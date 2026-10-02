@@ -10,7 +10,7 @@ management.
 ## Local model server entry points
 
 `scripts/model-server.sh` is the canonical Claude-first launcher. Invoke it as
-`${CLAUDE_PLUGIN_ROOT}/scripts/model-server.sh qwen36|qwen38|qwen38l`; this
+`"${LLM_SCRIPTING_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/model-server.sh" qwen36|qwen38|qwen38l`; this
 works from the plugin root Claude actually loaded and does not assume a plugin
 `bin/` directory is on PATH. `bin/qwen36-server`, `bin/qwen38-server`, and
 `bin/qwen38l-server` are thin shell adapters for interactive environments that

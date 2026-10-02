@@ -189,8 +189,8 @@ def bootstrap(ctx: Any) -> None:
     # session instead of a bare `python` (see /bootstrap fact
     # python_interpreter and python-interpreter.md).
     refresh_stub_launcher = (
-        f"{PLUGIN_CALL_SITE_EXPR} ${{CLAUDE_PLUGIN_ROOT}}/scripts/"
-        "refresh_unreal_stub.py --project-root <project-root>"
+        f"{PLUGIN_CALL_SITE_EXPR} \"${{UNREAL_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}}/scripts/"
+        "refresh_unreal_stub.py\" --project-root <project-root>"
     )
 
     generated_stub = (

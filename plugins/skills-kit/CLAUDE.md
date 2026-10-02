@@ -227,11 +227,11 @@ claude_md:
           from any directory:
 
           "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" \\
-            "${CLAUDE_PLUGIN_ROOT}/scripts/skills_kit_tool.py" audit \\
+            "${SKILLS_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/skills_kit_tool.py" audit \\
             <path-to-SKILL.md-or-CLAUDE.md>
 
           "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" \\
-            "${CLAUDE_PLUGIN_ROOT}/scripts/skills_kit_tool.py" material \\
+            "${SKILLS_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/skills_kit_tool.py" material \\
             --skill <path> --budget <n> [--json]
 
         - The md-domain lane scripts (scripts/discover_*.py, references_audit.py,

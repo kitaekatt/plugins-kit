@@ -1,0 +1,470 @@
+"""Durable guard: `${CLAUDE_PLUGIN_ROOT}` must appear only on the two
+surfaces Claude Code expands, never in a command an agent types into a shell.
+
+TWO SURFACES. The harness substitutes `${CLAUDE_PLUGIN_ROOT}` where it reads
+the string before executing it: a `hooks/hooks.json` `command:` field (worked
+example: `plugins/bootstrap/hooks/hooks.json`, whose SessionStart entry
+launches the only writer of `BOOTSTRAP_PYTHON`), and a skill's `!` preload
+(the substitution set is pinned as `CLAUDE_SKILL_SUBSTITUTIONS` in
+`tests/repo-scripts/test_python_invocation_standard.py`, sourced from
+code.claude.com/docs/en/skills, "Available string substitutions"). Everywhere
+else -- in particular the Bash tool's environment -- the variable is unset, so
+`${CLAUDE_PLUGIN_ROOT}/scripts/x.py` degrades silently to `/scripts/x.py`.
+A command an agent runs itself names the plugin root through
+`"${<PLUGIN>_ROOT:?<msg>}"` instead (`plugin_root_env_var_name` in
+`plugins/bootstrap/bootstrap_lib/env_var_check.py`; exported each un-skipped
+pass by `export_env_var` in `plugins/bootstrap/bootstrap_lib/engine.py`).
+
+THE COMMAND-POSITION RULE this file implements. Deciding where prose ends and
+a command begins is the whole difficulty, so the rule is a disjunction of five
+narrow signals, each requiring the occurrence to look like a path to an
+EXECUTABLE artifact (`_EXECUTABLE_SUFFIXES`, or an extension-less path under a
+`bin/` segment) unless stated otherwise:
+
+  S1 launcher-led -- an interpreter or launcher token appears earlier on the
+     same line (`${BOOTSTRAP_PYTHON...}` / `${BOOTSTRAP_PROJECT_PYTHON...}`,
+     a `<...python...>` placeholder, a literal `python`/`python3`/
+     `python.exe` word, `uv run`, `bash`/`sh`/`node`/`pwsh`/`powershell`).
+  S2 command-key-led -- the line is a YAML-ish command field
+     (`_COMMAND_KEYS`: tool, command, operation, detail, action, invocation,
+     satisfied_by), which is a value a reader executes.
+  S3 first-word -- the occurrence begins the line's first shell word, inside a
+     Markdown fenced code block, or anywhere in a non-Markdown file. (A
+     continuation line of a multi-line command is caught here too: its first
+     word is an argument the same shell must still resolve.)
+  S4 inline span with arguments -- an inline code span whose content begins
+     with the occurrence AND carries something after the path. A span that is
+     EXACTLY the path is a doc coordinate, not a command, and is let through.
+  S5 `cd` -- the occurrence immediately follows `cd `, with or without a path
+     suffix (the `(cd ${CLAUDE_PLUGIN_ROOT} && ...)` shape).
+
+WHAT IS DELIBERATELY NOT FLAGGED, preferring false negatives:
+  - `hooks/hooks.json` entirely, and any `!` preload line: the two expanded
+    surfaces (`_is_expanded_surface`, `preload_lines`).
+  - The `${CLAUDE_PLUGIN_ROOT:-<fallback>}` form: a `:-` default is a hook
+    script's deliberate self-location fallback, not a bare read.
+  - Prose that names the variable with no path, or with a non-executable path
+    (`${CLAUDE_PLUGIN_ROOT}/CLAUDE.md`, `/examples/`, `/skills_kit_lib/`
+    used as a doc coordinate): no signal fires.
+  - A `Read (${CLAUDE_PLUGIN_ROOT}/.../x.md)` tool argument: not a shell
+    command, and a different defect class.
+  - An inline code span that is exactly an executable path and nothing else
+    (S4's argument requirement) -- it may be a command, but it reads as a
+    coordinate and the scanner cannot tell.
+  - A path assembled across adjacent Python string literals, where the
+    filename lands on the next source line (`${{CLAUDE_PLUGIN_ROOT}}/scripts/`
+    + `"refresh_unreal_stub.py ..."` in `plugins/unreal-kit/custom_bootstrap.py`
+    and `plugins/unreal-kit/scripts/search_unreal_stub.py`): line-local
+    scanning cannot see the suffix. Named here so the gap is a record, not a
+    surprise.
+
+STATUS: the migration of the genuine Bash sites to `"${<PLUGIN>_ROOT:?...}"`
+has landed, and this lane holds at zero offenders. The allowlist covers ONLY
+documentation that describes or quotes the mechanism, never a command awaiting
+a migration: an offender is a finding to fix at the site, not an entry to add.
+Per the root CLAUDE.md insights `a_check_must_be_shown_to_fail` and
+`guard_cannot_see_its_own_subject`, the real-file lane asserts a property
+against real files and the injected-string counterfactuals prove each signal
+fires; do not quiet a genuine finding with an allowlist entry.
+"""
+
+from __future__ import annotations
+
+import re
+import subprocess
+from pathlib import Path
+from typing import NamedTuple
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+#: The braced read this guard is about. The doubled form is an f-string's
+#: escaped spelling of the same text (`f"${{CLAUDE_PLUGIN_ROOT}}/..."`), which
+#: renders identically at runtime.
+_OCCURRENCE_RE = re.compile(r"\$\{\{?CLAUDE_PLUGIN_ROOT\}\}?")
+
+#: `${CLAUDE_PLUGIN_ROOT:-...}` -- a shell default, used by a hook script to
+#: locate itself when launched outside the harness. Not a bare read.
+_WITH_DEFAULT_RE = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT:")
+
+_EXECUTABLE_SUFFIXES = (".py", ".sh", ".cmd", ".bat", ".ps1", ".js", ".mjs")
+
+#: Characters that end a shell word in the text shapes this repo uses.
+_PATH_END_RE = re.compile(r"[\s\"'`)\];|&,]")
+
+_LAUNCHER_RES = (
+    re.compile(r"\$\{?\{?BOOTSTRAP_(?:PROJECT_)?PYTHON"),
+    re.compile(r"<[^<>]*[Pp]ython[^<>]*>"),
+    re.compile(r"(?:^|[\s\"'(/=`])(?:python3?|python\.exe)\b"),
+    re.compile(r"\buv\s+run\b"),
+    re.compile(r"(?:^|[\s\"'(`])(?:bash|sh|node|pwsh|powershell)\s"),
+)
+
+_COMMAND_KEYS = (
+    "tool", "command", "operation", "detail", "action", "invocation",
+    "satisfied_by",
+)
+_COMMAND_KEY_RE = re.compile(
+    r"^\s*(?:[-|]\s*)?(?:" + "|".join(_COMMAND_KEYS) + r")\s*:"
+)
+
+#: Leading noise before the first shell word: indentation, a list bullet, a
+#: table cell pipe, a shell-continuation remnant, and an opening quote.
+_LEADING_NOISE_RE = re.compile(r"^[\s>|]*(?:[-*]\s+)?[\"']?")
+
+_CD_RE = re.compile(r"\bcd\s+[\"']?$")
+
+_FENCE_RE = re.compile(r"^\s*(?:`{3,}|~{3,})")
+
+#: An inline `!` preload (`` !`cmd` ``) at line start or after whitespace --
+#: the same shape `scan_skill_preloads` in
+#: tests/repo-scripts/test_python_invocation_standard.py recognizes -- and a
+#: ```` ```! ```` fenced block.
+_INLINE_PRELOAD_RE = re.compile(r"(?:^|(?<=\s))!`[^`\n]+`")
+_PRELOAD_FENCE_OPEN_RE = re.compile(r"^\s*`{3,}!\s*$")
+_FENCE_CLOSE_RE = re.compile(r"^\s*`{3,}\s*$")
+
+_INLINE_SPAN_RE = re.compile(r"`([^`\n]+)`")
+
+#: A hooks manifest's `"command": "..."` field -- not the `"type": "command"`
+#: discriminator that sits beside it.
+_COMMAND_FIELD_RE = re.compile(r'"command"\s*:')
+
+
+class Hit(NamedTuple):
+    line: int
+    signal: str
+    text: str
+
+
+def _path_after(line: str, end: int) -> str:
+    """The path-looking remainder of the shell word starting at `end` (just
+    past the occurrence). Empty when the occurrence is not followed by `/`."""
+    if end >= len(line) or line[end] != "/":
+        return ""
+    stop = _PATH_END_RE.search(line, end)
+    return line[end:stop.start()] if stop else line[end:]
+
+
+def _is_executable_path(suffix: str) -> bool:
+    """A path suffix that names something a shell would execute or hand to an
+    interpreter: a known executable extension, or an extension-less path
+    under a `bin/` segment (a CLI shim)."""
+    if not suffix:
+        return False
+    tail = suffix.rstrip("\\")
+    if tail.endswith(_EXECUTABLE_SUFFIXES):
+        return True
+    last = tail.rsplit("/", 1)[-1]
+    return "/bin/" in tail and bool(last) and "." not in last
+
+
+def preload_lines(text: str) -> set[int]:
+    """1-based lines carrying a skill `!` preload command -- an inline
+    `` !`cmd` `` or a line inside a ```` ```! ```` block. Claude Code
+    substitutes `${CLAUDE_PLUGIN_ROOT}` there before the command runs."""
+    lines: set[int] = set()
+    in_preload_fence = False
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        if in_preload_fence:
+            if _FENCE_CLOSE_RE.match(line):
+                in_preload_fence = False
+            else:
+                lines.add(lineno)
+            continue
+        if _PRELOAD_FENCE_OPEN_RE.match(line):
+            in_preload_fence = True
+            continue
+        if _INLINE_PRELOAD_RE.search(line):
+            lines.add(lineno)
+    return lines
+
+
+def _inline_span_signal(line: str, start: int, end: int) -> bool:
+    """S4: an inline code span whose content BEGINS with the occurrence and
+    carries arguments after the path. A span that is exactly the path is a
+    doc coordinate and returns False."""
+    for m in _INLINE_SPAN_RE.finditer(line):
+        if m.start(1) != start or m.end(1) < end:
+            continue
+        suffix = _path_after(line, end)
+        if not _is_executable_path(suffix):
+            return False
+        rest = line[end + len(suffix):m.end(1)].strip()
+        return bool(rest)
+    return False
+
+
+def scan_text(path: str, text: str) -> list[Hit]:
+    """Every command-position `${CLAUDE_PLUGIN_ROOT}` occurrence in one
+    tracked file's text, per the five signals in the module docstring.
+
+    `path` decides only whether Markdown fence tracking applies (S3 needs a
+    fence in Markdown, where a line may begin with a prose code span, and
+    needs none elsewhere). Pure text scan, no disk access.
+    """
+    is_markdown = path.endswith(".md")
+    skip = preload_lines(text) if is_markdown else set()
+    hits: list[Hit] = []
+    in_fence = False
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        if is_markdown and _FENCE_RE.match(line):
+            in_fence = not in_fence
+            continue
+        if lineno in skip:
+            continue
+        for m in _OCCURRENCE_RE.finditer(line):
+            if _WITH_DEFAULT_RE.match(line, m.start()):
+                continue
+            signal = _classify(line, m.start(), m.end(),
+                               in_fence or not is_markdown)
+            if signal:
+                hits.append(Hit(lineno, signal, line.strip()))
+    return hits
+
+
+def _classify(line: str, start: int, end: int, first_word_ok: bool) -> str:
+    """The first signal that fires for one occurrence, or "" for none."""
+    if _CD_RE.search(line[:start]):
+        return "S5-cd"
+    suffix = _path_after(line, end)
+    if not _is_executable_path(suffix):
+        return ""
+    before = line[:start]
+    if any(r.search(before) for r in _LAUNCHER_RES):
+        return "S1-launcher"
+    if _COMMAND_KEY_RE.match(line):
+        return "S2-command-key"
+    if first_word_ok and _LEADING_NOISE_RE.match(before).end() == start:
+        return "S3-first-word"
+    if _inline_span_signal(line, start, end):
+        return "S4-inline-span"
+    return ""
+
+
+# --- real-file lane --------------------------------------------------------
+
+#: Everything under plugins/ that can carry a command an agent types. `*.json`
+#: is in the universe so the hooks.json exemption is an explicit rule rather
+#: than an accident of which patterns were chosen.
+_PATTERNS = (
+    "plugins/*.md", "plugins/*/**/*.md", "plugins/*/*.md",
+    "plugins/*/**/*.py", "plugins/*/*.py",
+    "plugins/*/**/*.sh", "plugins/*/**/*.cmd", "plugins/*/**/*.bat",
+    "plugins/*/**/*.json", "plugins/*/*.json",
+    "plugins/*/bin/*",
+)
+
+
+def _is_expanded_surface(path: str) -> bool:
+    """A file the harness reads before executing: a plugin's hooks manifest.
+    `plugins/bootstrap/hooks/hooks.json` is the worked example -- its
+    SessionStart `command:` launches session-bootstrap.sh, the only writer of
+    `BOOTSTRAP_PYTHON`, and that variable is present in a Bash tool call, so
+    the expansion demonstrably happened."""
+    return path.endswith("hooks/hooks.json")
+
+
+class AllowlistEntry(NamedTuple):
+    anchor: str
+    reason: str
+
+
+#: Whole-file exemptions for documentation that NAMES the mechanism. Nothing
+#: here may be a command awaiting the migration: the genuine Bash sites stay
+#: red until they are fixed. `anchor` must still be a literal substring of the
+#: file (see test_allowlist_is_not_stale).
+_ALLOWLIST: dict[str, AllowlistEntry] = {
+    "plugins/CLAUDE.md": AllowlistEntry(
+        "Two surfaces expand `${CLAUDE_PLUGIN_ROOT}`",
+        "states the two-surface rule this guard enforces; its "
+        "`bash ${CLAUDE_PLUGIN_ROOT}/hooks/sessionstart/...` text is the "
+        "hooks.json worked example, quoted, not a command to run"),
+    "plugins/bootstrap/skills/bootstrap/references/plugin-reload-lifecycle.md":
+        AllowlistEntry(
+            "the script behind that",
+            "describes how a hooks.json `command:` registration resolves and "
+            "what a version update does to it; the quoted `bash "
+            "${CLAUDE_PLUGIN_ROOT}/hooks/.../foo.sh` is that registration"),
+    "plugins/skills-kit/skills/md-domain/references/skill-domain/"
+    "example-verification.md":
+        AllowlistEntry(
+            "The composition broke.",
+            "a record of two argument-passing bugs that shipped; the fenced "
+            "block reproduces the BROKEN command verbatim as the evidence for "
+            "the first one, so migrating it would falsify the historical "
+            "record. Its paths are unreal-kit's "
+            "(skills/ue-python-api/bin/ue-runner.cmd, "
+            "skills/fix-up-redirectors/bin/apply_fixups.py) quoted inside a "
+            "skills-kit document, so SKILLS_KIT_ROOT would be a false claim "
+            "and UNREAL_KIT_ROOT would wrongly read as a command to run"),
+}
+
+
+def _git_ls_files(*patterns: str) -> list[str]:
+    result = subprocess.run(
+        ["git", "-C", str(_REPO_ROOT), "ls-files", *patterns],
+        capture_output=True, text=True, check=True,
+    )
+    return sorted({line for line in result.stdout.splitlines() if line})
+
+
+def collect_offenders() -> list[str]:
+    """Every command-position hit in a tracked plugins/** file that is
+    neither a harness-expanded surface nor allowlisted."""
+    offenders: list[str] = []
+    for rel in _git_ls_files(*_PATTERNS):
+        if _is_expanded_surface(rel) or rel in _ALLOWLIST:
+            continue
+        text = (_REPO_ROOT / rel).read_text(encoding="utf-8")
+        for hit in scan_text(rel, text):
+            offenders.append(f"{rel}:{hit.line} [{hit.signal}] {hit.text}")
+    return offenders
+
+
+def test_tracked_plugin_files_have_no_command_position_plugin_root():
+    """No tracked plugins/** file tells an agent to type
+    `${CLAUDE_PLUGIN_ROOT}` into a shell.
+
+    Revert proof: the assertion reads real tracked files and reports real
+    hits, so it needs no fixture to show it fails -- re-breaking any one site
+    (restoring `${CLAUDE_PLUGIN_ROOT}/scripts/x.py` after a launcher) turns it
+    red, which `test_each_signal_fires_on_an_injected_command` proves per
+    signal without touching a tracked file.
+    """
+    offenders = collect_offenders()
+    assert not offenders, (
+        "`${CLAUDE_PLUGIN_ROOT}` in command position (the Bash tool does not "
+        "expand it -- use \"${<PLUGIN>_ROOT:?...}\"):\n" + "\n".join(offenders)
+    )
+
+
+# --- counterfactuals: each signal must be shown to fire --------------------
+
+def test_each_signal_fires_on_an_injected_command():
+    """Prove every signal detects a real command shape. Revert proof for the
+    test itself: drop a signal's branch from `_classify` and its case here
+    goes red, so this is not a vacuous "== []" check."""
+    launcher = ('run `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" '
+                '${CLAUDE_PLUGIN_ROOT}/scripts/x.py` first\n')
+    assert [h.signal for h in scan_text("plugins/p/SKILL.md", launcher)] == [
+        "S1-launcher"]
+
+    key = "          tool: ${CLAUDE_PLUGIN_ROOT}/scripts/x.py\n"
+    assert [h.signal for h in scan_text("plugins/p/SKILL.md", key)] == [
+        "S2-command-key"]
+
+    fenced = ('```bash\n'
+              '  "${CLAUDE_PLUGIN_ROOT}/scripts/x.py" --flag \\\n'
+              '```\n')
+    assert [h.signal for h in scan_text("plugins/p/SKILL.md", fenced)] == [
+        "S3-first-word"]
+
+    in_python = '    "${CLAUDE_PLUGIN_ROOT}/scripts/x.py" <path>\n'
+    assert [h.signal for h in scan_text("plugins/p/scripts/x.py", in_python)] == [
+        "S3-first-word"]
+
+    span = "calls `${CLAUDE_PLUGIN_ROOT}/scripts/s.sh qwen36|qwen38`; this\n"
+    assert [h.signal for h in scan_text("plugins/p/CLAUDE.md", span)] == [
+        "S4-inline-span"]
+
+    cd = "(cd ${CLAUDE_PLUGIN_ROOT} && <venvPython> scripts/r.py)\n"
+    assert [h.signal for h in scan_text("plugins/p/SKILL.md", cd)] == ["S5-cd"]
+
+    shim = '```sh\n"${CLAUDE_PLUGIN_ROOT}/bin/plugin-cli" status\n```\n'
+    assert [h.signal for h in scan_text("plugins/p/README.md", shim)] == [
+        "S3-first-word"]
+
+
+def test_doubled_f_string_brace_form_is_recognized():
+    """An f-string writes the same runtime text as `${{CLAUDE_PLUGIN_ROOT}}`;
+    the occurrence regex must see both spellings. Revert proof: drop `\\{?`
+    and `\\}?` from `_OCCURRENCE_RE` and this goes red."""
+    plain = '    "${CLAUDE_PLUGIN_ROOT}/scripts/x.py" a\n'
+    doubled = '    "${{CLAUDE_PLUGIN_ROOT}}/scripts/x.py" a\n'
+    assert len(scan_text("plugins/p/x.py", plain)) == 1
+    assert len(scan_text("plugins/p/x.py", doubled)) == 1
+
+
+def test_prose_and_doc_coordinates_are_not_flagged():
+    """The shapes the module docstring promises to let through. Revert proof:
+    delete `_is_executable_path`'s suffix test (accept any path) and the
+    `.md`/`/examples/` cases go red; delete `_inline_span_signal`'s
+    argument requirement and the bare-span case goes red."""
+    bare = "`${CLAUDE_PLUGIN_ROOT}` of the CURRENT skill is NOT it\n"
+    doc_coordinate = "a Dec-N entry in `${CLAUDE_PLUGIN_ROOT}/CLAUDE.md` is\n"
+    directory = "an example under `${CLAUDE_PLUGIN_ROOT}/examples/`.\n"
+    strip_prefix = 'rel = raw.replace("${CLAUDE_PLUGIN_ROOT}/", "")\n'
+    bare_span = "the contract is in `${CLAUDE_PLUGIN_ROOT}/lib/registry.py`\n"
+    read_tool = '          tool: "Read (${CLAUDE_PLUGIN_ROOT}/refs/a.md)"\n'
+    with_default = 'S="${CLAUDE_PLUGIN_ROOT:-$(dirname "$0")/..}/scripts"\n'
+    for text in (bare, doc_coordinate, directory, strip_prefix, bare_span,
+                 read_tool, with_default):
+        assert scan_text("plugins/p/SKILL.md", text) == [], text
+
+
+def test_preload_and_hooks_json_surfaces_are_exempt():
+    """The two harness-expanded surfaces. Revert proof: drop the
+    `lineno in skip` guard and the preload cases go red; drop
+    `_is_expanded_surface` and `plugins/bootstrap/hooks/hooks.json` appears
+    in `collect_offenders()`, which the real-file assertion below pins."""
+    inline = ('!`uv run --no-project python '
+              '"${CLAUDE_PLUGIN_ROOT}/scripts/x.py" $ARGUMENTS`\n')
+    assert scan_text("plugins/p/SKILL.md", inline) == []
+
+    fenced = ('```!\n'
+              'bash "${CLAUDE_PLUGIN_ROOT}/scripts/x.sh"\n'
+              '```\n')
+    assert scan_text("plugins/p/SKILL.md", fenced) == []
+
+    assert _is_expanded_surface("plugins/bootstrap/hooks/hooks.json")
+    assert _is_expanded_surface("plugins/unreal-kit/hooks/hooks.json")
+    assert not _is_expanded_surface("plugins/p/scripts/hooks.json")
+
+
+def test_hooks_json_command_fields_still_use_the_harness_variable():
+    """The positive half of the two-surface rule, asserted against real
+    files: every tracked `hooks/hooks.json` reaches its script through
+    `${CLAUDE_PLUGIN_ROOT}`. Without this the guard would read as "the
+    variable is always wrong", and a later edit could replace a working
+    hook registration with a `<PLUGIN>_ROOT` form the harness never sets.
+
+    Revert proof: rewrite any tracked hooks.json `command:` to an absolute or
+    `<PLUGIN>_ROOT`-rooted path and this goes red."""
+    manifests = [p for p in _git_ls_files("plugins/*/hooks/hooks.json")]
+    assert manifests, "no tracked plugin hooks manifest found"
+    offenders = []
+    for rel in manifests:
+        text = (_REPO_ROOT / rel).read_text(encoding="utf-8")
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            if not _COMMAND_FIELD_RE.search(line):
+                continue
+            if not _OCCURRENCE_RE.search(line):
+                offenders.append(f"{rel}:{lineno} {line.strip()}")
+    assert not offenders, (
+        "hooks.json command field not rooted at ${CLAUDE_PLUGIN_ROOT}:\n"
+        + "\n".join(offenders)
+    )
+
+
+# --- allowlist staleness ---------------------------------------------------
+
+def test_allowlist_is_not_stale():
+    """Every allowlisted path is still tracked, still produces a hit worth
+    exempting, and still contains its anchor text -- an entry whose file was
+    renamed, fixed, or edited away from the reasoning it records is silently
+    wrong, not silently safe.
+
+    Revert proof: typo any anchor above and this goes red; fix an allowlisted
+    file's last hit and the "no longer needed" branch goes red."""
+    tracked = set(_git_ls_files())
+    offenders = []
+    for path, entry in _ALLOWLIST.items():
+        if path not in tracked:
+            offenders.append(f"{path}: not tracked by git ls-files")
+            continue
+        text = (_REPO_ROOT / path).read_text(encoding="utf-8")
+        if entry.anchor not in text:
+            offenders.append(f"{path}: anchor {entry.anchor!r} not in file")
+        if not scan_text(path, text):
+            offenders.append(f"{path}: no longer hits; drop the entry")
+    assert not offenders, "stale allowlist entry:\n" + "\n".join(offenders)

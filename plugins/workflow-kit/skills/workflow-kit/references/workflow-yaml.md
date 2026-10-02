@@ -33,7 +33,7 @@ plugins-kit:bootstrap and start a new session" and STOP.
    files and ask which.
 2. **Compile it.** Run the compiler via the plugin-venv interpreter, writing the
    script under `.compiled/`:
-   `<plugin-venv-python> ${CLAUDE_PLUGIN_ROOT}/scripts/compile_workflow.py <yaml> -o <project>/.claude/workflows/.compiled/<name>.js`
+   `<plugin-venv-python> "${WORKFLOW_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/compile_workflow.py" <yaml> -o <project>/.claude/workflows/.compiled/<name>.js`
    Exit 0 -> stdout is the compiled path. On exit 1, surface stderr (an authoring
    error) and STOP -- do not run.
 3. **Gather inputs.** Read the `inputs:` block; for each declared input collect a
@@ -42,7 +42,9 @@ plugins-kit:bootstrap and start a new session" and STOP.
    workflow uses any `script` or `openrouter` node, also inject the reserved args**
    the compiled script references (not declared in `inputs:`):
    - `runId` -- a short id for this run (namespaces `$OUT` paths).
-   - `pluginRoot` -- `${CLAUDE_PLUGIN_ROOT}` for workflow-kit.
+   - `pluginRoot` -- workflow-kit's install directory. The Workflow tool expands
+     nothing in `args`, so pass a resolved path: read it from
+     `"${WORKFLOW_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}"`.
    - `workflowKitVenvPython` -- the plugin-venv python
      (`~/.claude/plugins/data/plugins-kit/workflow-kit/.venv/{Scripts/python.exe|bin/python}`);
      when workflow-kit is dev-only (no own venv), use the bootstrap standalone python.
@@ -67,7 +69,7 @@ Gotchas:
 ## Procedure: validate only
 
 Run the compiler in validate-only mode (same precondition as above):
-`<plugin-venv-python> ${CLAUDE_PLUGIN_ROOT}/scripts/compile_workflow.py <yaml> --validate-only`
+`<plugin-venv-python> "${WORKFLOW_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/compile_workflow.py" <yaml> --validate-only`
 Exit 0 prints `OK: <name> (<n> step(s))`. Exit 1 prints a located error to
 stderr -- relay it verbatim.
 

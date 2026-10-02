@@ -98,7 +98,7 @@ python -m skills_kit_lib.tag <path-to-SKILL.md> <skill-type> --force
 **Usage.** Run it through the launcher, from any directory:
 
 ```
-"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/skills_kit_tool.py" material --skill <path> [--catalog] [--no-declared] [--resource <rel>]... [--skill <path> ...] --budget <n> [--json]
+"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${SKILLS_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/skills_kit_tool.py" material --skill <path> [--catalog] [--no-declared] [--resource <rel>]... [--skill <path> ...] --budget <n> [--json]
 ```
 
 - `--skill <path>` is a skill directory or its `SKILL.md`; it is repeatable and the order is kept. A relative path resolves against the caller's working directory.

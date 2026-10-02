@@ -377,16 +377,15 @@ domain_skill:
         option and must precede the VERB (argparse rejects it after). Invocation:
         `bin/hue-kit` (`bin/hue-kit.cmd` on Windows) is on the Bash tool's PATH
         while this plugin is enabled, so `hue-kit <verb>` works directly. The
-        portable form, for when the plugin's `bin/` is not what launched this
-        shell, uses the bootstrap interpreter, which every bootstrap-managed
-        session exports (/bootstrap fact python_interpreter):
-        `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/hue_kit_cli.py" <verb>`
-        The CLI re-execs under the plugin's bootstrap-provisioned venv either
-        way. Working files (scene-groups.yaml / scene-designs.yaml /
+        PATH entry is injected by Claude Code per session and is keyed to the
+        installed version, so a bare `hue-kit` resolves in a Claude Code session
+        with this plugin enabled; elsewhere run the shim by its path in the
+        plugin's install directory. The CLI re-execs under the plugin's
+        bootstrap-provisioned venv either way. Working files (scene-groups.yaml / scene-designs.yaml /
         index.html) default to the plugin data dir
         (~/.claude/plugins/data/plugins-kit/hue-kit), regardless of cwd.
     - name: scene-layers.py
-      command: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/scene-layers.py" [--html|--export-designs|--validate-design|--apply ...]'
+      command: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${HUE_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/scene-layers.py" [--html|--export-designs|--validate-design|--apply ...]'
       description: >-
         Re-execs under the plugin venv when launched directly.
         The layered solver + bi-directional sync the CLI wraps. Read-only against

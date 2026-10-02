@@ -557,7 +557,7 @@ from bootstrap_lib.code_review.chunking import ...      # now resolvable
 ```
 
 **Why:** a script must not trust the interpreter that launched it. Skills name a
-script as `tool: ${CLAUDE_PLUGIN_ROOT}/scripts/foo.py` with no interpreter, so an
+script as `tool: <plugin root>/scripts/foo.py` with no interpreter, so an
 agent runs it under `python` / `uv run python` -- neither carries the shared-lib
 `.pth`. Without the re-exec the import fails and the except-handler emits a
 MISLEADING "bootstrap has not provisioned ... (missing: bootstrap_lib)" message
@@ -584,13 +584,49 @@ The SKILL.md-side companion is in the root CLAUDE.md insight
 and let it re-exec; use the explicit venv path only for a script without a
 re-exec guard; never use `uv run python` outside a skill preload.
 
-**SKILL.md examples launch `"$BOOTSTRAP_PYTHON" ${CLAUDE_PLUGIN_ROOT}/scripts/<script>.py`**
-and rely on the script's `reexec_under_plugin_venv`. A skill `!` preload is
-the exception: Claude Code rejects shell expansion there, so a preload keeps
-`uv run --no-project python`. Details: root CLAUDE.md "Python interpreter
-variables" and `plugins/bootstrap/skills/bootstrap/references/python-interpreter.md`;
-manifest commands: `plugins/bootstrap/skills/bootstrap/references/manifest-reference.md`,
-"Python inside manifest commands".
+**Two surfaces expand `${CLAUDE_PLUGIN_ROOT}`; a shell is not one of them.**
+Claude Code substitutes the variable only where the harness reads the string
+before executing it, and there are exactly two such surfaces:
+
+- A `hooks/hooks.json` `command:` field. Worked example:
+  `plugins/bootstrap/hooks/hooks.json`, whose SessionStart entry is
+  `bash ${CLAUDE_PLUGIN_ROOT}/hooks/sessionstart/session-bootstrap.sh` -- that
+  hook is the only writer of `BOOTSTRAP_PYTHON`, and the variable is set in a
+  session, so the expansion demonstrably happens.
+- A skill's `!` preload. Claude Code substitutes its own names there
+  (`${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_SESSION_ID}`, ...) and refuses a preload
+  carrying any other expansion, which is why a preload keeps
+  `uv run --no-project python`
+  (`plugins/bootstrap/skills/bootstrap/references/python-interpreter.md`,
+  "Skill preload commands").
+
+**Everywhere else the variable is unset** -- including the Bash tool's
+environment. A command an agent types or copies into a shell therefore resolves
+`${CLAUDE_PLUGIN_ROOT}/scripts/x.py` to `/scripts/x.py`: a path nobody wrote,
+failing for a reason that does not name the cause.
+
+**A command an AGENT runs names the plugin root as `"${<PLUGIN>_ROOT:?<msg>}"`**
+-- `GIT_KIT_ROOT`, `HUE_KIT_ROOT`, `UNREAL_KIT_ROOT`, and so on. The name is
+whatever `plugin_root_env_var_name` in
+`plugins/bootstrap/bootstrap_lib/env_var_check.py` derives from the plugin
+name; `plugins/bootstrap/bootstrap_lib/engine.py` exports it through
+`export_env_var` on every un-skipped pass, for every plugin that ships a
+`bootstrap.json`. The pointer exists from bootstrap 0.72.0 onward (commit
+`771d3920` added the helper and the export together). In a session whose
+bootstrap pass was skipped by a gate the variable is absent, and `:?` aborts
+the command with the message, naming the missing variable -- a loud failure
+that is the point of the form, and strictly better than silently running
+against `/scripts/x.py`.
+
+**SKILL.md examples launch
+`"$BOOTSTRAP_PYTHON" "${<PLUGIN>_ROOT:?<msg>}/scripts/<script>.py"`** and rely
+on the script's `reexec_under_plugin_venv`. Details: root CLAUDE.md "Python
+interpreter variables" and
+`plugins/bootstrap/skills/bootstrap/references/python-interpreter.md`;
+manifest commands:
+`plugins/bootstrap/skills/bootstrap/references/manifest-reference.md`,
+"Python inside manifest commands". Guard:
+`tests/repo-scripts/test_claude_plugin_root_expansion.py`.
 
 **Test gotcha: this same re-exec silently short-circuits pytest.** Importing
 `prepare_review.py` triggers `reexec_under_plugin_venv`, which on a machine with

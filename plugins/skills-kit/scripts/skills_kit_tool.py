@@ -4,7 +4,7 @@
 Usage::
 
     "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" \\
-        "${CLAUDE_PLUGIN_ROOT}/scripts/skills_kit_tool.py" <audit|classify|tag|material> [args...]
+        "${SKILLS_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/skills_kit_tool.py" <audit|classify|tag|material> [args...]
 
 The launcher re-execs under the skills-kit plugin venv, where pyyaml lives.
 Without pyyaml the YAML contract checks degrade to judgment-required. It then

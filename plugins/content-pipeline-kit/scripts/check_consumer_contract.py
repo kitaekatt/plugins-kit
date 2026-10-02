@@ -3,7 +3,7 @@
 Usage (stdlib only; run with the bootstrap interpreter):
 
     "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" \
-        "${CLAUDE_PLUGIN_ROOT}/scripts/check_consumer_contract.py" <path> [<path> ...]
+        "${CONTENT_PIPELINE_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/check_consumer_contract.py" <path> [<path> ...]
 
 Each <path> is a Python file or a directory scanned recursively. The listing
 read is contract/public-surface.json under the plugin root; pass --contract to

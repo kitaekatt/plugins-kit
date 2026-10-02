@@ -2,19 +2,25 @@
 import json
 import os
 import sys
+from pathlib import Path
 
-plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
-if not plugin_root:
-    print("Running <unknown>@<unknown> (CLAUDE_PLUGIN_ROOT unset)", file=sys.stderr)
-    sys.exit(0)
+# CLAUDE_PLUGIN_ROOT is expanded by Claude Code only in a hook's command field;
+# it is unset in a Bash-tool launch. This script lives at <plugin root>/scripts/,
+# so its own location answers "which version of this plugin am I". Deriving from
+# __file__ is legitimate here because the question is provenance of the running
+# code, not where durable data goes (the durability-root rule does not apply).
+plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT") or str(
+    Path(__file__).resolve().parent.parent
+)
 
 manifest_path = os.path.join(plugin_root, ".claude-plugin", "plugin.json")
 try:
     with open(manifest_path, "r", encoding="utf-8") as f:
         d = json.load(f)
-except OSError as exc:
-    print(f"Running <unknown>@<unknown> (cannot read {manifest_path}: {exc})")
-    sys.exit(0)
+except (OSError, ValueError) as exc:
+    # Fail loudly: a provenance line that cannot be established must not exit 0.
+    print(f"print_version: cannot read {manifest_path}: {exc}", file=sys.stderr)
+    sys.exit(1)
 
 print(f"Running {d.get('name', '<unnamed>')}@{d.get('version', '<unversioned>')}")
 

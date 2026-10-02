@@ -39,7 +39,7 @@ hardcoded defaults.
 
 If `ue_runner.py` reports "uproject path not configured":
 - Bootstrap may have failed to auto-detect the project. Check bootstrap output at session start.
-- Run `"${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" "${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue_runner.py" --setup` to interactively pick the `.uproject` and write the per-project config. That is `--setup`'s only job -- ini settings and host deps stay bootstrap's (it does not duplicate the rows above).
+- Run `"${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" "${UNREAL_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/skills/ue-python-api/scripts/ue_runner.py" --setup` to interactively pick the `.uproject` and write the per-project config. That is `--setup`'s only job -- ini settings and host deps stay bootstrap's (it does not duplicate the rows above).
 - Or manually create `<project_root>/.local-data/plugins-kit/unreal-kit/config.yaml` with `uproject` and `engine_dir` fields. (The legacy `.local-data/unreal-kit/config.yaml` and `.claude/unreal-kit.yaml` paths are still read if present, but create new files at `.local-data/plugins-kit/unreal-kit/config.yaml`.)
 - Global config: `~/.claude/plugins/data/plugins-kit/unreal-kit/config.yaml` is deep-merged beneath any per-project config (see Config resolution order above), so fields it sets apply unless the project config overrides them.
 
@@ -52,9 +52,9 @@ If remote execution fails with "Editor not responding":
 
 ### Stubs missing
 
-Run `"${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" ${CLAUDE_PLUGIN_ROOT}/scripts/search_unreal_stub.py "<pattern>" --project-root <project-root>`. It prefers the durable enriched stub, then the machine-local stock stub.
+Run `"${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" "${UNREAL_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/search_unreal_stub.py" "<pattern>" --project-root <project-root>`. It prefers the durable enriched stub, then the machine-local stock stub.
 
 If neither exists:
 - API search says plainly that it is unavailable; scripts still run.
 - Start a new Claude Code session to let bootstrap retry the stock PyPI download. Check network/firewall issues if it remains missing.
-- For the enriched stub, enable Developer Mode, complete a full compile, then run `"${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" ${CLAUDE_PLUGIN_ROOT}/scripts/refresh_unreal_stub.py --project-root <project-root>`. This explicit action announces and writes the durable destination; bootstrap never writes it.
+- For the enriched stub, enable Developer Mode, complete a full compile, then run `"${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" "${UNREAL_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/refresh_unreal_stub.py" --project-root <project-root>`. This explicit action announces and writes the durable destination; bootstrap never writes it.

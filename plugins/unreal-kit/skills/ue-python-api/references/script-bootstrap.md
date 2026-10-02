@@ -55,7 +55,7 @@ interpreter expression. It fails with a version diagnosis when the bootstrap
 variables are unavailable:
 
 ```
-"${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" "${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue_runner.py" <script>.py
+"${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" "${UNREAL_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/skills/ue-python-api/scripts/ue_runner.py" <script>.py
 ```
 
 - **`ue-runner.cmd`**: Starts with the deterministic standalone interpreter, accepts a validated `BOOTSTRAP_PYTHON` fallback, and then checks the bootstrap-provisioned plugin venv (`~/.claude/plugins/data/plugins-kit/unreal-kit/.venv/Scripts/python.exe`). The runner then re-execs into that venv via `bootstrap_guard.reexec_under_plugin_venv`, where upyrc and pyyaml are available. If no bootstrap interpreter variable is present, the command prints the required version diagnosis.
