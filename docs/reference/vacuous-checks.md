@@ -207,12 +207,12 @@ The remedy: the literal is load-bearing. Never relax it into a comparison
 against a recomputed value, and when reviewing a test, treat a hardcoded
 expected number next to a recomputed one as the part that carries the property.
 
-## Shape 7: a predicate whose removal stays green because the language already excludes the case
+## Shape 7: a predicate whose removal stays green because something else already excludes the case
 
 Removing a guard and watching the test stay green does not show the guard is
 unnecessary, and it does not show the test is sound. It can mean the language
 or engine already excludes the case, so the revert is not a counterfactual at
-all.
+all. The excluding layer can also be an upstream stage of the same pipeline.
 
 Worked example. In `tests/content-pipeline-kit/test_llm_spend_ledger_orphans.py`
 (`TestNullLeaseIsNeverSwept`), deleting `AND lease_expires_at IS NOT NULL` from
@@ -228,6 +228,21 @@ that breaks the property before concluding the guard is unnecessary. A property
 stated as an absence ("never swept") is broken by adding a case, not by
 removing a clause. Record the corrected prediction beside the test, as that
 test's docstring does.
+
+Second worked example, an upstream stage in place of the language. The engine
+writes `<PLUGIN>_ROOT` into the `plugin_roots` record in
+`_maintain_env_records` (`plugins/bootstrap/bootstrap_lib/engine.py`), and that
+writer keeps its own gate: it skips a plugin whose install path holds no
+`bootstrap.json`. An end-to-end pass cannot show the gate red when it is
+removed, because the discovery stage (`list_enabled_plugins`) already drops such
+a plugin before the writer sees it, so the pass is green with or without the
+writer's gate. The remedy is to assert the gate on the unit that owns it: drive
+`_maintain_env_records` directly with a plugin list wider than discovery would
+produce, and assert the bare plugin is absent from the record
+(`test_a_plugin_with_no_bootstrap_json_is_not_recorded` in
+`tests/bootstrap/test_plugin_roots.py`, whose docstring states the reason). The
+general test: ask whether an earlier stage already filters the input, and if it
+does, feed the guarded stage an input the earlier stage would not have passed.
 
 ## Shape 8: a structural property no runtime test can carry
 
