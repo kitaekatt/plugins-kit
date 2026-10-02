@@ -385,7 +385,7 @@ domain_skill:
         index.html) default to the plugin data dir
         (~/.claude/plugins/data/plugins-kit/hue-kit), regardless of cwd.
     - name: scene-layers.py
-      command: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${HUE_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/scene-layers.py" [--html|--export-designs|--validate-design|--apply ...]'
+      command: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/scene-layers.py" [--html|--export-designs|--validate-design|--apply ...]'
       description: >-
         Re-execs under the plugin venv when launched directly.
         The layered solver + bi-directional sync the CLI wraps. Read-only against

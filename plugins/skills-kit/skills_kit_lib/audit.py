@@ -1396,7 +1396,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.config:
         from . import standards_resolve
         project_root = _find_project_root(Path(args.path).resolve())
-        resolved = standards_resolve.resolve(project_root)
+        try:
+            resolved = standards_resolve.resolve(project_root)
+        except standards_resolve.StandardsConfigError as exc:
+            # --config asked for the layered config. A layer that cannot be
+            # read -- malformed, or no pyyaml on this interpreter -- must stop
+            # the run, not fall back to an audit that ignored it.
+            print(f"audit --config: {exc}", file=sys.stderr)
+            return 1
 
     report = audit(Path(args.path), resolved)
     if "error" in report:

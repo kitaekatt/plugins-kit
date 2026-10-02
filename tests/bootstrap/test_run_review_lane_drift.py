@@ -61,8 +61,8 @@ class TestWrapperCopiesMatch:
         # bootstrap_lib.model_declaration (parse, CORE_IDS), first shipped in
         # bootstrap 0.129.0, which raises its floor to that release.
         expected = {
-            "git-kit": "0.142.0",
-            "p4-kit": "0.142.0",
+            "git-kit": "0.143.0",
+            "p4-kit": "0.143.0",
             "llm-scripting-kit": "0.138.0",
         }
         minimum = {"git-kit": "0.113.0", "p4-kit": "0.113.0",

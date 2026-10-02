@@ -120,23 +120,25 @@ ONCE per run (not per file), resolve the configurable standards via the plugin v
 ```
 
 A non-zero exit means STOP: the script wrote nothing to stdout and a single
-diagnostic line to stderr (a malformed config layer or an un-tunable rule id).
+diagnostic line to stderr. Exit 1 is a malformed config layer, an un-tunable
+rule id, or an interpreter without pyyaml (the line names the skills-kit venv
+to use); exit 2 is a usage error, such as a `--primitive` no lane consumes.
 No audit runs on a partial config -- surface that stderr line and stop rather
 than falling back to defaults.
 
 On a zero exit, parse its JSON `{ disabled, thresholds, standards, audit, notes }`.
 Keep run-level `disabledCriteria` = `disabled`, and per target
-`standardsPaths` = `standards.<primitive>`. Both thread into DETECT. An empty
-or absent config yields empty lists, so default behavior is unchanged. A
-non-empty `notes` array (for example, "pyyaml unavailable; standards
-resolution degraded to defaults") must be surfaced in the report header
-verbatim -- it means the run is NOT the same as "no config", even though the
-disabled/threshold lists read identically to that case.
+`standardsPaths` = `standards.<primitive>`. Both thread into DETECT, and
+`disabledCriteria` is REQUIRED there: pass the list even when it is empty. A
+detect workflow called without it throws rather than applying every
+criterion. An absent config yields empty lists, so default behavior is
+unchanged. A non-empty `notes` array must be surfaced in the report header
+verbatim.
 
 Keep run-level `fixMode` = `audit.fix_mode`: `apply` (the default when the
 config sets nothing) or `propose`. `scripts/resolve_standards.py` always
 emits it, validated by `AUDIT_KEYS` in `skills_kit_lib/standards_resolve.py`.
-It is read again in Step 5.
+It is read again in Step 5, where every remediate workflow requires it.
 
 ### Step 2 -- DETECT (before-Q&A)
 
@@ -386,6 +388,10 @@ files: pass `fixMode: "propose"` in the Workflow `args`; the
 and dispatches no agent. ONE file: no script runs, so this instruction is the
 only guard -- do not call Edit, and report the proposals as above.
 
+`fixMode` is a REQUIRED Workflow arg in both values. A remediate script called
+without it, or with anything other than `apply` or `propose`, throws before it
+dispatches a lane; it never assumes `apply`.
+
 - **ONE file** -- apply inline with Edit (never when `fixMode` is `propose`).
 - **TWO OR MORE files** -- call the Workflow tool with the script
   `"${SKILLS_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/skills/md-domain/workflow/<artifact>-remediate.js"`
@@ -558,7 +564,7 @@ its location moved. It differs from the three per-file lanes in five ways:
 Its Q&A gate batches every IMPROVE + SPECIAL finding into ONE foreground question
 round -- a numbered list with category, options, and a recommendation. Do NOT
 per-finding round-trip. Remediation fans out per file via
-`workflow/references-remediate.js`, and the scan is re-run afterwards to verify:
+`workflow/references-remediate.js` (with the required `fixMode`, Step 5), and the scan is re-run afterwards to verify:
 newly-surfaced findings are common (a backticked literal can reveal another
 broken ref nearby that was previously masked).
 

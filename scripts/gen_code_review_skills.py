@@ -62,22 +62,36 @@ from bootstrap_lib.interpreter_env import PLUGIN_CALL_SITE_EXPR  # noqa: E402
 # it, and `$BOOTSTRAP_PYTHON` is exported into every bootstrap-managed session
 # (see /bootstrap fact python_interpreter and python-interpreter.md). Single
 # source for every prepare_review.py launch site rendered below.
-# CLAUDE_PLUGIN_ROOT is expanded only in a hooks.json `command:` field and a
-# skill `!` preload line; it is unset in the Bash tool's environment, where an
-# agent runs these launchers. Each kit therefore anchors its scripts on the
-# `<PLUGIN>_ROOT` variable the bootstrap engine exports (name derived by
+# CLAUDE_PLUGIN_ROOT is substituted by Claude Code in a skill's own body, in a
+# hooks.json `command:` field and in a `!` preload, but not in references/*.md,
+# and it is unset in the Bash tool's environment. Launchers rendered into a
+# generated SKILL.md therefore use CLAUDE_PLUGIN_ROOT (the *_SKILL constants);
+# launchers rendered into a generated reference anchor on the `<PLUGIN>_ROOT`
+# variable the bootstrap engine exports (name derived by
 # plugin_root_env_var_name), guarded so an unset variable fails loudly instead
-# of running `/scripts/x.py`. The kit name is the per-VCS KIT fragment value.
+# of running `/scripts/x.py` (the unsuffixed constants). The kit name is the
+# per-VCS KIT fragment value.
 _KIT_BY_VCS = {"git": "git-kit", "p4": "p4-kit"}
 _ROOT_UNSET_HINT = "requires a bootstrap engine pass; run bootstrap run"
 
 
-def _launcher(vcs: str, script: str) -> str:
-    root_var = plugin_root_env_var_name(_KIT_BY_VCS[vcs])
-    return (
-        PLUGIN_CALL_SITE_EXPR
-        + " " + chr(34) + "${" + root_var + ":?" + _ROOT_UNSET_HINT + "}/scripts/" + script + chr(34)
-    )
+def _launcher(vcs: str, script: str, surface: str = "reference") -> str:
+    """One review-script launch expression for a rendering surface.
+
+    `surface="skill"` is for text inside a generated SKILL.md, where Claude
+    Code substitutes CLAUDE_PLUGIN_ROOT before the command reaches the shell
+    (the kit's scripts live at the plugin root, not in the skill directory).
+    `surface="reference"` is for a generated references/*.md file, which Claude
+    Code does not substitute, so it anchors on the bootstrap-exported
+    `<PLUGIN>_ROOT` variable with the loud `:?` guard.
+    """
+    if surface == "skill":
+        root = "${CLAUDE_PLUGIN_ROOT}"
+    elif surface == "reference":
+        root = "${" + plugin_root_env_var_name(_KIT_BY_VCS[vcs]) + ":?" + _ROOT_UNSET_HINT + "}"
+    else:
+        raise ValueError(surface)
+    return PLUGIN_CALL_SITE_EXPR + " " + chr(34) + root + "/scripts/" + script + chr(34)
 
 
 PREPARE_LAUNCHER = {v: _launcher(v, "prepare_review.py") for v in _KIT_BY_VCS}
@@ -96,6 +110,12 @@ PREPARE_LAUNCHER_YAML = {v: "'" + PREPARE_LAUNCHER[v] + "'" for v in _KIT_BY_VCS
 LANE_LAUNCHER = {v: _launcher(v, "run_review_lane.py") for v in _KIT_BY_VCS}
 PARSE_LAUNCHER = {v: _launcher(v, "parse_review_lane.py") for v in _KIT_BY_VCS}
 RENDER_LAUNCHER = {v: _launcher(v, "render_review_profiles.py") for v in _KIT_BY_VCS}
+# SKILL.md variants of the four launchers above (same scripts, harness-substituted root).
+PREPARE_LAUNCHER_SKILL = {v: _launcher(v, "prepare_review.py", "skill") for v in _KIT_BY_VCS}
+PREPARE_LAUNCHER_YAML_SKILL = {v: "'" + PREPARE_LAUNCHER_SKILL[v] + "'" for v in _KIT_BY_VCS}
+LANE_LAUNCHER_SKILL = {v: _launcher(v, "run_review_lane.py", "skill") for v in _KIT_BY_VCS}
+PARSE_LAUNCHER_SKILL = {v: _launcher(v, "parse_review_lane.py", "skill") for v in _KIT_BY_VCS}
+RENDER_LAUNCHER_SKILL = {v: _launcher(v, "render_review_profiles.py", "skill") for v in _KIT_BY_VCS}
 GIT_SKILL = REPO_ROOT / "plugins/git-kit/skills/git-code-review/SKILL.md"
 P4_SKILL = REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/SKILL.md"
 GIT_AGENTS = REPO_ROOT / "plugins/git-kit/agents"
@@ -303,7 +323,7 @@ LANE_ROUTING = """\
             Exit 2 from the runner is a REFUSAL: it declined the dispatch as configured --
             for example a lane it does not support by name, an effort outside a codex entry's
             effort menu, an effort a transport entry cannot deliver, or an installed
-            llm-scripting-kit older than 0.59.0, the first release that accepts `--effort`. A
+            llm-scripting-kit older than 0.60.0, the first release that accepts `--effort`. A
             refusal the launch-correction rule does not explain is a configuration error for
             the user to fix, not something to work around: report it in step 9 under
             `## Lane failures` with the runner's stderr verbatim and mark coverage missing.
@@ -411,7 +431,13 @@ MD_DOMAIN_LAUNCH = """\
             `mechanicalCheckPhrases` = `bundle.mechanical_check_phrases` once at the top level of
             EVERY lane args object. Resolve the remaining fields from each claimed file's
             `claude_mds` per references/md-domain-review.md. Resolve the skills-kit plugin root and
-            venvPython defensively per that reference. Use the Workflow tool when callable, passing
+            venvPython defensively per that reference, then run skills-kit's
+            `scripts/resolve_standards.py` ONCE per review under that venvPython (exact command in
+            that reference) and pass its `disabled` list as `disabledCriteria` in EVERY lane args
+            object -- an empty list when nothing is disabled; every detect lane throws without it --
+            plus each file's `standardsPaths` from its `standards` map. A non-zero exit is never
+            replaced by `[]`: run no lane and report every non-trivial claimed file
+            `REVIEW INCOMPLETE` with the script's stderr line. Use the Workflow tool when callable, passing
             each installed lane's full text as `script` (never its installed path as `scriptPath`)
             per that reference; when the tool is unavailable or rejects the lane, use that reference's
             "Manual detect invocation" with the SAME installed lanes and args. Transport failure
@@ -977,7 +1003,8 @@ technique_skill:
       restrictions:
         - "Read the assigned chunk diff first."
         - "MAY use Read to look at surrounding context in the changed files (the LOCAL paths you were given) when needed."
-        - "Examples: concurrency issues, lifetime bugs, security holes."
+        - "MAY find and Read the consumers of an input the change newly admits, outside the chunk's files, for the silenced-error rule in the canonical prompt only."
+        - "Examples: concurrency issues, lifetime bugs, security holes, an input that used to be refused and is now accepted and ignored."
         - "Only flag issues in files present in your chunk."
     - name: validator
       subagent_type: "@KIT@:review-lane-<entry effort> (step 7)"
@@ -986,6 +1013,7 @@ technique_skill:
       output_format: "exactly one line: 'CONFIRMED: <one-sentence reason>' or 'REJECTED: <one-sentence reason>'"
       restrictions:
         - "Validator does not see who flagged the issue. Independence is the value."
+        - "For a silenced-error issue (an input the change newly admits that a consumer ignores), MAY Read the consumer the description names. CONFIRMED when no consumer acts on the admitted input; it is not an input-dependent issue."
   false_positive_guardrails:
     only_flag:
       - "code that will fail to compile or parse (syntax errors, type errors, missing imports, unresolved references)"
@@ -1160,7 +1188,7 @@ __LAUNCH_EMIT__
           on_failure: Surface the stderr message to the user and stop. No retry.""".replace(
     "__CLAIM_PROBE__", CLAIM_PROBE
 ).replace(
-    "__PREPARE_LAUNCHER__", PREPARE_LAUNCHER_YAML["git"]
+    "__PREPARE_LAUNCHER__", PREPARE_LAUNCHER_YAML_SKILL["git"]
 ).replace(
     "__LAUNCH_EMIT__", LAUNCH_EMIT
 )
@@ -1209,7 +1237,7 @@ __LAUNCH_EMIT__
             Launch note: ALWAYS invoke through `$BOOTSTRAP_PYTHON` (the guarded expression shown in `tool:`), never as a bare path and never as bare `python`/`python3` -- a bare name is not guaranteed to resolve to any interpreter that can run this script, and `python3` in particular can be absent from PATH on Windows (see /bootstrap fact python_interpreter and python-interpreter.md). Bare `$P4_KIT_ROOT/scripts/prepare_review.py <CL>` lets bash try to run the file as a shell script -- it has no shebang line in older checkouts and the exec bit does not survive on Windows checkouts, so bash parses the Python as sh and exits 2. Passing the script as an argument to `$BOOTSTRAP_PYTHON` avoids that entirely: bash only launches the interpreter, never the file. The script self-relocates under the p4-kit venv via reexec, so bootstrap's own interpreter is sufficient. And NEVER pipe the invocation (`... | tail`, `... | head`): a pipe makes `$?` the last pipeline stage's status, not the script's, which silently masks a launch failure as success.""".replace(
     "__CLAIM_PROBE__", P4_CLAIM_PROBE
 ).replace(
-    "__PREPARE_LAUNCHER__", PREPARE_LAUNCHER_YAML["p4"]
+    "__PREPARE_LAUNCHER__", PREPARE_LAUNCHER_YAML_SKILL["p4"]
 ).replace(
     "__LAUNCH_EMIT__", LAUNCH_EMIT
 )
@@ -1285,7 +1313,7 @@ P4_STEP10 = f"""\
 
             Skip this step entirely when `bundle.auto_shelved` is false (we did
             not create the shelf and must not touch it).
-          tool: {PREPARE_LAUNCHER_YAML["p4"]}
+          tool: {PREPARE_LAUNCHER_YAML_SKILL["p4"]}
           input: "--cleanup <bundle.bundle_dir>"
 """
 
@@ -1579,10 +1607,10 @@ FRAGMENTS = {
         "ISSUE_PATH": "<repo-relative or absolute path>",
         "SG_DESC": GIT_SG_DESC,
         "OUTPUT_FORMAT": GIT_OUTPUT_FORMAT,
-        "PREPARE_TOOL": PREPARE_LAUNCHER_YAML["git"],
-        "LANE_TOOL": LANE_LAUNCHER["git"],
-        "PARSE_TOOL": PARSE_LAUNCHER["git"],
-        "RENDER_TOOL": RENDER_LAUNCHER["git"],
+        "PREPARE_TOOL": PREPARE_LAUNCHER_YAML_SKILL["git"],
+        "LANE_TOOL": LANE_LAUNCHER_SKILL["git"],
+        "PARSE_TOOL": PARSE_LAUNCHER_SKILL["git"],
+        "RENDER_TOOL": RENDER_LAUNCHER_SKILL["git"],
         "PROFILE_ROOT": PROFILE_ROOT["git"],
         "LEDGER_RECORD_N": "10",
         "BASELINE_DESC": "the range base SHA advances -- origin/main moves, or HEAD changes for a working-tree review",
@@ -1615,10 +1643,10 @@ FRAGMENTS = {
         "ISSUE_PATH": "<depot or local path>",
         "SG_DESC": P4_SG_DESC,
         "OUTPUT_FORMAT": P4_OUTPUT_FORMAT,
-        "PREPARE_TOOL": PREPARE_LAUNCHER_YAML["p4"],
-        "LANE_TOOL": LANE_LAUNCHER["p4"],
-        "PARSE_TOOL": PARSE_LAUNCHER["p4"],
-        "RENDER_TOOL": RENDER_LAUNCHER["p4"],
+        "PREPARE_TOOL": PREPARE_LAUNCHER_YAML_SKILL["p4"],
+        "LANE_TOOL": LANE_LAUNCHER_SKILL["p4"],
+        "PARSE_TOOL": PARSE_LAUNCHER_SKILL["p4"],
+        "RENDER_TOOL": RENDER_LAUNCHER_SKILL["p4"],
         "PROFILE_ROOT": PROFILE_ROOT["p4"],
         "LEDGER_RECORD_N": "11",
         "BASELINE_DESC": "the CL is reshelved, its content edited, or its revisions move",
@@ -1849,6 +1877,8 @@ use "Manual detect invocation" below. Locate the INSTALLED skills-kit plugin:
   SKILL.md subjects AND for a skill's own `references/*.md` documents), and
   `<root>/skills/md-domain/workflow/project-doc-detect.js` (the
   `audit_project_doc` lane, for every OTHER `.md` subject).
+- Standards resolver: `<root>/scripts/resolve_standards.py` (see "Resolve the run's standards
+  configuration" below).
 - venvPython: skills-kit's provisioned venv, which lives in the version-independent DATA dir --
   `~/.claude/plugins/data/plugins-kit/skills-kit/.venv/Scripts/python.exe` on Windows,
   `~/.claude/plugins/data/plugins-kit/skills-kit/.venv/bin/python` on macOS/Linux.
@@ -1858,7 +1888,8 @@ missing, a documented args contract is not what this doc describes, or the insta
 a subject shape this skill claims. Check the tiers in order and take the FIRST that matches:
 
 - **Broad skew** -- `<root>` cannot be located, OR the `claude-md-detect.js` / `skill-detect.js`
-  entry point or args contract is missing, OR `discover_claude_md.classify_dimension is unavailable`:
+  entry point or args contract is missing, OR `<root>/scripts/resolve_standards.py` is missing,
+  OR `discover_claude_md.classify_dimension is unavailable`:
   emit a one-line warning and RE-RUN prepare_review.py WITHOUT any `--claim` flags. All claimed md
   files return to `changed_files` for generic review, and the whole md-domain section is skipped for
   this run.
@@ -1895,6 +1926,40 @@ These are the only sanctioned second prepare invocations.
 Transport failure is not skills-kit version skew. Keep the current bundle and claims.
 Do not rerun prepare_review.py for a transport failure. Use the manual invocation below.
 
+## Resolve the run's standards configuration (once per review)
+
+Every detect lane REQUIRES `disabledCriteria`, the run's resolved list of disabled optional
+criterion ids, and throws before dispatching any agent when it is absent. An empty list means
+nothing is disabled; an absent list is never read that way. Resolve it ONCE per review, after
+`<root>` and venvPython and before any lane call, with the same skills-kit install the lanes come
+from:
+
+    "<venvPython>" "<root>/scripts/resolve_standards.py" --project-root "<project root>"
+
+`<project root>` = @PROJECT_ROOT@. Omit `--primitive`, so the `standards` map covers every
+primitive this review may route. The script makes `<root>` importable itself, so no `cd` is needed.
+Run it under venvPython only: the resolver needs pyyaml, which skills-kit's venv carries.
+
+On exit 0, parse stdout as `{ disabled, thresholds, standards, audit, notes }`:
+
+- `disabledCriteria` = `disabled`, passed at the top level of EVERY lane args object below --
+  including the empty list.
+- per file, `standardsPaths` = `standards.<primitive>` (absent key -> `[]`), where `<primitive>` is
+  `claude_md` for a CLAUDE.md / active AGENTS.md, `skill_md` for a SKILL.md, `reference_doc` for a
+  skill reference document, and `plain_md` for a generic project doc. This is how project- and
+  user-authored standards reach the lanes.
+- A non-empty `notes` array is rendered verbatim at the top of the md-domain findings section.
+- `thresholds` and `audit` need no threading here: the lanes' mechanical validator reads thresholds
+  itself under `--config`, and `audit.fix_mode` governs a remediate step this review does not run.
+
+On a non-zero exit (1: a malformed config layer, an un-tunable rule id, or an interpreter without
+pyyaml; 2: a usage error) the script prints nothing on stdout and one diagnostic line on stderr.
+Do NOT substitute `[]` and do NOT run any lane on a guessed configuration: an unread config is
+indistinguishable from an empty one. Run no detect lane, keep the files claimed (this is not version
+skew, so they do not return to the generic reviewers), and report
+`REVIEW INCOMPLETE: <file> - resolve_standards.py exited <code>: <stderr line>` for every
+non-trivial claimed file. Incomplete coverage cannot satisfy a submit gate.
+
 ## The Workflow calls (three-way by basename, then by path)
 
 At most three, in the SAME message that launches the reviewer fan-out (or the reviewer Workflow).
@@ -1905,20 +1970,22 @@ Route by basename first; the ONE path-shape rule is the skill-reference case in 
    (CLAUDE.md takes precedence); a claimed `AGENTS.md` sitting beside a `CLAUDE.md` is SHADOWED
    and is dropped from ALL three lanes -- never audited as a claude-md and never as a project doc.
    `script` = the text of `<root>/skills/md-domain/workflow/claude-md-detect.js`, `args` =
-   `{ files: [...], mechanicalCheckPhrases: bundle.mechanical_check_phrases, review: true, refs: { criteria: <root>/skills/md-domain/references/standards/claude-md-standards.md, codeDirFilter: <root>/skills/md-domain/references/standards/claude-md-standards.md, densityCriteria: <root>/skills/md-domain/references/standards/claude-md-standards.md, pluginRoot: <root>, venvPython: <venvPython> } }` (one standards doc backs all three refs -- the code-directory dimension and the density lens are sections of it).
+   `{ files: [...], disabledCriteria: <resolved disabled>, mechanicalCheckPhrases: bundle.mechanical_check_phrases, review: true, refs: { criteria: <root>/skills/md-domain/references/standards/claude-md-standards.md, codeDirFilter: <root>/skills/md-domain/references/standards/claude-md-standards.md, densityCriteria: <root>/skills/md-domain/references/standards/claude-md-standards.md, pluginRoot: <root>, venvPython: <venvPython> } }` (one standards doc backs all three refs -- the code-directory dimension and the density lens are sections of it).
 2. **`audit_skill` lane** -- one call for every claimed file that is EITHER (a) named `SKILL.md`
    OR (b) inside a `*/skills/<name>/references/` folder (only if any). Those are the `skill`
    artifact's two subject shapes and they share one lane and one Workflow call; the lane picks the
    criteria set per file from the path.
    `script` = the text of `<root>/skills/md-domain/workflow/skill-detect.js`, `args` =
-   `{ files: [...], mechanicalCheckPhrases: bundle.mechanical_check_phrases, review: true, refs: { pluginRoot: <root>, venvPython: <venvPython> } }`.
+   `{ files: [...], disabledCriteria: <resolved disabled>, mechanicalCheckPhrases: bundle.mechanical_check_phrases, review: true, refs: { pluginRoot: <root>, venvPython: <venvPython> } }`.
 3. **`audit_project_doc` lane** -- one call for every OTHER claimed `.md` file (generic docs; only if any).
    `script` = the text of `<root>/skills/md-domain/workflow/project-doc-detect.js`, `args` =
-   `{ files: [...], mechanicalCheckPhrases: bundle.mechanical_check_phrases, review: true, refs: { criteria: <root>/skills/md-domain/references/standards/project-doc-standards.md, pluginRoot: <root> } }`.
+   `{ files: [...], disabledCriteria: <resolved disabled>, mechanicalCheckPhrases: bundle.mechanical_check_phrases, review: true, refs: { criteria: <root>/skills/md-domain/references/standards/project-doc-standards.md, pluginRoot: <root> } }`.
 
 `args` may be passed as an object or a JSON string; all `refs` paths must be ABSOLUTE (the
 Workflow runs from the session cwd, not the skill dir). `review: true` forces the model pin and
-per-file diff attribution; keep it true.
+per-file diff attribution; keep it true. `<resolved disabled>` is the `disabled` list from
+"Resolve the run's standards configuration" above, the same list in every lane; a lane call
+without it throws.
 
 **Passing a lane script to the Workflow tool.** Read the installed lane script and pass its full
 text VERBATIM as `script`. Do not pass the installed path as `scriptPath`: the tool refuses the
@@ -1935,8 +2002,8 @@ rejects the lane script. Run the existing detect script's audit through the Agen
 The installed script remains the source of the prompt and result contract.
 
 1. Read the applicable existing detect script in full. Build the same args described above and
-   below, including `review: true`, each file's `preImagePath` and `mechanicalScan`, and the
-   top-level `mechanicalCheckPhrases`. Resolve every referenced file against the installed root.
+   below, including `review: true`, each file's `preImagePath`, `standardsPaths` and
+   `mechanicalScan`, and the top-level `disabledCriteria` and `mechanicalCheckPhrases`. Resolve every referenced file against the installed root.
 2. For each file, invoke Agent with `subagent_type: @KIT@:review-lane-high` and `model: opus`.
    The Agent tool has no effort argument; the subtype's `effort: high` frontmatter binds effort.
    Set `prompt` to the installed script's instantiated `lanePrompt` plus its exact installed
@@ -1977,6 +2044,8 @@ Derive, per claimed file:
   belt-and-braces guard against any residual drive-letter casing skew.
 - `preImagePath` = the entry's `pre_image` (pass `null` through unchanged -- an add is fully
   attributable).
+- `standardsPaths` = the resolved `standards.<primitive>` list for this file's primitive (see
+  "Resolve the run's standards configuration" above).
 - `mechanicalScan` = the entry's `mechanical_scan.files[0]` record. The wrapper has exactly one
   record for this claimed file. Do not flatten it or infer coverage from findings: an empty
   `checks_run` is uncovered, while non-empty `checks_run` with no findings is a clean scan.
@@ -2053,11 +2122,16 @@ MD_DOMAIN_REVIEW_FRAGMENTS = {
         "SKILL_NAME": "git-code-review",
         "KIT": "git-kit",
         "PREIMAGE_ORIGIN": "`git show <range-base>:<path>`",
+        "PROJECT_ROOT": "`bundle.project_root` (the git repo root)",
     },
     "p4": {
         "SKILL_NAME": "p4-code-review",
         "KIT": "p4-kit",
         "PREIMAGE_ORIGIN": "`p4 print -q -o <dest> //depot/path#have`",
+        "PROJECT_ROOT": (
+            "`bundle.project_root` (the p4 workspace root), or the session cwd when it\n"
+            "is null (an unresolvable workspace root)"
+        ),
     },
 }
 
@@ -2361,7 +2435,7 @@ How the effort reaches the model depends on the entry's harness:
   llm-scripting-kit. The runner refuses the lane with exit 2 when a codex entry's effort menu
   does not include the level, or when a transport entry cannot deliver an effort at all; the
   review reports that refusal as a configuration error. The runner's JSON envelope records the
-  effort it sent in its `effort` field. `--effort` needs llm-scripting-kit 0.59.0 or later; the
+  effort it sent in its `effort` field. `--effort` needs llm-scripting-kit 0.60.0 or later; the
   runner refuses an older release.
 
 `model` and `effort` are therefore independent: any model may pair with any effort the model's

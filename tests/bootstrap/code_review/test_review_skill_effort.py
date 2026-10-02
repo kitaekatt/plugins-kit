@@ -133,7 +133,7 @@ def test_lane_tool_entries_are_passed_their_effort(vcs: str) -> None:
 def test_a_runner_refusal_is_not_re_selected_past(vcs: str) -> None:
     body = _flat(gen.render_skill(vcs))
     assert "Exit 2 from the runner is a REFUSAL" in body
-    assert "older than 0.59.0, the first release that accepts `--effort`" in body
+    assert "older than 0.60.0, the first release that accepts `--effort`" in body
     assert "Do not re-select past it, and do not re-run the entry at another effort." in body
 
 

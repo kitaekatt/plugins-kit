@@ -4490,11 +4490,11 @@ def _maintain_project_python_record(data_dir, key, value, source, parse_errors,
 
 
 def _maintain_env_records(data_dir, plugins, ok_entries, quiet_entries):
-    """Rewrite the pre-gate env records (``plugin_roots``, ``tool_bins``).
+    """Rewrite the pre-gate plugin-root env record.
 
     Both skip gates in session-bootstrap.sh short-circuit this engine, so the
     names a pass exports through ``session_env`` are missing from most
-    sessions. These two records are what the hook's pre-gate prelude re-emits
+    sessions. This record is what the hook's pre-gate prelude re-emits
     instead; see the "pre-gate env record" comment in env_var_check.py for the
     format and for why bash does not resolve any of this itself.
 
@@ -4505,10 +4505,9 @@ def _maintain_env_records(data_dir, plugins, ok_entries, quiet_entries):
     staleness story: a plugin that left the registry loses its line here, and
     a path deleted between passes is skipped there.
     """
-    from . import tool_paths
     from .env_var_check import (
         plugin_root_env_var_name, plugin_roots_record_path, read_env_record,
-        tool_bins_record_path, write_env_record,
+        write_env_record,
     )
 
     roots = OrderedDict()
@@ -4521,28 +4520,30 @@ def _maintain_env_records(data_dir, plugins, ok_entries, quiet_entries):
             continue
         roots[plugin_root_env_var_name(plugin_info.name)] = plugin_info.install_path
 
-    # Same source and same existence test as export_tool_env_vars, which runs
-    # later in the pass against this identical mapping. None = the canonical
-    # tool_paths.json location, which is where every plugin pass records to.
-    bins = OrderedDict()
-    for tool_name, tool_path in tool_paths.all_paths(None).items():
-        if os.path.isfile(tool_path):
-            bins[tool_paths.tool_env_var_name(tool_name)] = tool_path
+    record_path = plugin_roots_record_path(data_dir)
+    before = read_env_record(record_path)
+    wrote, kept = write_env_record(record_path, roots)
+    # No path in any entry: a quiet entry is log-only, but the display
+    # tests treat "no absolute paths in entries" as the house rule.
+    if not wrote:
+        quiet_entries.append("plugin roots: pre-gate record write FAILED")
+    elif before == kept:
+        ok_entries.append(f"plugin roots: pre-gate record ok - {len(kept)} names")
+    else:
+        quiet_entries.append(f"plugin roots: pre-gate record now holds {len(kept)} names")
 
-    for label, record_path, wanted in (
-        ("plugin roots", plugin_roots_record_path(data_dir), roots),
-        ("tool paths", tool_bins_record_path(data_dir), bins),
-    ):
-        before = read_env_record(record_path)
-        wrote, kept = write_env_record(record_path, wanted)
-        # No path in any entry: a quiet entry is log-only, but the display
-        # tests treat "no absolute paths in entries" as the house rule.
-        if not wrote:
-            quiet_entries.append(f"{label}: pre-gate record write FAILED")
-        elif before == kept:
-            ok_entries.append(f"{label}: pre-gate record ok - {len(kept)} names")
+    # Bootstrap 0.141.x wrote this record, but the hook no longer reads it.
+    # Remove it so an upgrade does not leave misleading state behind.
+    stale_tool_record = os.path.join(data_dir, "tool_bins")
+    if os.path.exists(stale_tool_record):
+        try:
+            os.unlink(stale_tool_record)
+        except OSError:
+            quiet_entries.append("tool-bin record cleanup FAILED")
         else:
-            quiet_entries.append(f"{label}: pre-gate record now holds {len(kept)} names")
+            quiet_entries.append("tool-bin record removed")
+    else:
+        ok_entries.append("tool-bin record absent")
 
 
 def _interpreter_env_layers(project_dir, profile_state):

@@ -174,7 +174,7 @@ How the effort reaches the model depends on the entry's harness:
   llm-scripting-kit. The runner refuses the lane with exit 2 when a codex entry's effort menu
   does not include the level, or when a transport entry cannot deliver an effort at all; the
   review reports that refusal as a configuration error. The runner's JSON envelope records the
-  effort it sent in its `effort` field. `--effort` needs llm-scripting-kit 0.59.0 or later; the
+  effort it sent in its `effort` field. `--effort` needs llm-scripting-kit 0.60.0 or later; the
   runner refuses an older release.
 
 `model` and `effort` are therefore independent: any model may pair with any effort the model's

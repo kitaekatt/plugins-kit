@@ -294,15 +294,20 @@ class TestAgentLoopRefusal:
         lr._check_selection(LANE, selection)
 
     @pytest.mark.parametrize("lane", sorted(lr.LANES_REQUIRING_AGENT_LOOP))
-    def test_an_agent_loop_lane_is_actually_granted_read(self, lane: str) -> None:
+    def test_an_agent_loop_lane_is_granted_read_and_search_only(self, lane: str) -> None:
         """Passing the harness check must GRANT the capability it checked for.
 
         claude-cli renders allowed_tools=None as `--allowedTools ""` -- an
         allow-nothing list, not an absent flag -- so without this the lane would
         be admitted as needing an agent loop and then handed a tool-less
-        completion holding a prompt that tells it to read files.
+        completion holding a prompt that tells it to read files. Search (Grep,
+        Glob) is part of the grant because the lane is told to find consumers
+        outside the diff; no write or exec tool may ride along.
         """
-        assert lr._allowed_tools_for(lane) == "Read"
+        granted = set(lr._allowed_tools_for(lane).split(","))
+        assert {"Read", "Grep", "Glob"} <= granted
+        assert granted.isdisjoint({"Edit", "Write", "Bash", "NotebookEdit"})
+        assert granted == {"Read", "Grep", "Glob"}
 
     @pytest.mark.parametrize("lane", sorted(lr.LANES_REQUIRING_AGENT_LOOP))
     def test_an_agent_loop_lane_is_rooted_in_the_project(self, seam, lane: str) -> None:

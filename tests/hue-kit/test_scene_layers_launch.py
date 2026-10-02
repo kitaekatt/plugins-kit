@@ -48,16 +48,16 @@ def test_skill_md_names_the_launcher_form():
 
     text = SKILL.read_text(encoding="utf-8")
     # hue_kit_cli.py is launched by the bare `hue-kit` name (bin/ is on the
-    # session PATH). CLAUDE_PLUGIN_ROOT is unset in the Bash tool, so the
-    # prefixed form expands to /scripts/hue_kit_cli.py and fails.
+    # session PATH), so no plugin-root form is needed for it.
     assert "command: hue-kit [--dir PATH]" in text
     assert not [
         line for line in text.splitlines()
         if "${CLAUDE_PLUGIN_ROOT}" in line and "hue_kit_cli.py" in line
     ], "hue_kit_cli.py must be launched as bare `hue-kit`, not via CLAUDE_PLUGIN_ROOT"
-    # scene-layers.py has no bin/ shim, so it keeps the launcher form, rooted
-    # on the variable the bootstrap engine exports rather than on the unset
-    # CLAUDE_PLUGIN_ROOT.
-    assert (f'{expr} "${{HUE_KIT_ROOT:?requires a bootstrap engine pass; '
-            f'run bootstrap run}}/scripts/scene-layers.py"') in text
+    # scene-layers.py has no bin/ shim, so it keeps the launcher form. The
+    # path sits in the skill body, where Claude Code substitutes
+    # CLAUDE_PLUGIN_ROOT before the command runs, so it is rooted on that
+    # variable and not on the bootstrap-exported <PLUGIN>_ROOT name.
+    assert f'{expr} "${{CLAUDE_PLUGIN_ROOT}}/scripts/scene-layers.py"' in text
+    assert "HUE_KIT_ROOT" not in text
     assert "HUE_KIT_VENV" not in text

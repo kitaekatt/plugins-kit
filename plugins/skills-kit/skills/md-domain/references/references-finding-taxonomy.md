@@ -174,7 +174,7 @@ references-audit is a corpus-wide scanner with four rules. The taxonomy A-K abov
 
 ## Background-agent brief template
 
-When the FIX bucket is non-empty, its edits are applied in the REMEDIATE phase, never during classification. For a single affected file the main agent applies them inline with Edit; for two or more files they are handed to `workflow/references-remediate.js` lanes (one per file). The per-finding brief below is fully self-contained -- the executor does not reclassify, it applies. Use this template to build each lane's payload:
+When the FIX bucket is non-empty, its edits are applied in the REMEDIATE phase, never during classification. For a single affected file the main agent applies them inline with Edit; for two or more files they are handed to `workflow/references-remediate.js` lanes (one per file), with the run's resolved `fixMode` as a required arg (`lanes/audit-lane.md`, Step 5). The per-finding brief below is fully self-contained -- the executor does not reclassify, it applies. Use this template to build each lane's payload:
 
 > **Task: apply references-audit FIX edits.**
 >

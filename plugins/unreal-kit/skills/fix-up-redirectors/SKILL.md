@@ -184,7 +184,7 @@ Use the reducer on either the fix-up safe set or the orphaned safe set; the inpu
 
 ```bash
 ~/.claude/plugins/data/plugins-kit/unreal-kit/.venv/Scripts/python.exe \
-  "${UNREAL_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/skills/fix-up-redirectors/scripts/pick_one_per_dir.py" \
+  "${CLAUDE_SKILL_DIR}/scripts/pick_one_per_dir.py" \
   --in tmp/redirectors/safe_filtered.json \
   --out tmp/redirectors/safe_per_dir.json
 ```
@@ -202,8 +202,8 @@ Run discovery via the plugin's `ue-runner`. Pass scope via `SCOPE` env var.
 ```bash
 mkdir -p tmp/redirectors
 MSYS_NO_PATHCONV=1 SCOPE="${1:-/Game}" \
-  "${UNREAL_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/skills/ue-python-api/scripts/ue-runner.cmd" \
-  "${UNREAL_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/skills/fix-up-redirectors/scripts/discover_redirectors.py" \
+  "${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue-runner.cmd" \
+  "${CLAUDE_SKILL_DIR}/scripts/discover_redirectors.py" \
   "${ue_timeout_args[@]}" \
   --copy-output tmp/redirectors/
 ```
@@ -218,7 +218,7 @@ The classifier is a host-side script (no Unreal needed). Run it from the project
 
 ```bash
 ~/.claude/plugins/data/plugins-kit/unreal-kit/.venv/Scripts/python.exe \
-  "${UNREAL_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/skills/fix-up-redirectors/scripts/classify_safety.py" \
+  "${CLAUDE_SKILL_DIR}/scripts/classify_safety.py" \
   --discovery tmp/redirectors/redirectors_discovery.yaml \
   --out-safe tmp/redirectors/safe.json \
   --out-orphaned tmp/redirectors/orphaned.json \
@@ -284,7 +284,7 @@ The cache lives at `./.local-data/code_references.yaml` (per-project, not checke
 
 ```bash
 ~/.claude/plugins/data/plugins-kit/unreal-kit/.venv/Scripts/python.exe \
-  "${UNREAL_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/skills/fix-up-redirectors/scripts/filter_safe_by_code_refs.py" \
+  "${CLAUDE_SKILL_DIR}/scripts/filter_safe_by_code_refs.py" \
   --safe-in tmp/redirectors/safe.json \
   --safe-out tmp/redirectors/safe_filtered.json \
   --report-out tmp/redirectors/code_refs_report.json \
@@ -305,7 +305,7 @@ To force a fresh scan ahead of time (e.g. you just renamed a bunch of assets in 
 
 ```bash
 ~/.claude/plugins/data/plugins-kit/unreal-kit/.venv/Scripts/python.exe \
-  "${UNREAL_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/skills/fix-up-redirectors/scripts/scan_code_references.py"
+  "${CLAUDE_SKILL_DIR}/scripts/scan_code_references.py"
 ```
 
 ## Phase 4 - Apply fixups (UE Python, after approval)
@@ -316,8 +316,8 @@ For the fix-up safe set, use `safe_filtered.json` from Phase 3.5, NOT the raw `s
 
 ```bash
 SAFE_JSON="$PWD/tmp/redirectors/safe_filtered.json" \
-  "${UNREAL_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/skills/ue-python-api/scripts/ue-runner.cmd" \
-  "${UNREAL_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/skills/fix-up-redirectors/scripts/apply_fixups.py" \
+  "${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue-runner.cmd" \
+  "${CLAUDE_SKILL_DIR}/scripts/apply_fixups.py" \
   "${ue_timeout_args[@]}"
 ```
 
@@ -325,8 +325,8 @@ For the orphaned safe set (delete-only), point `SAFE_JSON` at `orphaned_filtered
 
 ```bash
 SAFE_JSON="$PWD/tmp/redirectors/orphaned_filtered.json" \
-  "${UNREAL_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/skills/ue-python-api/scripts/ue-runner.cmd" \
-  "${UNREAL_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/skills/fix-up-redirectors/scripts/apply_fixups.py" \
+  "${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue-runner.cmd" \
+  "${CLAUDE_SKILL_DIR}/scripts/apply_fixups.py" \
   "${ue_timeout_args[@]}"
 ```
 
@@ -334,8 +334,8 @@ To prepend a project-specific CL tag (e.g. for naming conventions like `[Mix, To
 
 ```bash
 CL_DESC_SUFFIX="[Mix, Tool]" SAFE_JSON="$PWD/tmp/redirectors/safe_filtered.json" \
-  "${UNREAL_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/skills/ue-python-api/scripts/ue-runner.cmd" \
-  "${UNREAL_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/skills/fix-up-redirectors/scripts/apply_fixups.py" \
+  "${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue-runner.cmd" \
+  "${CLAUDE_SKILL_DIR}/scripts/apply_fixups.py" \
   "${ue_timeout_args[@]}"
 ```
 

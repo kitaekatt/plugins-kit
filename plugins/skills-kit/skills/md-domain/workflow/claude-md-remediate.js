@@ -25,7 +25,9 @@
 //       decision: "apply"|"skip"|string  // user/inferred decision; free-text = a
 //                                          // refined instruction to apply instead
 //     } ]
-//   } ]
+//   } ],
+//   fixMode: "apply"|"propose"  // REQUIRED: audit.fix_mode from
+//                               // scripts/resolve_standards.py; absent throws
 // }
 
 export const meta = {
@@ -65,6 +67,14 @@ if (typeof input === 'string') {
 }
 if (!input || !Array.isArray(input.perFile) || input.perFile.length === 0) {
   throw new Error('remediate.js requires args.perFile = [{path, role, remediations}]')
+}
+
+// fixMode is REQUIRED. It is the resolved `audit.fix_mode` from
+// scripts/resolve_standards.py, threaded by the caller. An absent or unknown
+// value throws before anything else runs: reading "not passed" as "apply" would
+// edit files for a consumer whose config says propose.
+if (input.fixMode !== 'apply' && input.fixMode !== 'propose') {
+  throw new Error(`remediate.js requires args.fixMode = "apply" | "propose", got ${JSON.stringify(input.fixMode) ?? 'nothing'}. Pass audit.fix_mode from scripts/resolve_standards.py; an absent fixMode is never read as "apply".`)
 }
 
 // Drop files whose every remediation is a skip — nothing to do, no lane needed.

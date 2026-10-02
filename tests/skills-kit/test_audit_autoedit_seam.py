@@ -8,7 +8,9 @@ Two layers, kept distinct:
 - Behaviour layer, FAN-OUT path: the generated `workflow/<artifact>-remediate.js`
   scripts are executed under node with a stub `agent`. With `fixMode: "propose"`
   the stub must see ZERO dispatches and the target file's bytes must be
-  unchanged; with the flag off the stub is dispatched with the remediation list.
+  unchanged; with `fixMode: "apply"` the stub is dispatched with the remediation
+  list. `fixMode` is a REQUIRED input: an absent or unknown value throws before
+  any dispatch, in every remediate lane, rather than reading as "apply".
 
 The SINGLE-FILE path is an agent doing an inline Edit, with no code to execute;
 it is guarded only by an instruction in audit-lane.md. The last test pins that
@@ -73,14 +75,18 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _run_lane(tmp_path: Path, args: dict) -> dict:
+def _run_lane(tmp_path: Path, args: dict, script: Path = SKILL_REMEDIATE,
+              expect_ok: bool = True) -> dict:
     harness = tmp_path / "harness.cjs"
     harness.write_text(HARNESS, encoding="utf-8")
     proc = subprocess.run(
-        [NODE, str(harness), str(SKILL_REMEDIATE), json.dumps(args)],
+        [NODE, str(harness), str(script), json.dumps(args)],
         capture_output=True, text=True, timeout=60,
     )
-    assert proc.returncode == 0, proc.stdout + proc.stderr
+    if expect_ok:
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+    else:
+        assert proc.returncode != 0, proc.stdout + proc.stderr
     return json.loads(proc.stdout.strip().splitlines()[-1])
 
 
@@ -142,9 +148,28 @@ class TestFanOutPathIsEnforcedByCode:
         assert "desc-160-char" in out["prompts"][0]
         assert str(fixture_skill) in out["prompts"][0]
 
-    def test_absent_flag_is_the_apply_default(self, tmp_path, fixture_skill):
-        out = _run_lane(tmp_path, _args(fixture_skill))
-        assert out["calls"] == 1
+    @pytest.mark.parametrize("lane", ["skill", "claude-md", "project-doc", "references"])
+    @pytest.mark.parametrize("fix_mode", [None, "", "Apply", "never", True])
+    def test_absent_or_unknown_fix_mode_throws_before_dispatch(
+        self, tmp_path, fixture_skill, lane, fix_mode
+    ):
+        """An absent fixMode used to read as "apply" and edit the file; it must
+        refuse instead, in every generated remediate lane."""
+        before = _sha(fixture_skill)
+        extra = {} if fix_mode is None else {"fixMode": fix_mode}
+        args = _args(fixture_skill, **extra)
+        if lane == "references":
+            item = args["perFile"][0].pop("remediations")[0]
+            args["perFile"][0] = {"file": str(fixture_skill), "edits": [item]}
+        out = _run_lane(
+            tmp_path, args,
+            script=MD_DOMAIN / "workflow" / f"{lane}-remediate.js",
+            expect_ok=False,
+        )
+        assert "requires args.fixMode" in out["error"], out
+        assert "resolve_standards.py" in out["error"], out
+        assert "calls" not in out
+        assert _sha(fixture_skill) == before
 
     @pytest.mark.parametrize("lane", ["claude-md", "project-doc", "references"])
     def test_every_remediate_lane_carries_the_guard(self, lane):

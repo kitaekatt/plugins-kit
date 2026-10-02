@@ -1,19 +1,33 @@
-"""Durable guard: `${CLAUDE_PLUGIN_ROOT}` must appear only on the two
-surfaces Claude Code expands, never in a command an agent types into a shell.
+"""Durable guard: a plugin-root variable must be spelled for the surface it
+sits on -- the harness variable where Claude Code substitutes it, the bootstrap
+variable everywhere an agent's own shell resolves it.
 
-TWO SURFACES. The harness substitutes `${CLAUDE_PLUGIN_ROOT}` where it reads
-the string before executing it: a `hooks/hooks.json` `command:` field (worked
-example: `plugins/bootstrap/hooks/hooks.json`, whose SessionStart entry
-launches the only writer of `BOOTSTRAP_PYTHON`), and a skill's `!` preload
-(the substitution set is pinned as `CLAUDE_SKILL_SUBSTITUTIONS` in
-`tests/repo-scripts/test_python_invocation_standard.py`, sourced from
-code.claude.com/docs/en/skills, "Available string substitutions"). Everywhere
-else -- in particular the Bash tool's environment -- the variable is unset, so
-`${CLAUDE_PLUGIN_ROOT}/scripts/x.py` degrades silently to `/scripts/x.py`.
-A command an agent runs itself names the plugin root through
+THREE SURFACES substitute `${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_SKILL_DIR}`
+before any command runs, per code.claude.com/docs/en/skills, "Available string
+substitutions": (1) a `hooks/hooks.json` `command:` field (worked example:
+`plugins/bootstrap/hooks/hooks.json`, whose SessionStart entry launches the only
+writer of `BOOTSTRAP_PYTHON`); (2) a skill's `!` preload (the substitution set
+is pinned as `CLAUDE_SKILL_SUBSTITUTIONS` in
+`tests/repo-scripts/test_python_invocation_standard.py`); (3) a plugin skill's
+own `SKILL.md` -- its markdown body and the Bash rules in its `allowed-tools`
+frontmatter. Everywhere else -- references/*.md, READMEs, CLAUDE.md, scripts,
+and the Bash tool's environment -- neither variable is substituted or set, so
+`${CLAUDE_PLUGIN_ROOT}/scripts/x.py` degrades silently to `/scripts/x.py`. A
+command an agent copies out of such a file names the plugin root through
 `"${<PLUGIN>_ROOT:?<msg>}"` instead (`plugin_root_env_var_name` in
 `plugins/bootstrap/bootstrap_lib/env_var_check.py`; exported each un-skipped
 pass by `export_env_var` in `plugins/bootstrap/bootstrap_lib/engine.py`).
+
+THE SURFACE-AWARE RULE this file enforces over tracked plugin files:
+  - In a `plugins/*/skills/**/SKILL.md` (body and frontmatter),
+    command-position `${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_SKILL_DIR}` are
+    ALLOWED, and a command-position bootstrap name (`${<PLUGIN>_ROOT...`, the
+    names `plugin_root_env_var_name` yields for the plugin directories present)
+    is FLAGGED: it is a value the harness never substitutes in a skill body, so
+    the harness variable is the form that works there.
+  - In every other tracked plugin file, command-position
+    `${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_SKILL_DIR}` are FLAGGED, except the
+    hooks.json and preload exemptions below.
 
 THE COMMAND-POSITION RULE this file implements. Deciding where prose ends and
 a command begins is the whole difficulty, so the rule is a disjunction of five
@@ -39,8 +53,9 @@ EXECUTABLE artifact (`_EXECUTABLE_SUFFIXES`, or an extension-less path under a
      suffix (the `(cd ${CLAUDE_PLUGIN_ROOT} && ...)` shape).
 
 WHAT IS DELIBERATELY NOT FLAGGED, preferring false negatives:
-  - `hooks/hooks.json` entirely, and any `!` preload line: the two expanded
-    surfaces (`_is_expanded_surface`, `preload_lines`).
+  - `hooks/hooks.json` entirely, and any `!` preload line: two of the
+    expanded surfaces (`_is_expanded_surface`, `preload_lines`); the third, a
+    SKILL.md, is handled by the surface-aware rule above.
   - The `${CLAUDE_PLUGIN_ROOT:-<fallback>}` form: a `:-` default is a hook
     script's deliberate self-location fallback, not a bare read.
   - Prose that names the variable with no path, or with a non-executable path
@@ -58,8 +73,7 @@ WHAT IS DELIBERATELY NOT FLAGGED, preferring false negatives:
     scanning cannot see the suffix. Named here so the gap is a record, not a
     surprise.
 
-STATUS: the migration of the genuine Bash sites to `"${<PLUGIN>_ROOT:?...}"`
-has landed, and this lane holds at zero offenders. The allowlist covers ONLY
+STATUS: this lane holds at zero offenders. The allowlist covers ONLY
 documentation that describes or quotes the mechanism, never a command awaiting
 a migration: an offender is a finding to fix at the site, not an entry to add.
 Per the root CLAUDE.md insights `a_check_must_be_shown_to_fail` and
@@ -70,6 +84,7 @@ fires; do not quiet a genuine finding with an allowlist entry.
 
 from __future__ import annotations
 
+import functools
 import re
 import subprocess
 from pathlib import Path
@@ -82,9 +97,37 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 #: renders identically at runtime.
 _OCCURRENCE_RE = re.compile(r"\$\{\{?CLAUDE_PLUGIN_ROOT\}\}?")
 
+#: The skill-directory variable, flagged outside a SKILL.md for the same
+#: reason `${CLAUDE_PLUGIN_ROOT}` is.
+_SKILL_DIR_RE = re.compile(r"\$\{\{?CLAUDE_SKILL_DIR\}\}?")
+
 #: `${CLAUDE_PLUGIN_ROOT:-...}` -- a shell default, used by a hook script to
 #: locate itself when launched outside the harness. Not a bare read.
 _WITH_DEFAULT_RE = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT:")
+
+_SKILL_MD_RE = re.compile(r"(?:^|/)plugins/[^/]+/skills/(?:.+/)?SKILL\.md$")
+
+
+def is_skill_md(path: str) -> bool:
+    """A plugin skill's own SKILL.md -- the substituted surface (3)."""
+    return bool(_SKILL_MD_RE.search(path.replace("\\", "/")))
+
+
+@functools.lru_cache(maxsize=1)
+def _kit_root_re() -> re.Pattern[str]:
+    """`${<PLUGIN>_ROOT...}` for every plugin directory present, with the
+    variable names DERIVED by `plugin_root_env_var_name` (never re-typed)."""
+    from bootstrap_lib.env_var_check import plugin_root_env_var_name
+
+    names = sorted(
+        {plugin_root_env_var_name(d.name)
+         for d in (_REPO_ROOT / "plugins").iterdir()
+         if (d / ".claude-plugin" / "plugin.json").is_file()},
+        key=len, reverse=True)
+    assert names, "no plugin directories found to derive root variable names"
+    return re.compile(
+        r"\$\{\{?(?:" + "|".join(map(re.escape, names)) + r")(?::[^}\n]*)?\}\}?")
+
 
 _EXECUTABLE_SUFFIXES = (".py", ".sh", ".cmd", ".bat", ".ps1", ".js", ".mjs")
 
@@ -195,15 +238,20 @@ def _inline_span_signal(line: str, start: int, end: int) -> bool:
 
 
 def scan_text(path: str, text: str) -> list[Hit]:
-    """Every command-position `${CLAUDE_PLUGIN_ROOT}` occurrence in one
+    """Every command-position occurrence the surface-aware rule flags in one
     tracked file's text, per the five signals in the module docstring.
 
-    `path` decides only whether Markdown fence tracking applies (S3 needs a
+    `path` decides (a) whether Markdown fence tracking applies (S3 needs a
     fence in Markdown, where a line may begin with a prose code span, and
-    needs none elsewhere). Pure text scan, no disk access.
+    needs none elsewhere) and (b) the surface: in a SKILL.md the flagged
+    spelling is a bootstrap `<PLUGIN>_ROOT` name, anywhere else it is
+    `${CLAUDE_PLUGIN_ROOT}` / `${CLAUDE_SKILL_DIR}`.
     """
     is_markdown = path.endswith(".md")
-    skip = preload_lines(text) if is_markdown else set()
+    skill_md = is_skill_md(path)
+    flagged_res = ((_kit_root_re(),) if skill_md
+                   else (_OCCURRENCE_RE, _SKILL_DIR_RE))
+    skip = preload_lines(text) if is_markdown and not skill_md else set()
     hits: list[Hit] = []
     in_fence = False
     for lineno, line in enumerate(text.splitlines(), start=1):
@@ -212,13 +260,14 @@ def scan_text(path: str, text: str) -> list[Hit]:
             continue
         if lineno in skip:
             continue
-        for m in _OCCURRENCE_RE.finditer(line):
-            if _WITH_DEFAULT_RE.match(line, m.start()):
-                continue
-            signal = _classify(line, m.start(), m.end(),
-                               in_fence or not is_markdown)
-            if signal:
-                hits.append(Hit(lineno, signal, line.strip()))
+        for flagged_re in flagged_res:
+            for m in flagged_re.finditer(line):
+                if _WITH_DEFAULT_RE.match(line, m.start()):
+                    continue
+                signal = _classify(line, m.start(), m.end(),
+                                   in_fence or not is_markdown)
+                if signal:
+                    hits.append(Hit(lineno, signal, line.strip()))
     return hits
 
 
@@ -275,8 +324,8 @@ class AllowlistEntry(NamedTuple):
 #: file (see test_allowlist_is_not_stale).
 _ALLOWLIST: dict[str, AllowlistEntry] = {
     "plugins/CLAUDE.md": AllowlistEntry(
-        "Two surfaces expand `${CLAUDE_PLUGIN_ROOT}`",
-        "states the two-surface rule this guard enforces; its "
+        "Three surfaces expand `${CLAUDE_PLUGIN_ROOT}`",
+        "states the three-surface rule this guard enforces; its "
         "`bash ${CLAUDE_PLUGIN_ROOT}/hooks/sessionstart/...` text is the "
         "hooks.json worked example, quoted, not a command to run"),
     "plugins/bootstrap/skills/bootstrap/references/plugin-reload-lifecycle.md":
@@ -322,8 +371,10 @@ def collect_offenders() -> list[str]:
 
 
 def test_tracked_plugin_files_have_no_command_position_plugin_root():
-    """No tracked plugins/** file tells an agent to type
-    `${CLAUDE_PLUGIN_ROOT}` into a shell.
+    """No tracked plugins/** file spells a plugin-root variable for the
+    wrong surface: `${<PLUGIN>_ROOT...}` in a SKILL.md, or
+    `${CLAUDE_PLUGIN_ROOT}` / `${CLAUDE_SKILL_DIR}` anywhere else in command
+    position.
 
     Revert proof: the assertion reads real tracked files and reports real
     hits, so it needs no fixture to show it fails -- re-breaking any one site
@@ -333,8 +384,9 @@ def test_tracked_plugin_files_have_no_command_position_plugin_root():
     """
     offenders = collect_offenders()
     assert not offenders, (
-        "`${CLAUDE_PLUGIN_ROOT}` in command position (the Bash tool does not "
-        "expand it -- use \"${<PLUGIN>_ROOT:?...}\"):\n" + "\n".join(offenders)
+        "plugin-root variable spelled for the wrong surface (a SKILL.md body "
+        "uses ${CLAUDE_SKILL_DIR} / ${CLAUDE_PLUGIN_ROOT}; every other file "
+        "uses \"${<PLUGIN>_ROOT:?...}\"):\n" + "\n".join(offenders)
     )
 
 
@@ -403,7 +455,7 @@ def test_prose_and_doc_coordinates_are_not_flagged():
 
 
 def test_preload_and_hooks_json_surfaces_are_exempt():
-    """The two harness-expanded surfaces. Revert proof: drop the
+    """The preload and hooks.json surfaces. Revert proof: drop the
     `lineno in skip` guard and the preload cases go red; drop
     `_is_expanded_surface` and `plugins/bootstrap/hooks/hooks.json` appears
     in `collect_offenders()`, which the real-file assertion below pins."""
@@ -422,7 +474,7 @@ def test_preload_and_hooks_json_surfaces_are_exempt():
 
 
 def test_hooks_json_command_fields_still_use_the_harness_variable():
-    """The positive half of the two-surface rule, asserted against real
+    """The positive half of the surface rule, asserted against real
     files: every tracked `hooks/hooks.json` reaches its script through
     `${CLAUDE_PLUGIN_ROOT}`. Without this the guard would read as "the
     variable is always wrong", and a later edit could replace a working
@@ -444,6 +496,80 @@ def test_hooks_json_command_fields_still_use_the_harness_variable():
         "hooks.json command field not rooted at ${CLAUDE_PLUGIN_ROOT}:\n"
         + "\n".join(offenders)
     )
+
+
+# --- surface-aware rule: both directions -----------------------------------
+
+def test_skill_md_allows_harness_variables_and_flags_bootstrap_names():
+    """In a SKILL.md the harness spelling is allowed and the bootstrap name is
+    flagged, in the body and in `allowed-tools`/capability frontmatter.
+
+    Revert proof: make `scan_text` ignore `is_skill_md` and the first two
+    cases go red (harness spelling flagged), or swap `flagged_res` for the
+    skill branch and the last two go red (bootstrap name let through)."""
+    skill = "plugins/p/skills/s/SKILL.md"
+    fenced_plugin = ('```bash\n'
+                     '"${CLAUDE_PLUGIN_ROOT}/scripts/x.py" --flag\n'
+                     '```\n')
+    fenced_skill = ('```bash\n'
+                    '"${CLAUDE_SKILL_DIR}/scripts/x.py" --flag\n'
+                    '```\n')
+    frontmatter = ("          operation: '\"${BOOTSTRAP_PYTHON:?requires bootstrap "
+                   ">= 0.120.0}\" \"${CLAUDE_SKILL_DIR}/scripts/x.py\" a'\n")
+    assert scan_text(skill, fenced_plugin) == []
+    assert scan_text(skill, fenced_skill) == []
+    assert scan_text(skill, frontmatter) == []
+    bootstrap_name = ('```bash\n'
+                      '"${AWESOME_KIT_ROOT:?x}/scripts/task.py" <verb>\n'
+                      '```\n')
+    assert [h.signal for h in scan_text(skill, bootstrap_name)] == [
+        "S3-first-word"]
+    launched = ("          tool: '\"${BOOTSTRAP_PYTHON:?requires bootstrap >= "
+                "0.120.0}\" \"${GIT_KIT_ROOT:?x}/scripts/p.py\"'\n")
+    assert [h.signal for h in scan_text(skill, launched)] == ["S1-launcher"]
+
+
+def test_other_files_flag_harness_variables_and_allow_bootstrap_names():
+    """Outside a SKILL.md the harness spellings are flagged, the bootstrap
+    name is the correct form. A references/*.md under a skill directory is NOT
+    a SKILL.md.
+
+    Revert proof: drop `_SKILL_DIR_RE` from the non-skill branch and the
+    `${CLAUDE_SKILL_DIR}` case goes red."""
+    ref = "plugins/p/skills/s/references/r.md"
+    skill_dir = ('```bash\n'
+                 '"${CLAUDE_SKILL_DIR}/scripts/x.py" --flag\n'
+                 '```\n')
+    plugin_root = ('```bash\n'
+                   '"${CLAUDE_PLUGIN_ROOT}/scripts/x.py" --flag\n'
+                   '```\n')
+    assert [h.signal for h in scan_text(ref, skill_dir)] == ["S3-first-word"]
+    assert [h.signal for h in scan_text(ref, plugin_root)] == ["S3-first-word"]
+    assert [h.signal for h in scan_text("plugins/p/scripts/x.py",
+                                        '    "${CLAUDE_SKILL_DIR}/scripts/y.py" a\n')
+            ] == ["S3-first-word"]
+    kit_root = ('```bash\n'
+                '"${AWESOME_KIT_ROOT:?x}/scripts/task.py" <verb>\n'
+                '```\n')
+    assert scan_text(ref, kit_root) == []
+    assert not is_skill_md(ref)
+    assert is_skill_md("plugins/p/skills/s/SKILL.md")
+    assert is_skill_md("plugins/p/skills/deep/er/SKILL.md")
+    assert not is_skill_md("plugins/p/README.md")
+
+
+def test_kit_root_names_are_derived_from_the_producer():
+    """The flagged names come from `plugin_root_env_var_name` over the plugin
+    directories, so a new plugin is covered without editing this file.
+
+    Revert proof: hard-code a list in `_kit_root_re` that omits a plugin and
+    this goes red for that plugin."""
+    from bootstrap_lib.env_var_check import plugin_root_env_var_name
+
+    for d in (_REPO_ROOT / "plugins").iterdir():
+        if (d / ".claude-plugin" / "plugin.json").is_file():
+            read = "${" + plugin_root_env_var_name(d.name) + ":?x}"
+            assert _kit_root_re().search(read), d.name
 
 
 # --- allowlist staleness ---------------------------------------------------

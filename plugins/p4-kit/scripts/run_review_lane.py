@@ -135,7 +135,7 @@ _BUNDLE_PHRASE_MAP_MIN_VERSION = "0.43.0"
 
 _CHUNK_INDEX_MIN_VERSION = "0.49.0"
 
-_EFFORT_MIN_VERSION = "0.59.0"
+_EFFORT_MIN_VERSION = "0.60.0"
 
 
 def _supports_claimed_file() -> bool | None:
@@ -222,7 +222,7 @@ def _supports_bundle_phrase_map() -> bool | None:
 def _supports_effort() -> bool | None:
     """Return whether run_lane takes the required per-entry ``effort``.
 
-    llm-scripting-kit 0.59.0 is the first version whose ``review_lane`` has
+    llm-scripting-kit 0.60.0 is the first version whose ``review_lane`` has
     the required ``--effort`` flag and ``run_lane(effort=...)``. An older
     owner ignores or rejects the flag, so the wrapper refuses it by name
     instead of letting a lane run at an effort nobody chose. None means the

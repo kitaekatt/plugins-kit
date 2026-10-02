@@ -21,8 +21,14 @@ what was touched, not as current coordinates.
 ## Mechanism
 
 - `CLAUDE_PLUGIN_ROOT` is expanded by Claude Code only in values the harness
-  reads before executing them: a `hooks/hooks.json` `command:` field, and a
-  skill `!` preload line. The preload case is established in
+  reads before executing them, in three surfaces: a `hooks/hooks.json`
+  `command:` field, a skill `!` preload line, and a plugin skill's markdown
+  body together with Bash rules in its `allowed-tools` frontmatter (source:
+  https://code.claude.com/docs/en/skills, "Available string substitutions",
+  verified 2026-10-02; the same page substitutes `${CLAUDE_SKILL_DIR}`, the
+  skill's own subdirectory rather than the plugin root, in those two skill
+  places). A `references/*.md`, README, `CLAUDE.md` or script is none of the
+  three. The preload case is established in
   `plugins/bootstrap/skills/bootstrap/references/python-interpreter.md`
   (section "Skill preload commands"): Claude Code refuses a preload containing
   any shell expansion, and only the names it substitutes itself, such as
@@ -32,7 +38,13 @@ what was touched, not as current coordinates.
   `hooks/sessionstart/session-bootstrap.sh`, the only writer of
   `BOOTSTRAP_PYTHON`, and that variable is set in sessions.
 - The variable is UNSET in the Bash tool environment. An agent-typed
-  `${CLAUDE_PLUGIN_ROOT}/scripts/x.py` therefore runs as `/scripts/x.py`.
+  `${CLAUDE_PLUGIN_ROOT}/scripts/x.py` therefore runs as `/scripts/x.py`
+  wherever the document carrying it is not one of the three surfaces.
+- In a skill body the harness variable is substituted and needs no bootstrap
+  pass; the guard enforces the surface-aware rule (harness variable in a skill
+  body, `<PLUGIN>_ROOT` form in non-substituted documents). The migration
+  recorded below was made on the premise that a skill body was not a
+  substituted surface, so its SKILL.md entries describe pre-correction work.
 
 ### Replacement
 
@@ -48,15 +60,14 @@ only a session that ran a full pass. Two blocks in
 gates: the interpreter names (lines 134-137), and, from bootstrap 0.141.0, the
 "Recorded env names for this session" block. The second re-emits what a full
 pass recorded under bootstrap's data dir -- `<data_dir>/plugin_roots` for
-`<PLUGIN>_ROOT`, `<data_dir>/tool_bins` for `BOOTSTRAP_BIN_<TOOL>`, one
-`NAME=path` line per entry -- and resolves nothing itself. The writer is
-`engine._maintain_env_records` at Step 4b3, which rewrites each record whole on
+`<PLUGIN>_ROOT`, one `NAME=path` line per entry -- and resolves nothing itself.
+The writer is
+`engine._maintain_env_records` at Step 4b3, which rewrites the record whole on
 every full pass; a `cadence: always` throttled lane returns before Step 4 and
-never rewrites them.
+never rewrites it.
 
 A name is re-emitted only while its recorded path still exists: `[ -d ]` for a
-plugin root, `[ -f ]` for a tool. A path deleted since the recording pass is
-SKIPPED.
+plugin root. A path deleted since the recording pass is SKIPPED.
 
 So a gate-skipped session HAS the root variable -- provided a full pass has
 recorded it since 0.141.0 reached the machine AND the recorded directory still
@@ -89,6 +100,29 @@ record" comment. Step placement and logging:
   `CLAUDE.md` insight `claude_plugin_root_not_in_bash`.
 - `bin/` on PATH: only hue-kit, job-kit, llm-scripting-kit and secrets-kit
   ship a `bin/` dir whose versioned path is on the session PATH.
+
+### Rejected mechanisms
+
+- Shell cache scan in the SessionStart hook, to find plugin roots without a
+  recorded name. Ruled out because it would be a second plugin-root resolver
+  duplicating `plugin_resolve.py` in bash; it would disagree with the engine in
+  `claudx` and `--plugin-dir` sessions, which load from disk while the cache
+  holds published versions; it must choose among multiple cached version
+  directories without the registry, which is permanently empty for marketplace
+  installs under registry v2; and it would run unlogged on every SessionStart,
+  against the rule that every bootstrap check logs its outcome.
+
+### Shipped mechanism: record-and-re-emit
+
+Bootstrap 0.141.0 records `<PLUGIN>_ROOT` under its data dir on a full pass and
+re-emits it in the pre-gate prelude. The plugin-root record was built
+to repair a dependence on an exported variable in skill bodies, which harness
+substitution there (verified 2026-10-02) makes unnecessary. Its remaining
+plugin-root consumers are reference, README and script sites, none of which is
+a substituted surface. A parallel `BOOTSTRAP_BIN_<TOOL>` record-and-re-emit was
+removed in bootstrap 0.142.0: its one identified consumer,
+`plugins/claude-ui-kit/scripts/statusline.sh`, runs as the statusline
+process rather than through the Bash tool environment.
 
 ## Classes
 

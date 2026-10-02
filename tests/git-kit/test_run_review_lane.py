@@ -337,7 +337,7 @@ def test_owner_without_effort_support_is_refused_naming_0_59_0(
     assert code != 0
     stderr = capsys.readouterr().err
     assert "too old" in stderr
-    assert "0.59.0" in stderr
+    assert "0.60.0" in stderr
     assert "--effort" in stderr
 
 
@@ -391,4 +391,4 @@ def test_unconfirmable_effort_support_refuses_instead_of_falling_through(
     code = _run_wrapper(monkeypatch, package, review_lane)
 
     assert code != 0
-    assert "0.59.0" in capsys.readouterr().err
+    assert "0.60.0" in capsys.readouterr().err

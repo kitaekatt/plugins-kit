@@ -380,7 +380,7 @@ claude_md:
       added: "2026-10-02"
     - id: audit_block_fix_mode
       keywords: [audit block, fix_mode, apply propose, FIX = apply, AUDIT_KEYS, _validate_audit, remediate lanes guard, args.fixMode, fails open, single-file inline edit, review mode not reusable, behaviour setting not rule id, plugin-opinion razor]
-      summary: "A fourth validated top-level config block, audit:, added 2026-10-02 with one key, fix_mode: apply | propose (default apply). propose reports FIX findings as proposals and edits nothing. The guard is code-enforced only on the multi-file fan-out path and fails open when args.fixMode is not threaded; both limits are deliberate."
+      summary: "A fourth validated top-level config block, audit:, added 2026-10-02 with one key, fix_mode: apply | propose (default apply). propose reports FIX findings as proposals and edits nothing. The guard is code-enforced only on the multi-file fan-out path and, as originally decided, failed open when args.fixMode was not threaded; both limits were deliberate. Limitation (2) was reversed from skills-kit 0.88.0: see silent_noops_fail_loudly."
       detail: |
         Surface: the same 2026-10-02 razor audit. md-domain's audit applied FIX
         findings as edits with no per-finding decision (audit-lane.md step 5,
@@ -414,8 +414,56 @@ claude_md:
         introduced. A fail-closed variant would need an args.configResolved
         sentinel and a changed lane contract across four lanes; it was judged not
         worth that while the sibling mechanism fails open the same way.
+        Reversal note (2026-10-02): limitation (2) was reversed in skills-kit
+        0.88.0, together with the disabledCriteria fail-open it cited; see
+        silent_noops_fail_loudly below. Limitation (1) stands.
         Consumer-facing text, including both limitations: configuring-standards.md,
         "Audit behaviour (audit:)".
       origin: Surface, finding and follow-up above; the user's ruling was "Build the seam", 2026-10-02.
+      added: "2026-10-02"
+    - id: silent_noops_fail_loudly
+      keywords: [reversal, fails open, fail closed, required lane input, fixMode required, disabledCriteria required, pyyaml unavailable, StandardsUnavailableError, --primitive code_directory, usage error, silent no-op, accepted then ignored, thresholds consumed]
+      summary: "2026-10-02 (skills-kit 0.88.0): four inputs that were accepted and then ignored fail loudly. This REVERSES limitation (2) of audit_block_fix_mode above: fixMode and disabledCriteria are required workflow inputs, and an absent value throws."
+      detail: |
+        Surface: an audit of skills-kit for silent no-ops, following the 0.86.0
+        regression in which widening `applies_to` turned a loud
+        StandardsConfigError into a silently ignored standards file. User
+        ruling: an error that is silently swallowed must never be deferred.
+        Finding, per case.
+        (1) fixMode. audit_block_fix_mode recorded the fail-open as deliberate,
+        on the reasoning that disabledCriteria failed open the same way and a
+        fail-closed variant would need a sentinel. Both lanes are fixed
+        together, so the parity argument no longer holds, and no sentinel was
+        needed: fixMode must be "apply" or "propose", and anything else,
+        absence included, throws in the generated remediate template before
+        any dispatch. Limitation (1), the single-file inline path, stands.
+        (2) disabledCriteria. The four detect lanes (claude-md, skill,
+        project-doc, coverage) required no list and read absence as "nothing
+        disabled". From 0.88.0 the list is required; an empty array is the explicit
+        "nothing disabled". The guard is one shared chunk pinned by
+        gen_workflow_js.py's check_shared_chunks.
+        (3) pyyaml unavailable. resolve() returned empty defaults plus a note,
+        and resolve_standards.py exited 0, so every config and standards file
+        was ignored while the output read like "nothing configured". resolve()
+        raises StandardsUnavailableError (a StandardsConfigError), naming
+        the skills-kit venv. emit_audit_jobs.resolve_admitted_endpoints catches
+        it by name, but re-raises (main exits 5) when any config or
+        *-standards.md layer file exists on disk, because narrowing then
+        silently ignores a configured admitted_endpoints. It returns the empty
+        admission, with no message, only when no layer file exists. Every other
+        caller stops.
+        (4) `--primitive code_directory`. The answer was always `[]`, because
+        authored code_directory sets are rejected at load. A --primitive in
+        APPLIES_TO_NOT_CONSUMED, or an unknown name, is a usage error.
+        Not a silent no-op: `thresholds`. Every accepted key is a key of
+        audit.THRESHOLDS, every one is read by audit.py, and audit.py runs
+        under --config in the skill and claude-md detect lanes. Thresholds are
+        not scoped per lane, so no key can be configured that no consumer
+        reads; the coverage lane's not reading them drops nothing a user set
+        for it. Nothing changed for this case.
+        Follow-up: callers outside skills-kit that dispatch the detect lanes
+        must thread disabledCriteria (git-kit's and p4-kit's
+        md-domain-review.md references).
+      origin: Surface, finding and follow-up above; user ruling 2026-10-02.
       added: "2026-10-02"
 ```

@@ -64,12 +64,20 @@ either variable. Claude Code runs the preload before the skill renders and
 refuses any preload command that contains a shell expansion ("Contains
 expansion"), so the whole skill fails. Only the names Claude Code substitutes
 itself, such as `${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_SESSION_ID}`, may appear.
+A preload is one of three surfaces where Claude Code substitutes the plugin
+root; the other two are a hooks.json `command:` field and a plugin skill's
+markdown body with its `allowed-tools` Bash rules (see
+https://code.claude.com/docs/en/skills, "Available string substitutions").
 Launch Python in a preload as:
 
     !`uv run --no-project python "${CLAUDE_PLUGIN_ROOT}/scripts/<script>.py" $ARGUMENTS`
 
 Commands the agent runs itself (step text, `tool:` values, "run ..." lines)
-still use the variable forms above.
+still use the interpreter variable forms above. That includes a skill body:
+`BOOTSTRAP_PYTHON` and `BOOTSTRAP_PROJECT_PYTHON` apply there unchanged. Only
+the path to a plugin script differs in a skill body, which uses the harness
+variable (`${CLAUDE_SKILL_DIR}` or `${CLAUDE_PLUGIN_ROOT}`) because Claude Code
+substitutes it there.
 
 ## Where each value comes from
 
