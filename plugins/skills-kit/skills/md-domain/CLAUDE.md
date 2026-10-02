@@ -122,7 +122,7 @@ claude_md:
       added: "2026-07-29"
     - id: coverage_is_report_only_and_not_an_audit_lane
       keywords: [coverage verb, third verb, peer verb superseded, discovery phase, not an audit lane, not a density lens, report-only, GAPS-FOUND, COVERAGE-ASSESSED, code subject, ambient chain, no remediate workflow, registration is go-live, coverage_is_a_report_only_third_verb]
-      summary: The coverage capability is REPORT-ONLY and has its own procedure (coverage_code_subtree, own coverage-lane.md) -- it is not a fifth audit lane and not a --coverage flag. Three contract facts decide that; the report-only narrowing is what keeps a separate procedure cheap. The further claim that it is a PEER THIRD VERB is superseded (see the amendment at the end).
+      summary: The coverage capability is REPORT-ONLY and has its own procedure (coverage_code_directory, own coverage-lane.md) -- it is not a fifth audit lane and not a --coverage flag. Three contract facts decide that; the report-only narrowing is what keeps a separate procedure cheap. The further claim that it is a PEER THIRD VERB is superseded (see the amendment at the end).
       detail: |
         Three shapes were considered: (A) a third verb with its own procedure,
         (B) a --coverage lens threaded through audit_claude_md exactly as
@@ -441,11 +441,20 @@ claude_md:
         disagreed about what a directory is, and the ledger supplied a third
         definition; the recursive subject was the root cause rather than the
         inventory check. Follow-up: `applies_to: code_subtree` and the lane id
-        `coverage_code_subtree` are now imprecise names for a
-        single-directory subject -- the rename is deliberately NOT bundled here,
+        `coverage_code_subtree` were imprecise names for a single-directory
+        subject, and the rename was deliberately not bundled with this change,
         because it touches the dispatch table, the framework registry, the lane
-        records and their tests, and a partial rename is the worse failure. It is
-        recorded as its own change.
+        records and their tests, and a partial rename is the worse failure. It
+        landed as its own change (skills-kit 0.86.0): `code_subtree` is now
+        `code_directory` and `coverage_code_subtree` is now
+        `coverage_code_directory`. The lane id is retired outright; the
+        composition id keeps `code_subtree` as a deprecated `applies_to:` alias
+        that `standards_resolve.py` normalises to `code_directory`. The files
+        named for the OUTPUT (`coverage-lane.md`, `coverage-standards.md`,
+        `discover_coverage.py`, `coverage-detect.js`) kept their names.
+        `code_directory` is a near-neighbour of the CD "code-directory
+        dimension" in `claude-md-standards.md`, which classifies a CLAUDE.md's
+        KIND rather than naming a directory subject; do not conflate them.
       added: "2026-08-11"
     - id: verification_is_a_stage_not_a_prompt_clause
       keywords: [refutation stage, verifier, generator with no verifier, self-verification, verified absent unearned, truth not value, refutation posture, counterexample required, unreturned verification, verbatim quote, invented criterion, promotion gate, unshipped filter drifts]
@@ -672,24 +681,27 @@ claude_md:
         SKILL.md.
       added: "2026-08-17"
     - id: analyze_is_the_verb_coverage_is_the_output
-      keywords: [analyze verb, coverage noun, rename, coverage_code_subtree, legacy identifier, named for output, no coverage verb, partial rename avoided]
+      keywords: [analyze verb, coverage noun, rename, coverage_code_directory, coverage_code_subtree, code_subtree, legacy identifier, named for output, no coverage verb, partial rename avoided]
       summary: The verb formerly called `coverage` is `analyze`; `coverage` is retained as the name of what it PRODUCES. Every file and id keeping the word coverage is named for the output, so no file rename was needed and none should be done later.
       detail: |
         The owner's framing: `analyze` describes what you DO to produce coverage,
         and coverage is the artifact. So the rename touches the dispatch surface
         only -- the verb token in the table, grammar, greeting and the lane
-        record's `verb:` field. `coverage_code_subtree`, `coverage-lane.md`,
-        `coverage-standards.md`, `discover_coverage.py`, `coverage-detect.js` and
-        the `code_subtree` composition all keep their names because each is named
-        for the output or is a stable identifier.
+        record's `verb:` field. `coverage-lane.md`, `coverage-standards.md`,
+        `discover_coverage.py` and `coverage-detect.js` keep their names because
+        each is named for the output. (At the time of the verb change the lane id
+        and the `code_subtree` composition were also left alone; both were
+        renamed later, see below.)
         THAT CONTAINMENT WAS THE POINT. A sweeping rename would have touched the
         framework registry, the discover scripts, the workflow and their tests --
         and `the_subject_is_one_directory_not_a_subtree` already warns that a
         PARTIAL rename is the worse failure. Naming the files for the output
         makes the full rename unnecessary rather than merely deferred.
-        The still-deferred rename is a different one: `code_subtree` is imprecise
-        for a single-directory subject. It stays deferred, and it stays recorded
-        in that insight -- do not bundle it into a later verb change either.
+        The rename that was deferred at the time was a different one: `code_subtree`
+        was imprecise for a single-directory subject. It landed separately as
+        `code_directory` (lane id `coverage_code_directory`), recorded in
+        `the_subject_is_one_directory_not_a_subtree`; the output-named files
+        still keep their names.
       origin: |
         Surface: the verb `coverage` named a noun, which made "run coverage then
         generate" read as two nouns rather than a verb chain. Finding: the owner

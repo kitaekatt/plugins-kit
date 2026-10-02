@@ -3,8 +3,9 @@
 A standards file is a markdown document carrying one fenced `standards_set:`
 YAML block. The prose is for a human browsing the standards; the block is the
 machine-validated contract skills-kit's own audits consume. One file governs
-exactly one file-type primitive -- the optional, tunable opinions skills-kit
-applies when auditing that kind of file.
+exactly one subject -- a file-type primitive or a composition such as
+`code_directory` -- and carries the optional, tunable opinions skills-kit
+applies to it.
 
 Standards files are the authored surface of skills-kit's configurable
 standards: architectural opinions stay hard-coded and are never expressed here;
@@ -14,18 +15,22 @@ optional layer -- opinions a project may keep, disable, or tune.
 ## Where standards files live
 
 Standards files sit in a skills-kit config layer directory (mirroring
-`bootstrap.json` layering), one file per file type. The filename is a
+`bootstrap.json` layering), one file per subject. The filename is a
 discoverability convention; the block's `applies_to:` key is authoritative.
 
-| Filename | `applies_to` primitive |
+| Filename | `applies_to` subject |
 |---|---|
 | `SKILL-standards.md` | `skill_md` |
 | `CLAUDE-md-standards.md` | `claude_md` |
 | `reference-standards.md` | `reference_doc` |
 | `doc-standards.md` | `plain_md` |
+| `coverage-standards.md` | `code_directory` (a composition) |
 
 The primitive ids are the file-type sub-kinds registered in
-`audit-framework.yaml` (this same references/ directory). If the
+`audit-framework.yaml` (this same references/ directory); a composition id is
+one of that file's `compositions:` entries, and `code_directory` is the only
+one a standards file may name. The former spelling `code_subtree` is still
+accepted as a deprecated alias and is normalised to `code_directory`. If the
 filename and `applies_to` disagree, `applies_to` wins; keep them aligned so the
 file is discoverable by name.
 
@@ -34,9 +39,10 @@ file is discoverable by name.
 Top-level fields:
 
 - **`identity`** (required) -- one sentence stating what this set governs and
-  for which file type. Read aloud, it answers "which opinions does this file
+  for which subject. Read aloud, it answers "which opinions does this file
   carry, and over what."
-- **`applies_to`** (required) -- the file-type primitive id this set governs.
+- **`applies_to`** (required) -- the file-type primitive id or composition id
+  this set governs.
   Authoritative over the filename convention.
 - **`criteria`** (required, at least one) -- the list of standards. Each entry
   is one checkable opinion.
@@ -71,9 +77,11 @@ Each criterion carries:
 
 `enforcement` declares how a criterion is evaluated:
 
-- **`judgment`** (default) -- the detect lane evaluates the criterion from its
-  `statement` text. No code is involved; the standard is enforced entirely from
-  what it says.
+- **`judgment`** (default) -- for a set naming a file-type primitive, the audit
+  detect lane evaluates the criterion from its `statement` text. No code is
+  involved; the standard is enforced entirely from what it says. A
+  `code_directory` set is resolved by `scripts/resolve_standards.py` and is not
+  consumed by the coverage lane.
 - **`mechanical`** -- a registered evaluator, keyed by the criterion `id`,
   performs the check (for example a character count or a regex). The standards
   file remains the single source of truth for the statement, id, and default;
@@ -84,9 +92,9 @@ Omit `enforcement` and the criterion is a judgment criterion.
 ## Verbatim-quote enforcement posture
 
 A standards criterion is enforced by quoting it verbatim, never by paraphrase.
-When the detect lane raises a finding against a standards criterion, it emits
-the criterion's exact `statement` text together with the source path of the
-standards file that declared it. An agent does not infer a rule the standards
+When the audit detect lane raises a finding against a file-type primitive's
+criterion, it emits the criterion's exact `statement` text together with the
+source path of the standards file that declared it. An agent does not infer a rule the standards
 file does not state, and does not restate a criterion in its own words. This
 mirrors the ancestor-CLAUDE.md convention enforcement already in the audit
 lanes: the standard, its wording, and its provenance travel together so the

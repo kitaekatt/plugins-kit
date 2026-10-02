@@ -7,15 +7,16 @@ configuration for the artifact type they audit:
 
   - the disabled optional-rule/criterion ids and threshold overrides (threaded
     into the detect lanes as `disabledCriteria` and used by audit.py --config);
-  - the applicable *-standards.md file paths per audit-framework primitive
+  - the applicable *-standards.md file paths per subject (a file-type primitive or a composition id)
     (threaded per-file as `standardsPaths`).
 
 Usage:
     python resolve_standards.py --project-root <dir> [--primitive <name> ...]
 
 --primitive is repeatable and filters the `standards` map to the named
-primitives (skill_md, claude_md, reference_doc, plain_md); omit it to return
-every primitive that has standards. Prints one JSON object:
+subjects: a file-type primitive (skill_md, claude_md, reference_doc, plain_md)
+or a composition id (code_directory); omit it to return every subject that has
+standards. Prints one JSON object:
 
     {
       "disabled":   ["<rule-id>", ...],
@@ -62,9 +63,10 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         default=None,
         metavar="NAME",
-        help="Restrict the `standards` map to this audit-framework primitive "
-             "(skill_md, claude_md, reference_doc, plain_md). Repeatable; "
-             "omit to return every primitive that has standards.",
+        help="Restrict the `standards` map to this subject: a file-type "
+             "primitive (skill_md, claude_md, reference_doc, plain_md) or a "
+             "composition id (code_directory). Repeatable; omit to return "
+             "every subject that has standards.",
     )
     args = parser.parse_args(argv)
 

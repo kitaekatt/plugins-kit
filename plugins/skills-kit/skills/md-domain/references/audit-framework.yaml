@@ -76,7 +76,7 @@ primitives:
 
 compositions:
 
-  - id: code_subtree
+  - id: code_directory
     description: A named code directory together with the ambient CLAUDE.md chain that governs it.
     marker: 'user-named directory or a directory resolved from --diff; ambient chain resolved by discover_coverage.py'
     contains:

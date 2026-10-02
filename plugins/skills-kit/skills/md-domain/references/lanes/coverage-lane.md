@@ -5,7 +5,7 @@ SUBJECT rather than artifact. Its subject is CODE: one directory's own direct
 code files, assessed for what its CLAUDE.md is missing.
 
 **The verb is `analyze`; `coverage` is what it PRODUCES.** This file, the lane id
-`coverage_code_subtree`, `coverage-standards.md`, `discover_coverage.py` and
+`coverage_code_directory`, `coverage-standards.md`, `discover_coverage.py` and
 `coverage-detect.js` all keep the word `coverage` because they are named for the
 output, not the verb. Do not read those names as a surviving `coverage` verb;
 there is none, and `/md-domain coverage` is not a dispatch.
@@ -27,7 +27,7 @@ this lane's report is worth persisting rather than consuming and discarding.
 
 **Status as of 2026-08-08: filled and registered.** The assessment criteria live
 in `references/standards/coverage-standards.md`, callers pass that document's
-absolute path as `refs.criteria`, and `coverage_code_subtree` is registered in
+absolute path as `refs.criteria`, and `coverage_code_directory` is registered in
 SKILL.md. Registration is the go-live switch; all three parts landed together.
 
 ## What this verb is for, before anything else
@@ -64,9 +64,8 @@ against copies of themselves (`../standards/coverage-standards.md:22-28`).
 is not a subject: git -> `check-ignore --no-index`; Perforce -> `p4 ignores`;
 neither -> nothing is excluded (`../standards/coverage-standards.md:30-34`).
 
-The lane id `coverage_code_subtree` and the standards doc's
-`applies_to: code_subtree` are stable identifiers, not descriptions of the
-subject. Read them as names: what they identify is one directory's own direct
+The lane id `coverage_code_directory` and the standards doc's
+`applies_to: code_directory` name the subject: one directory's own direct
 code.
 
 This is why coverage cannot be a criterion inside `audit_claude_md`: the per-file
@@ -79,7 +78,7 @@ never reaches.
 
 | Parameter | Value |
 |---|---|
-| lane id | `coverage_code_subtree` |
+| lane id | `coverage_code_directory` |
 | discovery | `scripts/discover_coverage.py` |
 | detect workflow | `workflow/coverage-detect.js` |
 | remediate workflow | NONE -- report-only, deliberately |
@@ -399,10 +398,10 @@ resolution degraded to defaults") goes in the report header verbatim -- it means
 the run is NOT the same as "no config", even though the disabled list reads
 identically to that case.
 
-No `--primitive` is passed and the `standards` map is not consumed: an authored
-`*-standards.md` declares `applies_to:` as one of the four FILE-TYPE primitives,
-and this lane's subject is a directory plus its ancestor chain, so no authored
-standards file can target it. `thresholds` is not consumed either -- every
+No `--primitive` is passed and the `standards` map is not consumed: this lane
+does not read it. A standards file naming `applies_to: code_directory` (or the
+deprecated alias `code_subtree`) resolves, but this lane does not apply its
+criteria. `thresholds` is not consumed either -- every
 criterion here is judgment, and no coverage criterion reads a threshold.
 
 Announce the run by its canonical analysis name (`Code analysis` -- echoed

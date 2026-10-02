@@ -356,10 +356,12 @@ claude_md:
         non-zero exit as STOP, so enabling that route would refuse every skill,
         claude-md and project-doc audit in every project. This is the most
         reusable finding of the entry: `shipped_dir` is fatal to enable as it
-        stands.
+        stands. skills-kit 0.86.0 admitted the `code_directory` composition id,
+        so the second cause is spent; the missing `standards_set:` block still
+        makes `shipped_dir` fatal.
         Follow-up: none for the seam itself. `shipped_dir` remains unused;
-        narrowing its glob and widening `applies_to` are prerequisites to any
-        future use of it.
+        narrowing its glob is a prerequisite to any future use of it. The
+        `applies_to` widening it also required landed in 0.86.0.
         Verification was behavioural, not a prompt-string assertion: the same
         fixture assessed with the criterion enabled returned COVERAGE-ASSESSED
         with no candidates, and with the id disabled returned GAPS-FOUND with the
