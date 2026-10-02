@@ -578,3 +578,60 @@ def link_shared_lib(name: str, python: Optional[str], shared_root: str) -> Share
         name, "failed",
         f"wrote {pth} but `import {name}` still fails; {rollback_note}",
     )
+
+
+class SharedRootResolution(NamedTuple):
+    name: str
+    status: str   # "resolved" | "absent" | "ambiguous"
+    root: Optional[str]   # the shared_root to pass to link_shared_lib; set only when "resolved"
+    message: str
+
+
+def resolve_project_shared_root(
+    data_root: str, name: str, marketplace: Optional[str] = None
+) -> SharedRootResolution:
+    """Find the ``shared_root`` that holds a published shared lib, for a consumer
+    that has no marketplace of its own (a project venv).
+
+    Scans ``<data_root>/*/_shared_libs/<name>/<name>/`` and reports the one
+    marketplace that holds it. ``root`` is ``<data_root>/<marketplace>/_shared_libs``,
+    the same value a plugin consumer derives, so it feeds ``link_shared_lib``
+    unchanged; generation pinning stays in ``pth_line``.
+
+    Never raises (like the other functions here, outcomes are a status for the
+    engine to route): "resolved" (exactly one match, or the named marketplace
+    holds it), "absent" (no match, or the named marketplace does not hold it --
+    the same eventual-consistency soft-skip as an unpublished lib), or
+    "ambiguous" (two or more marketplaces hold it and none was named; the message
+    names each and asks for the qualified form). ``marketplace`` restricts the
+    search to that one directory name.
+    """
+    try:
+        candidates = sorted(os.listdir(data_root))
+    except OSError:
+        candidates = []
+    found = [
+        mkt for mkt in candidates
+        if (marketplace is None or mkt == marketplace)
+        and os.path.isdir(os.path.join(data_root, mkt, "_shared_libs", name, name))
+    ]
+    if not found:
+        where = (
+            f"marketplace {marketplace}" if marketplace is not None
+            else f"any marketplace under {data_root}"
+        )
+        return SharedRootResolution(
+            name, "absent", None,
+            f"shared lib {name} not published by {where}; will retry next session",
+        )
+    if len(found) > 1:
+        return SharedRootResolution(
+            name, "ambiguous", None,
+            f"shared lib {name} is published by more than one marketplace "
+            f"({', '.join(found)}); qualify it as "
+            f'{{"name": "{name}", "marketplace": "<one of them>"}}',
+        )
+    return SharedRootResolution(
+        name, "resolved", os.path.join(data_root, found[0], "_shared_libs"),
+        f"{name} resolved from marketplace {found[0]}",
+    )

@@ -16,6 +16,7 @@ Exit behavior:
 import argparse
 import json
 import os
+import re
 import stat
 import sys
 import tempfile
@@ -1116,7 +1117,11 @@ def _main_pass():
         # (env_checks) and Step 4 (plugin manifests) see it. A higher-priority
         # Step 3c outcome is kept: an opted-out project exports no project
         # interpreter at all, and an activated VIRTUAL_ENV outranks the venv.
-        if not pv_failures:
+        # A malformed OPTIONAL shared_lib_imports entry is reported (it stays in
+        # all_failures below) but does not withhold the interpreter export: the
+        # venv itself is valid and only that one library goes unlinked. Every
+        # venv-level failure still gates the export exactly as before.
+        if not [f for f in pv_failures if f.get("blocks_venv", True)]:
             if project_python_source in _PROJECT_PYTHON_OUTRANKS_VENV:
                 pv_ok.append(_kept_over_venv_entry(project_python_source))
             else:
@@ -1299,6 +1304,16 @@ def _main_pass():
     )
     if sweep_failures:
         all_failures.extend(sweep_failures)
+    # Step 4c2: link the declared project_venv shared libs. Deliberately HERE,
+    # after the sweep (every owner has published), and NOT inline at Step 3d,
+    # which runs before any owner publishes and would soft-skip on a first pass.
+    if project_venv_def and args.project_dir:
+        pl_actions, pl_quiets, pl_oks, pl_failures = _link_project_shared_libs(
+            project_venv_def, args.project_dir, data_dir, shared_lib_links)
+        sweep_actions = sweep_actions + pl_actions
+        sweep_quiets = sweep_quiets + pl_quiets
+        sweep_oks = sweep_oks + pl_oks
+        all_failures.extend(pl_failures)
     # ONE aggregated display line for every shared-lib success in the pass, from
     # BOTH emission sites (per-plugin manifest phase + this sweep), deduped and
     # grouped by lib -- the per-plugin lines are log-only (see _SharedLibLinkLog).
@@ -2263,6 +2278,106 @@ def _shared_lib_convergence_sweep(plugins, data_dir, link_log=None, engine_versi
             else:  # cached / skipped -> verbose-only
                 oks.append(entry)
     return actions, quiets, oks, failures
+
+
+def _link_project_shared_libs(venv_def, project_dir, data_dir, link_log=None):
+    """Step 4c2: link ``project_venv.shared_lib_imports`` into the project venv.
+
+    Runs after the convergence sweep so every owner has published; the owner's
+    marketplace is found with ``resolve_project_shared_root`` because a project
+    has none of its own. Routing, one entry per declared library:
+    linked -> quiet + the shared aggregate line; cached / skipped -> ok;
+    failed / ambiguous -> action entry plus a ``shared_lib`` failure attributed
+    to ``config``. An existing ``sitecustomize.py`` in the venv is reported.
+
+    Returns ``(actions, quiets, oks, failures)``.
+    """
+    from .shared_lib import link_shared_lib, purelib_of, resolve_project_shared_root
+    from .venv_check import _find_python
+
+    actions, quiets, oks, failures = [], [], [], []
+    entries, _bad = _normalize_project_shared_lib_imports(venv_def)
+    if not entries:
+        return actions, quiets, oks, failures
+    try:
+        target_dir, failure = _resolve_project_subdir(
+            project_dir, venv_def.get("subdir"), "project_venv")
+    except (OSError, TypeError, ValueError):
+        target_dir, failure = None, True
+    if failure or not os.path.isfile(os.path.join(target_dir, "pyproject.toml")):
+        oks.append("config: shared-libs: skipped - no project venv to link into")
+        return actions, quiets, oks, failures
+    python = _find_python(os.path.join(target_dir, ".venv"))
+    data_root = os.path.dirname(os.path.dirname(data_dir))
+    site = purelib_of(python) if python and os.path.exists(python) else None
+    if site and os.path.isfile(os.path.join(site, "sitecustomize.py")):
+        actions.append(
+            f"config: shared-libs: {os.path.join(site, 'sitecustomize.py')} exists in "
+            f"the project venv; a <lib>.pth link plus that file prepends the same "
+            f"generation twice (harmless, but neither can be shown to be the one "
+            f"working) -- remove the file once the link is in place")
+    for entry in entries:
+        name = entry["name"]
+        res = resolve_project_shared_root(data_root, name, entry["marketplace"])
+        label = f"config: shared-lib {name}"
+        if res.status == "ambiguous":
+            actions.append(f"{label}: FAILED - {res.message}")
+            failures.append({"type": "shared_lib", "name": name,
+                             "message": res.message, "plugin": "config"})
+            continue
+        if res.status == "absent":
+            oks.append(f"{label}: {res.message}")
+            continue
+        result = link_shared_lib(name, python, res.root)
+        text = f"{label}: {result.message}"
+        if result.status == "linked":
+            quiets.append(text)
+            if link_log is not None:
+                link_log.record("linked", name, "project")
+        elif result.status == "failed":
+            actions.append(f"{label}: FAILED - {result.message}")
+            failures.append({"type": "shared_lib", "name": name,
+                             "message": result.message, "plugin": "config"})
+        else:  # cached / skipped
+            oks.append(text)
+        if result.status in ("linked", "cached") and site:
+            shadow = _project_venv_own_copy(site, name)
+            if shadow:
+                actions.append(
+                    f"{label}: the project venv already holds its own {shadow}; "
+                    f"the shared copy is prepended and is the one that imports -- "
+                    f"remove {name} from shared_lib_imports if the project's own "
+                    f"copy is wanted")
+    return actions, quiets, oks, failures
+
+
+def _project_venv_own_copy(site, name):
+    """Describe a copy of library ``name`` installed in purelib ``site``, or "".
+
+    Observable facts only (a declared-but-uninstalled dependency shadows
+    nothing): a ``<name>/`` package or ``<name>.py`` module, and a
+    ``<name>-<version>.dist-info`` directory for the version. Never modifies
+    the venv.
+    """
+    try:
+        listing = os.listdir(site)
+    except OSError:
+        return ""
+    norm = re.sub(r"[-_.]+", "_", name).lower()
+    present = (os.path.isdir(os.path.join(site, name))
+               or os.path.isfile(os.path.join(site, name + ".py")))
+    version = ""
+    for entry in sorted(listing):
+        stem, ext = os.path.splitext(entry)
+        if ext != ".dist-info" or "-" not in stem:
+            continue
+        dist, ver = stem.split("-", 1)
+        if re.sub(r"[-_.]+", "_", dist).lower() == norm:
+            version, present = ver, True
+            break
+    if not present:
+        return ""
+    return f"{name} {version}" if version else name
 
 
 def _plugin_ships_sessionstart_hook(install_path):
@@ -4041,6 +4156,74 @@ def _resolve_project_subdir(project_dir, subdir, label):
     return resolved, None
 
 
+def _normalize_project_shared_lib_imports(venv_def):
+    """Validate and normalize ``project_venv.shared_lib_imports``.
+
+    Accepts a list whose items are each a non-empty library name string or a
+    ``{"name": <str>, "marketplace": <str, optional>}`` object (no other keys).
+    Returns ``(entries, failures)``: ``entries`` is a list of
+    ``{"name", "marketplace"}`` dicts (``marketplace`` None when unqualified),
+    deduplicated by ``(name, marketplace)`` in first-seen order; a qualified
+    entry supersedes an unqualified entry of the same name. Every
+    malformed item adds one descriptive failure (attributed to ``config``,
+    type ``project_venv``); valid items are still returned.
+    """
+    raw = venv_def.get("shared_lib_imports") if isinstance(venv_def, dict) else None
+    if raw is None:
+        return [], []
+
+    def _fail(msg):
+        return {
+            "type": "project_venv",
+            "message": f"shared_lib_imports {msg}",
+            "remediation_cmd": None,
+            "plugin": "config",
+            # Reported, but the venv is still usable: see Step 3d.
+            "blocks_venv": False,
+        }
+
+    if not isinstance(raw, list):
+        return [], [_fail(
+            f"must be a list of library names or {{name, marketplace}} "
+            f"objects, got {type(raw).__name__}")]
+
+    entries, failures, seen = [], [], set()
+    for i, item in enumerate(raw):
+        name = marketplace = None
+        problem = None
+        if isinstance(item, str):
+            name = item
+        elif isinstance(item, dict):
+            extra = sorted(set(item) - {"name", "marketplace"})
+            name = item.get("name")
+            marketplace = item.get("marketplace")
+            if extra:
+                problem = f"has unknown key(s) {extra}"
+            elif not isinstance(name, str):
+                problem = "needs a string 'name'"
+            elif marketplace is not None and (
+                    not isinstance(marketplace, str) or not marketplace.strip()):
+                problem = "'marketplace' must be a non-empty string when present"
+        else:
+            problem = (f"must be a string or a {{name, marketplace}} object, "
+                       f"got {type(item).__name__}")
+        if problem is None and not name.strip():
+            problem = "has an empty library name"
+        if problem:
+            failures.append(_fail(f"entry [{i}] {item!r} {problem}"))
+            continue
+        key = (name, marketplace)
+        if key not in seen:
+            seen.add(key)
+            entries.append({"name": name, "marketplace": marketplace})
+    # A qualified entry supersedes its bare twin: resolving the bare one could
+    # report "ambiguous" for a library the qualified entry already links.
+    qualified = {e["name"] for e in entries if e["marketplace"] is not None}
+    entries = [e for e in entries
+               if e["marketplace"] is not None or e["name"] not in qualified]
+    return entries, failures
+
+
 def _process_project_venv(venv_def, project_dir, quiet_entries=None):
     """Process project_venv: ensure the project's own .venv is ready.
 
@@ -4065,6 +4248,17 @@ def _process_project_venv(venv_def, project_dir, quiet_entries=None):
     action_entries = []
     ok_entries = []
     failures = []
+
+    # A malformed shared_lib_imports is reported whether or not the venv
+    # syncs: the declaration is wrong regardless of the project's state.
+    _entries, import_failures = _normalize_project_shared_lib_imports(venv_def)
+    for failure in import_failures:
+        _append_detail(
+            action_entries,
+            f"project_venv: FAILED - {failure['message']}",
+            display="project_venv: FAILED - bad shared_lib_imports",
+        )
+        failures.append(failure)
 
     target_dir, failure = _resolve_project_subdir(
         project_dir, venv_def.get("subdir"), "project_venv")

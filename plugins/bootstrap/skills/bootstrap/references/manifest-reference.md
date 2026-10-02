@@ -221,6 +221,11 @@ Fields (all optional):
 - `extras` — dependency extras (`uv sync --extra <name>` each).
 - `check_imports` — module names that must import inside the venv.
 - `subdir` — a **project-relative** subdirectory that becomes BOTH the uv-sync project target and the `.venv` parent: `<project>/<subdir>/pyproject.toml` → `<project>/<subdir>/.venv`. Absent = the project root (`<project>/pyproject.toml` → `<project>/.venv`). A `subdir` that is absolute or resolves outside the project is a descriptive `project_venv` failure — no fallback to the root.
+- `shared_lib_imports` -- published first-party libraries to link into the project venv, so the project imports them without a `sitecustomize.py` shim. A list whose entries take either of two forms, and the two may be mixed:
+  - a library name string, `"content_pipeline"`; or
+  - an object `{"name": "content_pipeline", "marketplace": "plugins-kit"}`. `name` is required; `marketplace` is optional and names the marketplace whose `_shared_libs/` holds the library. No other key is accepted.
+
+  An unqualified entry is resolved by scanning `~/.claude/plugins/data/*/_shared_libs/<name>/<name>/`; if two marketplaces publish the name, the entry is reported as `ambiguous` and nothing is linked until it is qualified. **Across layers the lists are unioned**, not replaced: a user-layer list and a project-layer list both apply, with duplicates removed (order preserved). A bare entry and an object with the same `name` and no `marketplace` count as the same entry, and a qualified entry supersedes its unqualified twin of the same name, so declaring the qualified form in any layer resolves an `ambiguous` entry declared in another. The link is written after the owning plugin has published in the same pass, so a first pass converges without a second session. A shared library takes precedence over a same-named package already in the venv, because its `.pth` prepends to `sys.path`. Each entry's outcome (`linked`, `cached`, `skipped`, `failed`, `ambiguous`), the reporting of a malformed value, and the older-engine caveat: [library-consumption.md](library-consumption.md#mode-3a----project-venv-that-bootstrap-owns). A malformed value is reported as a `project_venv` failure but does not withhold the `BOOTSTRAP_PROJECT_PYTHON` export.
 
 Example — env-config, whose Python package lives under `python/`:
 
@@ -230,6 +235,19 @@ Example — env-config, whose Python package lives under `python/`:
     "subdir": "python",
     "extras": ["dev"],
     "check_imports": ["yaml"]
+  }
+}
+```
+
+Example -- a project that links a published shared library into its venv, one entry bare and one qualified:
+
+```json
+{
+  "project_venv": {
+    "shared_lib_imports": [
+      "content_pipeline",
+      {"name": "llm_scripting_kit", "marketplace": "plugins-kit"}
+    ]
   }
 }
 ```
@@ -1237,7 +1255,10 @@ This table is the exact set of identity-keyed sections in
 | `git_config` | `key` |
 
 `path_entries` and `shared_lib_imports` are plain string lists — unioned and
-deduplicated (order preserved), not identity-keyed.
+deduplicated (order preserved), not identity-keyed. `project_venv.shared_lib_imports`
+is the one nested list that is unioned the same way inside an otherwise
+deep-merged object, and its entries may be strings or `{name, marketplace}`
+objects.
 
 **Sections NOT identity-keyed** (e.g. `git_deps`, `sync_to_data`): they are
 absent from `_IDENTITY_KEYS`, so `merge_manifests` falls through to plain list
