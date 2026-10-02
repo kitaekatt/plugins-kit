@@ -60,15 +60,14 @@ only a session that ran a full pass. Two blocks in
 gates: the interpreter names (lines 134-137), and, from bootstrap 0.141.0, the
 "Recorded env names for this session" block. The second re-emits what a full
 pass recorded under bootstrap's data dir -- `<data_dir>/plugin_roots` for
-`<PLUGIN>_ROOT`, `<data_dir>/tool_bins` for `BOOTSTRAP_BIN_<TOOL>`, one
-`NAME=path` line per entry -- and resolves nothing itself. The writer is
-`engine._maintain_env_records` at Step 4b3, which rewrites each record whole on
+`<PLUGIN>_ROOT`, one `NAME=path` line per entry -- and resolves nothing itself.
+The writer is
+`engine._maintain_env_records` at Step 4b3, which rewrites the record whole on
 every full pass; a `cadence: always` throttled lane returns before Step 4 and
-never rewrites them.
+never rewrites it.
 
 A name is re-emitted only while its recorded path still exists: `[ -d ]` for a
-plugin root, `[ -f ]` for a tool. A path deleted since the recording pass is
-SKIPPED.
+plugin root. A path deleted since the recording pass is SKIPPED.
 
 So a gate-skipped session HAS the root variable -- provided a full pass has
 recorded it since 0.141.0 reached the machine AND the recorded directory still
@@ -115,13 +114,14 @@ record" comment. Step placement and logging:
 
 ### Shipped mechanism: record-and-re-emit
 
-Bootstrap 0.141.0 records `<PLUGIN>_ROOT` and `BOOTSTRAP_BIN_<TOOL>` under its
-data dir on a full pass and re-emits them in the pre-gate prelude. It was built
+Bootstrap 0.141.0 records `<PLUGIN>_ROOT` under its data dir on a full pass and
+re-emits it in the pre-gate prelude. The plugin-root record was built
 to repair a dependence on an exported variable in skill bodies, which harness
 substitution there (verified 2026-10-02) makes unnecessary. Its remaining
 plugin-root consumers are reference, README and script sites, none of which is
-a substituted surface. The `BOOTSTRAP_BIN_<TOOL>` family's one identified
-consumer, `plugins/claude-ui-kit/scripts/statusline.sh`, runs as the statusline
+a substituted surface. A parallel `BOOTSTRAP_BIN_<TOOL>` record-and-re-emit was
+removed in bootstrap 0.142.0: its one identified consumer,
+`plugins/claude-ui-kit/scripts/statusline.sh`, runs as the statusline
 process rather than through the Bash tool environment.
 
 ## Classes

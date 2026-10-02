@@ -110,7 +110,6 @@ def plugin_root_env_var_name(plugin_name: str) -> str:
 # is what makes an entry that left the registry disappear.
 
 PLUGIN_ROOTS_FILENAME = "plugin_roots"
-TOOL_BINS_FILENAME = "tool_bins"
 
 _RECORD_NAME_RE = re.compile(r"[A-Z_][A-Z0-9_]*")
 
@@ -118,11 +117,6 @@ _RECORD_NAME_RE = re.compile(r"[A-Z_][A-Z0-9_]*")
 def plugin_roots_record_path(data_dir: str) -> str:
     """``<data_dir>/plugin_roots`` -- the ``<PLUGIN>_ROOT`` record."""
     return os.path.join(data_dir, PLUGIN_ROOTS_FILENAME)
-
-
-def tool_bins_record_path(data_dir: str) -> str:
-    """``<data_dir>/tool_bins`` -- the ``BOOTSTRAP_BIN_<TOOL>`` record."""
-    return os.path.join(data_dir, TOOL_BINS_FILENAME)
 
 
 def record_line_is_safe(name: str, value: str) -> bool:
