@@ -386,10 +386,11 @@ happened, which is precisely what the prompt exists to prevent.
 
 ## Configuring these criteria
 
-Every criterion above carries a stable id and is disable-able or tunable
-through the standard mechanism in `references/configuring-standards.md`. A
-project that holds a different position on an opinion here changes it there
-rather than forking this document.
+Every criterion above carries a stable id, but none is disable-able or tunable
+through the standard mechanism in `references/configuring-standards.md`: that
+mechanism accepts only ids from a project's or user's own standards files, and
+these criteria are not in its catalog. A project that holds a different
+position on an opinion here has no supported seam.
 
 **Named deviation: `applies_to: code_subtree` is not a file-type primitive.**
 `references/authoring-standards.md` says a standards file governs exactly one
@@ -405,6 +406,6 @@ unaffected: `coverage-detect.js` requires only a readable document at
 The one opinion worth naming explicitly, because a competent team genuinely
 disagrees with it: `already-ambient-suppressed` refuses a second placement at a
 trigger site even when visibility near the code would help. That is a
-deliberate default, not an oversight -- copies consume ambient budget and drift
-apart -- and a project that prefers trigger-site visibility disables the
-criterion by id.
+deliberate stance, not an oversight -- copies consume ambient budget and drift
+apart -- and a project that prefers trigger-site visibility has no supported
+way to disable the criterion.
