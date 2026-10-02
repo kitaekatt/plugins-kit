@@ -556,3 +556,91 @@ class TestOutsideCounterpartStands:
     def test_cv7_covers_the_own_anchor_case(self):
         cv7 = STANDARDS.read_text(encoding='utf-8')
         assert "the candidate's own anchor" in cv7
+
+
+class TestCriteriaAreConfigurableById:
+    """The coverage criteria are disableable by id, default ON.
+
+    These are TEXT assertions over the lane and the workflow, which is all a
+    Python test can reach: every coverage criterion is `enforcement: judgment`,
+    so no mechanical code path evaluates one. The resolver-and-CLI half of the
+    seam is pinned behaviourally in tests/skills-kit/test_standards_resolve.py
+    (test_coverage_criterion_id_is_a_configurable_knob and
+    test_resolve_cli_reports_a_disabled_coverage_criterion), and whether a
+    disabled criterion actually changes an assessment is observable only by
+    dispatching the lane.
+    """
+
+    def test_every_criterion_id_is_registered_as_configurable(self):
+        """The ids in the standards doc are exactly what the resolver accepts."""
+        spec = importlib.util.spec_from_file_location(
+            "rule_catalog_for_coverage",
+            REPO_ROOT / "plugins" / "skills-kit" / "skills_kit_lib" / "rule_catalog.py",
+        )
+        rule_catalog = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(rule_catalog)
+
+        text = STANDARDS.read_text(encoding="utf-8")
+        block = text.split("standards_set:", 1)[1].split("\n```", 1)[0]
+        ids = re.findall(r"^\s*- id: (\S+)\s*$", block, flags=re.MULTILINE)
+        assert len(ids) == 8, f"expected the eight coverage criteria, got {ids}"
+
+        configurable = set(rule_catalog.optional_rule_ids())
+        missing = [rid for rid in ids if rid not in configurable]
+        assert not missing, f"coverage criteria with no config knob: {missing}"
+
+    def test_detect_reads_disabled_criteria_from_its_args(self):
+        src = _detect()
+        assert "input.disabledCriteria" in src
+        assert "const disabledCriteria = Array.isArray(input.disabledCriteria)" in src
+
+    def test_disabled_clause_reaches_the_assessment_prompt(self):
+        prompt = _lane_prompt_body()
+        assert "${disabledClause}" in prompt
+
+    def test_an_absent_list_applies_every_criterion(self):
+        """Default ON: the empty branch tells the agent to apply them all."""
+        src = _detect()
+        assert "No criteria were disabled for this run" in src
+        assert "apply every criterion in the document normally" in src
+
+    def test_disabled_clause_suppresses_rather_than_merely_notes(self):
+        src = _detect()
+        assert "Do NOT apply a criterion whose" in src
+        assert "propose a candidate the criterion would have suppressed" in src
+
+    def test_disabled_ids_are_reported_not_applied_silently(self):
+        src = _detect()
+        assert r"Report each id you were given here in \`notes\`" in src
+
+    def test_structural_rules_are_never_disableable(self):
+        src = _detect()
+        assert (
+            "subject identity, anchor membership, the destination rule, the "
+            "candidate ceiling -- are never switched off by this list"
+        ) in src
+
+    def test_lane_resolves_the_standards_config_once_per_run(self):
+        lane = _lane()
+        assert "scripts/resolve_standards.py" in lane
+        assert "ONCE per run (not per subject), resolve the configurable standards" in lane
+        assert "A non-zero exit means STOP" in lane
+
+    def test_lane_threads_the_resolved_list_into_the_dispatch(self):
+        lane = _lane()
+        assert "`disabledCriteria` from Step 1" in lane
+        assert "Omitting the key applies\nevery criterion" in lane
+
+    def test_lane_binds_any_carrier_to_the_same_disabled_list(self):
+        lane = _lane()
+        assert "The same rule holds for ANY carrier.** A subagent" in lane
+
+    def test_standards_doc_describes_the_seam_not_a_stance(self):
+        text = STANDARDS.read_text(encoding="utf-8")
+        assert "configurable\nwith the opinionated default on" in text
+        assert "already-ambient-suppressed: off" in text
+        # The retired claims: the criterion had no seam, and the opinion was
+        # registered as a deliberate stance. Both are false once the knob exists.
+        assert "no supported seam" not in text
+        assert "no supported\nway to disable the criterion" not in text
+        assert "deliberate stance" not in text

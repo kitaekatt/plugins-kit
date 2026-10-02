@@ -76,6 +76,24 @@ const actionable = input.perFile.filter(
   (f) => Array.isArray(f.remediations) && f.remediations.some((r) => r.decision !== 'skip')
 )
 
+// Propose-only guard. args.fixMode comes from resolve_standards.py's
+// `audit.fix_mode`. When it is "propose" the lane makes NO edit and dispatches NO
+// agent: it returns the actionable items as proposals. This return sits before
+// the first agent() call; the dispatch below is unreachable on this path.
+if (input.fixMode === 'propose') {
+  const proposed = actionable.map((f) => ({
+    path: f.path,
+    applied: 0,
+    skipped: 0,
+    failed: 0,
+    actions: [],
+    proposed: f.remediations.filter((r) => r.decision !== 'skip'),
+  }))
+  const proposedCount = proposed.reduce((n, f) => n + f.proposed.length, 0)
+  log(`Propose-only (audit.fix_mode = propose) -- no edits made; ${proposedCount} remediation(s) across ${proposed.length} docs reported as proposals`)
+  return { perFile: proposed, summary: { applied: 0, skipped: 0, failed: 0, proposed: proposedCount }, fixMode: 'propose' }
+}
+
 function lanePrompt(f) {
   return `You are ONE lane of a project-document remediation pass. Apply the decided edits to exactly one file. Make ONLY the edits listed; do not audit, re-scan, or fix anything not listed here.
 

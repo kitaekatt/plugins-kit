@@ -1,16 +1,19 @@
 """rule_catalog -- SSOT for every audit rule id: its bucket, sub-group, and
 user-facing description.
 
-Every rule id emitted by audit.py (the ``rule`` field on a CheckResult) is
-mapped here to one of three buckets:
+This is the registry of every CONFIGURABLE id, which is a superset of the ids
+audit.py emits: besides every rule id audit.py puts in a CheckResult's ``rule``
+field, it carries the judgment criteria an agent applies inside a workflow lane
+(the coverage-criteria group). Each id is mapped to one of three buckets:
 
 - ``architectural`` -- structural-contract checks (the YAML type contract,
   mixed-type / cross-block drift). These are the spine of the framework and are
   never disableable; the standards resolver rejects any attempt to switch one
   off by id.
 - ``optional`` -- opinion checks (description hygiene, size signals, record
-  floors, the legacy per-type heuristic rows). These carry stable ids so a user
-  can disable or tune them via config.
+  floors, the legacy per-type heuristic rows, and the coverage lane's admission
+  criteria). These carry stable ids so a user can disable or tune them via
+  config.
 - ``inoffensive`` -- mechanical integrity checks (frontmatter/name presence and
   charset, reference reachability and citation resolution, asset-path
   resolution). Disabling one could never make a correct document, so they get
@@ -57,7 +60,7 @@ RULES: dict[str, tuple[str, str, str]] = {
     # Tunability decided 2026-07-29 (md-domain fold): a project may
     # legitimately cluster a large reference set into subdirectories when
     # every cluster surface is index-reachable; the rule stays on by default.
-    "refs-one-hop-deep": ("optional", "layout", "`references/` is one hop deep (no nested references directories)."),
+    "refs-one-hop-deep": ("optional", "layout", "`references/` is one hop deep, except that a nested reference file counts as one hop when SKILL.md's `index.references[]` declares that file's own relative path or its containing directory."),
     # -- optional: thresholds / signals -----------------------------------
     "body-line-count": ("optional", "thresholds-signals", "Reports the SKILL.md body line count (informational count row)."),
     "body-token-count": ("optional", "thresholds-signals", "Reports the approximate SKILL.md body token count (informational count row)."),
@@ -91,6 +94,23 @@ RULES: dict[str, tuple[str, str, str]] = {
     "domain-orientation": ("optional", "legacy-heuristics", "A domain-skill body carries orientation content (at least one H2 beyond the index)."),
     "domain-reference-index": ("optional", "legacy-heuristics", "A domain-skill body carries a Conditional-Loading reference index."),
     "domain-prohibited-index-only": ("optional", "legacy-heuristics", "A domain-skill is not an index-only stub (an index with no orientation content)."),
+    # -- optional: coverage (analyze) admission criteria --------------------
+    # The eight criteria declared in skills/md-domain/references/standards/
+    # coverage-standards.md, registered here so each is disableable by id. They
+    # are not emitted by audit.py: their `enforcement` is judgment, so they are
+    # applied by an agent inside the coverage lane
+    # (skills/md-domain/workflow/coverage-detect.js), which suppresses any
+    # candidate whose criterion id the resolver reports as disabled. The
+    # catalog is the registry of configurable ids, and audit.py's emitted ids
+    # are a subset of it rather than the whole of it.
+    "absent-fact-earns-ambient-cost": ("optional", "coverage-criteria", "CV-1: a coverage candidate is durable and consequential rather than cheaply recoverable from the local files."),
+    "already-ambient-suppressed": ("optional", "coverage-criteria", "CV-2: a fact already carried by any CLAUDE.md in the directory's ancestor chain is not a candidate, a trigger site closer to the code included."),
+    "fact-scoped-to-this-directory": ("optional", "coverage-criteria", "CV-3: a candidate is a fact about the assessed directory's own direct code, and its destination is that directory."),
+    "candidate-tier-classified": ("optional", "coverage-criteria", "CV-4: every surviving candidate is classified finding-convertible or context-only, and the classification is reported."),
+    "hazard-durability": ("optional", "coverage-criteria", "CV-5: an observed hazard earns ambient prose only when it is durable, or severe and not being fixed."),
+    "loud-failure-excluded": ("optional", "coverage-criteria", "CV-6: a constraint that is documented, fails loudly at runtime, and is test-enforced is not a candidate."),
+    "evidence-floor": ("optional", "coverage-criteria", "CV-7: every candidate cites a file and line observed in source; a convention needs two or more instances or one authoritative source."),
+    "present-content-not-re-audited": ("optional", "coverage-criteria", "CV-8: coverage judges absent facts only and never evaluates content already present."),
 }
 
 # rule id -> bucket, derived. Public API preserved for existing consumers

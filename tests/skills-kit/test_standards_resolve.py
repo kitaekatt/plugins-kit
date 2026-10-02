@@ -8,7 +8,13 @@ guards, malformed-config loudness, standards-file parsing + grouping, and the
 audit-side disable/threshold-override behavior are each pinned.
 """
 
+import json
+import os
+import re
+import subprocess
+import sys
 import textwrap
+from pathlib import Path
 
 import pytest
 import yaml
@@ -359,3 +365,71 @@ def test_module_resolve_symbol_is_public(tmp_path, monkeypatch):
     # standards_resolve.resolve is the documented public entry point.
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "none"))
     assert standards_resolve.resolve(None).disabled_rules == set()
+
+
+# ---------------------------------------------------------------------------
+# Coverage-lane criterion ids are configurable knobs
+# ---------------------------------------------------------------------------
+
+#: One coverage criterion id from
+#: plugins/skills-kit/skills/md-domain/references/standards/coverage-standards.md.
+#: Its own text concedes a competent team disputes it, so it is the criterion the
+#: seam exists for.
+_COVERAGE_CRITERION = "already-ambient-suppressed"
+
+_PLUGIN_ROOT = Path(standards_resolve.__file__).resolve().parents[1]
+_RESOLVE_CLI = _PLUGIN_ROOT / "scripts" / "resolve_standards.py"
+_COVERAGE_STANDARDS = (
+    _PLUGIN_ROOT / "skills" / "md-domain" / "references" / "standards"
+    / "coverage-standards.md"
+)
+
+
+def _coverage_criterion_ids() -> list[str]:
+    """The ids declared in coverage-standards.md's standards_set block."""
+    text = _COVERAGE_STANDARDS.read_text(encoding="utf-8")
+    block = text.split("standards_set:", 1)[1].split("\n```", 1)[0]
+    return re.findall(r"^\s*- id: (\S+)\s*$", block, flags=re.MULTILINE)
+
+
+def test_coverage_criterion_id_is_a_configurable_knob(tmp_path, monkeypatch):
+    """A user layer may switch a coverage criterion off by id."""
+    layer = _user_layer(tmp_path, monkeypatch)
+    _write_yaml(layer / "config.yaml", {"rules": {_COVERAGE_CRITERION: False}})
+
+    resolved = resolve(None)
+
+    assert _COVERAGE_CRITERION in resolved.disabled_rules
+
+
+def test_every_coverage_criterion_id_is_configurable(tmp_path, monkeypatch):
+    """Every id in coverage-standards.md is a knob, not just the disputed one."""
+    ids = _coverage_criterion_ids()
+    assert len(ids) == 8, f"expected the eight coverage criteria, got {ids}"
+
+    layer = _user_layer(tmp_path, monkeypatch)
+    _write_yaml(layer / "config.yaml", {"rules": {rid: False for rid in ids}})
+
+    assert resolve(None).disabled_rules == set(ids)
+
+
+def test_resolve_cli_reports_a_disabled_coverage_criterion(tmp_path):
+    """The CLI the coverage lane runs exits 0 and lists the id in `disabled`."""
+    config_dir = tmp_path / "config"
+    layer = config_dir / "skills-kit"
+    layer.mkdir(parents=True)
+    _write_yaml(layer / "config.yaml", {"rules": {_COVERAGE_CRITERION: False}})
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+
+    env = dict(os.environ)
+    env["CLAUDE_CONFIG_DIR"] = str(config_dir)
+    proc = subprocess.run(
+        [sys.executable, str(_RESOLVE_CLI), "--project-root", str(project_root)],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert proc.returncode == 0, f"stderr: {proc.stderr}"
+    assert _COVERAGE_CRITERION in json.loads(proc.stdout)["disabled"]

@@ -378,6 +378,33 @@ those runs are consumed in matters downstream -- see `generation-lane.md`, paren
 composition, for the bottom-up constraint. This lane never widens a target on the
 caller's behalf.
 
+ONCE per run (not per subject), resolve the configurable standards via the plugin
+venv:
+
+```
+(cd "${SKILLS_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}" && <venvPython> scripts/resolve_standards.py \
+   --project-root <workspace root>)
+```
+
+A non-zero exit means STOP: the script wrote nothing to stdout and a single
+diagnostic line to stderr (a malformed config layer or an un-tunable criterion
+id). No assessment runs on a partial config -- surface that stderr line and stop
+rather than falling back to defaults.
+
+On a zero exit, parse its JSON `{ disabled, thresholds, standards, notes }` and
+keep run-level `disabledCriteria` = `disabled`. It threads into Step 3. An empty
+or absent config yields an empty list, so default behaviour is every criterion
+applied. A non-empty `notes` array (for example, "pyyaml unavailable; standards
+resolution degraded to defaults") goes in the report header verbatim -- it means
+the run is NOT the same as "no config", even though the disabled list reads
+identically to that case.
+
+No `--primitive` is passed and the `standards` map is not consumed: an authored
+`*-standards.md` declares `applies_to:` as one of the four FILE-TYPE primitives,
+and this lane's subject is a directory plus its ancestor chain, so no authored
+standards file can target it. `thresholds` is not consumed either -- every
+criterion here is judgment, and no coverage criterion reads a threshold.
+
 Announce the run by its canonical analysis name (`Code analysis` -- echoed
 verbatim) and its scope before Step 2: the directory, the direct-code-file count,
 and the size of the ambient chain.
@@ -472,6 +499,23 @@ The following settled rules remain part of the assessment contract:
   that shrinks as the run widens. When it is hit, SAY SO, and state the aggregate
   for a multi-directory run. Silent truncation in the verb that reports silent
   truncation would be its own joke.
+
+Pass the run-level `disabledCriteria` from Step 1 as the `disabledCriteria` key
+of the workflow args. The workflow turns it into one clause of the assessment
+prompt: a criterion whose id is in the list is NOT applied, so a candidate it
+would have suppressed is proposed instead, and the ids are named in the affected
+subjects' `notes` so the report says which criteria were not applied. The
+structural rules this script enforces after the agent returns -- subject
+identity, anchor membership, the destination rule, the candidate ceiling -- are
+never in that list and are never switched off by it. Omitting the key applies
+every criterion, which is the shipped default and the only behaviour a project
+that writes no config ever sees. Configuration surface and the layer model:
+`../configuring-standards.md`.
+
+**The same rule holds for ANY carrier.** A subagent, a background CLI, or a
+hand-written brief given the assessment gets the disabled ids too. A carrier that
+silently applies a criterion the project switched off produces a suppression the
+project refused, and nothing downstream can tell that from an honest run.
 
 `coverage-detect.js` refuses to run while `refs.criteria` names no document, so
 this seam cannot be crossed by accident.

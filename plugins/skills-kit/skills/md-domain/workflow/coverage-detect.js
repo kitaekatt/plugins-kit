@@ -113,6 +113,9 @@
 //   batchSize: integer|undefined     // subjects per agent; default below
 //   ceiling: integer|undefined   // candidate cap PER SUBTREE; default below
 //   depth: 'basic'|'advanced'    // resolved by the lane's intent gate
+//   disabledCriteria: string[]|undefined  // criterion ids the run configuration
+//     switched off, from the lane's Step 1 standards resolution. Absent or empty
+//     means every criterion applies, which is the shipped default.
 //   refs: { criteria: <abs path to the coverage standards doc>,
 //           observationKinds: <abs path to references/standards/claude-md-standards.md>,
 //           pluginRoot: <abs path to plugins/skills-kit> }
@@ -174,6 +177,16 @@ const ceiling = Number.isInteger(input.ceiling) ? input.ceiling : DEFAULT_CEILIN
 const batchSize = Number.isInteger(input.batchSize) && input.batchSize > 0
   ? input.batchSize
   : DEFAULT_BATCH_SIZE
+
+// Criterion ids the run configuration switched OFF, resolved by the lane's
+// Step 1 from the layered skills-kit config (scripts/resolve_standards.py ->
+// `disabled`). Same shape and same meaning as the three per-file audit detect
+// lanes' `disabledCriteria`; an absent or empty list leaves every criterion on,
+// which is the shipped default.
+const disabledCriteria = Array.isArray(input.disabledCriteria) ? input.disabledCriteria : []
+const disabledClause = disabledCriteria.length > 0
+  ? `DISABLED CRITERIA. The run configuration switched these optional criterion ids OFF: ${disabledCriteria.map((d) => `"${d}"`).join(', ')}. Do NOT apply a criterion whose \`id\` in the criteria document matches one in that list: propose a candidate the criterion would have suppressed, and do not reject a candidate on its account. Report each id you were given here in \`notes\` for the subjects it affected, so a reader of the report knows which criteria were not applied. Every other criterion applies in full, and the structural rules this script enforces after you return -- subject identity, anchor membership, the destination rule, the candidate ceiling -- are never switched off by this list.`
+  : `No criteria were disabled for this run; apply every criterion in the document normally.`
 
 const SUBJECT_FINDINGS_SCHEMA = {
   type: 'object',
@@ -739,6 +752,8 @@ Read those documents ONCE, now, before you open subject 1, and keep them for the
 whole batch. Do not re-read them between subjects, and do not compress them into
 a summary of your own -- the criteria are what they say, not what you remember of
 them.
+
+${disabledClause}
 
 SCOPE, AND IT IS THE HARDEST RULE HERE. Every candidate must be a fact about
 ITS OWN SUBJECT DIRECTORY'S OWN DIRECT code, and its destination is ALWAYS that

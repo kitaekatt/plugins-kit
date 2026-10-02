@@ -124,7 +124,7 @@ diagnostic line to stderr (a malformed config layer or an un-tunable rule id).
 No audit runs on a partial config -- surface that stderr line and stop rather
 than falling back to defaults.
 
-On a zero exit, parse its JSON `{ disabled, thresholds, standards, notes }`.
+On a zero exit, parse its JSON `{ disabled, thresholds, standards, audit, notes }`.
 Keep run-level `disabledCriteria` = `disabled`, and per target
 `standardsPaths` = `standards.<primitive>`. Both thread into DETECT. An empty
 or absent config yields empty lists, so default behavior is unchanged. A
@@ -132,6 +132,11 @@ non-empty `notes` array (for example, "pyyaml unavailable; standards
 resolution degraded to defaults") must be surfaced in the report header
 verbatim -- it means the run is NOT the same as "no config", even though the
 disabled/threshold lists read identically to that case.
+
+Keep run-level `fixMode` = `audit.fix_mode`: `apply` (the default when the
+config sets nothing) or `propose`. `scripts/resolve_standards.py` always
+emits it, validated by `AUDIT_KEYS` in `skills_kit_lib/standards_resolve.py`.
+It is read again in Step 5.
 
 ### Step 2 -- DETECT (before-Q&A)
 
@@ -298,8 +303,9 @@ summary in three visible sections IN THIS ORDER, no hedging:
 1. **SERIOUS** -- "Found `<N>` serious issue(s) that require fixing" plus a
    one-line summary each. Never auto-fixed, never buried.
 2. **FIX** -- normally the count auto-applied and landing in the reviewable
-   remediation CL. **In REVIEW MODE nothing is auto-applied**, so render it as
-   the count PROPOSED and awaiting the step-4 decision, never as applied.
+   remediation CL. **In REVIEW MODE nothing is auto-applied**, and neither is
+   anything when `fixMode` = `propose`, so in either case render it as the count
+   PROPOSED (in review mode, awaiting the step-4 decision), never as applied.
 3. **IMPROVE** -- "Audit found `<N>` improvement opportunit(ies). Do you want to
    discuss them?" plus one one-line pitch each.
 
@@ -326,7 +332,7 @@ Verdict: COMPLIANT | NON-COMPLIANT | DIFF-CLEAN | NOT-AUDITED
 ### SERIOUS -- Found <N> serious issue(s) that require fixing
 - <one-line summary per issue>   (never auto-fixed)
 
-### FIX -- <N> applied (in the reviewable remediation CL)   [review mode: "<N> proposed" -- nothing is applied]
+### FIX -- <N> applied (in the reviewable remediation CL)   [review mode or fixMode=propose: "<N> proposed" -- nothing is applied]
 - <criterion>: <what was corrected>
 
 ### IMPROVE -- Audit found <N> improvement opportunit(ies). Do you want to discuss them?
@@ -354,7 +360,7 @@ Verdict: COMPLIANT | NON-COMPLIANT | DIFF-CLEAN | NOT-AUDITED
   as-proposed / skip / a refined instruction). Surface a tight grouped set; do
   not dump a giant list. A declined IMPROVE is recorded in the target's
   `md-audit-declined:` frontmatter so a re-audit does not re-pitch it.
-- **If `non_interactive` is TRUE:** apply FIX findings, surface SERIOUS, and
+- **If `non_interactive` is TRUE:** apply FIX findings (not when `fixMode` is `propose`), surface SERIOUS, and
   infer each IMPROVE/SPECIAL decision from the taxonomy's `default_remediation`
   plus the file content -- record every inferred decision in the final summary so
   the user can see and reverse it. FIX findings need no decision (they apply by
@@ -371,11 +377,20 @@ Assemble per-file remediation lists from the decided findings (FIX = apply;
 IMPROVE/SPECIAL = per decision; SERIOUS never auto-applied; drop skips). Choose
 mode by how many FILES carry remediation work.
 
-- **ONE file** -- apply inline with Edit.
+**Propose-only (`fixMode` = `propose`).** The audit makes NO edit, in either mode
+below: it reports each FIX finding, and each IMPROVE/SPECIAL item with an
+apply decision, as a proposal -- file, line, criterion, and the concrete
+instruction -- in Step 6, and stops. Enforcement differs by mode. TWO OR MORE
+files: pass `fixMode: "propose"` in the Workflow `args`; the
+`workflow/<artifact>-remediate.js` script then returns the items as proposals
+and dispatches no agent. ONE file: no script runs, so this instruction is the
+only guard -- do not call Edit, and report the proposals as above.
+
+- **ONE file** -- apply inline with Edit (never when `fixMode` is `propose`).
 - **TWO OR MORE files** -- call the Workflow tool with the script
   `"${SKILLS_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/skills/md-domain/workflow/<artifact>-remediate.js"`
   (passed as in "Passing a lane script to the Workflow tool", Step 2)
-  and `args = { perFile:[{path, remediations:[{criterion, taxonomy, bucket, line, instruction, decision}]}] }`.
+  and `args = { fixMode, perFile:[{path, remediations:[{criterion, taxonomy, bucket, line, instruction, decision}]}] }`.
   One lane per file (disjoint files never conflict).
 
 Remediation lanes do not classify -- they apply edits from the decided list.
@@ -383,6 +398,12 @@ Carry exact before/after text for a before/after FIX; a lane records "failed"
 (not a guess) when the before-text no longer matches.
 
 ### Step 6 -- Final summary
+
+When `fixMode` is `propose`, nothing was edited: render each FIX finding and
+each IMPROVE/SPECIAL item as a PROPOSAL (with its exact before/after text or
+instruction) instead of "applied per file", and omit the re-run reminder and the
+modified-file scope below -- no file changed, so a re-run reproduces the same
+verdict. Otherwise:
 
 Render: FIX applied per file, IMPROVE decisions (including inferred ones),
 SERIOUS still-open (never auto-applied), any failures. Remind the user that
