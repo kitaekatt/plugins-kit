@@ -3,7 +3,6 @@
 import hashlib
 import json
 import os
-import shlex
 import subprocess
 import sys
 
@@ -11,21 +10,6 @@ import pytest
 
 from bootstrap.link_compat import link_tree
 
-
-def _sourced_value(env_file, var):
-    """Value of `export <var>=...` from an env file, parsed POSIX-shell style.
-
-    Avoids spawning `bash -c 'source ...'`: the `bash` on PATH may be WSL, which
-    can't source a Windows-path file or see a Windows venv. shlex.split tests the
-    same property (a quoted path round-trips as one token, space preserved).
-    """
-    prefix = f"export {var}="
-    for line in env_file.read_text().splitlines():
-        line = line.strip()
-        if line.startswith(prefix):
-            parts = shlex.split(line[len(prefix):])
-            return parts[0] if parts else ""
-    return None
 
 BOOTSTRAP_ROOT = os.path.normpath(
     os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, "plugins", "bootstrap")
@@ -348,11 +332,12 @@ class TestMultiPluginEngine:
         assert "venv" in response["hookSpecificOutput"]["additionalContext"].lower()
         assert "[venv-plugin]" in response["hookSpecificOutput"]["additionalContext"]
 
-    def test_plugin_venv_exports_env_var_via_claude_env_file(self, tmp_path):
-        """Plugin with a working venv writes <PLUGIN>_VENV to $CLAUDE_ENV_FILE.
+    def test_plugin_venv_is_not_exported_to_claude_env_file(self, tmp_path):
+        """A plugin's venv is provisioned, but no <PLUGIN>_VENV line is written.
 
-        Consumer scripts read this var to re-exec themselves under the venv's
-        python without reconstructing bootstrap's data-dir path layout.
+        The session env carries only what the razor in manifest-reference.md
+        ("What bootstrap writes to the session env") admits; the interpreter
+        stays at the deterministic <data>/<plugin>/.venv path.
         """
         plugins_dir = tmp_path / "plugins"
         plugins_dir.mkdir()
@@ -397,15 +382,8 @@ class TestMultiPluginEngine:
         result = run_engine(data_dir, plugin_root=str(fake_root), env=env)
         assert result.returncode == 0, result.stderr
 
-        contents = env_file.read_text()
-        assert "export MY_VENV_PLUGIN_VENV=" in contents
-
-        # The exported path should resolve to a real python binary (parsed the
-        # way a POSIX shell would; see _sourced_value).
-        python_path = _sourced_value(env_file, "MY_VENV_PLUGIN_VENV")
-        assert python_path is not None
-        assert os.path.isfile(python_path)
-        assert str(plugin_data_dir / ".venv") in python_path
+        assert "MY_VENV_PLUGIN_VENV" not in env_file.read_text()
+        assert (plugin_data_dir / ".venv").is_dir()
 
     def test_plugin_venv_no_export_when_claude_env_file_unset(self, tmp_path):
         """No export is written when CLAUDE_ENV_FILE is absent from the env."""

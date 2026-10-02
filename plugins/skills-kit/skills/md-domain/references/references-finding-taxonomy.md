@@ -1,9 +1,5 @@
 # Finding Taxonomy and Remediation
 
-> Reference doc owned by `md-domain`'s `audit_references` lane, folded in from the
-> former standalone `references-audit` skill at the phase-3 restructure. Preserved
-> content below is byte-faithful except path updates for the new location.
-
 Load this when you are interpreting a references-audit report and deciding how to fix each finding. The scanner's job is detection; the classification and remediation here is inference work -- that's why it lives in a skill, not in the script.
 
 ## YAML-transcription note
@@ -19,7 +15,7 @@ default_remediation: >-
 
 ## The disposition model (ratified four-disposition contract)
 
-Every finding gets a taxonomy category (A-K) AND one of four dispositions. This is the ratified four-disposition contract that replaced the earlier three-bucket dispatch model. The authoritative spec is the four-disposition contract in [`audit-framework.md`](audit-framework.md); this doc applies it to references-audit findings.
+Every finding gets a taxonomy category (A-K) AND one of four dispositions. This is the ratified four-disposition contract. The authoritative spec is the four-disposition contract in [`audit-framework.md`](audit-framework.md); this doc applies it to references-audit findings.
 
 ```
 report -> classify each finding -> disposition -> dispatch
@@ -51,7 +47,7 @@ Ambiguity rulings: (1) Your own verified reading (the ref does / does not resolv
 
 ## Scanner-rule dispositions (default per rule, before taxonomy refines)
 
-references-audit is a corpus-wide scanner with four rules. The taxonomy A-K above refines a `soft-ref` / `hard-dep` finding's disposition once the *why* is known; but each rule also has a sensible default, derived from the master razor:
+references-audit is a corpus-wide scanner with four rules. The taxonomy A-K below refines a `soft-ref` / `hard-dep` finding's disposition once the *why* is known; but each rule also has a sensible default, derived from the master razor:
 
 | Rule | Severity | Default disposition | Rationale |
 |---|---|---|---|
@@ -184,7 +180,7 @@ When the FIX bucket is non-empty, its edits are applied in the REMEDIATE phase, 
 >
 > - File: `<absolute or project-relative path>`
 > - Line: `<1-indexed line number from the scanner>`
-> - Category: `<A | B (incidental clause) | C | E | F | G | I | J>`
+> - Category: `<A | B (incidental clause) | C | D (incidental) | E | F | G | I | J>`
 > - Before (exact text to match): `<single-line or short snippet>`
 > - After (exact replacement): `<single-line or short snippet>`
 >
@@ -208,7 +204,7 @@ The main agent constructs the per-finding payload by:
 - Reading the JSON output from `references_audit.py --json`.
 - For each FIX before/after finding, computing the **exact before-text** by reading the cited file at the cited line.
 - Computing the **after-text** per the category's default remediation above.
-- Bundling all payloads into the single Agent call.
+- Bundling the payloads per file, one `workflow/references-remediate.js` lane per file when two or more files have fixes.
 
 This keeps inference (classification, remediation strategy) on the main agent and execution (apply edits) in the REMEDIATE phase -- inline for a single file, one `workflow/references-remediate.js` lane per file for two or more. The remediate lanes are cheap to parallelize against the foreground IMPROVE/SPECIAL conversation. SERIOUS findings are surfaced summarized at the top of the report and are NEVER handed to a remediation lane.
 
@@ -235,4 +231,4 @@ If a finding lands in category K (unclassified) and the user's chosen strategy g
 - The remediation can be expressed as a default that applies to the majority of instances in the new category.
 - The category is **mutually exclusive** with A-J. If a finding can fit two existing categories, refine the detection signal of one of them rather than adding a new one.
 
-The taxonomy is closed-world only for the scanner's current detection capabilities. As the scanner gains the ability to detect new kinds of staleness (e.g. broken file paths, dead URLs, orphaned references in `Skill: { name: ... }` blocks the regex currently misses), new categories will be added here.
+The taxonomy is closed-world only for the scanner's detection capabilities. As the scanner gains the ability to detect new kinds of staleness (e.g. broken file paths, dead URLs, orphaned references in `Skill: { name: ... }` blocks the regex does not match), new categories will be added here.

@@ -1541,13 +1541,6 @@ def _main_pass():
     # Update the log display marker
     _update_display_marker(data_dir)
 
-    # Export BOOTSTRAP_BIN_<TOOL> env vars to $CLAUDE_ENV_FILE so plugin
-    # scripts can invoke recorded tools directly by absolute path. No-op
-    # when CLAUDE_ENV_FILE isn't set (e.g. console mode, tests). See
-    # docs/planning/bootstrap/tool-resolution-redesign.md.
-    from . import tool_paths as _tool_paths
-    _tool_paths.export_tool_env_vars(None)
-
     # Step 8: Emit results, threading the profile prompt through.
     _emit_pass_results(
         all_failures=all_failures, current_os=current_os,
@@ -3886,7 +3879,7 @@ def _process_path_entries(path_entries, prefix, action_entries, ok_entries):
 def _process_venv_def(venv_def, data_dir, plugin_root, prefix, label, action_entries,
                       ok_entries, failures, plugin_name, failure_type="venv",
                       failure_plugin=None, always_sync=False, extras=(),
-                      export_env_var=True, quiet_entries=None):
+                      quiet_entries=None):
     """Run the shared ensure_venv flow and route its outcome to the entry lists.
 
     One wrapper for all three venv call sites (self-setup, manifest, project
@@ -3894,7 +3887,7 @@ def _process_venv_def(venv_def, data_dir, plugin_root, prefix, label, action_ent
     sync commands and diagnostics are quiet entries. A successful remediation
     emits one short action summary, and a failure emits one short display label.
     """
-    from .venv_check import ensure_venv, export_venv_env_var
+    from .venv_check import ensure_venv
 
     result, venv_entries = ensure_venv(
         plugin_root, os.path.join(data_dir, ".venv"),
@@ -3918,10 +3911,6 @@ def _process_venv_def(venv_def, data_dir, plugin_root, prefix, label, action_ent
                 display=f"{prefix}{label}: {summary}",
             )
         ok_entries.append(f"{prefix}{label}: ok - {result.message}")
-        if export_env_var:
-            exported = export_venv_env_var(plugin_name, data_dir)
-            if exported:
-                ok_entries.append(f"{prefix}{label}: exported {exported} to CLAUDE_ENV_FILE")
     else:
         _append_detail(
             action_entries,
@@ -4321,13 +4310,12 @@ def _process_project_venv(venv_def, project_dir, quiet_entries=None):
         return action_entries, ok_entries, failures
 
     # target_dir serves as both data_dir (.venv location) and plugin_root
-    # (pyproject.toml location). No env-var export: the project venv belongs
-    # to the project, not a plugin.
+    # (pyproject.toml location).
     _process_venv_def(
         venv_def, target_dir, target_dir, "", "project_venv",
         action_entries, ok_entries, failures,
         plugin_name="config", failure_type="project_venv", failure_plugin="config",
-        extras=venv_def.get("extras", []), export_env_var=False,
+        extras=venv_def.get("extras", []),
         quiet_entries=quiet_entries,
     )
 

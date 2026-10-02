@@ -292,9 +292,11 @@ Under `~/.claude/plugins/data/<marketplace>/bootstrap/` unless noted:
   hook re-emits this record from a block that sits ABOVE both gates, which is
   why such a session still has `<PLUGIN>_ROOT`. It is rewritten whole on every
   full pass and a name is re-emitted only while its recorded path still exists.
-  The `tool_bins` record-and-re-emit was removed in bootstrap 0.142.0 because
-  its only identified consumer runs outside the Bash tool environment; ordinary
-  full-pass `BOOTSTRAP_BIN_<TOOL>` export remains unchanged. Mechanics:
+  The `tool_bins` record-and-re-emit was removed in bootstrap 0.142.0, and the
+  `BOOTSTRAP_BIN_<TOOL>` session export in 0.143.0, because the only identified
+  consumer runs outside the Bash tool environment. The admission rule:
+  [manifest-reference.md](manifest-reference.md), "What bootstrap writes to the
+  session env". Mechanics:
   [engine-internals.md](engine-internals.md), Step 4b3.
 - `bootstrap.log` → per-run headers `--- bootstrap@<version> <ISO-ts> ---` and harvest
   audit lines (`--- bootstrap harvest … --- / harvest: launched bootstrap <v> engine`).

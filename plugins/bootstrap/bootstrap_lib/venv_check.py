@@ -9,7 +9,6 @@ import subprocess
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
-from . import session_env
 from .result import Result
 
 
@@ -21,54 +20,6 @@ def _venv_result(passed: bool, message: str, venv_path: str, remediation_cmd: Op
         message=message,
         remediation_cmd=remediation_cmd,
     )
-
-
-def venv_env_var_name(plugin_name: str) -> str:
-    """Compute the env var name exposing a plugin's venv python.
-
-    Uppercases the name and replaces every character that is not a valid
-    POSIX shell identifier character (anything other than A-Z, 0-9, or
-    underscore) with an underscore, then suffixes ``_VENV``. Consumers
-    re-exec themselves under this interpreter so they don't have to
-    reconstruct bootstrap's data-dir path layout.
-
-    >>> venv_env_var_name("unreal-kit")
-    'UNREAL_KIT_VENV'
-    >>> venv_env_var_name("bootstrap")
-    'BOOTSTRAP_VENV'
-    """
-    return re.sub(r"[^A-Z0-9_]", "_", plugin_name.upper()) + "_VENV"
-
-
-def export_venv_env_var(plugin_name: str, plugin_data_dir: str) -> Optional[str]:
-    """Record this plugin's venv python in the pass's ``$CLAUDE_ENV_FILE`` block.
-
-    Buffered by ``session_env``, which deduplicates the block and writes it once
-    at the end of the pass. See that module for why appending per variable is
-    not safe.
-
-    No-ops (returning ``None``) when any of these hold:
-        - ``CLAUDE_ENV_FILE`` is unset or empty
-        - the venv python binary does not exist
-
-    The no-op-on-missing-binary behavior is deliberate: consumer scripts
-    fail fast on unset env vars rather than silently re-exec'ing a broken
-    interpreter path.
-
-    Args:
-        plugin_name: Plugin manifest name (e.g. ``"unreal-kit"``).
-        plugin_data_dir: Plugin data dir; the venv lives at
-            ``<plugin_data_dir>/.venv``.
-
-    Returns:
-        The exported env var name, or ``None`` if nothing was written.
-    """
-    venv_path = os.path.join(plugin_data_dir, ".venv")
-    python_bin = _find_python(venv_path)
-    if not python_bin:
-        return None
-
-    return session_env.record(venv_env_var_name(plugin_name), python_bin)
 
 
 _FINDER_IMPORT_RE = re.compile(r"\bimport\s+(__editable___[A-Za-z0-9_]+_finder)\b")

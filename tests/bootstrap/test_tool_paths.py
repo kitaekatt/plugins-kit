@@ -2,7 +2,6 @@
 
 import json
 import os
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -109,71 +108,6 @@ class TestPersistence:
         assert leftovers == []
 
 
-class TestNamingConvention:
-    def test_tool_env_var_name_basic(self):
-        assert tool_paths.tool_env_var_name("git") == "BOOTSTRAP_BIN_GIT"
-
-    def test_tool_env_var_name_hyphen_to_underscore(self):
-        assert tool_paths.tool_env_var_name("github-cli") == "BOOTSTRAP_BIN_GITHUB_CLI"
-
-    def test_tool_env_var_name_already_uppercase(self):
-        assert tool_paths.tool_env_var_name("UV") == "BOOTSTRAP_BIN_UV"
-
-    def test_tool_env_var_name_dot_to_underscore(self):
-        # Binary filenames can contain dots (e.g. draw.io). A bare dot in
-        # the var name produces an invalid shell identifier that fails to
-        # export, so it must be sanitized to an underscore.
-        assert tool_paths.tool_env_var_name("draw.io") == "BOOTSTRAP_BIN_DRAW_IO"
-
-    def test_tool_env_var_name_is_valid_shell_identifier(self):
-        import re
-
-        for raw in ("draw.io", "github-cli", "foo.bar.baz", "a+b", "x y"):
-            var = tool_paths.tool_env_var_name(raw)
-            assert re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", var), var
-
-
-class TestExportToolEnvVars:
-    def test_noop_when_claude_env_file_unset(self, tmp_path, monkeypatch):
-        d = _bootstrap_dir(tmp_path)
-        tool_paths.record(d, "git", "/usr/bin/git")
-        monkeypatch.delenv("CLAUDE_ENV_FILE", raising=False)
-        assert tool_paths.export_tool_env_vars(d) == []
-
-    def test_writes_exports_when_paths_exist(self, tmp_path, monkeypatch):
-        d = _bootstrap_dir(tmp_path)
-        # Create a real file on disk that the path can resolve to.
-        fake_git = tmp_path / "git"
-        fake_git.write_text("#!/bin/sh\n")
-        tool_paths.record(d, "git", str(fake_git))
-
-        env_file = tmp_path / "env_file"
-        env_file.touch()
-        monkeypatch.setenv("CLAUDE_ENV_FILE", str(env_file))
-
-        exported = tool_paths.export_tool_env_vars(d)
-        assert exported == ["BOOTSTRAP_BIN_GIT"]
-        # export_tool_env_vars buffers; session_env writes the block once a
-        # pass (the engine flushes in a finally around the whole pass).
-        session_env.flush()
-        content = env_file.read_text()
-        assert "export BOOTSTRAP_BIN_GIT=" in content
-        assert str(fake_git) in content
-
-    def test_skips_tools_whose_path_no_longer_exists(self, tmp_path, monkeypatch):
-        d = _bootstrap_dir(tmp_path)
-        tool_paths.record(d, "ghost", "/nonexistent/path/to/ghost")
-
-        env_file = tmp_path / "env_file"
-        env_file.touch()
-        monkeypatch.setenv("CLAUDE_ENV_FILE", str(env_file))
-
-        exported = tool_paths.export_tool_env_vars(d)
-        assert exported == []
-        # Nothing should have been appended.
-        assert env_file.read_text() == ""
-
-
 class TestDataDirContract:
     """data_dir=None -> canonical location; explicit dir -> exactly that dir (B15).
 
@@ -208,9 +142,3 @@ class TestDataDirContract:
         d.mkdir()
         tool_paths.record(str(d), "git", "/usr/bin/git")
         assert (d / "tool_paths.json").exists()
-
-    def test_engine_exports_from_canonical_data_dir(self):
-        engine_path = Path(__file__).parents[2] / "plugins/bootstrap/bootstrap_lib/engine.py"
-        source = engine_path.read_text()
-
-        assert "_tool_paths.export_tool_env_vars(None)" in source

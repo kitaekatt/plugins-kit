@@ -1,6 +1,10 @@
 # Tool Resolution Redesign
 
+Superseded in part: the `BOOTSTRAP_BIN_<TOOL>` session-env export described below was removed in bootstrap 0.143.0 (admission rule: `plugins/bootstrap/skills/bootstrap/references/manifest-reference.md`, "What bootstrap writes to the session env"). The `tool_paths.json` record and `resolve` are unchanged.
+
 Move bootstrap from a "find tools on PATH" model to a "record absolute paths during bootstrap, use those paths directly" model. Plugins stop depending on `shutil.which("git")` and start using `resolve("git")` (Python) or `$BOOTSTRAP_BIN_GIT` (shell).
+
+(Removed in bootstrap 0.143.0; see the banner above.)
 
 This document is the design contract. Implementation lands in phases; the first phase (foundational mechanism, additive only) ships alongside this doc.
 
@@ -59,6 +63,8 @@ Session-bootstrap exports `BOOTSTRAP_BIN_<TOOL>` for every recorded tool. Tool n
 "$BOOTSTRAP_BIN_FFMPEG" -i input.mp4 ...
 ```
 
+(Removed in bootstrap 0.143.0; see the banner above.)
+
 Unset variable means bootstrap hasn't recorded a path for that tool yet — caller should fall back to `command -v` and surface a clear error if missing.
 
 ## Engine integration
@@ -103,7 +109,9 @@ We already prepend `~/.local/bin` to PATH in the shell hook, so in principle plu
 
 - It's the failure mode we just spent this entire investigation fixing. As soon as a plugin's PATH inheritance chain breaks (Rider terminal, sub-subprocess, exec'd shim) the call fails. Per-tool env vars make the contract explicit and survive any inheritance chain that preserves env vars (i.e. all of them).
 - It documents the dependency. A plugin's shell script using `"$BOOTSTRAP_BIN_GIT"` is self-evidently bootstrap-dependent; a script using `git` is ambiguous.
+  (Removed in bootstrap 0.143.0; see the banner above.)
 - It catches regressions. If a tool isn't recorded, `$BOOTSTRAP_BIN_GIT` is empty and the call fails loudly. If we relied on PATH, the same situation would silently fall back to whatever `git` the user happens to have, which is exactly the kind of silent divergence we're trying to eliminate.
+  (Removed in bootstrap 0.143.0; see the banner above.)
 
 ## Open questions tracked elsewhere
 
@@ -115,6 +123,7 @@ We already prepend `~/.local/bin` to PATH in the shell hook, so in principle plu
 1. `plugins/bootstrap/bootstrap_lib/tool_paths.py` with `resolve` / `record` / `all_paths` / `tool_env_var_name` / `export_tool_env_vars` / `canonical_data_dir` API.
 2. Engine records resolved paths after both tool-check loops.
 3. `export_tool_env_vars()` appends `BOOTSTRAP_BIN_<TOOL>` lines to `$CLAUDE_ENV_FILE` so Claude Code picks them up, mirroring `venv_check.export_venv_env_var`.
+   (Removed in bootstrap 0.143.0; see the banner above.)
 4. Tests for `tool_paths.py` covering record/resolve, atomic write, corrupt-file recovery, env-var name convention, `$CLAUDE_ENV_FILE` export behavior, canonical-dir redirect.
 5. Note in `dependency-philosophy.md` pointing at this doc for the target architecture.
 
