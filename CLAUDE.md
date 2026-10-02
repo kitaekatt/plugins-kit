@@ -142,7 +142,8 @@ something, remove what it protects and watch it go red -- revert the fix and
 run the named test; for a guard that compares a generated artifact to its
 generator, ask what happens when both move together. A check that stays green
 is worse than no check, because the green result stops anyone looking again.
-Both observed shapes, their worked examples, and the remedy:
+The four observed shapes (three checks that pass when they should fail, one
+that fails when nothing is broken), their worked examples, and the remedy:
 [docs/reference/vacuous-checks.md](docs/reference/vacuous-checks.md).
 
 **Targeted test runs** -- the full test suite is too slow for routine use. Always run only the specific test file(s) relevant to your changes:
@@ -694,6 +695,7 @@ claude_md:
       - publish flow
       - test-suite discipline
       - Python invocation standard
+      - premise discipline when briefing delegated agents
     excludes:
       - per-plugin internals confined to ONE plugin that ship with it (covered
         by per-plugin CLAUDE.md / bootstrap.json); maintainer-only single-plugin
@@ -935,6 +937,41 @@ claude_md:
         both shapes: docs/reference/vacuous-checks.md.
       origin: "2026-09-08 -- found while shipping the generated-skills machine-emitted exclusion in bootstrap-display-rule5; the drift guard would have gone on passing with the banner removed."
       added: "2026-09-08"
+    - id: pin_the_producer_not_the_spelling
+      keywords: [hardcoded literal, pinned spelling, brittle test, expected string, anchored allowlist, anchor text, migration reds tests, re-typed constant, second source of truth, constants-only assertion, test_skill_drift, launcher string, form changes, distinctive stable anchor]
+      summary: A check that asserts a hardcoded spelling of the thing it guards must be edited by every change to that spelling. Assert against the generator or constant that PRODUCES the spelling, and re-type only the property a constants-only assertion cannot protect.
+      detail: |
+        Inverse of a_check_must_be_shown_to_fail: that insight is a check that cannot
+        fail, this one is a check that fails for a reason that is not a defect.
+        Operative rule: derive what is incidental from the producer; re-type only the
+        property the producer cannot vouch for; choose an allowlist anchor for being
+        DISTINCTIVE and STABLE, not merely present.
+        Worked example: docs/reference/vacuous-checks.md, "Shape 4".
+      origin: "2026-10-01 -- the plugin-root variable migration; four tests went red on spelling alone."
+      added: "2026-10-01"
+    - id: a_survey_is_an_artifact_not_evidence
+      keywords: [survey, enumeration, earlier agent pass, brief, established premise, derived artifact treated as source, re-derive before briefing, measuring instrument, offender list, leave as prose, universal claim, sync_to_data, plugin-root-variable-sites, premise marking, report contradictions]
+      summary: An enumeration produced by an earlier agent pass is a map, not a measurement. Re-derive a claim before a brief rests on it, and prefer a measuring instrument -- a guard run over the real files -- to an enumeration, because the guard's offender list cannot be stale.
+      detail: |
+        Worked case (2026-10-01): a read-only survey listed about 110 `${CLAUDE_PLUGIN_ROOT}`
+        sites and classified them; its claims then went into implementation briefs as
+        "established", and two were wrong. (1) A "leave these as prose" list disagreed
+        with the files: two lines carried genuinely runnable commands, and the migration
+        unit migrated them and reported the contradiction instead of complying --
+        complying would have shipped two broken sites. (2) The universal claim "no
+        plugin syncs `scripts/` into its data dir" is false: plugins/claude-ui-kit/bootstrap.json
+        declares `sync_to_data` with src `scripts`. It reached a draft of the root insight
+        claude_plugin_root_not_in_bash and docs/reference/plugin-root-variable-sites.md
+        before an md-domain review lane caught it.
+        Both errors share one cause: a derived artifact treated as a source. The survey
+        was careful and useful; the defect was in its consumption. A universal claim
+        ("no plugin ...") is checked by one grep over the real files, so run it.
+        Second-order: both errors were caught DOWNSTREAM by units told to verify premises
+        and report contradictions. That premise-marking discipline is why neither shipped,
+        so keep marking premises "established" only when the briefing agent itself
+        measured them.
+      origin: "2026-10-01 -- plugin-root variable migration; a survey's classification and one universal claim were briefed as established and were wrong."
+      added: "2026-10-01"
     - id: never_hand_make_a_plugins_output
       keywords: [hand-create artifact, hand-place file, copy the file myself, plugin should generate it, refresh action, generated stub, index, report, prove the workflow, publish and run, skip the round trip, missing prerequisite, written not working, verify by running]
       summary: Never hand-create an artifact a plugin's workflow is supposed to produce. Build or fix the producing action, publish it, install it, and run it -- a hand-placed file cannot distinguish a working workflow from a broken one.

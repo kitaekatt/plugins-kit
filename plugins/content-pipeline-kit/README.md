@@ -59,6 +59,22 @@ an llm-scripting-kit that lacks the fields, responses carry no reported cost and
 are priced from the `pricing` table (step 3). Exception (transport error)
 charges are always estimator-based and need a pricing table.
 
+## The cross-process spend cap (opt-in)
+
+`CostBudget` is an in-process float accumulator, so processes that each hold one
+do not share a cap. `content_pipeline.llm.spend_ledger` is a USD cap that every
+process opening the same SQLite file shares. It is stdlib only, opt-in, and the
+library picks no path -- the consumer names the file. Pass the ledger as
+`call_llm(spend=ledger)` and each provider attempt reserves against the cap
+before it pays and settles after; `ledger.halt()` stops further admission for
+every process, and `cli.budget.spend_stop` turns a cap or halt verdict into a
+clean partial `BudgetStop`. The ledger cannot see a `call_llm` made without
+`spend=`, so reserve-before-pay is a property of the call site. Reservation
+sizing, the halt lifecycle, orphan reclaim and its overshoot bound, and the
+`status()` fields:
+`skills/content-pipeline-domain/references/building-a-pipeline.md`, "The
+cross-process spend cap".
+
 ## Durable waits
 
 A unit of a tracked run can ask a person a typed question and wait for the
