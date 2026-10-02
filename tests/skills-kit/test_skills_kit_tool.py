@@ -1,8 +1,10 @@
 """scripts/skills_kit_tool.py: the documented launcher for audit/classify/tag/material.
 
 md-domain's SKILL.md names the launcher as
-``"${BOOTSTRAP_PYTHON:?...}" "${CLAUDE_PLUGIN_ROOT}/scripts/skills_kit_tool.py"
-<command>``. These tests run it as a script from a directory that is NOT the
+``"${BOOTSTRAP_PYTHON:?...}" "${SKILLS_KIT_ROOT:?...}/scripts/skills_kit_tool.py"
+<command>`` -- ``CLAUDE_PLUGIN_ROOT`` is unset in the Bash tool, so an
+agent-typed command anchors on the ``<PLUGIN>_ROOT`` variable the bootstrap
+engine exports. These tests run it as a script from a directory that is NOT the
 plugin root (the case the former ``-m skills_kit_lib.audit`` form could not
 serve) under this test interpreter, with the re-exec disabled by the suite's
 guard flag (tests/skills-kit/conftest.py), so they observe the dispatch; the
@@ -89,6 +91,7 @@ def test_skill_md_names_the_launcher():
         # Two sites name each launch form: the capability's operation and the
         # tool's command. Both must carry the real call-site expression.
         launch = (f"'{expr} "
-                  f'"${{CLAUDE_PLUGIN_ROOT}}/scripts/skills_kit_tool.py" {command}')
+                  f'"${{SKILLS_KIT_ROOT:?requires a bootstrap engine pass; '
+                  f'run bootstrap run}}/scripts/skills_kit_tool.py" {command}')
         assert len(re.findall(re.escape(launch) + "(?=[ '])", text)) == 2, command
     assert "-m skills_kit_lib." not in text

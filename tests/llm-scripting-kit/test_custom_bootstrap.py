@@ -87,12 +87,12 @@ class TestBootstrapMissingKey:
         assert len(ctx.deferred) == 1
         d = ctx.deferred[0]
         assert d["name"] == "openrouter_credential"
-        assert d["satisfied_by"] == "llm-scripting-kit set-key"
+        assert d["satisfied_by"] == f"{constants.CLI_COMMAND} set-key"
         # The brief user_msg says there is nothing to do yet; the detailed
         # remediation (set-key + where to get a key) lives in the agent_msg,
         # for the point-of-need skill to present verbatim.
         assert "fix-all" not in d["user_msg"]
-        assert "llm-scripting-kit set-key" in d["agent_msg"]
+        assert f"{constants.CLI_COMMAND} set-key --key <THE_KEY>" in d["agent_msg"]
         assert "openrouter.ai/keys" in d["agent_msg"]
 
     def test_missing_key_is_not_announced_to_the_user(self, env_setup):

@@ -11,23 +11,49 @@ This module (per the dependency contract) may import ``llm`` for the
 :class:`~content_pipeline.llm.platform.PipelineHaltError` taxonomy and stdlib -- nothing
 else from ``content_pipeline``. It consumes the halt signal the ``llm`` layer
 already raises; it does not re-implement provider-error classification.
+
+That one-way rule is also WHY :func:`spend_stop` lives here rather than in
+``llm``: the spend ledger's verdicts have to become a :class:`BudgetStop`
+somewhere, and ``llm`` importing ``BudgetStop`` would invert the layer. So the
+ledger raises its own
+:class:`~content_pipeline.llm.spend_ledger.SpendCapExceeded` /
+:class:`~content_pipeline.llm.spend_ledger.SpendLedgerHalted` (both
+:class:`~content_pipeline.llm.platform.BudgetExceededError` subclasses) and this
+module translates them, exactly as :func:`preflight_check` translates
+``PipelineHaltError``.
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable, List, Optional, Sequence
+from contextlib import contextmanager
+from typing import Any, Callable, Iterator, List, Optional, Sequence
 
 from content_pipeline.llm.platform import (
     PipelineHaltError,
     classify_halt_text,
 )
+from content_pipeline.llm.spend_ledger import (
+    SpendCapExceeded,
+    SpendLedgerHalted,
+)
+
+#: :attr:`BudgetStop.reason` when the cross-process spend ledger refused a
+#: reservation because granting it would push spend past the cap. Spelled like
+#: the ``PipelineHaltError.kind`` values (``HALT_AUTH`` and friends) that supply
+#: every other ``reason``: a lowercase machine-readable token.
+SPEND_CAP = "spend_cap"
+
+#: :attr:`BudgetStop.reason` when the ledger refused a reservation because its
+#: halt row is set -- an operator (or an overbilled settle) stopped the run.
+SPEND_HALT = "spend_halt"
 
 
 class BudgetStop(Exception):
     """A bulk sweep hit a hard-stop and halted with partial progress.
 
     - ``reason`` -- the halt kind (``PipelineHaltError.kind``: auth / rate_limit /
-      insufficient_credit).
+      insufficient_credit), or a spend-ledger verdict (:data:`SPEND_CAP` /
+      :data:`SPEND_HALT`) when :func:`spend_stop` raised it.
     - ``unit_id`` -- the unit whose call tripped the stop (``""`` for a
       preflight stop before any unit ran).
     - ``done`` / ``remaining`` -- units completed before the stop and units not
@@ -70,6 +96,58 @@ def preflight_check(probe: Callable[[], Any]) -> None:
         raise BudgetStop(exc.kind) from exc
 
 
+@contextmanager
+def spend_stop(
+    done: Sequence[Any],
+    remaining: Sequence[Any],
+    *,
+    unit_id: str = "",
+) -> Iterator[None]:
+    """Translate a spend-ledger verdict raised in the block into :class:`BudgetStop`.
+
+    Wrap the work that may hit the cross-process ledger (in practice a
+    ``call_llm(spend=...)`` for one unit). Two ledger exceptions are budget
+    verdicts and become a clean partial stop, mirroring
+    :func:`preflight_check`'s ``PipelineHaltError`` translation:
+
+    - :class:`~content_pipeline.llm.spend_ledger.SpendCapExceeded` ->
+      ``BudgetStop(SPEND_CAP, ...)``
+    - :class:`~content_pipeline.llm.spend_ledger.SpendLedgerHalted` ->
+      ``BudgetStop(SPEND_HALT, ...)``
+
+    ``done`` / ``remaining`` / ``unit_id`` are copied onto the
+    :class:`BudgetStop` so the driver reports accurate partial progress and a
+    resume loop knows what is left.
+
+    EVERYTHING ELSE PROPAGATES UNCHANGED, deliberately -- as a budget verdict
+    each would be a lie, and a consumer that only catches :class:`BudgetStop`
+    would then report hitting its cap when it did not:
+
+    - ``sqlite3.OperationalError`` -- the busy timeout was exhausted. An
+      unreachable ledger is infrastructure; the ledger admits nothing and
+      fails closed.
+    - ``ValueError`` -- a misconfiguration (a refused ``resume`` of an
+      overbilled halt, or a reservation whose amount cannot be determined).
+    - ``StaleReservationError`` / ``LedgerStateInvalid`` /
+      ``LedgerIdentityChanged`` -- ledger-state faults, not verdicts.
+    - ``KeyError`` -- an unknown model in the pricing table.
+
+    None of those are caught here, which is why they are named rather than
+    re-raised: adding a branch for any of them is the change this function
+    exists to refuse.
+    """
+    try:
+        yield
+    except SpendCapExceeded as exc:
+        raise BudgetStop(
+            SPEND_CAP, unit_id=unit_id, done=done, remaining=remaining
+        ) from exc
+    except SpendLedgerHalted as exc:
+        raise BudgetStop(
+            SPEND_HALT, unit_id=unit_id, done=done, remaining=remaining
+        ) from exc
+
+
 def check_response(response: Any) -> None:
     """Raise :class:`~content_pipeline.llm.platform.PipelineHaltError` on a hard-stop response.
 
@@ -87,7 +165,10 @@ def check_response(response: Any) -> None:
 
 
 __all__ = [
+    "SPEND_CAP",
+    "SPEND_HALT",
     "BudgetStop",
     "preflight_check",
+    "spend_stop",
     "check_response",
 ]

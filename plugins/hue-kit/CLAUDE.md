@@ -29,12 +29,11 @@ home's natural structure.
   Re-execs under the plugin venv via `bootstrap_guard.py` (vendored,
   stdlib-only; canonical in bootstrap's `bootstrap_lib/`).
 - `bin/hue-kit`, `bin/hue-kit.cmd` -- Claude Code adds an enabled plugin's
-  `bin/` to the Bash tool's PATH, so `hue-kit <verb>` works directly. The
-  portable invocation, for when this plugin's `bin/` did not launch the
-  current shell, is
-  `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/hue_kit_cli.py" <verb>`:
-  every bootstrap-managed session exports `BOOTSTRAP_PYTHON`. The CLI and
-  `scene-layers.py` both re-exec under the plugin venv.
+  `bin/` to the Bash tool's PATH, so `hue-kit <verb>` works directly. That
+  PATH entry is injected by Claude Code per session and is keyed to the
+  installed version, so a bare `hue-kit` resolves in a Claude Code session with
+  this plugin enabled; elsewhere run the shim by its path in the plugin's install
+  directory. The CLI and `scene-layers.py` both re-exec under the plugin venv.
 - `examples/scene-groups.yaml`, `examples/scene-designs.yaml`, `examples/index.html`
   -- the author's home (42 lights, 12 scenes). **Example data**; a user
   regenerates their own or overwrites via `hue-kit init`. The rendered report is
@@ -44,9 +43,8 @@ home's natural structure.
 
 ## The CLI
 
-`hue-kit <verb>` (from PATH), or
-`"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/hue_kit_cli.py" <verb>`. Working files
-(`scene-groups.yaml`, `scene-designs.yaml`, `index.html`) default to the plugin
+`hue-kit <verb>` (from PATH in a Claude Code session with this plugin enabled).
+Working files (`scene-groups.yaml`, `scene-designs.yaml`, `index.html`) default to the plugin
 data dir (`~/.claude/plugins/data/plugins-kit/hue-kit`) -- one source of truth
 regardless of invocation cwd; pass `--dir PATH` to relocate. Verbs map to
 scene-layers.py flags:

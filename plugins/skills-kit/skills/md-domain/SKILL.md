@@ -754,43 +754,43 @@ domain_skill:
     - id: audit
       keywords: [audit, contract check, validate skill, run audit, schema validation]
       description: Run deterministic contract checks against a SKILL.md or CLAUDE.md (generation-time and audit-time validation).
-      operation: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/skills_kit_tool.py" audit <path>'
+      operation: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${SKILLS_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/skills_kit_tool.py" audit <path>'
       tool: skills_kit_lib/audit.py
       scope_axes: [single-skill]
       reference_section: skill-domain/scripts.md (audit)
     - id: classify
       keywords: [classify, infer type, type detection, mixed-type detection, suggest type]
       description: Infer a SKILL.md's type from content shape and YAML root.
-      operation: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/skills_kit_tool.py" classify <path>'
+      operation: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${SKILLS_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/skills_kit_tool.py" classify <path>'
       tool: skills_kit_lib/classify.py
       scope_axes: [single-skill]
       reference_section: skill-domain/scripts.md (classify)
     - id: tag
       keywords: [tag, write skill-type, frontmatter tagging, idempotent skill-type write]
       description: Write a skill-type value into a SKILL.md's frontmatter idempotently.
-      operation: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/skills_kit_tool.py" tag <path> <skill-type>'
+      operation: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${SKILLS_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/skills_kit_tool.py" tag <path> <skill-type>'
       tool: skills_kit_lib/tag.py
       scope_axes: [single-skill]
       reference_section: skill-domain/scripts.md (tag)
     - id: material
       keywords: [material, render a skill, skill as prompt text, token estimate, declared resources, skill context block]
       description: Print selected skills and the reference files they declare as one text block, or the report of what went into it, within a token budget.
-      operation: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/skills_kit_tool.py" material --skill <path> --budget <n> [--json]'
+      operation: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${SKILLS_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/skills_kit_tool.py" material --skill <path> --budget <n> [--json]'
       tool: skills_kit_lib/material.py
       scope_axes: [multi-skill]
       reference_section: skill-domain/scripts.md (material)
   tools:
     - name: audit
-      command: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/skills_kit_tool.py" audit'
+      command: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${SKILLS_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/skills_kit_tool.py" audit'
       description: YAML-first schema validator with markdown-heuristic fallback for legacy skills. Runs from any directory -- the launcher re-execs under the plugin venv (pyyaml) and runs skills_kit_lib.<command>; relative paths resolve against the caller's directory (see skill-domain/scripts.md).
     - name: classify
-      command: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/skills_kit_tool.py" classify'
+      command: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${SKILLS_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/skills_kit_tool.py" classify'
       description: Type inference across the canonical skill types.
     - name: tag
-      command: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/skills_kit_tool.py" tag'
+      command: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${SKILLS_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/skills_kit_tool.py" tag'
       description: Idempotent frontmatter tagger; refuses to invent or overwrite without --force.
     - name: material
-      command: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/skills_kit_tool.py" material'
+      command: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${SKILLS_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/skills_kit_tool.py" material'
       description: Prints skills as one text block or a report, within a required token budget. Exits 0 printed, 1 refused, 2 usage, 3 library unavailable, 4 over budget.
 ```
 

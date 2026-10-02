@@ -10,7 +10,7 @@ management.
 ## Local model server entry points
 
 `scripts/model-server.sh` is the canonical Claude-first launcher. Invoke it as
-`${CLAUDE_PLUGIN_ROOT}/scripts/model-server.sh qwen36|qwen38|qwen38l`; this
+`"${LLM_SCRIPTING_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/model-server.sh" qwen36|qwen38|qwen38l`; this
 works from the plugin root Claude actually loaded and does not assume a plugin
 `bin/` directory is on PATH. `bin/qwen36-server`, `bin/qwen38-server`, and
 `bin/qwen38l-server` are thin shell adapters for interactive environments that
@@ -123,7 +123,8 @@ swapper on purpose; default and every other value is on.
 
 ## `acceptance`: proofs that must be able to go red
 
-`llm-scripting-kit acceptance swapper|frontdoor`
+`llm-scripting-kit acceptance swapper|frontdoor` (run it by the CLI contract path
+in README.md, "Invoking the CLI")
 (`swapper_acceptance.py`, `frontdoor/acceptance.py`) asserts a deployment
 through its HTTP surface only (`/v1/models`, `/running`, `/health/backends`,
 `/v1/chat/completions`, the `x-frontdoor-deployment` header), never through

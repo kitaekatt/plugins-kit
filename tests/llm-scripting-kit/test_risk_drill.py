@@ -434,7 +434,9 @@ def check_assertion_1_in_session(drill: Drill, monkeypatch) -> dict[str, Any]:
     )
 
     # What the Re-select line tells the agent to run.
-    assert "llm-scripting-kit record-halt <entry>" in decl.RULE_TRIGGER_SESSION
+    from llm_scripting_kit.constants import CLI_COMMAND
+
+    assert f"{CLI_COMMAND} record-halt <entry>" in decl.RULE_TRIGGER_SESSION
     monkeypatch.setattr(cli, "discover_model_entries", lambda **_kw: _entries())
     assert cli.main(["record-halt", "codex"]) == cli.EXIT_OK
 

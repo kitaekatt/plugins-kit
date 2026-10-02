@@ -1,7 +1,29 @@
 # llm-scripting-kit
 
 The installed `llm-scripting-kit` command is the host-neutral interface to the
-shared endpoint registry and completion backends:
+shared endpoint registry and completion backends.
+
+## Invoking the CLI
+
+The contract is the plugin venv's console script, spelled out in full:
+
+```
+~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.venv/bin/llm-scripting-kit
+(Windows: ~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.venv/Scripts/llm-scripting-kit.exe)
+```
+
+The path has no version segment, so it survives plugin upgrades. It needs no
+PATH entry and no environment variable, and it resolves the same way from
+PowerShell, Git Bash, Codex, and a Claude Code Bash session. The marketplace
+segment `plugins-kit` is part of the contract; a marketplace rename changes it
+here and nowhere else.
+
+A bare `llm-scripting-kit` resolves only where something has put a plugin
+`bin/` directory on PATH. Claude Code does that inside its own sessions, using
+the version-keyed plugin cache directory, so a bare name works there and fails
+in PowerShell, Codex, and other shells. In the examples below, `llm-scripting-kit`
+stands for the contract path; an agent or script that runs the command uses
+that path.
 
 ```bash
 llm-scripting-kit endpoints
@@ -646,8 +668,10 @@ writes are atomic (temp file + rename).
 /plugin install llm-scripting-kit
 ```
 
-Then run `llm-scripting-kit status` (the plugin's `bin/` shim is on PATH). If no
-key is set, run `llm-scripting-kit set-key` yourself -- the hidden prompt is
+Then run `llm-scripting-kit status` (the contract path from "Invoking the CLI";
+the plugin's `bin/` shim is on PATH only inside a Claude Code session, and its
+directory is version-keyed). If no key is set, run `llm-scripting-kit set-key`
+yourself -- the hidden prompt is
 interactive, so an agent cannot drive it. The `openrouter-account` skill covers
 verify / rotate / diagnose flows.
 
@@ -658,7 +682,8 @@ as one local `/v1/chat/completions` endpoint. Add a transport-only `routing:`
 mapping with a `group`, optional `order`, `max_parallel`, and `effort_style`
 (omitted means `top-level`; an entry-level `effort_style` overrides it);
 callers send the group as `model`. Lower orders fill first, then requests spill
-to the next tier. Run it with `llm-scripting-kit frontdoor ...` or
+to the next tier. Run it with `llm-scripting-kit frontdoor ...` (the contract path from
+"Invoking the CLI"; a bare name resolves only inside a Claude Code session) or
 `scripts/frontdoor.sh`; the launcher selects the plugin venv Python and supports
 `--print-command`. Use one uvicorn worker because concurrency counts are held in
 one process's memory. `--check` prints tiers and lists transport entries that

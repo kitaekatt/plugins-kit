@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .api_key import get_api_key
-from .constants import BASE_URL
+from .constants import BASE_URL, CLI_COMMAND
 
 # Placeholder sent to a KEYLESS endpoint. The OpenAI SDK requires a truthy
 # api_key, while a keyless server ignores the Authorization header entirely, so
@@ -79,7 +79,7 @@ def make_openai_client(
         if result.key is None:
             raise RuntimeError(
                 f"No API key found for endpoint '{endpoint or 'openrouter'}'. "
-                f"Set {key_env_hint} or run `llm-scripting-kit set-key"
+                f"Set {key_env_hint} or run `{CLI_COMMAND} set-key"
                 + ("`." if endpoint is None else f" --endpoint {endpoint}`.")
             )
         api_key = result.key

@@ -888,9 +888,10 @@ class TestSessionDispatchableTransport:
 def test_session_reselect_rule_tells_the_agent_to_record_a_quota_halt():
     """Drill F1: an in-session quota/credit halt must be written back."""
     from llm_scripting_kit import declaration as _decl
+    from llm_scripting_kit.constants import CLI_COMMAND
 
     rule = _decl.RULE_TRIGGER_SESSION
-    assert "llm-scripting-kit record-halt <entry>" in rule
+    assert f"{CLI_COMMAND} record-halt <entry>" in rule
     assert rule.index("record-halt") < rule.index("--exclude")
     assert "quota or credit halt" in rule
 

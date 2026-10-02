@@ -39,7 +39,7 @@ wants the text itself.
 ## Step 2 -- Run it
 
 ```
-"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/skills_kit_tool.py" material --skill <path> [--catalog] [--no-declared] [--resource <rel>]... [--skill <path> ...] --budget <n> [--json]
+"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${SKILLS_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/skills_kit_tool.py" material --skill <path> [--catalog] [--no-declared] [--resource <rel>]... [--skill <path> ...] --budget <n> [--json]
 ```
 
 The launcher runs from any directory. On success stdout holds the block (or the

@@ -584,7 +584,8 @@ Plugins follow the Claude Code plugin spec:
 - **Marketplace manifest** (`.claude-plugin/marketplace.json`): Lists available plugins with name, version, source path
 - **Plugin manifest** (`.claude-plugin/plugin.json`): Per-plugin metadata (name, version, description, keywords)
 - **Skill discovery**: Claude Code scans `skills/` directories for `SKILL.md` files
-- **Variable expansion**: `${CLAUDE_PLUGIN_ROOT}` resolves to the plugin's install path at runtime
+- **Variable expansion**: `${CLAUDE_PLUGIN_ROOT}` resolves to the plugin's install path in the values Claude Code expands before executing them. Two surfaces: a hook's `command:` field (worked example: `plugins/bootstrap/hooks/hooks.json`), and a skill's `!` preload line, where Claude Code substitutes only its own names (`${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_SESSION_ID}`) and refuses a preload carrying any other expansion (`plugins/bootstrap/skills/bootstrap/references/python-interpreter.md`, "Skill preload commands").
+  - It is absent from the Bash tool's environment, so a command carrying it that an agent types or copies out of prose runs against a bare `/`-rooted path -- never write it inside a command a skill, reference, or README asks a reader to run.
 
 **Plugin dependencies on bootstrap.** Every plugin except bootstrap declares
 `"dependencies": ["bootstrap"]`, enforced at pre-commit and again in
@@ -1083,6 +1084,43 @@ claude_md:
           re-resolved per directory change inside a single session.
       origin: "2026-09-16 -- BOOTSTRAP_PYTHON / BOOTSTRAP_PROJECT_PYTHON shipped for every Python call site, on every OS, superseding an engine-process-only draft that never landed on this file."
       added: "2026-09-16"
+    - id: claude_plugin_root_not_in_bash
+      keywords: [CLAUDE_PLUGIN_ROOT, unset in Bash, /scripts/x.py, <PLUGIN>_ROOT, plugin_root_env_var_name, CLAUDE_ENV_FILE, gate-skipped session, hooks.json command, preload, CLAUDE_PLUGIN_DATA, sync_to_data]
+      summary: "`CLAUDE_PLUGIN_ROOT` is expanded by Claude Code only in values the harness reads before executing them, and is UNSET in the Bash tool's environment, so a command an agent types or copies from prose runs it as `/scripts/x.py`. An agent-typed command anchors on the bootstrap-exported `<PLUGIN>_ROOT` with a `:?` guard instead."
+      detail: |
+        The mechanism is owned one scope down by `plugins/CLAUDE.md`, under "Two
+        surfaces expand `${CLAUDE_PLUGIN_ROOT}`": the two surfaces the harness
+        expands (a `hooks/hooks.json` `command:` field, and a skill `!` preload,
+        where Claude Code substitutes only its own names such as
+        `${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_SESSION_ID}` and refuses a preload
+        carrying any other expansion), the variable's absence everywhere else
+        including the Bash tool's environment, the `/scripts/x.py` that a command
+        carrying it resolves to, the `"${<PLUGIN>_ROOT:?<msg>}"` replacement
+        form, `plugin_root_env_var_name` in
+        plugins/bootstrap/bootstrap_lib/env_var_check.py, the `export_env_var`
+        call that exports it, and the gate-skipped session in which `:?` fails
+        loudly on purpose. The preload rule is established in
+        plugins/bootstrap/skills/bootstrap/references/python-interpreter.md,
+        "Skill preload commands", and restated in that skill's SKILL.md.
+        Per-site survey, its WORKING / DOC / BROKEN classes and the per-plugin
+        counts: docs/reference/plugin-root-variable-sites.md. Guard:
+        tests/repo-scripts/test_claude_plugin_root_expansion.py. Only the two
+        gotchas below are recorded here.
+      gotchas:
+        - "Do not substitute `CLAUDE_PLUGIN_DATA`. It is set, but when measured
+          it held the data directory of a DIFFERENT plugin (codex-openai-codex),
+          so anchoring on it silently points one plugin's lookup at another's."
+        - "The data directory is not a general anchor for a shipped script
+          either. `sync_to_data` is null for git-kit, skills-kit, awesome-kit,
+          hue-kit and cache-kit, and unreal-kit syncs only `lib`; claude-ui-kit
+          is the one plugin that syncs `scripts`, declaring a `sync_to_data`
+          entry with src `scripts` and dst `scripts` in its bootstrap.json. So
+          ~/.claude/plugins/data/plugins-kit/claude-ui-kit/scripts/ does hold
+          that plugin's shipped scripts, while the same path under a plugin that
+          declares no such entry does not exist. What the data directory anchors
+          for every plugin is a venv INTERPRETER, not a script."
+      origin: "2026-10-01 -- measured while finding that agent-typed commands in skills and references used ${CLAUDE_PLUGIN_ROOT}; the complementary correction to the Plugin System 'Variable expansion' bullet."
+      added: "2026-10-01"
   conventions:
     - rule: Commit and push to dev freely without asking; only a PUBLISH (dev -> master) needs the user. Do not coordinate around other agent sessions' concurrent work.
       keywords: [commit freely, push freely, no permission, dev branch, only publishes gated, other agents, concurrent sessions, shared tree, git commit -- paths]

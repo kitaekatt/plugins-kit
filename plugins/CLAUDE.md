@@ -228,7 +228,7 @@ unconfigurable opinion whose test passes is a finding.
   verdict expires and the next read evaluates the pool afresh (`usage_budget.pinned_evaluate`). A
   team could reasonably want live re-evaluation -- a session running for days holds an
   `available` verdict computed against numbers that have since moved -- and the only
-  remedy we leave them is to start a new session (or `llm-scripting-kit usage --no-pin`,
+  remedy we leave them is to start a new session (or `~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.venv/bin/llm-scripting-kit usage --no-pin`, or `.venv/Scripts/llm-scripting-kit.exe` in place of `.venv/bin/llm-scripting-kit` on Windows,
   which inspects without changing what `seats` returns). We refuse the seam because the
   alternative is the failure the feature exists to prevent: an endpoint that was usable
   when work was planned against it disappearing mid-run on a re-read, which strands that
@@ -453,7 +453,7 @@ optional-dependency section above defers to it.
 | job-kit | `llm_scripting_kit.completion` (`BackendSelection`, `Capabilities`, `adapter_capabilities`, `create_backend`, `match_capabilities`), `llm_scripting_kit.declaration` (`describe`, `NoUsableRoutingTarget`, `CALLER_PROCESS`), `llm_scripting_kit.usage_budget` (`record_observed_halt`, `quota_pool_key`) | Run policy over llm-scripting-kit's `describe(caller="process")` ranking: halt narrowing, attempts, and the ledger's pace-reading record | Yes |
 | workflow-kit | `llm_scripting_kit.declaration` (`run`, `RunRequest`, `NoUsableRoutingTarget`), `llm_scripting_kit.completion` (`create_transport_backend`, `BackendOptions`), and `default_declaration` (via `scripts/openrouter_run.py`); `llm_scripting_kit.completion` (`OutputContract`, `POLICY_VALIDATED_RESULT`, `json_schema`) for typed artifacts (via `workflow_kit_lib/contracts.py` at compile time, lazily and only for a schema artifact, and `scripts/check_artifact.py` and `scripts/openrouter_run.py --provides` at run time); every `model:` declaration is validated with `bootstrap_lib.model_declaration` (via `workflow_kit_lib/declarations.py`), not llm-scripting-kit | The `openrouter` node strategy: one non-Claude call per workflow node over a declaration of transport entries, reporting the typed floor; agent-step routing of Claude core ids at compile time; typed node artifacts (compile-time `provides`/`requires` checks with compatibility by `schema_digest` equality, and the per-execution verdict file) | Yes |
 | awesome-kit (orchestrate) | `llm_scripting_kit.discover_model_entries` and `describe(caller="session")` (lazy/optional, via `orchestration_guidance.py` and `dispatch.py`) | Each routing row ranked by `describe(caller="session")` and passed through verbatim (no local ranking); `dispatch.py` resolves `--model` through `discover_model_entries` and REFUSES (exit 3) without llm-scripting-kit | Yes |
-| bootstrap | `llm_scripting_kit.seats.discover_seats` (lazy/optional, via `bootstrap_lib.code_review.review_profiles`) | Peer-seat discovery for review profiles (a `peer:<name>` entry in a reviewer's ordered `model` priority list); it never talks to an LLM | Yes |
+| bootstrap | none directly -- `bootstrap_lib.code_review.review_profiles` and `bootstrap_lib.model_declaration` are stdlib-only and import no llm-scripting-kit module | Shape validation of reviewer `model` priority lists (ordered registry ids); ranking and dispatch live in llm-scripting-kit and the code-review kits (see the git-kit, p4-kit row) | Yes |
 | git-kit, p4-kit | `llm_scripting_kit.review_lane.main` via each kit's thin `scripts/run_review_lane.py` wrapper | The code-review skills rank each reviewer declaration through the `llm-scripting-kit describe` CLI (session caller) and dispatch by entry harness; bootstrap setup and the REFUSE probe for the shared library live here, and the lane's prompt lives in `bootstrap_lib.code_review.lane_prompts` and its guards in `llm_scripting_kit.review_lane` | Yes |
 | yaml-data-editor-kit | none directly -- reaches it via content-pipeline-kit's `content_pipeline` (the dispatch binding in `dispatch/`) | The editor's dispatch planner, not the completion transport | No (`published: false`) |
 
@@ -557,7 +557,7 @@ from bootstrap_lib.code_review.chunking import ...      # now resolvable
 ```
 
 **Why:** a script must not trust the interpreter that launched it. Skills name a
-script as `tool: ${CLAUDE_PLUGIN_ROOT}/scripts/foo.py` with no interpreter, so an
+script as `tool: <plugin root>/scripts/foo.py` with no interpreter, so an
 agent runs it under `python` / `uv run python` -- neither carries the shared-lib
 `.pth`. Without the re-exec the import fails and the except-handler emits a
 MISLEADING "bootstrap has not provisioned ... (missing: bootstrap_lib)" message
@@ -584,13 +584,49 @@ The SKILL.md-side companion is in the root CLAUDE.md insight
 and let it re-exec; use the explicit venv path only for a script without a
 re-exec guard; never use `uv run python` outside a skill preload.
 
-**SKILL.md examples launch `"$BOOTSTRAP_PYTHON" ${CLAUDE_PLUGIN_ROOT}/scripts/<script>.py`**
-and rely on the script's `reexec_under_plugin_venv`. A skill `!` preload is
-the exception: Claude Code rejects shell expansion there, so a preload keeps
-`uv run --no-project python`. Details: root CLAUDE.md "Python interpreter
-variables" and `plugins/bootstrap/skills/bootstrap/references/python-interpreter.md`;
-manifest commands: `plugins/bootstrap/skills/bootstrap/references/manifest-reference.md`,
-"Python inside manifest commands".
+**Two surfaces expand `${CLAUDE_PLUGIN_ROOT}`; a shell is not one of them.**
+Claude Code substitutes the variable only where the harness reads the string
+before executing it, and there are exactly two such surfaces:
+
+- A `hooks/hooks.json` `command:` field. Worked example:
+  `plugins/bootstrap/hooks/hooks.json`, whose SessionStart entry is
+  `bash ${CLAUDE_PLUGIN_ROOT}/hooks/sessionstart/session-bootstrap.sh` -- that
+  hook is the only writer of `BOOTSTRAP_PYTHON`, and the variable is set in a
+  session, so the expansion demonstrably happens.
+- A skill's `!` preload. Claude Code substitutes its own names there
+  (`${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_SESSION_ID}`, ...) and refuses a preload
+  carrying any other expansion, which is why a preload keeps
+  `uv run --no-project python`
+  (`plugins/bootstrap/skills/bootstrap/references/python-interpreter.md`,
+  "Skill preload commands").
+
+**Everywhere else the variable is unset** -- including the Bash tool's
+environment. A command an agent types or copies into a shell therefore resolves
+`${CLAUDE_PLUGIN_ROOT}/scripts/x.py` to `/scripts/x.py`: a path nobody wrote,
+failing for a reason that does not name the cause.
+
+**A command an AGENT runs names the plugin root as `"${<PLUGIN>_ROOT:?<msg>}"`**
+-- `GIT_KIT_ROOT`, `HUE_KIT_ROOT`, `UNREAL_KIT_ROOT`, and so on. The name is
+whatever `plugin_root_env_var_name` in
+`plugins/bootstrap/bootstrap_lib/env_var_check.py` derives from the plugin
+name; `plugins/bootstrap/bootstrap_lib/engine.py` exports it through
+`export_env_var` on every un-skipped pass, for every plugin that ships a
+`bootstrap.json`. The pointer exists from bootstrap 0.72.0 onward (commit
+`771d3920` added the helper and the export together). In a session whose
+bootstrap pass was skipped by a gate the variable is absent, and `:?` aborts
+the command with the message, naming the missing variable -- a loud failure
+that is the point of the form, and strictly better than silently running
+against `/scripts/x.py`.
+
+**SKILL.md examples launch
+`"$BOOTSTRAP_PYTHON" "${<PLUGIN>_ROOT:?<msg>}/scripts/<script>.py"`** and rely
+on the script's `reexec_under_plugin_venv`. Details: root CLAUDE.md "Python
+interpreter variables" and
+`plugins/bootstrap/skills/bootstrap/references/python-interpreter.md`;
+manifest commands:
+`plugins/bootstrap/skills/bootstrap/references/manifest-reference.md`,
+"Python inside manifest commands". Guard:
+`tests/repo-scripts/test_claude_plugin_root_expansion.py`.
 
 **Test gotcha: this same re-exec silently short-circuits pytest.** Importing
 `prepare_review.py` triggers `reexec_under_plugin_venv`, which on a machine with
@@ -609,7 +645,7 @@ os.environ.setdefault("_BOOTSTRAP_GUARD_VENV_REEXEC", "1")
 ```
 
 Current setters: `tests/awesome-kit`, `tests/git-kit`, `tests/job-kit`,
-`tests/p4-kit`, `tests/unreal-kit`. A dir whose tests import a re-execing script and which does
+`tests/p4-kit`, `tests/skills-kit`, `tests/unreal-kit`. A dir whose tests import a re-execing script and which does
 NOT set this is a latent false green, and the failure hides itself: in a
 full-suite run an earlier conftest (alphabetically, `tests/awesome-kit`) sets
 the var first, so the dir looks healthy and only breaks when run ALONE -- i.e.

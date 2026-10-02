@@ -7,7 +7,7 @@ expression keeps project environments preferred and emits a version diagnosis
 when the bootstrap variables are missing:
 
 ```
-"${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" "${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue_runner.py" <script>.py
+"${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" "${UNREAL_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/skills/ue-python-api/scripts/ue_runner.py" <script>.py
 ```
 
 The `py` examples below are Unreal Editor's embedded-console syntax. They run

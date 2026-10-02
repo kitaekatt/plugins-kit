@@ -57,7 +57,7 @@ After the decision pass, collect the findings the author DECLINED (code-review
 issues rejected + md-domain remediations not applied), write them to
 `<bundle.bundle_dir>/declined.json`, and run:
 
-    "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py --ledger-record <bundle.bundle_dir>/declined.json
+    "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${GIT_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/prepare_review.py" --ledger-record <bundle.bundle_dir>/declined.json
 
 The payload is `{change_id, baseline, declined:[{kind, file, ...}, ...]}` using
 `bundle.change_id` and `bundle.ledger_baseline`. `--ledger-record` computes keys

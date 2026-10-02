@@ -69,7 +69,8 @@ class StageSnapshotter:
     ``CandidateStore`` wrap ``dump_store``). The file is written to a sibling
     temporary name and renamed into place, so an interrupted write never
     leaves a plausible-looking partial snapshot. A ``write`` error propagates
-    and stops the loop.
+    and stops the loop; a ``write`` that returns without creating the file
+    raises ``FileNotFoundError`` naming the store that was to be copied.
     """
 
     def __init__(
@@ -93,6 +94,19 @@ class StageSnapshotter:
         tmp = dst.with_name(dst.name + ".partial")
         try:
             self._write(store, tmp)
+            if not tmp.exists():
+                # The write callback produced nothing (a path-store copier
+                # returns without writing when its source is absent). Name the
+                # store, not the temporary file inside the audit directory.
+                what = (
+                    f"store file '{store}'"
+                    if isinstance(store, (str, os.PathLike))
+                    else f"store {type(store).__name__} object"
+                )
+                raise FileNotFoundError(
+                    f"cannot snapshot {dst.name} (cycle {cycle}): the {what} "
+                    f"is missing, so the write produced no file for {dst}"
+                )
             os.replace(tmp, dst)
         except BaseException:
             try:

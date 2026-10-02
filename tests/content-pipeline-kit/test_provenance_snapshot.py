@@ -103,6 +103,21 @@ def test_snapshot_failure_stops_loop(tmp_path):
     assert "store.after-select.json" not in names
 
 
+def test_missing_source_store_error_names_the_store(tmp_path):
+    from content_pipeline.provenance.record import snapshot_file
+
+    store = tmp_path / "candidates.json"  # never created
+    s = snap.StageSnapshotter(
+        tmp_path / "audit", write=lambda src, dst: snapshot_file(src, dst)
+    )
+    with pytest.raises(FileNotFoundError) as exc:
+        s(cl.LoopEvent(kind=cl.LoopEventKind.CYCLE_STARTED, cycle=1, store=store))
+    msg = str(exc.value)
+    assert str(store) in msg
+    assert ".partial" not in msg
+    assert not list((tmp_path / "audit").rglob("*.partial"))
+
+
 def test_event_log_one_line_per_event(tmp_path):
     log = tmp_path / "sub" / "events.jsonl"
     _loop({"secret_store_marker": 1}, [snap.EventLog(log)], max_cycles=1)
