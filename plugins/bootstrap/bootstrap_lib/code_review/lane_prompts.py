@@ -74,9 +74,8 @@ def is_agent_alias(model: str) -> bool:
 # is a constraint on the BACKEND KIND rather than on eligibility -- see
 # LANES_REQUIRING_AGENT_LOOP.
 #
-# The validator is NOT here on purpose. It is the control that suppresses a
-# weak reviewer's noise; replacing it in the same phase as a reviewer would
-# remove the instrument the reviewer change has to be measured with.
+# The validator is NOT here on purpose. The runner has no validator prompt, input
+# or verdict contract, so a non-Agent validator entry is dropped at dispatch.
 ENDPOINT_ELIGIBLE_LANES = frozenset(
     {
         "reviewer_a_claude_md_compliance",

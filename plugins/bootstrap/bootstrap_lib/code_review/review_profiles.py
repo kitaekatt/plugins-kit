@@ -20,7 +20,7 @@ Every model a layer names is an ENTRY stating both an id and an effort:
     - {id: opus, effort: high}
 
 A reviewer's ``model`` is an ordered list of entries; a validator reason is a
-list holding exactly one. A layer that states a reviewer or a validator reason
+list like it, of one or more entries. A layer that states a reviewer or a validator reason
 must state it completely, in that layer. Each gap is a FINDING, and
 ``resolve_config`` raises one error listing every finding across every layer.
 ``main --check`` prints the findings without rendering a table.
@@ -219,8 +219,6 @@ def _validate_entries(
     value: Any,
     source: Path | str,
     location: str,
-    *,
-    exactly_one: bool,
 ) -> None:
     """Validate the STRUCTURE of a model entry list.
 
@@ -238,7 +236,6 @@ def _validate_entries(
     * a blank id, an empty list, or one id twice -- checked by
       ``model_declaration.parse`` over the ordered ids, so every plugin
       reading a declaration rejects the same shapes.
-    * for a validator, any count other than one entry.
     """
     if isinstance(value, str):
         ids: list[Any] = [value]
@@ -283,13 +280,7 @@ def _validate_entries(
     except model_declaration.DeclarationError as exc:
         where = location if exc.index is None else f"{location}[{exc.index}]"
         _fail(source, where, str(exc))
-    if exactly_one and len(parsed) != 1:
-        _fail(
-            source,
-            location,
-            f"must hold exactly one entry, got {parsed!r}: a validator has no "
-            "failover chain",
-        )
+    del parsed
 
 
 def _no_effort(model_id: str) -> str:
@@ -407,17 +398,17 @@ def _validate_validator_models(value: Any, source: Path | str, location: str) ->
     the shipped reasons; a new reason is an addressable mapping record and is
     appended by the normal mapping merge.
 
-    Each value is a list holding exactly ONE ``{id, effort}`` entry. A
-    validator is never endpoint-eligible and has no failover chain, so a
-    second entry would be a preference nothing honours; it is refused rather
-    than silently ignored.
+    Each value is an ordered list of one or more ``{id, effort}`` entries,
+    like a reviewer's model list. The lane tool has no validator route, so the
+    skill drops non-Agent entries at dispatch; the resolved table must still
+    name at least one Agent entry per reason (see ``_validate_resolved``).
     """
     if not isinstance(value, dict):
         _fail(source, location, f"must be a mapping, got {type(value).__name__}")
     for reason, entries in value.items():
         if not isinstance(reason, str) or not reason.strip():
             _fail(source, f"{location} key {reason!r}", "must be a non-empty string")
-        _validate_entries(entries, source, f"{location}.{reason}", exactly_one=True)
+        _validate_entries(entries, source, f"{location}.{reason}")
 
 
 def _validate_reviewer(value: Any, source: Path | str, location: str) -> None:
@@ -450,7 +441,7 @@ def _validate_reviewer(value: Any, source: Path | str, location: str) -> None:
     _validate_nonempty_string(value["name"], source, f"{location}.name")
     _validate_disabled(value, source, location)
     if "model" in value:
-        _validate_entries(value["model"], source, f"{location}.model", exactly_one=False)
+        _validate_entries(value["model"], source, f"{location}.model")
 
 
 def _validate_reviewers(value: Any, source: Path | str, location: str) -> None:
@@ -590,6 +581,18 @@ def _validate_resolved(
 
     if not require_runtime_coverage:
         return
+    for index, profile in enumerate(profiles):
+        for reason, entries in profile["validator_models"].items():
+            ids = [entry["id"].strip() for entry in entries]
+            if not any(lane_prompts.is_agent_alias(model_id) for model_id in ids):
+                _fail(
+                    source,
+                    f"profiles[{index}].validator_models.{reason}",
+                    f"validator reason {reason!r} names no Agent entry "
+                    f"(entries: {ids!r}); the lane tool has no validator route, "
+                    "so a validator can only run Agent entries "
+                    f"({sorted(lane_prompts.AGENT_MODEL_ALIASES)})",
+                )
     supported = sorted(lane_prompts.KNOWN_LANES - {"validator"})
     for index, profile in enumerate(profiles):
         location = f"profiles[{index}]"
@@ -737,7 +740,7 @@ def resolve_config(
     return config, provenance
 
 
-def _complete_entries(value: Any, location: str, *, exactly_one: bool) -> list[dict[str, str]]:
+def _complete_entries(value: Any, location: str) -> list[dict[str, str]]:
     """Return ``value`` as normalized ``{id, effort}`` entries, or raise.
 
     The ids are stripped by ``model_declaration.parse``. Anything other than a
@@ -759,8 +762,6 @@ def _complete_entries(value: Any, location: str, *, exactly_one: bool) -> list[d
         ids = model_declaration.parse([entry["id"] for entry in value])
     except model_declaration.DeclarationError as exc:
         raise ConfigError(f"{location}: {exc}") from exc
-    if exactly_one and len(ids) != 1:
-        raise ConfigError(f"{location}: must hold exactly one entry, got {ids!r}")
     return [
         {"id": model_id, "effort": entry["effort"]}
         for model_id, entry in zip(ids, value)
@@ -771,7 +772,7 @@ def apply_model_priority(config: Mapping[str, Any]) -> dict[str, Any]:
     """Normalize every reviewer's and validator's entries in a resolved table.
 
     Each reviewer's ``model`` becomes its ordered ``[{id, effort}, ...]`` list
-    and each validator reason its one-entry list, with ids stripped. An entry
+    and each validator reason its ordered entry list, with ids stripped. An entry
     that is not complete raises ``ConfigError``.
     """
     resolved = deepcopy(dict(config))
@@ -781,7 +782,6 @@ def apply_model_priority(config: Mapping[str, Any]) -> dict[str, Any]:
             reason: _complete_entries(
                 entries,
                 f"{profile_location} validator {reason!r}",
-                exactly_one=True,
             )
             for reason, entries in profile["validator_models"].items()
         }
@@ -789,7 +789,6 @@ def apply_model_priority(config: Mapping[str, Any]) -> dict[str, Any]:
             reviewer["model"] = _complete_entries(
                 reviewer["model"],
                 f"{profile_location} lane {str(reviewer.get('name'))!r}",
-                exactly_one=False,
             )
     return resolved
 
@@ -816,7 +815,6 @@ def canonical_projection(value: Mapping[str, Any]) -> dict[str, Any]:
                         "model": _complete_entries(
                             reviewer["model"],
                             f"{profile_location} lane {str(reviewer['name'])!r}",
-                            exactly_one=False,
                         ),
                     }
                     for reviewer in profile["reviewers"]
@@ -825,7 +823,6 @@ def canonical_projection(value: Mapping[str, Any]) -> dict[str, Any]:
                     reason: _complete_entries(
                         entries,
                         f"{profile_location} validator {reason!r}",
-                        exactly_one=True,
                     )
                     for reason, entries in profile["validator_models"].items()
                 },

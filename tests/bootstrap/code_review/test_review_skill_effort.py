@@ -143,8 +143,24 @@ def test_validators_dispatch_to_the_effort_agent(vcs: str) -> None:
     (validate,) = [step for step in steps if step["n"] == 7]
     action = _flat(validate["action"])
     kit = KIT[vcs]
-    assert "is a list of exactly one `{id, effort}` entry" in action
-    assert f"`subagent_type: {kit}:review-lane-<effort>` and `model: <id>`" in action
+    assert "an ordered list of one or more `{id, effort}` entries" in action
+    assert "Dispatch the first Agent entry." in action
+    assert f"`subagent_type: {kit}:review-lane-<entry effort>` and `model: <id>`" in action
+
+
+@pytest.mark.parametrize("vcs", VCS)
+def test_step7_drops_non_agent_validator_entries_with_a_route_line(vcs: str) -> None:
+    (validate,) = [step for step in _steps(vcs) if step["n"] == 7]
+    action = _flat(validate["action"])
+    assert "Drop every non-Agent entry ahead of it." in action
+    assert (
+        "`route: validator <reason> -> <id> <effort>; <dropped id> dropped: no lane-tool "
+        "route for validators`" in action
+    )
+    assert "`route: validator issue <n> -> <id>; <prior> failed: <kind>`" in action
+    assert "unvalidated" in action
+    (render,) = [step for step in _steps(vcs) if step["n"] == 9]
+    assert "`route: validator` line" in _flat(render["action"])
 
 
 @pytest.mark.parametrize("vcs", VCS)

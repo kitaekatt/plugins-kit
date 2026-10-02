@@ -385,14 +385,22 @@ technique_skill:
           action: |
             Launch one validator subagent per candidate issue, all in parallel via a single message.
             The selected profile's `validator_models[reason]` (from the RESOLVED table fetched in
-            step 0) is a list of exactly one `{id, effort}` entry, chosen per issue by its reason.
-            Its `id` is one of `sonnet`, `opus`, `haiku`, `fable`: launch an Agent with
-            `subagent_type: p4-kit:review-lane-<effort>` and `model: <id>`, using that entry's own
-            stated effort, and give it the `validator` subagent definition below with the issue.
-            No validator lane is endpoint-eligible: the runner refuses one and exits 2, because the
-            validator is the control that suppresses a weak reviewer's noise and must not be
-            replaced in the same change as a reviewer. Any other id in `validator_models` is
-            therefore a configuration error to report, not a lane to run.
+            step 0) is an ordered list of one or more `{id, effort}` entries, chosen per issue by
+            its reason. Read it in declared order.
+            - Dispatch the first Agent entry. An Agent entry's `id` is one of `sonnet`, `opus`,
+              `haiku`, `fable`: launch an Agent with `subagent_type: p4-kit:review-lane-<entry effort>`
+              and `model: <id>`, using that entry's own stated effort, and give it the `validator`
+              subagent definition below with the issue.
+            - Drop every non-Agent entry ahead of it. The lane tool has no validator route: it has
+              no validator prompt, input or verdict contract, so the runner refuses a validator lane
+              and exits 2. Never send a validator to it. Announce the drop with ONE line per reason
+              per run: `route: validator <reason> -> <id> <effort>; <dropped id> dropped: no
+              lane-tool route for validators`, where `<id> <effort>` is the Agent entry dispatched.
+            - If an Agent dispatch fails, move to the next Agent entry at that entry's own effort,
+              at most once per entry, announced as `route: validator issue <n> -> <id>; <prior>
+              failed: <kind>`.
+            - If no entry is left, report the issue under `## Lane failures` as unvalidated,
+              neither confirmed nor dropped.
           tool: Agent
           expected: CONFIRMED or REJECTED per issue.
         - n: 8
@@ -403,6 +411,7 @@ technique_skill:
             - Report each corrected launch's original stderr, no-dispatch evidence,
               correction, and final outcome in a `## Launch corrections` section.
               Only a completed, schema-valid reviewer result restores that lane's coverage.
+            - A validator issue left with no usable entry is listed there as unvalidated.
             - When any lane FAILED (including an unsuccessful launch correction
               or a lane refused as a configuration error), prepend a `## Lane failures`
               section naming each failed lane, the model entry and effort it was configured with,
@@ -413,11 +422,13 @@ technique_skill:
               failed lane's files as clean, and never re-run the lane on a model its own
               declaration did not name -- a lane reaches this section only when its
               declaration has no usable entry left; report it and let the user decide.
-            - When any reviewer's declaration had two or more entries, prepend a
+            - When any reviewer's declaration had two or more entries, or any `route: validator`
+              line was announced, prepend a
               `## Lane routes` section carrying every `route:` line announced in step 6,
               verbatim, re-selections included. This is a disclosure, not a warning: the
               rendered review looks identical whichever entry ran, so the reader must never
-              have to infer which model actually reviewed their change.
+              have to infer which model actually reviewed their change. The same section also
+              carries every `route: validator` line announced in step 7, verbatim.
             - When `bundle.submit_gates` is non-empty, prepend a `## Submit checklist`
               section, each gate carrying its step-5 verdict and the evidence for it.
             - When `bundle.unresolved` or `bundle.stale_open` is non-empty, prepend a
@@ -546,7 +557,7 @@ technique_skill:
         - Submit gates discharged by the agent (if any), each with a MET / NOT APPLICABLE / NOT MET / NEEDS THE USER verdict and its evidence
         - Executable review-profile table resolved via render_review_profiles.py FIRST (step 0, before prepare_review.py and before any question to the user); a non-zero exit stopped the review with its stderr printed verbatim; profile selected from the resolved table using review_profiles guidance
         - Reviewers launched in parallel (single message, R x K Agent calls -- one per (reviewer x chunk) pair, where K = len(bundle.diff_chunks))
-        - Validators launched in parallel (single message, N Agent calls), each entry's id and effort taken from the profile's validator_models
+        - Validators launched in parallel (single message, N Agent calls), each the first Agent entry of the profile's validator_models list at its own effort; a non-Agent entry dropped with one `route: validator` line per reason; an issue with no Agent entry left reported as unvalidated under `## Lane failures`
         - Every reviewer and validator entry dispatched at its own stated effort -- an Agent entry as `p4-kit:review-lane-<effort>` with its `id` as the model, a lane-tool entry with `--effort <effort>`; a re-selected entry at its own effort; a runner refusal (exit 2) reported under `## Lane failures`, not re-selected past
         - Filtered to confirmed-only
         - Launch rationale line emitted once (file-type-driven; md_trivial variant when the change is all-mechanical)
