@@ -203,6 +203,10 @@ claude_md:
         - audit.py degrades gracefully when pyyaml is unavailable (HAVE_YAML False) --
           the contract-staged state; mechanics in skills_kit_lib/CLAUDE.md
           three_audit_states.
+        - Standards resolution does NOT degrade: without pyyaml,
+          standards_resolve.resolve() raises StandardsUnavailableError, so
+          scripts/resolve_standards.py and audit.py --config exit 1 naming the
+          venv. An unread config must not pass for an empty one.
     - id: invocation_paths
       keywords:
         - invoke md-domain
@@ -240,7 +244,8 @@ claude_md:
           judgment-required on the YAML contract row. classify.py and tag.py operate
           on frontmatter and a regex-detected YAML root key; they do not need pyyaml.
           material.py does not degrade: without bootstrap_lib or pyyaml it prints a
-          diagnosis and exits 3.
+          diagnosis and exits 3. Neither do resolve_standards.py and
+          audit.py --config: without pyyaml they exit 1.
     - id: audit_framework_paths_are_cross_plugin_api
       keywords: [audit-framework.md, audit-framework.yaml, cross-plugin consumers, breaking rename, md-domain references, awesome-kit, path contract]
       summary: skills/md-domain/references/audit-framework.{md,yaml} are consumed BY PATH from awesome-kit -- renaming or moving them is a breaking cross-plugin change requiring consumer version bumps.

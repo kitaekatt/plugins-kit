@@ -328,6 +328,10 @@ def _check_transport_sdk(selection: Any) -> None:
         ) from exc
 
 
+#: The read-only tool grant for an agent-loop lane (`--allowedTools` value).
+AGENT_LOOP_TOOLS = "Read,Grep,Glob"
+
+
 def _allowed_tools_for(lane: str) -> Optional[str]:
     """The `allowed_tools` value a lane needs, or None for a pure completion.
 
@@ -340,12 +344,15 @@ def _allowed_tools_for(lane: str) -> Optional[str]:
     hallucination LANES_REQUIRING_AGENT_LOOP exists to prevent, so the guard has
     to grant the capability it just finished checking for.
 
-    `Read` and nothing else: these lanes inspect the repository around the chunk
-    -- the changed files' surrounding context, or the CLAUDE.md files that govern
-    them -- which is the read-only use the seam sanctions. A reviewer has no
-    business writing or running anything.
+    `Read`, `Grep` and `Glob` and nothing else: these lanes inspect the
+    repository around the chunk -- the changed files' surrounding context, the
+    CLAUDE.md files that govern them, and the consumers of a changed input,
+    which must be FOUND before they can be read, so opening files alone is not
+    enough. All three are read-only; a reviewer has no business writing
+    (Edit, Write) or running (Bash) anything. The value is the comma-separated
+    form the claude CLI accepts for `--allowedTools`.
     """
-    return "Read" if lane in LANES_REQUIRING_AGENT_LOOP else None
+    return AGENT_LOOP_TOOLS if lane in LANES_REQUIRING_AGENT_LOOP else None
 
 
 def _cwd_for(lane: str, project_root: Optional[str]) -> Optional[Path]:

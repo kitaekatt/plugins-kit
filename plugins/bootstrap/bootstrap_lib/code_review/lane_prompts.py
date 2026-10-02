@@ -272,7 +272,7 @@ def _validate_issue(item: Any, index: int) -> dict[str, Any]:
 # Bumped whenever any prompt text below changes, so a recorded lane result says
 # which wording produced it. A comparison across prompt versions is not a
 # like-for-like measurement, and without this the difference is invisible.
-PROMPT_VERSION = "8"
+PROMPT_VERSION = "9"
 
 
 # The false-positive guardrails, stated once. These are the same rules the
@@ -462,13 +462,24 @@ holes in the introduced code. Report only what this change introduces, never a
 pre-existing problem.
 
 Context you must gather yourself. You may read the files listed below, at the
-paths as given, to see the code surrounding the change. Read only those files.
-Do not modify anything, do not run anything, and do not go browsing the rest of
-the repository.
+paths as given, to see the code surrounding the change. Read only those files,
+except as the silenced-error rule below allows. Do not modify anything, do not
+run anything, and do not go browsing the rest of the repository.
+
+Silenced errors. When the change widens what a validator, parser, schema, enum,
+or argument check accepts, or removes or softens a raise, exit, or error path,
+find and read every consumer of the newly admitted input, even outside these
+files, and confirm each one acts on it. An input that used to be refused and is
+now accepted and ignored is a bug, including an error replaced by a default, an
+empty result, a note, or exit 0. This is not an input-dependent issue: the
+admitted input is ignored every time. Report it with reason "bug" on the
+widened line, name the consumer that ignores the input, and state that the fix
+belongs in this change: widen the consumer, or keep the refusal.
 
 Restrictions. Only report issues in files that appear in this diff. When the
 context you would need to settle an issue is not in one of those files, you
-cannot settle it -- do not report it.
+cannot settle it -- do not report it. The silenced-error rule is the one
+exception.
 
 {GUARDRAILS}
 

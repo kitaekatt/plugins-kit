@@ -129,6 +129,14 @@ if (!input || !Array.isArray(input.perFile) || input.perFile.length === 0) {
   throw new Error('remediate.js requires args.perFile = [{@ERR_SHAPE@}]')
 }
 
+// fixMode is REQUIRED. It is the resolved `audit.fix_mode` from
+// scripts/resolve_standards.py, threaded by the caller. An absent or unknown
+// value throws before anything else runs: reading "not passed" as "apply" would
+// edit files for a consumer whose config says propose.
+if (input.fixMode !== 'apply' && input.fixMode !== 'propose') {
+  throw new Error(`remediate.js requires args.fixMode = "apply" | "propose", got ${JSON.stringify(input.fixMode) ?? 'nothing'}. Pass audit.fix_mode from scripts/resolve_standards.py; an absent fixMode is never read as "apply".`)
+}
+
 // Drop files whose every @ITEM_NOUN@ is a skip @EM@ nothing to do, no lane needed.
 const actionable = input.perFile.filter(
   (f) => Array.isArray(f.@ITEMS@) && f.@ITEMS@.some((@IV@) => @IV@.decision !== 'skip')
@@ -217,7 +225,9 @@ CLAUDE_MD_HEADER = f"""\
 //       decision: "apply"|"skip"|string  // user/inferred decision; free-text = a
 //                                          // refined instruction to apply instead
 //     }} ]
-//   }} ]
+//   }} ],
+//   fixMode: "apply"|"propose"  // REQUIRED: audit.fix_mode from
+//                               // scripts/resolve_standards.py; absent throws
 // }}
 """
 
@@ -273,7 +283,9 @@ SKILL_AUDIT_HEADER = f"""\
 //       decision: "apply"|"skip"|string  // user/inferred decision; free-text = a
 //                                          // refined instruction to apply instead
 //     }} ]
-//   }} ]
+//   }} ],
+//   fixMode: "apply"|"propose"  // REQUIRED: audit.fix_mode from
+//                               // scripts/resolve_standards.py; absent throws
 // }}
 """
 
@@ -327,7 +339,9 @@ REFERENCES_HEADER = f"""\
 //       instruction: string,           // human-readable edit description (instruction-type FIX / IMPROVE / SPECIAL)
 //       decision: "apply"|"skip"|string  // user/inferred decision; free-text = refined instruction
 //     }} ]
-//   }} ]
+//   }} ],
+//   fixMode: "apply"|"propose"  // REQUIRED: audit.fix_mode from
+//                               // scripts/resolve_standards.py; absent throws
 // }}
 """
 
@@ -385,7 +399,9 @@ PROJECT_DOC_HEADER = f"""\
 //       decision: "apply"|"skip"|string  // user/inferred decision; free-text = a
 //                                          // refined instruction to apply instead
 //     }} ]
-//   }} ]
+//   }} ],
+//   fixMode: "apply"|"propose"  // REQUIRED: audit.fix_mode from
+//                               // scripts/resolve_standards.py; absent throws
 // }}
 """
 
@@ -545,6 +561,20 @@ The checks listed above already ran. Do not repeat any listed check for this fil
 }
 """
 
+# The detect lanes' required-input guard: an absent disabledCriteria throws
+# rather than reading as "nothing disabled". Shared verbatim by all four detect
+# lanes so the guard and its message cannot drift apart.
+DETECT_DISABLED_CRITERIA_CHUNK = """\
+// disabledCriteria is REQUIRED: the resolved `disabled` list from
+// scripts/resolve_standards.py, threaded by the caller. An empty array means
+// "resolved, nothing disabled". An absent or malformed value throws before any
+// agent is dispatched: reading "not passed" as "nothing disabled" would apply
+// criteria the consumer's config switched off.
+if (!Array.isArray(input.disabledCriteria) || !input.disabledCriteria.every((d) => typeof d === 'string')) {
+  throw new Error(`md-domain detect lane requires args.disabledCriteria = string[] (an empty array when nothing is disabled), got ${JSON.stringify(input.disabledCriteria) ?? 'nothing'}. Pass "disabled" from scripts/resolve_standards.py; an absent list is never read as "nothing disabled".`)
+}
+"""
+
 # Only one totals-reducer chunk is shipped: DETECT_REVIEW_TOTALS_CHUNK below,
 # shared verbatim by the three lanes that implement `--review` (audit_claude_md,
 # audit_skill, audit_project_doc). A prior non-review variant, DETECT_TOTALS_CHUNK,
@@ -619,9 +649,10 @@ const totals = results.reduce((acc, r) => {
 """
 
 SHARED_CHUNK_TARGETS = {
-    MD_DOMAIN / "workflow" / "claude-md-detect.js": [ARGS_NORM_CHUNK, DETECT_MECHANICAL_CHUNK, DETECT_REVIEW_TOTALS_CHUNK],
-    MD_DOMAIN / "workflow" / "skill-detect.js": [ARGS_NORM_CHUNK, DETECT_MECHANICAL_CHUNK, DETECT_REVIEW_TOTALS_CHUNK],
-    MD_DOMAIN / "workflow" / "project-doc-detect.js": [ARGS_NORM_CHUNK, DETECT_MECHANICAL_CHUNK, DETECT_REVIEW_TOTALS_CHUNK],
+    MD_DOMAIN / "workflow" / "claude-md-detect.js": [ARGS_NORM_CHUNK, DETECT_DISABLED_CRITERIA_CHUNK, DETECT_MECHANICAL_CHUNK, DETECT_REVIEW_TOTALS_CHUNK],
+    MD_DOMAIN / "workflow" / "skill-detect.js": [ARGS_NORM_CHUNK, DETECT_DISABLED_CRITERIA_CHUNK, DETECT_MECHANICAL_CHUNK, DETECT_REVIEW_TOTALS_CHUNK],
+    MD_DOMAIN / "workflow" / "project-doc-detect.js": [ARGS_NORM_CHUNK, DETECT_DISABLED_CRITERIA_CHUNK, DETECT_MECHANICAL_CHUNK, DETECT_REVIEW_TOTALS_CHUNK],
+    MD_DOMAIN / "workflow" / "coverage-detect.js": [DETECT_DISABLED_CRITERIA_CHUNK],
     MD_DOMAIN / "workflow" / "references-classify.js": [ARGS_NORM_CHUNK],
 }
 

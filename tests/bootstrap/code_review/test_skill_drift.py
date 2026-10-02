@@ -827,3 +827,80 @@ class TestP4PendingChangeLookup:
     def test_does_not_derive_the_user_from_configured_variables(self):
         body = gen.P4_SKILL.read_text(encoding="utf-8")
         assert "p4 set -q P4USER" not in body
+
+
+def _flat(text):
+    """Collapse whitespace so a phrase matches across a line wrap."""
+    return " ".join(text.split())
+
+
+class TestSilencedErrorCriterionRendered:
+    """Both rendered skills must tell the introduced-code lane, and the
+    validator that judges its findings, that an input which used to be refused
+    and is now accepted and ignored is a bug.
+
+    The incident behind it: skills-kit 0.86.0 (ebefd8b5) widened an
+    ``applies_to`` validator so an authored ``code_directory`` standards file
+    validated and was then ignored by its only consumer, and the review passed
+    it. Root CLAUDE.md insight ``widening_a_validator_without_its_consumer``.
+
+    The phrases are RE-TYPED, not imported from ``lane_prompts``, and read from
+    the files ON DISK, not from the generator: a check derived from the
+    template would move with it and stay green when the criterion is removed
+    from both (root CLAUDE.md ``guard_cannot_see_its_own_subject``).
+    """
+
+    SKILLS = {
+        "git": "plugins/git-kit/skills/git-code-review/SKILL.md",
+        "p4": "plugins/p4-kit/skills/p4-code-review/SKILL.md",
+    }
+
+    PROMPT_PHRASES = (
+        "removes or softens a raise, exit, or error path",
+        "find and read every consumer of the newly admitted input",
+        "now accepted and ignored is a bug",
+        "an error replaced by a default, an empty result, a note, or exit 0",
+        'Report it with reason "bug" on the widened line',
+        "belongs in this change: widen the consumer, or keep the refusal",
+    )
+
+    @classmethod
+    def _subagent(cls, vcs, name):
+        import yaml
+
+        text = (REPO_ROOT / cls.SKILLS[vcs]).read_text(encoding="utf-8")
+        data = yaml.safe_load(TestGeneratedYamlBlockParses._first_yaml_block(text))
+        stack = [data]
+        while stack:
+            node = stack.pop()
+            if isinstance(node, dict):
+                if node.get("name") == name and "restrictions" in node:
+                    return node
+                stack.extend(node.values())
+            elif isinstance(node, list):
+                stack.extend(node)
+        raise AssertionError(f"{vcs}: no subagent named {name!r} in the contract block")
+
+    @pytest.mark.parametrize("vcs", ["git", "p4"])
+    def test_introduced_code_lane_carries_the_criterion(self, vcs):
+        lane = self._subagent(vcs, "reviewer_c_introduced_code")
+        prompt = _flat(lane["canonical_prompt"])
+        for phrase in self.PROMPT_PHRASES:
+            assert phrase in prompt, f"{vcs}: reviewer_c prompt lost {phrase!r}"
+        restrictions = _flat(" ".join(lane["restrictions"]))
+        assert "consumers of an input the change newly admits" in restrictions, vcs
+
+    @pytest.mark.parametrize("vcs", ["git", "p4"])
+    def test_validator_may_confirm_it(self, vcs):
+        restrictions = _flat(" ".join(self._subagent(vcs, "validator")["restrictions"]))
+        assert "CONFIRMED when no consumer acts on the admitted input" in restrictions, vcs
+
+    def test_endpoint_prompt_carries_the_criterion(self):
+        """The endpoint path sends ``LANE_PROMPTS`` directly, so assert it
+        there too: the rendered skill says nothing about what a configured
+        endpoint reviewer is told."""
+        from bootstrap_lib.code_review.lane_prompts import LANE_PROMPTS
+
+        prompt = _flat(LANE_PROMPTS["reviewer_c_introduced_code"].system)
+        for phrase in self.PROMPT_PHRASES:
+            assert phrase in prompt, f"endpoint reviewer_c prompt lost {phrase!r}"

@@ -43,13 +43,15 @@ def _render_prompt(file_record: dict) -> str:
     assert NODE, "node is required for this lane contract test"
     slice_src = _lane_prompt_builder_slice()
     harness = (
-        f"const args = {json.dumps({'files': [file_record]})};\n"
+        f"const args = {json.dumps({'files': [file_record], 'disabledCriteria': []})};\n"
         + slice_src
         + "\nprocess.stdout.write(lanePrompt(args.files[0]))\n"
     )
+    # The harness goes on stdin, not `-e`: the slice exceeds the Windows
+    # command-line length limit (WinError 206) once passed as an argument.
     result = subprocess.run(
-        [NODE, "--input-type=module", "-e", harness],
-        capture_output=True, text=True, timeout=30,
+        [NODE, "--input-type=module"],
+        input=harness, capture_output=True, text=True, encoding="utf-8", timeout=30,
     )
     assert result.returncode == 0, result.stderr
     return result.stdout

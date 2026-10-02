@@ -125,6 +125,15 @@ if (!input || !Array.isArray(input.files) || input.files.length === 0) {
 const refs = input.refs || {}
 const review = input.review === true
 
+// disabledCriteria is REQUIRED: the resolved `disabled` list from
+// scripts/resolve_standards.py, threaded by the caller. An empty array means
+// "resolved, nothing disabled". An absent or malformed value throws before any
+// agent is dispatched: reading "not passed" as "nothing disabled" would apply
+// criteria the consumer's config switched off.
+if (!Array.isArray(input.disabledCriteria) || !input.disabledCriteria.every((d) => typeof d === 'string')) {
+  throw new Error(`md-domain detect lane requires args.disabledCriteria = string[] (an empty array when nothing is disabled), got ${JSON.stringify(input.disabledCriteria) ?? 'nothing'}. Pass "disabled" from scripts/resolve_standards.py; an absent list is never read as "nothing disabled".`)
+}
+
 function mechanicalPreamble(f) {
   const scan = f.mechanicalScan
   if (!scan || typeof scan !== 'object') {
@@ -211,7 +220,7 @@ function lanePrompt(f) {
     ? `USER-AUTHORED STANDARDS. Read each standards file, nearest-layer first: ${standardsPaths.map((p) => `"${p}"`).join(', ')}. Each is a *-standards.md carrying a fenced \`standards_set:\` block whose \`criteria[]\` are the project's or user's own opinions for this artifact type. Apply ONLY criteria whose \`statement\` you can quote VERBATIM from the standards file -- same rule-extraction posture as the ancestor-convention check: no inferred rules, no generic best-practice, no "spirit of" a criterion; if you cannot quote the statement verbatim, do NOT raise the finding. SKIP any criterion whose \`enforcement\` is \`mechanical\` -- those are the audit.py validator's job (it runs them under --config), not yours; you evaluate only judgment criteria (enforcement \`judgment\` or absent). For each violated criterion emit group "Hygiene", taxonomy N_user_standard_violation, severity taken from the criterion's declared \`severity\` (fail -> FAIL, info -> INFO, judgment -> JUDGMENT), anchored on the doc line that violates it. The \`message\` MUST carry (a) the verbatim criterion statement, (b) the criterion \`id\`, and (c) the source standards-file path. Disposition is assigned in step 10 from the severity: a fail-severity violation is SERIOUS (a hard user-declared rule the auditor cannot mechanically satisfy -- surface at the top, never auto-fix), an info-severity note is IMPROVE (one-line pitch), a judgment-severity call is JUDGMENT (surfaced for review).`
     : `No user-authored standards files were supplied; do NOT apply any user standards and emit no N_user_standard_violation findings.`
 
-  const disabledCriteria = Array.isArray(input.disabledCriteria) ? input.disabledCriteria : []
+  const disabledCriteria = input.disabledCriteria
   const disabledClause = disabledCriteria.length > 0
     ? `DISABLED CRITERIA. The run configuration switched these optional criterion/rule ids OFF: ${disabledCriteria.map((d) => `"${d}"`).join(', ')}. SUPPRESS any finding whose criterion id or rule id matches one in that list -- do not emit it and do not count it toward the verdict. That list only ever names OPTIONAL ids; architectural (schema/contract) and integrity (frontmatter, reachability, convention) checks are NEVER in it, so never suppress one of those on account of this list.`
     : `No criteria were disabled for this run; apply every criterion normally.`

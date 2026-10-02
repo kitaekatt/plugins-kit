@@ -262,7 +262,13 @@ technique_skill:
             `mechanicalCheckPhrases` = `bundle.mechanical_check_phrases` once at the top level of
             EVERY lane args object. Resolve the remaining fields from each claimed file's
             `claude_mds` per references/md-domain-review.md. Resolve the skills-kit plugin root and
-            venvPython defensively per that reference. Use the Workflow tool when callable, passing
+            venvPython defensively per that reference, then run skills-kit's
+            `scripts/resolve_standards.py` ONCE per review under that venvPython (exact command in
+            that reference) and pass its `disabled` list as `disabledCriteria` in EVERY lane args
+            object -- an empty list when nothing is disabled; every detect lane throws without it --
+            plus each file's `standardsPaths` from its `standards` map. A non-zero exit is never
+            replaced by `[]`: run no lane and report every non-trivial claimed file
+            `REVIEW INCOMPLETE` with the script's stderr line. Use the Workflow tool when callable, passing
             each installed lane's full text as `script` (never its installed path as `scriptPath`)
             per that reference; when the tool is unavailable or rejects the lane, use that reference's
             "Manual detect invocation" with the SAME installed lanes and args. Transport failure
@@ -861,13 +867,24 @@ technique_skill:
         pre-existing problem.
 
         Context you must gather yourself. You may read the files listed below, at the
-        paths as given, to see the code surrounding the change. Read only those files.
-        Do not modify anything, do not run anything, and do not go browsing the rest of
-        the repository.
+        paths as given, to see the code surrounding the change. Read only those files,
+        except as the silenced-error rule below allows. Do not modify anything, do not
+        run anything, and do not go browsing the rest of the repository.
+
+        Silenced errors. When the change widens what a validator, parser, schema, enum,
+        or argument check accepts, or removes or softens a raise, exit, or error path,
+        find and read every consumer of the newly admitted input, even outside these
+        files, and confirm each one acts on it. An input that used to be refused and is
+        now accepted and ignored is a bug, including an error replaced by a default, an
+        empty result, a note, or exit 0. This is not an input-dependent issue: the
+        admitted input is ignored every time. Report it with reason "bug" on the
+        widened line, name the consumer that ignores the input, and state that the fix
+        belongs in this change: widen the consumer, or keep the refusal.
 
         Restrictions. Only report issues in files that appear in this diff. When the
         context you would need to settle an issue is not in one of those files, you
-        cannot settle it -- do not report it.
+        cannot settle it -- do not report it. The silenced-error rule is the one
+        exception.
 
         Only flag an issue when it is one of these:
         - code that will fail to compile or parse (syntax errors, type errors, missing
@@ -903,7 +920,8 @@ technique_skill:
       restrictions:
         - "Read the assigned chunk diff first."
         - "MAY use Read to look at surrounding context in the changed files (the LOCAL paths you were given) when needed."
-        - "Examples: concurrency issues, lifetime bugs, security holes."
+        - "MAY find and Read the consumers of an input the change newly admits, outside the chunk's files, for the silenced-error rule in the canonical prompt only."
+        - "Examples: concurrency issues, lifetime bugs, security holes, an input that used to be refused and is now accepted and ignored."
         - "Only flag issues in files present in your chunk."
     - name: validator
       subagent_type: general-purpose
@@ -912,6 +930,7 @@ technique_skill:
       output_format: "exactly one line: 'CONFIRMED: <one-sentence reason>' or 'REJECTED: <one-sentence reason>'"
       restrictions:
         - "Validator does not see who flagged the issue. Independence is the value."
+        - "For a silenced-error issue (an input the change newly admits that a consumer ignores), MAY Read the consumer the description names. CONFIRMED when no consumer acts on the admitted input; it is not an input-dependent issue."
   false_positive_guardrails:
     only_flag:
       - "code that will fail to compile or parse (syntax errors, type errors, missing imports, unresolved references)"

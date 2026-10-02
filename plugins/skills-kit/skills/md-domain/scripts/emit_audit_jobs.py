@@ -93,16 +93,26 @@ def resolve_admitted_endpoints(project_root: Path | None) -> frozenset[str]:
     Reads skills-kit's own layered configuration (user layer, then its
     config.local.yaml overlay, then the project layer and its overlay) through
     skills_kit_lib.standards_resolve -- no second config file and no environment
-    variable. Returns an EMPTY set when nothing is configured, and also when the
-    library or pyyaml is unavailable: an unresolvable config must never widen
-    admission, only narrow it. A malformed config still raises loudly, because a
+    variable. Returns an EMPTY set when nothing is configured. When pyyaml is
+    unavailable the config cannot be read: if any config or standards layer
+    file exists on disk, a configured value would be ignored, so this raises
+    StandardsUnavailableError (main exits 5, naming pyyaml and the skills-kit
+    venv); if no such file exists nothing is ignored and the empty admission
+    is correct and silent. A malformed config also raises loudly, because a
     typo'd admitted_endpoints is indistinguishable from the empty default.
+    When the skills_kit_lib package itself is not importable the result is the
+    empty set.
     """
     try:
         from skills_kit_lib import standards_resolve
     except ImportError:
         return frozenset()
-    resolved = standards_resolve.resolve(project_root)
+    try:
+        resolved = standards_resolve.resolve(project_root)
+    except standards_resolve.StandardsUnavailableError:
+        if standards_resolve.existing_layer_files(project_root):
+            raise
+        return frozenset()
     return resolved.adapter_admitted_endpoints(ADAPTER_ID)
 
 
@@ -679,6 +689,13 @@ def main(argv: list[str] | None = None) -> int:
     except MixedAdapterEndpointsError as exc:
         print(exc, file=sys.stderr)
         return 4
+    except Exception as exc:
+        # StandardsUnavailableError lives in a lazily imported module, so it is
+        # recognised by name rather than imported at module scope.
+        if type(exc).__name__ == "StandardsUnavailableError":
+            print(exc, file=sys.stderr)
+            return 5
+        raise
 
     non_ascii = _non_ascii_strings(document)
     if non_ascii:
