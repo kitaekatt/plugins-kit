@@ -15,6 +15,18 @@ artifacts alongside authored macros without overwriting them.
 Every import below is `from content_pipeline.<subpackage> import ...`. The
 package re-exports nothing eagerly -- import the submodule you need.
 
+`contract/public-surface.json` lists each public name and whether it is
+deprecated or removed. To list the names a consumer imports that are affected,
+run the stdlib-only scanner over the consumer's source:
+
+```bash
+"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CONTENT_PIPELINE_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/check_consumer_contract.py" <consumer source path>
+```
+
+It exits 1 when a removed name is used (and a deprecated name too under
+`--strict`), and 2 when the contract cannot be read. Detection is static: it
+sees imports and attribute uses, not `getattr` or string imports.
+
 ## 1. Pick the pipeline shape
 
 Two shapes ship:
@@ -278,6 +290,21 @@ which layers a budget guard, a content-addressed response cache, retry, and
 cost accounting over one `backend.complete`. For a cap that two OS processes
 share rather than an in-process `CostBudget`, pass `spend=` as well -- see "The
 cross-process spend cap" in step 10.
+
+`call_llm` charges `cost_budget` per live response through
+`platform.response_cost`, in this order: a cache hit costs zero on the current
+run; a live response with a valid `reported_cost_usd` plus
+`reported_cost_source` costs exactly that amount; otherwise the token counts are
+priced against `pricing`, and a model missing from a supplied table raises
+`KeyError`; with neither a reported cost nor `pricing` the cost is unknown
+(`None`) and nothing is charged, never zero. `reported_cost_source` names why
+the amount is authoritative (llm-scripting-kit supplies the pair), and a cached
+response keeps it as provenance only. The pair is all-or-nothing: an amount that
+is not a finite, non-negative number (a bool is invalid), or a source that is
+not a non-empty string, makes the whole pair unknown. A trusted reported cost is
+therefore charged even when `pricing` is not passed. A transport-exception
+charge is always estimated from `pricing`, and is skipped when `pricing` is
+absent or lacks the model.
 
 For a generation that must satisfy validators, use the validate-until-valid
 loop `platform.submit_validated`:
