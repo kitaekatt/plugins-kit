@@ -215,3 +215,11 @@ content-pipeline-kit sites, and the awesome-kit `codex-dispatch.md:298`.
 Discrepancy found on re-check: p4-kit `SKILL.md` also carries hits at 80, 558
 and 561 that the survey did not list; they appear to be prose mentions rather
 than launcher lines.
+
+Survey claims are artifacts, not evidence. Two survey-derived claims proved wrong
+(2026-10-01): a "leave as prose" list that hid two runnable commands, and the
+universal "no plugin syncs `scripts/`", refuted by claude-ui-kit (see "Rejected
+anchors"). Re-derive any claim in this file before a brief rests on it, and
+prefer the guard in `tests/repo-scripts/test_claude_plugin_root_expansion.py`
+run over the real files to this enumeration, since the guard's offender list
+cannot go stale. Root insight: `a_survey_is_an_artifact_not_evidence`.

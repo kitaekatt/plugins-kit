@@ -1,18 +1,29 @@
-# Vacuous checks: tests and guards that pass without checking
+# Vacuous checks: tests and guards that do not check what they appear to
 
 This reference supports the test-workflow rules in the root `CLAUDE.md`. It
-covers a class of defect that no test run reports, because the symptom IS a
-passing check: a test or guard that is green for a reason unrelated to the
-property it was written to protect.
+covers a class of defect in which a test or guard does not do what it looks
+like it does: its result (green or red) is decided by something other than the
+property it was written to protect. The class has two faces. A check can
+approve silently, staying green for a reason unrelated to the property. Or it
+can object noisily, going red on a change that broke nothing.
 
-The cost is worse than having no check. An absent check is visible in a
+The silent kind is worse than having no check. An absent check is visible in a
 coverage gap and in a reviewer's question. A vacuous one answers that question
 with a green result, so nobody looks again -- and it keeps answering after the
-behaviour it guarded is gone.
+behaviour it guarded is gone. No test run reports this kind, because the
+symptom IS a passing check.
 
-Two shapes have been observed in this repo. They differ in what the check
-compares, but the remedy is the same in both: assert the PROPERTY, and
-demonstrate the failure before believing the check.
+The noisy kind fails differently. A check that cries wolf gets edited to shut
+it up, and the edit can quietly remove the protection along with the noise: the
+literal is loosened, the assertion deleted, the allowlist widened. Its red
+result is at least visible, but the habit of dismissing it is what the next
+real regression meets.
+
+Four shapes have been observed in this repo, of two kinds. Shapes 1 to 3 are
+checks that PASS when they should fail; the remedy is to assert the PROPERTY
+and demonstrate the failure before believing the check. Shape 4 is a check
+that FAILS when nothing is broken; the remedy is to re-point it at the
+producer and show it still goes red when the fix is reverted.
 
 ## Shape 1: the check compares A to B, and both can move together
 
@@ -33,7 +44,7 @@ exclude from review.
 What the banner actually buys is a property of the CONTENT -- a code review
 classifies these files as machine-emitted, and the pre-commit guard's exemption
 has something to exempt. So the remedy was to assert that property directly
-against the real detectors, which the same file now does in
+against the real detectors, which the same file does in
 `TestRenderedFilesAreDetectableAsMachineEmitted`:
 
 - `detect_machine_emitted` fires on every rendered path.
@@ -110,13 +121,49 @@ same reason a blanket rule usually is here: some tests legitimately depend on
 an unknown command failing, and turning every catch-all into an error changes
 their meaning along with the ones that needed the fix.
 
-## Why all three shapes need a named revert-check
+## Shape 4: the check pins a spelling and goes red on a change that broke nothing
 
-Shape 1 and Shape 2 are not detectable by reading the test, and shape 3 often
-is not either -- the fake looks complete until a new command exposes what it
-was never taught to answer. All three read as reasonable assertions about real
-behaviour, and all three pass. The only reliable signal is the counterfactual:
-remove the thing the check protects and confirm the check notices.
+The inverse hazard: not a check that cannot fail, but one that fails for a reason
+that is not a defect. A check that asserts a hardcoded spelling of the thing it
+guards must be edited by every change to that spelling, and the red result names
+no regression.
+
+Worked example (2026-10-01). A migration of about 95 command sites from
+`${CLAUDE_PLUGIN_ROOT}/scripts/x.py` to `"${<PLUGIN>_ROOT:?...}/scripts/x.py"`
+turned four tests red on spelling alone: `test_skill_drift.py` (four assertions
+re-typing the launcher literal), `test_skills_kit_tool.py` (an expected literal
+and its docstring), `test_scene_layers_launch.py` (an expected substring and its
+docstring), and `test_python_invocation_standard.py` (two anchored allowlist
+entries whose anchor text the change moved).
+
+The remedy is a hybrid, not a rule to never re-type. `test_skill_drift.py` reads
+the launcher string from the generator's own constants, so the interpreter
+expression and the `:?` hint are not a second source of truth. It re-types the
+two per-kit variable names (`GIT_KIT_ROOT`, `P4_KIT_ROOT`) on purpose: a
+regression inside the generator's `_launcher` helper moves the constant and the
+rendered output together, so a pure `constant in render` check stays green. That
+is Shape 1 again. Derive what is incidental from the producer; re-type only the
+property the producer cannot vouch for.
+
+An anchored allowlist entry carries the same hazard. Its anchor is text in the
+guarded file, so a change to that file can stale it. The stale anchor firing is
+correct -- it caught a real edit -- but choose an anchor for being distinctive
+and stable, not merely present.
+
+## Why every shape needs a named revert-check
+
+Shapes 1 to 3 are checks that PASS when they should fail. Shape 1 and Shape 2
+are not detectable by reading the test, and shape 3 often is not either -- the
+fake looks complete until a new command exposes what it was never taught to
+answer. All three read as reasonable assertions about real behaviour, and all
+three stay green. The only reliable signal is the counterfactual: remove the
+thing the check protects and confirm the check notices.
+
+Shape 4 is the opposite kind: a check that FAILS when nothing is broken. It is
+visible the moment a change runs, so it needs no revert-check to find. It needs
+one to fix: after re-pointing the check at the producer, revert the fix and
+confirm it still goes red, so the repair did not trade a noisy check for a
+vacuous one.
 
 That is why this repo's task-level communication protocol asks, when a fix is
 reported, which test would FAIL if the fix were reverted. Naming it forces the
