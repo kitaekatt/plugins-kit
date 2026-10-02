@@ -43,11 +43,23 @@ except ImportError:  # pragma: no cover - exercised only on a bare interpreter
     HAVE_YAML = False
 
 
-#: The four file-type primitives a standards_set's `applies_to:` may name
+#: The file-type primitives a standards_set's `applies_to:` may name
 #: (schemas/standards.py's owner-doc note; configuring-standards.md's
 #: "Additive standards files" table). Defined once here, next to the
 #: schema's note, so both stay in sync.
 APPLIES_TO_PRIMITIVES = ("skill_md", "claude_md", "reference_doc", "plain_md")
+
+#: Composition ids a standards_set's `applies_to:` may also name (the analyze
+#: lane's subject: one directory plus its ambient CLAUDE.md chain).
+APPLIES_TO_COMPOSITIONS = ("code_directory",)
+
+#: Every admissible `applies_to:` value.
+APPLIES_TO_SUBJECTS = APPLIES_TO_PRIMITIVES + APPLIES_TO_COMPOSITIONS
+
+#: Deprecated `applies_to:` spellings, normalised to the current id so
+#: `standards_by_primitive` is keyed consistently. `code_subtree` was the
+#: composition's former name; a consumer's additive file may still carry it.
+APPLIES_TO_ALIASES = {"code_subtree": "code_directory"}
 
 
 class StandardsConfigError(Exception):
@@ -337,10 +349,11 @@ def _parse_standards_file(path: Path) -> StandardsFile:
         )
     inner = block["standards_set"]
     applies_to = inner["applies_to"]
-    if applies_to not in APPLIES_TO_PRIMITIVES:
+    applies_to = APPLIES_TO_ALIASES.get(applies_to, applies_to)
+    if applies_to not in APPLIES_TO_SUBJECTS:
         raise StandardsConfigError(
-            f"{path}: applies_to '{applies_to}' is not one of the four "
-            f"file-type primitives; valid values: {list(APPLIES_TO_PRIMITIVES)}"
+            f"{path}: applies_to '{applies_to}' is not a file-type primitive "
+            f"or composition id; valid values: {list(APPLIES_TO_SUBJECTS)}"
         )
     return StandardsFile(
         path=path,

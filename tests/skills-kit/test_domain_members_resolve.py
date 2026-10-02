@@ -68,14 +68,14 @@ EXPECTED_LANES = {
     "author_project_doc": {"verb": "author", "artifact": "project-doc"},
     "generate_claude_md": {"verb": "generate", "artifact": "claude-md"},
     "render_skill": {"verb": "render", "artifact": "skill"},
-    "coverage_code_subtree": {
+    "coverage_code_directory": {
         # The verb is `analyze`; the lane id, its procedure, its standards doc
         # and its scripts are all named for the OUTPUT (coverage) instead.
         "verb": "analyze",
-        "subject": "code_subtree",
-        # The lane id stays `coverage_code_subtree` (a stable identifier), but
-        # the table's human-readable key names the real unit: one directory's
-        # own direct code files, never a subtree.
+        "subject": "code_directory",
+        # The lane id and subject now name the real unit (one directory's own
+        # direct code files, never a subtree); the table's human-readable key
+        # says the same in words.
         "table_key": "analyze (one directory)",
     },
 }
@@ -88,7 +88,7 @@ GENERATE_LANES = {
 }
 
 ANALYZE_LANES = {
-    "coverage_code_subtree": ["GAPS-FOUND", "COVERAGE-ASSESSED"],
+    "coverage_code_directory": ["GAPS-FOUND", "COVERAGE-ASSESSED"],
 }
 
 # Lane-record keys whose value is a path relative to the md-domain skill dir.
@@ -193,7 +193,7 @@ class TestDispatchTable:
 
         The roster is the invariant, not the count: an artifact earns a generate
         lane when some analyze lane emits its input, and gains one no other way.
-        `claude-md` is fed by `coverage_code_subtree`; skill and project-doc
+        `claude-md` is fed by `coverage_code_directory`; skill and project-doc
         have no analysis, so they stay authored.
         """
         arts = {r.get("artifact") for r in LANE_RECORDS if r.get("verb") == "generate"}
@@ -207,7 +207,7 @@ class TestDispatchTable:
         """A lane is keyed by `artifact` OR `subject`, never both and never neither.
 
         This is the invariant that made a list-valued second subject invalid on
-        `coverage_code_subtree`: the axis is one scalar per lane, so a second
+        `coverage_code_directory`: the axis is one scalar per lane, so a second
         subject means a second lane record.
         """
         for record in LANE_RECORDS:
@@ -462,6 +462,22 @@ def _result_for(results, domain):
     matches = [r for r in results if r.domain == domain]
     assert matches, f"no result for domain '{domain}'"
     return matches[0]
+
+
+class TestRetiredCoverageLaneId:
+    """The analyze lane id was renamed; the old spelling is retired outright."""
+
+    RETIRED = "coverage_code_subtree"
+
+    def test_retired_lane_id_resolves_nowhere_in_skill_md(self):
+        skill_md = (MD_DOMAIN / "SKILL.md").read_text(encoding="utf-8")
+        assert self.RETIRED not in skill_md
+        assert "coverage_code_directory" in skill_md
+
+    def test_retired_lane_id_is_not_in_the_lane_registry(self):
+        ids = {record.get("id") for record in LANE_RECORDS}
+        assert self.RETIRED not in ids
+        assert "coverage_code_directory" in ids
 
 
 class TestDomainMemberResolution:

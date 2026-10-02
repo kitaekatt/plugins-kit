@@ -80,8 +80,10 @@ class TestArtifactsExist:
 
         # main() checks and writes the targets derived from REMEDIATE_FRAGMENTS.
         targets = generator.remediate_targets()
-        assert "coverage_code_subtree" not in generator.REMEDIATE_FRAGMENTS
-        assert "coverage_code_subtree" not in targets
+        # The CURRENT lane id: asserting the retired spelling would pass
+        # vacuously now that it no longer exists anywhere.
+        assert "coverage_code_directory" not in generator.REMEDIATE_FRAGMENTS
+        assert "coverage_code_directory" not in targets
         assert all(target.name != "coverage-remediate.js" for target in targets.values())
         expected = {
             "audit_claude_md": MD_DOMAIN / "workflow" / "claude-md-remediate.js",
@@ -463,9 +465,9 @@ class TestCoverageRegisteredWithCriteria:
             "`/md-domain coverage` example would advertise a verb that does not exist"
         )
 
-    def test_skill_md_registers_coverage_code_subtree(self):
+    def test_skill_md_registers_coverage_code_directory(self):
         skill_md = (MD_DOMAIN / "SKILL.md").read_text(encoding="utf-8")
-        assert "coverage_code_subtree" in skill_md
+        assert "coverage_code_directory" in skill_md
 
     def test_source_tree_disclaimer_is_absent(self):
         skill_md = (MD_DOMAIN / "SKILL.md").read_text(encoding="utf-8")
@@ -476,8 +478,45 @@ class TestCoverageRegisteredWithCriteria:
 
     def test_lane_record_binds_coverage_standards(self):
         skill_md = (MD_DOMAIN / "SKILL.md").read_text(encoding="utf-8")
-        record = skill_md.split("- id: coverage_code_subtree", 1)[1]
+        record = skill_md.split("- id: coverage_code_directory", 1)[1]
         assert "standards: references/standards/coverage-standards.md" in record
+
+
+class TestCodeDirectoryAppliesTo:
+    """standards_resolve admits `code_directory` and the deprecated alias."""
+
+    @staticmethod
+    def _resolve_with(tmp_path, monkeypatch, applies_to):
+        from skills_kit_lib.standards_resolve import resolve
+
+        config_dir = tmp_path / "config"
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+        layer = config_dir / "skills-kit"
+        layer.mkdir(parents=True)
+        body = (
+            "# Code standards\n\n```yaml\nstandards_set:\n"
+            "  identity: Optional standards for one code directory.\n"
+            f"  applies_to: {applies_to}\n"
+            "  criteria:\n"
+            "    - id: some-code-opinion\n"
+            "      statement: A directory's code is described once.\n"
+            "      severity: fail\n"
+            "      keywords: [code directory, opinion, example]\n"
+            "```\n"
+        )
+        (layer / "code-standards.md").write_text(body, encoding="utf-8")
+        return resolve(None)
+
+    def test_code_directory_is_accepted(self, tmp_path, monkeypatch):
+        resolved = self._resolve_with(tmp_path, monkeypatch, "code_directory")
+        assert "code_directory" in resolved.standards_by_primitive
+
+    def test_code_subtree_alias_normalises_to_code_directory(
+        self, tmp_path, monkeypatch
+    ):
+        resolved = self._resolve_with(tmp_path, monkeypatch, "code_subtree")
+        assert "code_directory" in resolved.standards_by_primitive
+        assert "code_subtree" not in resolved.standards_by_primitive
 
 
 class TestOutsideCounterpartStands:

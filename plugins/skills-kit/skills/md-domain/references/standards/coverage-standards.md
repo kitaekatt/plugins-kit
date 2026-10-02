@@ -2,7 +2,7 @@
 
 What makes a code-derived fact EARN a place in an ambient CLAUDE.md.
 
-Read by the `coverage_code_subtree` lane (`references/lanes/coverage-lane.md`),
+Read by the `coverage_code_directory` lane (`references/lanes/coverage-lane.md`),
 which passes this document's path as `refs.criteria` to
 `workflow/coverage-detect.js`. The workflow applies these criteria verbatim; it
 does not paraphrase them and does not supply criteria of its own.
@@ -57,7 +57,7 @@ standards_set:
     Admission criteria deciding which code-derived facts earn a place in an
     ambient CLAUDE.md, applied to one directory's own direct code files plus its
     ancestor chain, rather than to a markdown document.
-  applies_to: code_subtree
+  applies_to: code_directory
   criteria:
     - id: absent-fact-earns-ambient-cost
       statement: >-
@@ -400,17 +400,6 @@ difference is who applies them. Every criterion here is `enforcement: judgment`,
 applied by an agent inside `../../workflow/coverage-detect.js` rather than by the
 `audit.py` validator, so disabling one changes what an `analyze` run proposes and
 nothing about what an `audit` run reports.
-
-**Named deviation: `applies_to: code_subtree` is not a file-type primitive.**
-`references/authoring-standards.md` says a standards file governs exactly one
-file-type primitive, and registers four (`skill_md`, `claude_md`,
-`reference_doc`, `plain_md`) in `references/audit-framework.yaml`. Coverage's
-subject is a directory plus its ancestor chain -- a composition, not a file
-type -- so it fits none of them, and forcing it into one would misdescribe it.
-The go-live registration therefore adds `code_subtree` under the framework's
-compositions, while leaving the primitive roster unchanged. The workflow is
-unaffected: `coverage-detect.js` requires only a readable document at
-`refs.criteria` and never inspects `applies_to`.
 
 The one opinion worth naming explicitly, because a competent team genuinely
 disagrees with it: `already-ambient-suppressed` refuses a second placement at a

@@ -26,15 +26,15 @@ The single front door for five dispatch verbs over project markdown:
 `audit` crosses four artifacts (`skill`, `claude-md`, `project-doc`,
 `references`) and `author` crosses three (cross-references are not authored).
 `generate` crosses `claude-md`, `render` crosses `skill`, and `analyze` has the
-non-artifact subject `code_subtree`. This replaces the former `md-audit` / `md-authoring` routers and
+non-artifact subject `code_directory`. This replaces the former `md-audit` / `md-authoring` routers and
 the member skills they dispatched into.
 
 **Coverage's subject is ONE DIRECTORY'S OWN DIRECT code files -- never a
 subtree.** Assessing a directory never descends into its subdirectories: each of
 those is its own subject. A parent's content comes instead from its own direct
 code plus its children's finished CLAUDE.md files. The lane id
-`coverage_code_subtree` and the composition name `code_subtree` are legacy
-identifiers for that single-directory subject; the unit is the directory.
+`coverage_code_directory` and the composition name `code_directory` name that
+single-directory subject; the unit is the directory.
 
 **AUTHOR and GENERATE differ by where the content came from, not by what they
 produce.** Author takes what you give it -- a conversation, a pile of notes, an
@@ -248,7 +248,7 @@ silently returns a SMALLER corpus, which then reads as the whole corpus.
 ## Dispatch table
 
 For audit and author, route by verb AND artifact. `generate` takes `claude-md`;
-`render` takes `skill`; `analyze` has the non-artifact subject `code_subtree`. In
+`render` takes `skill`; `analyze` has the non-artifact subject `code_directory`. In
 every case but `render` load the selected procedure plus its standards doc --
 exactly those two, never the whole tree. `render` loads its procedure only, because
 it judges nothing and so has no standards doc.
@@ -265,14 +265,13 @@ it judges nothing and so has no standards doc.
 | author x references | -- (no lane) | -- | -- |
 | generate x claude-md | `generate_claude_md` | `references/lanes/generation-lane.md` | `references/standards/claude-md-standards.md` |
 | render x skill | `render_skill` | `references/lanes/render-lane.md` | -- (none) |
-| analyze (one directory) | `coverage_code_subtree` | `references/lanes/coverage-lane.md` | `references/standards/coverage-standards.md` |
+| analyze (one directory) | `coverage_code_directory` | `references/lanes/coverage-lane.md` | `references/standards/coverage-standards.md` |
 
 **The analyze lane's files are named for its OUTPUT, not its verb.** The lane id
-`coverage_code_subtree`, `coverage-lane.md`, `coverage-standards.md`,
-`discover_coverage.py`, `coverage-detect.js` and the composition `code_subtree`
+`coverage_code_directory`, `coverage-lane.md`, `coverage-standards.md`,
+`discover_coverage.py`, `coverage-detect.js` and the composition `code_directory`
 all keep the word `coverage` because coverage is what `analyze` produces. The
-verb was renamed; the artifact it emits was not. (`code_subtree` remains a legacy
-identifier for a single-directory subject, as stated above.)
+verb was renamed; the artifact it emits was not.
 
 **`author x references` has no lane, deliberately.** Cross-references are not an
 authored artifact -- they are an emergent property of the other three. There is
@@ -500,9 +499,9 @@ lanes:
     change_driver: >-
       Changes when the material command's arguments, outputs or exit codes
       change, or when bootstrap's skill-material report gains a schema.
-  - id: coverage_code_subtree
+  - id: coverage_code_directory
     verb: analyze
-    subject: code_subtree
+    subject: code_directory
     standards: references/standards/coverage-standards.md
     procedure: references/lanes/coverage-lane.md
     discover_script: scripts/discover_coverage.py
@@ -624,7 +623,7 @@ domain_skill:
     covers:
       - dispatching audit, author, generate, render, or analyze intent to exactly one lane
       - owning the four per-artifact standards docs (what good looks like for skill / claude-md / project-doc / references)
-      - owning coverage-standards.md for the code_subtree composition (one directory's direct code, not a subtree)
+      - owning coverage-standards.md for the code_directory composition (one directory's direct code, not a subtree)
       - owning the render lane's procedure, which runs the material command and writes nothing
       - owning three procedures (shared audit; ONE producing procedure serving both author and generate, including regeneration and its retention rules; and report-only analysis)
       - owning the placement spine (cohesion-principles) and the shared audit framework, configuration, and content-shape references
@@ -638,7 +637,7 @@ domain_skill:
       One skill, one dispatch table, three procedures and render's short one. Audit and author
       select an artifact, then load its standards plus the verb procedure; generate takes
       claude-md and nothing else; render takes skill, loads its procedure only, and runs the
-      material command. Analyze selects code_subtree and loads coverage-lane.md plus
+      material command. Analyze selects code_directory and loads coverage-lane.md plus
       coverage-standards.md. Audit uses DETECT -> Q&A gate -> REMEDIATE; author and generate
       SHARE confirm -> place -> apply -> shape -> validate, with generate adding a coverage
       intake in front and, on regeneration, a retention pass; analyze uses
@@ -652,7 +651,7 @@ domain_skill:
       - Scope is the user's decision, and it is announced in BOTH directions. Mechanical exclusions (VCS-ignored, vendored, generated) are yours to take and to report as a count. A JUDGMENT exclusion -- "this directory probably holds nothing worth carrying" -- is a prediction of the analysis result, so the way to settle it is to RUN the analysis, not to drop the subject. Never let cost silently shrink scope: report the honest subject count with its cost and let the user choose what to drop. A banding or ranking pre-filter is a substitute for the analysis, not a preparation for it -- if it means "skip" rather than "order", it has moved the admission decision outside coverage-standards.md where nothing enforces it. See "Narrowing scope".
       - Enumerate subjects with the discovery scripts, never a hand-rolled walk or extension filter. `scripts/discover_coverage.py <dir>` for one subject; `scripts/discover_composition.py <root> --json` -> `compositionSubjects` for every subject under a root, which is the cheap model-free enumeration to plan and cost from -- `coverageSubjects` under-counts by the code-free intermediate directories the chain still composes. A hand-written filter fails SILENTLY toward a smaller corpus, and that smaller corpus then reads as the whole one.
       - When this work is handed to another agent -- a subagent, a background CLI, a workflow -- pass the artifact's standards document VERBATIM by absolute path. Do not summarize it into a brief. A paraphrase is not the criteria: the agent will satisfy the paraphrase. Worse, a brief that lists worked EXAMPLES of qualifying facts will have those examples beat its own abstract rules, so a brief that correctly forbids repo-wide facts while illustrating "good" facts with repo-wide project rules produces exactly the bloat it forbade. If a brief must exist, let it carry the task and the return shape, and let the standards document carry every criterion.
-      - Route by verb AND subject. Audit and author require an artifact; generate takes claude-md; render takes skill; analyze takes code_subtree. A request to check, validate or audit a skill is an audit, never a render. Do not run a SKILL.md audit on a CLAUDE.md, and do not apply the producing direction when the user asked for a verdict.
+      - Route by verb AND subject. Audit and author require an artifact; generate takes claude-md; render takes skill; analyze takes code_directory. A request to check, validate or audit a skill is an audit, never a render. Do not run a SKILL.md audit on a CLAUDE.md, and do not apply the producing direction when the user asked for a verdict.
       - Author and generate are chosen by INPUT PROVENANCE, never by the word the user typed. Content the user supplies is authored; coverage from an analyze run is generated. "Generate a skill" and "generate a README" are author dispatches, because no analysis produces coverage for those artifacts -- say which lane you are taking and why, rather than silently honouring or silently overriding the token.
       - >-
         CLAUDE.md regeneration never deletes and never blocks. Generating over a CLAUDE.md that already exists SORTS every unit: content a DIRECTED check confirms against the code it describes is kept in place, marked content is kept verbatim, and everything else moves verbatim into the document's `## Unverified` section with the reason its check failed (NOT LOCATED, or CONTRADICTED at a named file:line). Verify by reading the code the claim describes -- never by whether this run's coverage happened to re-derive it, because coverage is a non-idempotent sample and sorting on coincidence churns the document. There is no proposal round and no pre-write marking chore; `retain` is how a user resolves a unit OUT of the Unverified section, never a precondition to running. Report the section with a count every run.
@@ -677,7 +676,7 @@ domain_skill:
       - id: coverage_standards
         path: references/standards/coverage-standards.md
         keywords: [coverage standards, one directory not a subtree, direct code files, non-recursive subject, ambient claude.md, absent facts, CV criteria, basic advanced, analysis depth, candidate admission, hoisting, vcs ignore exclusion]
-        summary: What makes a code-derived fact earn ambient CLAUDE.md cost -- CV admission criteria, the basic/advanced depth contract, evidence floor, suppression rules, and report-only boundary. Read by coverage_code_subtree.
+        summary: What makes a code-derived fact earn ambient CLAUDE.md cost -- CV admission criteria, the basic/advanced depth contract, evidence floor, suppression rules, and report-only boundary. Read by coverage_code_directory.
       - id: project_doc_standards
         path: references/standards/project-doc-standards.md
         keywords: [project document standards, PD-1, maturation, graduate to skill, orphan, discoverability, one hop, readme role, generated artifact, ancestor convention]
@@ -737,7 +736,7 @@ domain_skill:
       - id: coverage_lane
         path: references/lanes/coverage-lane.md
         keywords: [analyze procedure, coverage procedure, one directory, direct code, non-recursive, ambient chain, report only, gaps found, coverage assessed, refs.criteria, analysis depth, no remediation]
-        summary: The ANALYZE procedure for the non-artifact code_subtree subject -- intent and depth gate, mechanical discovery, criteria-bound assessment, the coverage report shape, and STOP. It reads code and never remediates. Named for its output (coverage), not its verb.
+        summary: The ANALYZE procedure for the non-artifact code_directory subject -- intent and depth gate, mechanical discovery, criteria-bound assessment, the coverage report shape, and STOP. It reads code and never remediates. Named for its output (coverage), not its verb.
       - id: authoring_patterns
         path: references/authoring-patterns/
         keywords: [content shape, three surfaces, yaml header markdown embedded yaml, structure asserts, area ownership, area config, actions pattern, query tool pattern, how to shape a fact]

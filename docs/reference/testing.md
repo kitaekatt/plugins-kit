@@ -60,8 +60,8 @@ bootstrap owns -- venvs, `_shared_libs`, logs, stamps, cooldowns, config --
 into a separate tree.
 
 The containment is real but PARTIAL: `CLAUDE_BOOTSTRAP_DATA_ROOT` redirects what bootstrap OWNS, not
-what it REACHES OUT TO. Three escapes are known, all observed on a 2026-09-20
-run:
+what it REACHES OUT TO. Four escapes are known. The first three were observed
+on a 2026-09-20 run; the fourth on a 2026-10-02 run:
 
 - **The shared-lib link is the dangerous one.** `shared_lib.py`'s
   `link_shared_lib` registers `<pkg>.pth` pointing at `<shared_root>/<name>/`
@@ -81,6 +81,14 @@ run:
   registry**, regardless of the data root. `BOOTSTRAP_SKIP_SHELL_INTEGRATION=1`
   suppresses the rc-file and registry persistence but gates neither of the two
   escapes above.
+- **`<PLUGIN>_ROOT` points at the installed plugin.** Bootstrap exports one
+  `<PLUGIN>_ROOT` variable per plugin, and `SKILLS_KIT_ROOT` resolved to
+  `~/.claude/plugins/cache/plugins-kit/skills-kit/0.83.0` inside a `claudx`
+  session. `--plugin-dir` repoints Claude Code's loading of skills and hooks,
+  not the exported variable. So a command anchored on `"${SKILLS_KIT_ROOT}"`
+  runs the installed plugin's script. A green `claudx` run can therefore
+  exercise the installed plugin instead of the dev tree, the same false pass
+  as the enablement-filtering trap.
 
 What `claudx` still does not test, by construction: anything whose output IS
 the machine -- package-manager tool installs, PATH / rc-file / registry

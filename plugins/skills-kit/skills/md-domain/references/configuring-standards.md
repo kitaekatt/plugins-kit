@@ -81,7 +81,7 @@ rules:
 
 A rule value accepts only `off` (or `false`); the id must be one of the optional
 rules below, or the `id` of a criterion declared by a standards file resolved
-for this project (any layer, any primitive) -- see
+for this project (any layer, any subject) -- see
 [authoring-standards.md](authoring-standards.md). Disabling an architectural or
 inoffensive rule is refused.
 
@@ -293,18 +293,22 @@ Three things to know before you add an id:
 
 Beyond disabling and tuning skills-kit's own rules, a layer may ADD standards of
 its own -- opinions skills-kit did not ship. Each is a markdown file carrying one
-fenced `standards_set:` block, one file per file-type primitive, discoverable by
+fenced `standards_set:` block, one file per subject, discoverable by
 a filename convention:
 
-| Filename | `applies_to` primitive |
+| Filename | `applies_to` subject |
 |----------|------------------------|
 | `SKILL-standards.md` | `skill_md` |
 | `CLAUDE-md-standards.md` | `claude_md` |
 | `reference-standards.md` | `reference_doc` |
 | `doc-standards.md` | `plain_md` |
+| `coverage-standards.md` | `code_directory` (a composition) |
 
 The block's `applies_to:` key is authoritative; the filename is the
-discoverability convention. Standards files live in a layer directory (user or
+discoverability convention. A subject is a file-type primitive or a composition
+id; `code_directory` is the only composition a standards file may name. The
+former spelling `code_subtree` is still accepted as a deprecated alias and is
+normalised to `code_directory`. Standards files live in a layer directory (user or
 project, not the gitignored `config.local.yaml` overlay) and union across every
 layer. Each criterion carries a stable `id`, a `statement`, a `severity`, and a
 keyword cluster. For the full block schema, the severity and enforcement
@@ -327,8 +331,10 @@ follows:
 - A per-run resolver (`scripts/resolve_standards.py`) computes, for the file
   under audit, the disabled-rule set, the threshold overrides, the `audit:` behaviour settings, and the additive
   standards that apply to that file's primitive.
-- Additive criteria are enforced by the detect lane and reported under taxonomy
-  `N_user_standard_violation`, modeled on the ancestor-CLAUDE.md convention
+- Additive criteria for the file-type primitives are enforced by the audit
+  detect lane and reported under taxonomy `N_user_standard_violation`. A
+  `code_directory` set is resolved but not consumed by the coverage lane. The
+  enforcement is modeled on the ancestor-CLAUDE.md convention
   mechanism: the finding emits the criterion's exact `statement` text verbatim
   together with the source path of the standards file that declared it. The
   agent does not infer a rule the standards file does not state and does not
