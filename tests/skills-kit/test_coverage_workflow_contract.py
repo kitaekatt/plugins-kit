@@ -641,14 +641,16 @@ class TestCriteriaAreConfigurableById:
 
     def test_detect_reads_disabled_criteria_from_its_args(self):
         src = _detect()
-        assert "input.disabledCriteria" in src
-        assert "const disabledCriteria = Array.isArray(input.disabledCriteria)" in src
+        assert "const disabledCriteria = input.disabledCriteria" in src
+        # Required, not defaulted: an absent list must not read as "none".
+        assert "Array.isArray(input.disabledCriteria) ? input.disabledCriteria : []" not in src
+        assert src.index("requires args.disabledCriteria") < src.index("agent(")
 
     def test_disabled_clause_reaches_the_assessment_prompt(self):
         prompt = _lane_prompt_body()
         assert "${disabledClause}" in prompt
 
-    def test_an_absent_list_applies_every_criterion(self):
+    def test_an_empty_list_applies_every_criterion(self):
         """Default ON: the empty branch tells the agent to apply them all."""
         src = _detect()
         assert "No criteria were disabled for this run" in src
@@ -679,7 +681,9 @@ class TestCriteriaAreConfigurableById:
     def test_lane_threads_the_resolved_list_into_the_dispatch(self):
         lane = _lane()
         assert "`disabledCriteria` from Step 1" in lane
-        assert "Omitting the key applies\nevery criterion" in lane
+        assert "The key is REQUIRED" in lane
+        assert "omitting the key makes\nthe workflow throw" in lane
+        assert "Omitting the key applies" not in lane
 
     def test_lane_binds_any_carrier_to_the_same_disabled_list(self):
         lane = _lane()

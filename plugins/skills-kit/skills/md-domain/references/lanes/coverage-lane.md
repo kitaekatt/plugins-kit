@@ -386,20 +386,19 @@ venv:
 ```
 
 A non-zero exit means STOP: the script wrote nothing to stdout and a single
-diagnostic line to stderr (a malformed config layer or an un-tunable criterion
-id). No assessment runs on a partial config -- surface that stderr line and stop
-rather than falling back to defaults.
+diagnostic line to stderr (a malformed config layer, an un-tunable criterion
+id, or an interpreter without pyyaml, in which case the line names the
+skills-kit venv to use). No assessment runs on a partial config -- surface that
+stderr line and stop rather than falling back to defaults.
 
 On a zero exit, parse its JSON `{ disabled, thresholds, standards, notes }` and
-keep run-level `disabledCriteria` = `disabled`. It threads into Step 3. An empty
-or absent config yields an empty list, so default behaviour is every criterion
-applied. A non-empty `notes` array (for example, "pyyaml unavailable; standards
-resolution degraded to defaults") goes in the report header verbatim -- it means
-the run is NOT the same as "no config", even though the disabled list reads
-identically to that case.
+keep run-level `disabledCriteria` = `disabled`. It threads into Step 3. An
+absent config yields an empty list, so default behaviour is every criterion
+applied. A non-empty `notes` array goes in the report header verbatim.
 
 No `--primitive` is passed and the `standards` map is not consumed: this lane
-does not read it. A standards file naming `applies_to: code_directory` (or the
+does not read it. Passing `--primitive code_directory` is a usage error (exit
+2), because its list could only ever be empty. A standards file naming `applies_to: code_directory` (or the
 deprecated alias `code_subtree`) makes the resolver exit non-zero, because this
 lane does not apply authored criteria and would silently ignore the file.
 `thresholds` is not consumed either -- every
@@ -507,9 +506,10 @@ would have suppressed is proposed instead, and the ids are named in the affected
 subjects' `notes` so the report says which criteria were not applied. The
 structural rules this script enforces after the agent returns -- subject
 identity, anchor membership, the destination rule, the candidate ceiling -- are
-never in that list and are never switched off by it. Omitting the key applies
-every criterion, which is the shipped default and the only behaviour a project
-that writes no config ever sees. Configuration surface and the layer model:
+never in that list and are never switched off by it. The key is REQUIRED: an
+empty list applies every criterion, which is the shipped default and the only
+behaviour a project that writes no config ever sees, and omitting the key makes
+the workflow throw before it dispatches any agent. Configuration surface and the layer model:
 `../configuring-standards.md`.
 
 **The same rule holds for ANY carrier.** A subagent, a background CLI, or a
@@ -517,8 +517,8 @@ hand-written brief given the assessment gets the disabled ids too. A carrier tha
 silently applies a criterion the project switched off produces a suppression the
 project refused, and nothing downstream can tell that from an honest run.
 
-`coverage-detect.js` refuses to run while `refs.criteria` names no document, so
-this seam cannot be crossed by accident.
+`coverage-detect.js` refuses to run while `refs.criteria` names no document or
+`disabledCriteria` is absent, so this seam cannot be crossed by accident.
 
 ### Step 3b -- Refute (advanced depth only)
 

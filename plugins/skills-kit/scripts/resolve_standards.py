@@ -7,16 +7,19 @@ configuration for the artifact type they audit:
 
   - the disabled optional-rule/criterion ids and threshold overrides (threaded
     into the detect lanes as `disabledCriteria` and used by audit.py --config);
-  - the applicable *-standards.md file paths per subject (a file-type primitive or a composition id)
+  - the applicable *-standards.md file paths per file-type primitive
     (threaded per-file as `standardsPaths`).
 
 Usage:
     python resolve_standards.py --project-root <dir> [--primitive <name> ...]
 
 --primitive is repeatable and filters the `standards` map to the named
-subjects: a file-type primitive (skill_md, claude_md, reference_doc, plain_md)
-or a composition id (code_directory); omit it to return every subject that has
-standards. Prints one JSON object:
+file-type primitives (skill_md, claude_md, reference_doc, plain_md); omit it to
+return every subject that has standards. A name no lane consumes authored
+standards for (a composition id in APPLIES_TO_NOT_CONSUMED, such as
+code_directory) or an unknown name is a usage error (exit 2): its answer could
+only ever be an empty list, which reads exactly like "nothing authored".
+Prints one JSON object:
 
     {
       "disabled":   ["<rule-id>", ...],
@@ -27,8 +30,10 @@ standards. Prints one JSON object:
     }
 
 Stdlib-only argument handling; the actual resolution (pyyaml + schema
-validation) lives in skills_kit_lib.standards_resolve, which degrades to empty
-defaults plus a note when pyyaml is unavailable.
+validation) lives in skills_kit_lib.standards_resolve. Exit 1, with one line on
+stderr and nothing on stdout, when a layer is malformed or when pyyaml is not
+importable by the launching interpreter -- the latter names the skills-kit
+plugin venv to run under instead.
 """
 
 from __future__ import annotations
@@ -48,6 +53,29 @@ if str(_PLUGIN_ROOT) not in sys.path:
 from skills_kit_lib import standards_resolve  # noqa: E402
 
 
+#: The --primitive values that can carry authored standards.
+_PRIMITIVE_CHOICES = tuple(
+    s for s in standards_resolve.APPLIES_TO_SUBJECTS
+    if s not in standards_resolve.APPLIES_TO_NOT_CONSUMED
+)
+
+
+def _check_primitive(parser: argparse.ArgumentParser, name: str) -> None:
+    """Reject a --primitive whose answer could only ever be an empty list."""
+    canonical = standards_resolve.APPLIES_TO_ALIASES.get(name, name)
+    if canonical in standards_resolve.APPLIES_TO_NOT_CONSUMED:
+        parser.error(
+            f"--primitive {name}: no lane consumes authored standards for "
+            f"'{canonical}', so its standards list is always empty; valid "
+            f"values: {', '.join(_PRIMITIVE_CHOICES)}"
+        )
+    if canonical not in standards_resolve.APPLIES_TO_SUBJECTS:
+        parser.error(
+            f"--primitive {name}: unknown subject; valid values: "
+            f"{', '.join(_PRIMITIVE_CHOICES)}"
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Resolve the layered skills-kit standards config to JSON.",
@@ -63,19 +91,21 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         default=None,
         metavar="NAME",
-        help="Restrict the `standards` map to this subject: a file-type "
-             "primitive (skill_md, claude_md, reference_doc, plain_md) or a "
-             "composition id (code_directory). Repeatable; omit to return "
+        help="Restrict the `standards` map to this file-type primitive "
+             f"({', '.join(_PRIMITIVE_CHOICES)}). Repeatable; omit to return "
              "every subject that has standards.",
     )
     args = parser.parse_args(argv)
+    for name in args.primitive or ():
+        _check_primitive(parser, name)
 
     project_root = Path(args.project_root).expanduser()
     try:
         resolved = standards_resolve.resolve(project_root)
     except standards_resolve.StandardsConfigError as exc:
-        # A malformed layer or an un-tunable id is a loud, actionable error --
-        # surface it on stderr and fail rather than emitting a partial config.
+        # A malformed layer, an un-tunable id, or a missing pyyaml
+        # (StandardsUnavailableError) is a loud, actionable error -- surface it
+        # on stderr and fail rather than emitting a partial or default config.
         print(f"resolve_standards: {exc}", file=sys.stderr)
         return 1
 

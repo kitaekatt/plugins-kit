@@ -16,9 +16,11 @@ layer appends, never replaces).
 
 Self-contained by design: stdlib + pyyaml only, no bootstrap_lib import (that
 would take a shared_lib_imports manifest change and break audit.py's graceful
-bare-python degradation). When pyyaml is unavailable resolution degrades to
-empty defaults plus a loud note, exactly like audit.py's contract-staged state
--- it never crashes. Malformed config, an un-tunable rule id, an unknown
+bare-python degradation). Importing this module never needs pyyaml, but
+RESOLVING does: when pyyaml is unavailable resolve() raises
+StandardsUnavailableError naming the missing dependency and the venv to use,
+because returning empty defaults would ignore every config and standards file
+while reading exactly like "nothing configured". Malformed config, an un-tunable rule id, an unknown
 threshold, an unknown adapter or adapter setting, an unknown audit setting or value, or an invalid standards file
 are LOUD (StandardsConfigError), never a silent {}.
 """
@@ -26,6 +28,7 @@ are LOUD (StandardsConfigError), never a silent {}.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -85,6 +88,18 @@ class StandardsConfigError(Exception):
     """
 
 
+class StandardsUnavailableError(StandardsConfigError):
+    """Resolution cannot run on this interpreter: pyyaml is not importable.
+
+    A subclass of StandardsConfigError so every caller that already stops on a
+    malformed layer also stops here. A caller that deliberately tolerates an
+    unresolvable config (emit_audit_jobs.resolve_admitted_endpoints) catches
+    this subclass by name, but only to stay quiet when
+    existing_layer_files() finds nothing to ignore; with any layer file on
+    disk it re-raises.
+    """
+
+
 #: The one adapter id this configuration surface knows, and the keys it takes.
 #: An adapter is task-specific context admitted for the model-task pairs it was
 #: MEASURED on. The shipped default admits nothing, so an unconfigured user gets
@@ -130,7 +145,8 @@ class ResolvedStandards:
       shipped default -- which for every adapter setting is EMPTY.
     - audit: the audit-behaviour settings (AUDIT_KEYS), always fully populated:
       a key the config does not set carries its AUDIT_DEFAULTS value.
-    - notes: loud-but-non-fatal diagnostics (e.g. pyyaml unavailable).
+    - notes: loud-but-non-fatal diagnostics. A missing pyyaml is not one: it
+      raises StandardsUnavailableError instead.
     """
 
     disabled_rules: set[str] = field(default_factory=set)
@@ -385,35 +401,71 @@ def _parse_standards_file(path: Path) -> StandardsFile:
     )
 
 
+def layer_paths(
+    project_root: Path | None, *, shipped_dir: Path | None = None
+) -> tuple[list[Path], list[Path]]:
+    """The paths resolve() reads, lowest layer first. Pure: touches no disk.
+
+    Returns (config_files, standards_dirs). config_files are the config.yaml /
+    config.local.yaml candidates, merged later-wins; standards_dirs are the
+    directories scanned for *-standards.md. Either may name a path that does
+    not exist.
+    """
+    user_layer = _config_dir() / "skills-kit"
+    proj_layer = (project_root / ".claude" / "skills-kit") if project_root is not None else None
+
+    config_files: list[Path] = []
+    standards_dirs: list[Path] = []
+    if shipped_dir is not None:
+        config_files.append(shipped_dir / "config.yaml")
+        standards_dirs.append(shipped_dir)
+    config_files.append(user_layer / "config.yaml")
+    config_files.append(user_layer / "config.local.yaml")
+    standards_dirs.append(user_layer)
+    if proj_layer is not None:
+        config_files.append(proj_layer / "config.yaml")
+        config_files.append(proj_layer / "config.local.yaml")
+        standards_dirs.append(proj_layer)
+    return config_files, standards_dirs
+
+
+def existing_layer_files(
+    project_root: Path | None, *, shipped_dir: Path | None = None
+) -> list[Path]:
+    """The config and *-standards.md files on disk that resolve() would read.
+
+    Reads no file content, so it works without pyyaml. A non-empty result
+    means a caller that cannot resolve is ignoring configured values.
+    """
+    config_files, standards_dirs = layer_paths(project_root, shipped_dir=shipped_dir)
+    found = [p for p in config_files if p.is_file()]
+    for d in standards_dirs:
+        if d.is_dir():
+            found.extend(sorted(d.glob("*-standards.md")))
+    return found
+
+
 def resolve(project_root: Path | None, *, shipped_dir: Path | None = None) -> ResolvedStandards:
     """Resolve every standards layer into one ResolvedStandards.
 
     Layer order (lowest -> highest): shipped_dir (optional), <user_dir>/skills-kit
     (config.yaml then config.local.yaml), <project_root>/.claude/skills-kit
     (config.yaml then config.local.yaml). Config merges later-wins; standards
-    files union across layers. Degrades to empty defaults + a note when pyyaml
-    is unavailable.
+    files union across layers. Raises StandardsUnavailableError when pyyaml is
+    unavailable: an unread config must never pass for an empty one.
     """
     notes: list[str] = []
     if not HAVE_YAML:
-        notes.append(
-            "pyyaml unavailable; standards resolution degraded to defaults "
-            "(no config or standards files applied)"
+        raise StandardsUnavailableError(
+            "pyyaml is not importable by this interpreter "
+            f"({sys.executable}), so no skills-kit config or standards file "
+            "can be read. Run under the skills-kit plugin venv "
+            "(~/.claude/plugins/data/<marketplace>/skills-kit/.venv/, "
+            "Scripts/python.exe on Windows, bin/python elsewhere), which "
+            "bootstrap provisions with pyyaml."
         )
-        return ResolvedStandards(notes=notes)
 
-    user_layer = _config_dir() / "skills-kit"
-    proj_layer = (project_root / ".claude" / "skills-kit") if project_root is not None else None
-
-    # -- config layers (files), merged later-wins -----------------------------
-    config_files: list[Path] = []
-    if shipped_dir is not None:
-        config_files.append(shipped_dir / "config.yaml")
-    config_files.append(user_layer / "config.yaml")
-    config_files.append(user_layer / "config.local.yaml")
-    if proj_layer is not None:
-        config_files.append(proj_layer / "config.yaml")
-        config_files.append(proj_layer / "config.local.yaml")
+    config_files, standards_dirs = layer_paths(project_root, shipped_dir=shipped_dir)
 
     merged: dict = {}
     for cf in config_files:
@@ -423,13 +475,6 @@ def resolve(project_root: Path | None, *, shipped_dir: Path | None = None) -> Re
     # Collected BEFORE the rules: block is validated -- an authored criterion
     # id is a valid `rules: {<id>: off}` knob, so the rule-id validation below
     # needs the full criterion-id set up front.
-    standards_dirs: list[Path] = []
-    if shipped_dir is not None:
-        standards_dirs.append(shipped_dir)
-    standards_dirs.append(user_layer)
-    if proj_layer is not None:
-        standards_dirs.append(proj_layer)
-
     standards_by_primitive: dict[str, list[StandardsFile]] = {}
     for d in standards_dirs:
         if not d.is_dir():

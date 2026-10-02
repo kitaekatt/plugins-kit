@@ -263,7 +263,8 @@ def by_root(out):
     return {r["root"]: r for r in out["result"]["perSubject"]}
 
 
-BASE = {"depth": "basic", "refs": REFS}
+# disabledCriteria is a required lane input (an empty list = nothing disabled).
+BASE = {"depth": "basic", "refs": REFS, "disabledCriteria": []}
 
 
 class TestTheHarnessItself:
@@ -271,6 +272,25 @@ class TestTheHarnessItself:
         """A guard on the guard: every other test here is vacuous if it does not."""
         out = run_lane(tmp_path, {**BASE, "subjects": [subject("/r/a")]})
         assert out["ok"], out.get("error")
+
+    @pytest.mark.parametrize("value", ["absent", None, "x", ["ok", 3]])
+    def test_absent_or_malformed_disabled_criteria_refuses_the_run(self, tmp_path, value):
+        """An absent list used to read as "nothing disabled" and run every
+        criterion the consumer switched off; it must refuse before dispatch."""
+        args = {**BASE, "subjects": [subject("/r/a")]}
+        if value == "absent":
+            del args["disabledCriteria"]
+        else:
+            args["disabledCriteria"] = value
+        out = run_lane(tmp_path, args)
+        assert out["ok"] is False and out["stage"] == "run", out
+        assert "requires args.disabledCriteria" in out["error"], out
+        assert "resolve_standards.py" in out["error"], out
+
+    def test_an_empty_disabled_list_runs_every_criterion(self, tmp_path):
+        out = run_lane(tmp_path, {**BASE, "subjects": [subject("/r/a")]})
+        assert out["ok"], out.get("error")
+        assert "No criteria were disabled for this run" in out["calls"][0]["prompt"]
 
     def test_the_harness_enforces_the_lane_own_schema(self, tmp_path):
         """Without this, a test can feed a shape a real dispatch would refuse."""
@@ -1024,6 +1044,7 @@ class TestRefutationStage:
             "subjects": [subject("d", ["d/a.py", "d/b.py"])],
             "depth": "advanced",
             "refs": {"criteria": "/abs/coverage-standards.md"},
+            "disabledCriteria": [],
         }
         if verify is not None:
             args["verify"] = verify
@@ -1103,6 +1124,7 @@ class TestRefutationStage:
             "subjects": [subject("d", ["d/a.py"])],
             "depth": "basic",
             "refs": {"criteria": "/abs/coverage-standards.md"},
+            "disabledCriteria": [],
         }
         out = run_lane(tmp_path, args, responses=[{"subjects": [result_for(
             "S1", "d", self._cands(1), verdict="GAPS-FOUND")]}],
@@ -1125,6 +1147,7 @@ class TestRefutationStage:
             "depth": "advanced",
             "batchSize": 8,
             "refs": {"criteria": "/abs/coverage-standards.md"},
+            "disabledCriteria": [],
         }
         batch = {"subjects": [
             result_for("S1", "d", self._cands(1), verdict="GAPS-FOUND"),

@@ -113,9 +113,9 @@
 //   batchSize: integer|undefined     // subjects per agent; default below
 //   ceiling: integer|undefined   // candidate cap PER SUBTREE; default below
 //   depth: 'basic'|'advanced'    // resolved by the lane's intent gate
-//   disabledCriteria: string[]|undefined  // criterion ids the run configuration
-//     switched off, from the lane's Step 1 standards resolution. Absent or empty
-//     means every criterion applies, which is the shipped default.
+//   disabledCriteria: string[]   // REQUIRED: criterion ids the run configuration
+//     switched off, from the lane's Step 1 standards resolution. Empty means
+//     every criterion applies, which is the shipped default; absent throws.
 //   refs: { criteria: <abs path to the coverage standards doc>,
 //           observationKinds: <abs path to references/standards/claude-md-standards.md>,
 //           pluginRoot: <abs path to plugins/skills-kit> }
@@ -173,6 +173,15 @@ if (!input) {
   throw new Error('coverage-detect.js requires args = { subjects | subjectsFile, depth, refs }')
 }
 
+// disabledCriteria is REQUIRED: the resolved `disabled` list from
+// scripts/resolve_standards.py, threaded by the caller. An empty array means
+// "resolved, nothing disabled". An absent or malformed value throws before any
+// agent is dispatched: reading "not passed" as "nothing disabled" would apply
+// criteria the consumer's config switched off.
+if (!Array.isArray(input.disabledCriteria) || !input.disabledCriteria.every((d) => typeof d === 'string')) {
+  throw new Error(`md-domain detect lane requires args.disabledCriteria = string[] (an empty array when nothing is disabled), got ${JSON.stringify(input.disabledCriteria) ?? 'nothing'}. Pass "disabled" from scripts/resolve_standards.py; an absent list is never read as "nothing disabled".`)
+}
+
 const ceiling = Number.isInteger(input.ceiling) ? input.ceiling : DEFAULT_CEILING
 const batchSize = Number.isInteger(input.batchSize) && input.batchSize > 0
   ? input.batchSize
@@ -181,9 +190,9 @@ const batchSize = Number.isInteger(input.batchSize) && input.batchSize > 0
 // Criterion ids the run configuration switched OFF, resolved by the lane's
 // Step 1 from the layered skills-kit config (scripts/resolve_standards.py ->
 // `disabled`). Same shape and same meaning as the three per-file audit detect
-// lanes' `disabledCriteria`; an absent or empty list leaves every criterion on,
-// which is the shipped default.
-const disabledCriteria = Array.isArray(input.disabledCriteria) ? input.disabledCriteria : []
+// lanes' `disabledCriteria`. Required (guarded above); an empty list leaves
+// every criterion on, which is the shipped default.
+const disabledCriteria = input.disabledCriteria
 const disabledClause = disabledCriteria.length > 0
   ? `DISABLED CRITERIA. The run configuration switched these optional criterion ids OFF: ${disabledCriteria.map((d) => `"${d}"`).join(', ')}. Do NOT apply a criterion whose \`id\` in the criteria document matches one in that list: propose a candidate the criterion would have suppressed, and do not reject a candidate on its account. Report each id you were given here in \`notes\` for the subjects it affected, so a reader of the report knows which criteria were not applied. Every other criterion applies in full, and the structural rules this script enforces after you return -- subject identity, anchor membership, the destination rule, the candidate ceiling -- are never switched off by this list.`
   : `No criteria were disabled for this run; apply every criterion in the document normally.`

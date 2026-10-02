@@ -49,11 +49,20 @@ _OTHER_VCS = {"git": "p4", "p4": "git"}
 
 #: script -> the generator constant holding its per-kit launcher, so the
 #: launcher STRING is single-sourced while the variable NAME above is not.
+#: The reference constants carry the `<PLUGIN>_ROOT` form (references/*.md is
+#: not substituted by Claude Code); the `_SKILL` constants carry
+#: `${CLAUDE_PLUGIN_ROOT}` (a SKILL.md body is substituted).
 _LAUNCHER_CONST = {
     "run_review_lane.py": "LANE_LAUNCHER",
     "parse_review_lane.py": "PARSE_LAUNCHER",
     "render_review_profiles.py": "RENDER_LAUNCHER",
 }
+
+
+def _root_var_read(vcs):
+    """The guarded read of a kit's exported root variable, as it would
+    appear in a command (`${GIT_KIT_ROOT:?`)."""
+    return "${" + _ROOT_VAR[vcs] + ":?"
 
 
 class TestRenderedFilesMatchTemplate:
@@ -382,26 +391,32 @@ class TestDeclinedLedgerPresent:
         from bootstrap_lib.interpreter_env import PLUGIN_CALL_SITE_EXPR as expr
         assert expr.startswith('"${BOOTSTRAP_PYTHON:?requires bootstrap >= ')
         for vcs in ("git", "p4"):
-            launcher = gen.PREPARE_LAUNCHER_YAML[vcs]
-            # Each kit anchors on its OWN exported plugin-root variable;
-            # CLAUDE_PLUGIN_ROOT is unset in the Bash tool an agent types into.
-            assert _ROOT_VAR[vcs] in launcher, vcs
-            assert _ROOT_VAR[_OTHER_VCS[vcs]] not in launcher, vcs
+            launcher = gen.PREPARE_LAUNCHER_YAML_SKILL[vcs]
+            # The SKILL.md body is a surface Claude Code substitutes, so the
+            # launcher there is rooted on CLAUDE_PLUGIN_ROOT, never on a kit's
+            # bootstrap-exported variable.
+            assert "${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py" in launcher, vcs
+            assert _root_var_read("git") not in launcher, vcs
+            assert _root_var_read("p4") not in launcher, vcs
             body = gen.render_skill(vcs)
             # Single-quoted as a whole: a YAML scalar cannot start with a
             # quoted segment (PLUGIN_CALL_SITE_EXPR's own double quotes) and
             # continue unquoted -- YAML strips only the outer pair, so the
             # decoded value still starts with the guarded expression.
             assert f"tool: {launcher}" in body, vcs
-            assert _ROOT_VAR[_OTHER_VCS[vcs]] not in body, vcs
-            assert "${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py" not in body
+            assert _root_var_read("git") not in body, vcs
+            assert _root_var_read("p4") not in body, vcs
             assert "python3 ${CLAUDE_PLUGIN_ROOT}" not in body
             assert "uv run --no-project python" not in body
             # ledger-record site (@PREPARE_TOOL@ token, shared
-            # LEDGER_RECORD_STEP body) -- raw, unwrapped launcher there.
+            # LEDGER_RECORD_STEP body) -- raw, unwrapped launcher in a
+            # reference, which Claude Code does not substitute, so it anchors
+            # on the kit's OWN exported plugin-root variable.
             ledger = gen.render_declined_ledger(vcs)
             assert f"{gen.PREPARE_LAUNCHER[vcs]} --ledger-record" in ledger, vcs
+            assert _ROOT_VAR[vcs] in gen.PREPARE_LAUNCHER[vcs], vcs
             assert _ROOT_VAR[_OTHER_VCS[vcs]] not in ledger, vcs
+            assert "${CLAUDE_PLUGIN_ROOT}" not in gen.PREPARE_LAUNCHER[vcs], vcs
 
     @pytest.mark.parametrize("script", [
         "run_review_lane.py", "parse_review_lane.py", "render_review_profiles.py",
@@ -412,31 +427,47 @@ class TestDeclinedLedgerPresent:
         rendered file keeps a `uv run --no-project python` launcher. Each
         script re-execs into its kit's venv (reexec_under_plugin_venv).
 
-        Each kit anchors the script on its OWN exported plugin-root variable
-        (`GIT_KIT_ROOT` in git-kit's rendered files, `P4_KIT_ROOT` in
-        p4-kit's), because `CLAUDE_PLUGIN_ROOT` is unset in the Bash tool an
-        agent types the command into.
+        The rendering surface decides the root. A generated SKILL.md is
+        substituted by Claude Code, so its launchers use
+        `${CLAUDE_PLUGIN_ROOT}` (the `_SKILL` constants). A generated
+        reference is not substituted, so its launchers anchor on the kit's OWN
+        exported plugin-root variable (`GIT_KIT_ROOT` in git-kit's files,
+        `P4_KIT_ROOT` in p4-kit's).
 
         Reverts that turn this RED: set the generator's LANE_TOOL, PARSE_TOOL,
-        or RENDER_TOOL back to the `uv run --no-project python` form, or to
-        `${CLAUDE_PLUGIN_ROOT}`; or render one kit's launcher into the other
-        kit's files, which the per-kit variable name catches.
+        or RENDER_TOOL back to the `uv run --no-project python` form; render a
+        reference launcher with `${CLAUDE_PLUGIN_ROOT}` or a SKILL.md launcher
+        with a `<PLUGIN>_ROOT` variable; or render one kit's launcher into the
+        other kit's files, which the per-kit variable name catches.
         """
         rendered = gen.targets()
         launchers = getattr(gen, _LAUNCHER_CONST[script])
+        skill_launchers = getattr(gen, _LAUNCHER_CONST[script] + "_SKILL")
         for vcs, kit in (("git", "git-kit"), ("p4", "p4-kit")):
             launcher = launchers[vcs]
+            skill_launcher = skill_launchers[vcs]
             assert _ROOT_VAR[vcs] in launcher, (kit, script)
             assert _ROOT_VAR[_OTHER_VCS[vcs]] not in launcher, (kit, script)
-            kit_text = "\n".join(text for path, text in rendered.items()
-                                 if f"/{kit}/" in path.as_posix())
-            assert launcher in kit_text, (kit, script)
-            assert _ROOT_VAR[_OTHER_VCS[vcs]] not in kit_text, (kit, script)
+            assert f"${{CLAUDE_PLUGIN_ROOT}}/scripts/{script}" in skill_launcher, (kit, script)
+            assert _root_var_read("git") not in skill_launcher, (kit, script)
+            assert _root_var_read("p4") not in skill_launcher, (kit, script)
+            kit_files = {path: text for path, text in rendered.items()
+                         if f"/{kit}/" in path.as_posix()}
+            skill_text = "\n".join(text for path, text in kit_files.items()
+                                   if path.name == "SKILL.md")
+            ref_text = "\n".join(text for path, text in kit_files.items()
+                                 if path.name != "SKILL.md")
+            assert skill_launcher in skill_text, (kit, script)
+            assert _root_var_read("git") not in skill_text, (kit, script)
+            assert _root_var_read("p4") not in skill_text, (kit, script)
+            assert f"${{CLAUDE_PLUGIN_ROOT}}/scripts/{script}" not in ref_text, (kit, script)
+            assert _ROOT_VAR[_OTHER_VCS[vcs]] not in "\n".join(kit_files.values()), (kit, script)
             source = (REPO_ROOT / "plugins" / kit / "scripts" / script).read_text(encoding="utf-8")
             assert "reexec_under_plugin_venv(" in source, (kit, script)
         for path, text in rendered.items():
             assert "uv run --no-project python" not in text, path
-            assert f"${{CLAUDE_PLUGIN_ROOT}}/scripts/{script}" not in text, path
+            if path.name != "SKILL.md":
+                assert f"${{CLAUDE_PLUGIN_ROOT}}/scripts/{script}" not in text, path
 
     def test_both_ledger_references_render(self):
         git_ref = gen.render_declined_ledger("git")
@@ -796,3 +827,80 @@ class TestP4PendingChangeLookup:
     def test_does_not_derive_the_user_from_configured_variables(self):
         body = gen.P4_SKILL.read_text(encoding="utf-8")
         assert "p4 set -q P4USER" not in body
+
+
+def _flat(text):
+    """Collapse whitespace so a phrase matches across a line wrap."""
+    return " ".join(text.split())
+
+
+class TestSilencedErrorCriterionRendered:
+    """Both rendered skills must tell the introduced-code lane, and the
+    validator that judges its findings, that an input which used to be refused
+    and is now accepted and ignored is a bug.
+
+    The incident behind it: skills-kit 0.86.0 (ebefd8b5) widened an
+    ``applies_to`` validator so an authored ``code_directory`` standards file
+    validated and was then ignored by its only consumer, and the review passed
+    it. Root CLAUDE.md insight ``widening_a_validator_without_its_consumer``.
+
+    The phrases are RE-TYPED, not imported from ``lane_prompts``, and read from
+    the files ON DISK, not from the generator: a check derived from the
+    template would move with it and stay green when the criterion is removed
+    from both (root CLAUDE.md ``guard_cannot_see_its_own_subject``).
+    """
+
+    SKILLS = {
+        "git": "plugins/git-kit/skills/git-code-review/SKILL.md",
+        "p4": "plugins/p4-kit/skills/p4-code-review/SKILL.md",
+    }
+
+    PROMPT_PHRASES = (
+        "removes or softens a raise, exit, or error path",
+        "find and read every consumer of the newly admitted input",
+        "now accepted and ignored is a bug",
+        "an error replaced by a default, an empty result, a note, or exit 0",
+        'Report it with reason "bug" on the widened line',
+        "belongs in this change: widen the consumer, or keep the refusal",
+    )
+
+    @classmethod
+    def _subagent(cls, vcs, name):
+        import yaml
+
+        text = (REPO_ROOT / cls.SKILLS[vcs]).read_text(encoding="utf-8")
+        data = yaml.safe_load(TestGeneratedYamlBlockParses._first_yaml_block(text))
+        stack = [data]
+        while stack:
+            node = stack.pop()
+            if isinstance(node, dict):
+                if node.get("name") == name and "restrictions" in node:
+                    return node
+                stack.extend(node.values())
+            elif isinstance(node, list):
+                stack.extend(node)
+        raise AssertionError(f"{vcs}: no subagent named {name!r} in the contract block")
+
+    @pytest.mark.parametrize("vcs", ["git", "p4"])
+    def test_introduced_code_lane_carries_the_criterion(self, vcs):
+        lane = self._subagent(vcs, "reviewer_c_introduced_code")
+        prompt = _flat(lane["canonical_prompt"])
+        for phrase in self.PROMPT_PHRASES:
+            assert phrase in prompt, f"{vcs}: reviewer_c prompt lost {phrase!r}"
+        restrictions = _flat(" ".join(lane["restrictions"]))
+        assert "consumers of an input the change newly admits" in restrictions, vcs
+
+    @pytest.mark.parametrize("vcs", ["git", "p4"])
+    def test_validator_may_confirm_it(self, vcs):
+        restrictions = _flat(" ".join(self._subagent(vcs, "validator")["restrictions"]))
+        assert "CONFIRMED when no consumer acts on the admitted input" in restrictions, vcs
+
+    def test_endpoint_prompt_carries_the_criterion(self):
+        """The endpoint path sends ``LANE_PROMPTS`` directly, so assert it
+        there too: the rendered skill says nothing about what a configured
+        endpoint reviewer is told."""
+        from bootstrap_lib.code_review.lane_prompts import LANE_PROMPTS
+
+        prompt = _flat(LANE_PROMPTS["reviewer_c_introduced_code"].system)
+        for phrase in self.PROMPT_PHRASES:
+            assert phrase in prompt, f"endpoint reviewer_c prompt lost {phrase!r}"

@@ -70,7 +70,7 @@ technique_skill:
             After prepare returns, emit the launch rationale line ONCE (see narration.launch_message):
             select the row from the file-type mix of the changed + claimed files, or the md_trivial row
             when the step-6 triviality gate will fire. This is the single launch message -- do not repeat it.
-          tool: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${P4_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/prepare_review.py"'
+          tool: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py"'
           input: "<CL>  (append `--claim '**/*.md'` when md-domain is available, per the claim probe)"
           expected: |
             JSON with cl, description, project_root, bundle_dir, diff_chunks, changed_files, unique_claude_mds, unreconciled, default_open, stale_open, shelf_drift, unresolved, hygiene_incomplete, submit_gates, auto_shelved, shelf_fingerprint, change_id, ledger_baseline, ledger_hits, -- only when the CL belongs to a different client -- foreign_change, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-emitted -- machine_emitted_files (each entry carries identifier, local, size_bytes, and the axis that matched -- machine_emitted_axis `content` or `declared_path` plus the naming machine_emitted_signature; such files are excluded from diff_chunks and changed_files, and `--review-machine-emitted` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff. `auto_shelved=true` means prepare_review created the shelf and step 10 must clean it up.
@@ -93,7 +93,7 @@ technique_skill:
             Read every path in unique_claude_mds (CLAUDE.md, or AGENTS.md where a directory has no
             CLAUDE.md -- the bundle already applies that precedence). Subagents do not need to re-read.
             Also resolve the EXECUTABLE review-profile table -- profile ids, reviewer rosters,
-            per-reviewer models, and validator_models -- by running "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${P4_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/render_review_profiles.py" with
+            per-reviewer models, and validator_models -- by running "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py" with
             `--project-root <bundle.project_root>` (omit the flag when bundle.project_root is
             unset; the resolver then falls back to the process cwd). NEVER merge the
             review-profile config layers (shipped / user / project) yourself -- the renderer is
@@ -101,7 +101,7 @@ technique_skill:
             `---` separator and layer provenance; parse only the YAML above the separator. Keep
             the resolved `profiles` list for steps 6 and 7. See references/configuration.md for
             the full layer/merge/override contract.
-          tool: Read + "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${P4_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/render_review_profiles.py"
+          tool: Read + "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py"
         - n: 5
           action: |
             If bundle.submit_gates is non-empty, DISCHARGE each gate yourself. Do NOT ask the
@@ -185,7 +185,7 @@ technique_skill:
             `claude/agent` -- or, on a one-entry declaration or the no-menu route, one of
             `sonnet`, `opus`, `haiku`, `fable` -- launches an Agent subagent with
             `model: <entry>`. Any other entry runs as a parallel Bash call to
-            "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${P4_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/run_review_lane.py" instead of launching an Agent for it, passing `--lane <reviewer
+            "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py" instead of launching an Agent for it, passing `--lane <reviewer
             name>`, `--model <the entry>`, `--bundle <bundle.bundle_dir>/bundle.json`, and
             `--chunk-index <i>` (that chunk's index in `bundle.diff_chunks`). The runner
             reads the bundle itself and derives everything else -- the chunk diff path,
@@ -262,7 +262,13 @@ technique_skill:
             `mechanicalCheckPhrases` = `bundle.mechanical_check_phrases` once at the top level of
             EVERY lane args object. Resolve the remaining fields from each claimed file's
             `claude_mds` per references/md-domain-review.md. Resolve the skills-kit plugin root and
-            venvPython defensively per that reference. Use the Workflow tool when callable, passing
+            venvPython defensively per that reference, then run skills-kit's
+            `scripts/resolve_standards.py` ONCE per review under that venvPython (exact command in
+            that reference) and pass its `disabled` list as `disabledCriteria` in EVERY lane args
+            object -- an empty list when nothing is disabled; every detect lane throws without it --
+            plus each file's `standardsPaths` from its `standards` map. A non-zero exit is never
+            replaced by `[]`: run no lane and report every non-trivial claimed file
+            `REVIEW INCOMPLETE` with the script's stderr line. Use the Workflow tool when callable, passing
             each installed lane's full text as `script` (never its installed path as `scriptPath`)
             per that reference; when the tool is unavailable or rejects the lane, use that reference's
             "Manual detect invocation" with the SAME installed lanes and args. Transport failure
@@ -340,14 +346,14 @@ technique_skill:
 
             Parse every NATIVE Agent lane's returned array before treating it as candidate
             issues. Write that lane's raw response verbatim to a distinct temporary file under
-            `bundle.bundle_dir`, then run `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${P4_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/parse_review_lane.py" --lane <reviewer name> --response
+            `bundle.bundle_dir`, then run `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/parse_review_lane.py" --lane <reviewer name> --response
             <that file> --bundle <bundle.bundle_dir>/bundle.json`. Replace the raw array with
             the parser's stdout array. The executable parser validates every lane and, for
             reviewer_a, verifies each citation against the reported file's governing CLAUDE.md
             chain. Endpoint envelopes already contain output from the same shared parser. A
             non-zero parser exit is a FAILED lane under the existing failure rule; never pass
             its unparsed issues to validators.
-          tool: Bash (the llm-scripting-kit venv CLI, `describe`) + Agent (per the entry-harness rule, a lane whose entry is not a `claude` entry runs as a Bash call to "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${P4_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/run_review_lane.py" instead)
+          tool: Bash (the llm-scripting-kit venv CLI, `describe`) + Agent (per the entry-harness rule, a lane whose entry is not a `claude` entry runs as a Bash call to "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py" instead)
           expected: JSON arrays of candidate issues from each launched reviewer (one array per (reviewer, chunk) lane), plus a recorded failure for any lane that exited non-zero.
         - n: 7
           action: |
@@ -479,7 +485,7 @@ technique_skill:
 
             Skip this step entirely when `bundle.auto_shelved` is false (we did
             not create the shelf and must not touch it).
-          tool: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${P4_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/prepare_review.py"'
+          tool: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py"'
           input: "--cleanup <bundle.bundle_dir>"
         - n: 11
           action: |
@@ -501,7 +507,7 @@ technique_skill:
             normalized anchor (never line numbers or exact wording) and NEVER records a SERIOUS
             md-domain finding (those always re-surface). Do NOT hand-edit the ledger JSON -- always go
             through --ledger-record so keying stays deterministic.
-          tool: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${P4_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/prepare_review.py"'
+          tool: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py"'
           input: "--ledger-record <bundle.bundle_dir>/declined.json"
       checklist:
         - CL number resolved
@@ -555,10 +561,10 @@ technique_skill:
         - The `--review-machine-emitted` flag is the override and it is the AUTHOR's call, never an inference. Pass it only when the user or the author explicitly asks for the machine-emitted files to be reviewed.
         - The declined-findings ledger is advisory memory, not a gate. A collapsed finding is one the author already declined for THIS change at THIS baseline; when the baseline moves (the CL is reshelved, its content edited, or its revisions move) the entry goes stale and the finding re-surfaces on its own. Never let a ledger hit suppress a SERIOUS md-domain finding.
         - Record declined findings ONLY through `prepare_review.py --ledger-record <json>`. Never hand-edit ledger.json -- the key normalization (criterion/reason + taxonomy + normalized anchor) must be computed deterministically, not typed.
-        - The `review_profiles` block above is SELECTION GUIDANCE AND RATIONALE ONLY. It carries no reviewer roster, model, or validator_models -- that executable table is resolved per review by "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${P4_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/render_review_profiles.py" (step 4), which merges the shipped bootstrap_lib defaults with any `~/.claude/config/review_profiles.yaml` (user) or `<project_root>/.claude/review_profiles.yaml` (project) override. Never merge those layers yourself and never hand-edit the resolved output.
+        - The `review_profiles` block above is SELECTION GUIDANCE AND RATIONALE ONLY. It carries no reviewer roster, model, or validator_models -- that executable table is resolved per review by "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py" (step 4), which merges the shipped bootstrap_lib defaults with any `~/.claude/config/review_profiles.yaml` (user) or `<project_root>/.claude/review_profiles.yaml` (project) override. Never merge those layers yourself and never hand-edit the resolved output.
         - The `profile` in steps 6-7 is always an entry from that RESOLVED table, never the guidance block. Match the guidance prose to decide which profile id fits the change, then read `reviewers` and `validator_models` off the resolved entry with that id.
         - See references/configuration.md for the layer precedence, merge rules (profiles/reviewers merge by id/name; validator_models and other mappings deep-merge; `disabled: true` removes a record; plain lists like `data_only_extensions` replace), the shipped default table, what a declaration entry may name, how a multi-entry declaration is routed, which lanes may take an endpoint entry, and what happens when a lane fails.
-        - A reviewer's `model` is a model DECLARATION -- the resolved `model` followed by its `model_fallbacks`. Each entry is dispatched by its harness under step 6's entry-harness rule -- a `claude` entry launches an Agent subagent, any other entry runs through "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${P4_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/run_review_lane.py".
+        - A reviewer's `model` is a model DECLARATION -- the resolved `model` followed by its `model_fallbacks`. Each entry is dispatched by its harness under step 6's entry-harness rule -- a `claude` entry launches an Agent subagent, any other entry runs through "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py".
         - Apply references/configuration.md's pre-dispatch launch-correction rule before classifying a failed invocation.
         - A reviewer record may carry an `effort` (`low`, `medium`, `high`, `xhigh`, `max`) beside its `model`. It selects the DISPATCH TARGET, not a parameter: the Agent tool has no effort argument, so an effort-carrying lane goes to the `p4-kit:review-lane-<effort>` agent, whose frontmatter sets it. A lane with no `effort` keeps `general-purpose` and inherits this session's effort. Do not attempt to pass effort as an Agent argument, and do not read a lane's effort off the agent's page -- the RESOLVED table is the authority.
         - Effort and model are independent and BOTH are honoured: the profile's `model` goes at the CALL SITE, where it overrides whatever the effort agent's own frontmatter would imply. Never move a lane to a different model to obtain an effort level, and never move it to a different effort to obtain a model.
@@ -654,7 +660,7 @@ technique_skill:
       of `bundle.changed_files`. Default to `code` when uncertain.
       The EXECUTABLE table -- profile ids, reviewer rosters, per-reviewer models, and
       validator_models -- is NOT inline here. It is resolved at review time by step 4
-      ("${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${P4_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/render_review_profiles.py"), which merges the shipped bootstrap_lib defaults with any user/project
+      ("${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py"), which merges the shipped bootstrap_lib defaults with any user/project
       override. Never merge those layers by hand. See references/configuration.md for the full
       layer/merge/override contract and the shipped default table.
     profiles:
@@ -861,13 +867,24 @@ technique_skill:
         pre-existing problem.
 
         Context you must gather yourself. You may read the files listed below, at the
-        paths as given, to see the code surrounding the change. Read only those files.
-        Do not modify anything, do not run anything, and do not go browsing the rest of
-        the repository.
+        paths as given, to see the code surrounding the change. Read only those files,
+        except as the silenced-error rule below allows. Do not modify anything, do not
+        run anything, and do not go browsing the rest of the repository.
+
+        Silenced errors. When the change widens what a validator, parser, schema, enum,
+        or argument check accepts, or removes or softens a raise, exit, or error path,
+        find and read every consumer of the newly admitted input, even outside these
+        files, and confirm each one acts on it. An input that used to be refused and is
+        now accepted and ignored is a bug, including an error replaced by a default, an
+        empty result, a note, or exit 0. This is not an input-dependent issue: the
+        admitted input is ignored every time. Report it with reason "bug" on the
+        widened line, name the consumer that ignores the input, and state that the fix
+        belongs in this change: widen the consumer, or keep the refusal.
 
         Restrictions. Only report issues in files that appear in this diff. When the
         context you would need to settle an issue is not in one of those files, you
-        cannot settle it -- do not report it.
+        cannot settle it -- do not report it. The silenced-error rule is the one
+        exception.
 
         Only flag an issue when it is one of these:
         - code that will fail to compile or parse (syntax errors, type errors, missing
@@ -903,7 +920,8 @@ technique_skill:
       restrictions:
         - "Read the assigned chunk diff first."
         - "MAY use Read to look at surrounding context in the changed files (the LOCAL paths you were given) when needed."
-        - "Examples: concurrency issues, lifetime bugs, security holes."
+        - "MAY find and Read the consumers of an input the change newly admits, outside the chunk's files, for the silenced-error rule in the canonical prompt only."
+        - "Examples: concurrency issues, lifetime bugs, security holes, an input that used to be refused and is now accepted and ignored."
         - "Only flag issues in files present in your chunk."
     - name: validator
       subagent_type: general-purpose
@@ -912,6 +930,7 @@ technique_skill:
       output_format: "exactly one line: 'CONFIRMED: <one-sentence reason>' or 'REJECTED: <one-sentence reason>'"
       restrictions:
         - "Validator does not see who flagged the issue. Independence is the value."
+        - "For a silenced-error issue (an input the change newly admits that a consumer ignores), MAY Read the consumer the description names. CONFIRMED when no consumer acts on the admitted input; it is not an input-dependent issue."
   false_positive_guardrails:
     only_flag:
       - "code that will fail to compile or parse (syntax errors, type errors, missing imports, unresolved references)"

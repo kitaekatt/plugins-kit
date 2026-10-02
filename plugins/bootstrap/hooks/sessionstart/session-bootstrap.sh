@@ -236,7 +236,7 @@ fi
 
 # --- Recorded env names for this session (every session, before any skip gate) ---
 # Re-emits the names a full pass recorded under the data dir -- <PLUGIN>_ROOT
-# from plugin_roots, BOOTSTRAP_BIN_<TOOL> from tool_bins -- into this session's
+# from plugin_roots -- into this session's
 # $CLAUDE_ENV_FILE. Both gates below short-circuit the engine, so without this
 # the names exist only in sessions that happened to run a pass; measured on a
 # session inside the cooldown window: BOOTSTRAP_PYTHON set, zero *_ROOT names.
@@ -248,8 +248,8 @@ fi
 # - A name that already has an `export NAME=` line is never written again:
 #   that line is the engine-verified value, or this block's own earlier line.
 # - EXISTENCE CHECK. A name is emitted only while its recorded path is still
-#   there -- a directory for a plugin root, a regular file for a tool. A path
-#   deleted since the recording pass is SKIPPED, so a consumer's
+#   there -- a directory for a plugin root. A path deleted since the recording
+#   pass is SKIPPED, so a consumer's
 #   "${NAME:?...}" guard aborts loudly naming the variable instead of running
 #   against a version directory that no longer exists.
 # - Append only, and a value holding a single quote is dropped: the file is
@@ -289,7 +289,6 @@ if [ -z "$FLAG_CONSOLE" ] && [ -n "${CLAUDE_ENV_FILE:-}" ]; then
         done < "$CLAUDE_ENV_FILE"
     fi
     _pr_scan "$PLUGIN_DATA/plugin_roots" d
-    _pr_scan "$PLUGIN_DATA/tool_bins" f
     [ -z "$_pr_out" ] || printf '%s%s' "$_pr_sep" "$_pr_out" 2>/dev/null >> "$CLAUDE_ENV_FILE" || :
 fi
 

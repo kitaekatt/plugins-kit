@@ -573,16 +573,14 @@ Either phase is optional — a plugin can provide just a manifest, just a script
 Both skip gates short-circuit the engine, so the names a pass exports through
 `session_env` are absent from most sessions (measured: a session inside the
 cooldown window had `BOOTSTRAP_PYTHON` but zero `*_ROOT` names). This step
-rewrites two records under bootstrap's data dir for `session-bootstrap.sh`'s
-own pre-gate block to re-emit, so bash resolves nothing itself:
+rewrites the plugin-root record under bootstrap's data dir for
+`session-bootstrap.sh`'s own pre-gate block to re-emit, so bash resolves
+nothing itself:
 
 - `<data_dir>/plugin_roots` -- one `<PLUGIN>_ROOT=<install path>` line per
   plugin that ships a `bootstrap.json`. That is the same gate the per-plugin
   `export_env_var` sits behind, so the record holds exactly what this pass
   exported.
-- `<data_dir>/tool_bins` -- one `BOOTSTRAP_BIN_<TOOL>=<path>` line per entry in
-  `tool_paths.all_paths(None)` whose path is a regular file: the same source
-  and the same existence test `export_tool_env_vars` applies later in the pass.
 
 Format is one `NAME=path` line per entry, LF, UTF-8, no quoting and no
 escaping. The name must be an upper-case shell identifier, and a value holding
@@ -592,15 +590,16 @@ prelude re-emits the value inside single quotes into a file that is sourced as
 shell code. The write is atomic, so a reader gets one complete record or the
 previous one, never half a file.
 
-**Staleness is handled by two mechanisms and nothing else.** Each record is
+**Staleness is handled by two mechanisms and nothing else.** The record is
 rewritten WHOLE every full pass, so a plugin that left the registry loses its
-line; and the prelude re-emits a name only while its recorded path still exists
--- a directory for a plugin root, a regular file for a tool -- so a path
-deleted between passes is skipped rather than exported. There is no revocation
-list and no expiry. A consumer's `"${<PLUGIN>_ROOT:?<msg>}"` guard therefore
+line; and the prelude re-emits a name only while its recorded directory still
+exists, so a path deleted between passes is skipped rather than exported. A
+stale `tool_bins` file from bootstrap 0.141.x is removed during the first
+0.142.0 full pass and is never read by the hook. There is no revocation list
+and no expiry. A consumer's `"${<PLUGIN>_ROOT:?<msg>}"` guard therefore
 still aborts loudly, naming the missing variable, instead of running against a
 version directory that no longer exists. A `cadence: always` throttled lane
-returns before Step 4 and never rewrites the records.
+returns before Step 4 and never rewrites the record.
 
 Placement is after Step 4b, so a plugin installed mid-pass is in the record,
 and before Steps 5/6, so the entries reach `bootstrap.log`. Write policy

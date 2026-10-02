@@ -254,8 +254,10 @@ Two facts about how `propose` is enforced:
 
 - With two or more files, the remediate lane refuses to dispatch. With a single
   file, the audit lane instructs the agent to make no edit.
-- The setting reaches the lane through the run's resolved config, so a caller
-  that does not thread it leaves the default `apply` in force.
+- The setting reaches the lane through the run's resolved config as the
+  required `fixMode` input. A remediate lane called without it, or with any
+  value other than `apply` or `propose`, throws before it edits anything; it
+  never assumes `apply`.
 
 ## Adapters
 
@@ -343,7 +345,7 @@ follows:
   agent does not infer a rule the standards file does not state and does not
   restate a criterion in its own words.
 - Disabled optional rules are suppressed via a `disabledCriteria` set threaded
-  into the detect lane (the coverage detect lane included), so a finding or candidate for a disabled id does not reach the report -- provided the caller threads the set. An absent `disabledCriteria` leaves every criterion on (`workflow/coverage-detect.js:186`, `workflow/skill-detect.js:232`), and the suppression reaches the agent as a prompt instruction rather than a mechanical filter -- the same fail-open the `audit:` section records for `fix_mode`.
+  into the detect lane (the coverage detect lane included), so a finding or candidate for a disabled id does not reach the report. `disabledCriteria` is a required input: an empty list means nothing is disabled, and a detect lane called without it throws before dispatching any agent rather than applying every criterion. The suppression reaches the agent as a prompt instruction rather than a mechanical filter.
 
 ## Troubleshooting
 
@@ -375,9 +377,15 @@ degrading to an empty config, and the message names the problem:
 - **An invalid standards file.** A `*-standards.md` whose `standards_set:` block
   is missing or fails schema validation raises an error naming the path and the
   validation failure.
-- **pyyaml unavailable.** Resolution degrades to defaults with a note (no config
-  or standards applied) rather than crashing -- the same posture as the audit's
-  contract-staged state.
+- **pyyaml unavailable.** Resolution raises an error naming the missing
+  dependency and the skills-kit plugin venv to run under, and
+  `scripts/resolve_standards.py` exits 1. It does not fall back to defaults:
+  an unread config would look identical to an empty one. (The audit's own
+  contract-staged state, without `--config`, is unaffected.)
+- **A `--primitive` no lane consumes.** `scripts/resolve_standards.py
+  --primitive code_directory`, or an unknown name, exits 2 with a usage error.
+  No lane applies authored standards for that subject, so its list could only
+  ever be empty.
 - **Custom standards ignored by an unattended run's acceptance check.** The
   project-doc audit contract (`scripts/check_project_doc_audit.py`, described in
   [lanes/audit-lane.md](lanes/audit-lane.md)) parses the valid criterion and
