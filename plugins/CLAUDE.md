@@ -601,9 +601,9 @@ The SKILL.md-side companion is in the root CLAUDE.md insight
 and let it re-exec; use the explicit venv path only for a script without a
 re-exec guard; never use `uv run python` outside a skill preload.
 
-**Two surfaces expand `${CLAUDE_PLUGIN_ROOT}`; a shell is not one of them.**
+**Three surfaces expand `${CLAUDE_PLUGIN_ROOT}`; a shell is not one of them.**
 Claude Code substitutes the variable only where the harness reads the string
-before executing it, and there are exactly two such surfaces:
+before executing it, and there are exactly three such surfaces:
 
 - A `hooks/hooks.json` `command:` field. Worked example:
   `plugins/bootstrap/hooks/hooks.json`, whose SessionStart entry is
@@ -616,6 +616,20 @@ before executing it, and there are exactly two such surfaces:
   `uv run --no-project python`
   (`plugins/bootstrap/skills/bootstrap/references/python-interpreter.md`,
   "Skill preload commands").
+- A plugin skill's markdown body, and Bash rules in its `allowed-tools`
+  frontmatter. Source: https://code.claude.com/docs/en/skills, "Available
+  string substitutions". `${CLAUDE_SKILL_DIR}` (the skill's own subdirectory,
+  not the plugin root) and `${CLAUDE_PROJECT_DIR}` are substituted in the same
+  two places, as is `${CLAUDE_PLUGIN_DATA}`. A `references/*.md` file, a README,
+  a `CLAUDE.md` and a script are not skill bodies and get no substitution.
+
+**Which form where.** Hooks.json `command:` and a skill `!` preload use
+`${CLAUDE_PLUGIN_ROOT}`. A skill body or `allowed-tools` rule uses the harness
+variable too -- `${CLAUDE_SKILL_DIR}` when the target is inside the skill's own
+directory, `${CLAUDE_PLUGIN_ROOT}` when it is elsewhere in the plugin -- which
+needs no bootstrap pass and is correct under `--plugin-dir`. References,
+READMEs, `CLAUDE.md` and scripts use `"${<PLUGIN>_ROOT:?<msg>}"`, because
+nothing substitutes them. The guard enforces this surface-aware rule.
 
 **Everywhere else the variable is unset** -- including the Bash tool's
 environment. A command an agent types or copies into a shell therefore resolves
@@ -645,8 +659,11 @@ silently running against `/scripts/x.py`. Record format, the existence check
 and the remaining `:?` cases: `docs/reference/plugin-root-variable-sites.md`.
 
 **SKILL.md examples launch
-`"$BOOTSTRAP_PYTHON" "${<PLUGIN>_ROOT:?<msg>}/scripts/<script>.py"`** and rely
-on the script's `reexec_under_plugin_venv`. Details: root CLAUDE.md "Python
+`"$BOOTSTRAP_PYTHON" "${CLAUDE_PLUGIN_ROOT}/scripts/<script>.py"`** (or
+`"${CLAUDE_SKILL_DIR}/..."` for a script inside the skill's own directory) and
+rely on the script's `reexec_under_plugin_venv`; references, READMEs and
+`CLAUDE.md` examples use `"${<PLUGIN>_ROOT:?<msg>}"` in the same position.
+Details: root CLAUDE.md "Python
 interpreter variables" and
 `plugins/bootstrap/skills/bootstrap/references/python-interpreter.md`;
 manifest commands:

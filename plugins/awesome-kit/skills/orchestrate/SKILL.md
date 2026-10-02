@@ -71,7 +71,7 @@ technique_skill:
       (macOS/Linux path shown; Windows uses .venv/Scripts/python.exe):
 
         ~/.claude/plugins/data/plugins-kit/awesome-kit/.venv/bin/python \
-          "${AWESOME_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/skills/orchestrate/scripts/orchestration_guidance.py" \
+          "${CLAUDE_SKILL_DIR}/scripts/orchestration_guidance.py" \
           --self <your endpoint alias>
 
       Add `--project-root <path>` when the project whose policy applies is not the cwd.

@@ -55,7 +55,7 @@ capability_skill:
     - id: run_script
       keywords: [run script, execute, commandlet, remote, ue_runner, run python, send to editor]
       user_objective: Execute a Python script against the Unreal Editor, with the Editor either open (remote mode) or closed (commandlet mode).
-      operation: '"${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" "${UNREAL_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/skills/ue-python-api/scripts/ue_runner.py" <script>.py [--copy-output <dir>]'
+      operation: '"${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" "${CLAUDE_SKILL_DIR}/scripts/ue_runner.py" <script>.py [--copy-output <dir>]'
       tool: scripts/ue_runner.py
       scope_axes: [editor-open, editor-closed]
       reference_section: architecture.md (execution modes)
@@ -65,7 +65,7 @@ capability_skill:
     - id: search_stubs
       keywords: [search stubs, find class, find method, API lookup, autocomplete equivalent]
       user_objective: Look up class names, method signatures, or property names in the best available Unreal API stub before authoring a script.
-      operation: '"${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" "${UNREAL_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/search_unreal_stub.py" "<pattern>" --project-root <project-root>'
+      operation: '"${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" "${CLAUDE_PLUGIN_ROOT}/scripts/search_unreal_stub.py" "<pattern>" --project-root <project-root>'
       tool: scripts/search_unreal_stub.py
       scope_axes: [classes, methods]
       reference_section: architecture.md (stubs)

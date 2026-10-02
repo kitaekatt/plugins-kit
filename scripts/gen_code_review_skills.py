@@ -62,22 +62,36 @@ from bootstrap_lib.interpreter_env import PLUGIN_CALL_SITE_EXPR  # noqa: E402
 # it, and `$BOOTSTRAP_PYTHON` is exported into every bootstrap-managed session
 # (see /bootstrap fact python_interpreter and python-interpreter.md). Single
 # source for every prepare_review.py launch site rendered below.
-# CLAUDE_PLUGIN_ROOT is expanded only in a hooks.json `command:` field and a
-# skill `!` preload line; it is unset in the Bash tool's environment, where an
-# agent runs these launchers. Each kit therefore anchors its scripts on the
-# `<PLUGIN>_ROOT` variable the bootstrap engine exports (name derived by
+# CLAUDE_PLUGIN_ROOT is substituted by Claude Code in a skill's own body, in a
+# hooks.json `command:` field and in a `!` preload, but not in references/*.md,
+# and it is unset in the Bash tool's environment. Launchers rendered into a
+# generated SKILL.md therefore use CLAUDE_PLUGIN_ROOT (the *_SKILL constants);
+# launchers rendered into a generated reference anchor on the `<PLUGIN>_ROOT`
+# variable the bootstrap engine exports (name derived by
 # plugin_root_env_var_name), guarded so an unset variable fails loudly instead
-# of running `/scripts/x.py`. The kit name is the per-VCS KIT fragment value.
+# of running `/scripts/x.py` (the unsuffixed constants). The kit name is the
+# per-VCS KIT fragment value.
 _KIT_BY_VCS = {"git": "git-kit", "p4": "p4-kit"}
 _ROOT_UNSET_HINT = "requires a bootstrap engine pass; run bootstrap run"
 
 
-def _launcher(vcs: str, script: str) -> str:
-    root_var = plugin_root_env_var_name(_KIT_BY_VCS[vcs])
-    return (
-        PLUGIN_CALL_SITE_EXPR
-        + " " + chr(34) + "${" + root_var + ":?" + _ROOT_UNSET_HINT + "}/scripts/" + script + chr(34)
-    )
+def _launcher(vcs: str, script: str, surface: str = "reference") -> str:
+    """One review-script launch expression for a rendering surface.
+
+    `surface="skill"` is for text inside a generated SKILL.md, where Claude
+    Code substitutes CLAUDE_PLUGIN_ROOT before the command reaches the shell
+    (the kit's scripts live at the plugin root, not in the skill directory).
+    `surface="reference"` is for a generated references/*.md file, which Claude
+    Code does not substitute, so it anchors on the bootstrap-exported
+    `<PLUGIN>_ROOT` variable with the loud `:?` guard.
+    """
+    if surface == "skill":
+        root = "${CLAUDE_PLUGIN_ROOT}"
+    elif surface == "reference":
+        root = "${" + plugin_root_env_var_name(_KIT_BY_VCS[vcs]) + ":?" + _ROOT_UNSET_HINT + "}"
+    else:
+        raise ValueError(surface)
+    return PLUGIN_CALL_SITE_EXPR + " " + chr(34) + root + "/scripts/" + script + chr(34)
 
 
 PREPARE_LAUNCHER = {v: _launcher(v, "prepare_review.py") for v in _KIT_BY_VCS}
@@ -96,6 +110,12 @@ PREPARE_LAUNCHER_YAML = {v: "'" + PREPARE_LAUNCHER[v] + "'" for v in _KIT_BY_VCS
 LANE_LAUNCHER = {v: _launcher(v, "run_review_lane.py") for v in _KIT_BY_VCS}
 PARSE_LAUNCHER = {v: _launcher(v, "parse_review_lane.py") for v in _KIT_BY_VCS}
 RENDER_LAUNCHER = {v: _launcher(v, "render_review_profiles.py") for v in _KIT_BY_VCS}
+# SKILL.md variants of the four launchers above (same scripts, harness-substituted root).
+PREPARE_LAUNCHER_SKILL = {v: _launcher(v, "prepare_review.py", "skill") for v in _KIT_BY_VCS}
+PREPARE_LAUNCHER_YAML_SKILL = {v: "'" + PREPARE_LAUNCHER_SKILL[v] + "'" for v in _KIT_BY_VCS}
+LANE_LAUNCHER_SKILL = {v: _launcher(v, "run_review_lane.py", "skill") for v in _KIT_BY_VCS}
+PARSE_LAUNCHER_SKILL = {v: _launcher(v, "parse_review_lane.py", "skill") for v in _KIT_BY_VCS}
+RENDER_LAUNCHER_SKILL = {v: _launcher(v, "render_review_profiles.py", "skill") for v in _KIT_BY_VCS}
 GIT_SKILL = REPO_ROOT / "plugins/git-kit/skills/git-code-review/SKILL.md"
 P4_SKILL = REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/SKILL.md"
 GIT_AGENTS = REPO_ROOT / "plugins/git-kit/agents"
@@ -1108,7 +1128,7 @@ __LAUNCH_EMIT__
           on_failure: Surface the stderr message to the user and stop. No retry.""".replace(
     "__CLAIM_PROBE__", CLAIM_PROBE
 ).replace(
-    "__PREPARE_LAUNCHER__", PREPARE_LAUNCHER_YAML["git"]
+    "__PREPARE_LAUNCHER__", PREPARE_LAUNCHER_YAML_SKILL["git"]
 ).replace(
     "__LAUNCH_EMIT__", LAUNCH_EMIT
 )
@@ -1157,7 +1177,7 @@ __LAUNCH_EMIT__
             Launch note: ALWAYS invoke through `$BOOTSTRAP_PYTHON` (the guarded expression shown in `tool:`), never as a bare path and never as bare `python`/`python3` -- a bare name is not guaranteed to resolve to any interpreter that can run this script, and `python3` in particular can be absent from PATH on Windows (see /bootstrap fact python_interpreter and python-interpreter.md). Bare `$P4_KIT_ROOT/scripts/prepare_review.py <CL>` lets bash try to run the file as a shell script -- it has no shebang line in older checkouts and the exec bit does not survive on Windows checkouts, so bash parses the Python as sh and exits 2. Passing the script as an argument to `$BOOTSTRAP_PYTHON` avoids that entirely: bash only launches the interpreter, never the file. The script self-relocates under the p4-kit venv via reexec, so bootstrap's own interpreter is sufficient. And NEVER pipe the invocation (`... | tail`, `... | head`): a pipe makes `$?` the last pipeline stage's status, not the script's, which silently masks a launch failure as success.""".replace(
     "__CLAIM_PROBE__", P4_CLAIM_PROBE
 ).replace(
-    "__PREPARE_LAUNCHER__", PREPARE_LAUNCHER_YAML["p4"]
+    "__PREPARE_LAUNCHER__", PREPARE_LAUNCHER_YAML_SKILL["p4"]
 ).replace(
     "__LAUNCH_EMIT__", LAUNCH_EMIT
 )
@@ -1233,7 +1253,7 @@ P4_STEP10 = f"""\
 
             Skip this step entirely when `bundle.auto_shelved` is false (we did
             not create the shelf and must not touch it).
-          tool: {PREPARE_LAUNCHER_YAML["p4"]}
+          tool: {PREPARE_LAUNCHER_YAML_SKILL["p4"]}
           input: "--cleanup <bundle.bundle_dir>"
 """
 
@@ -1525,10 +1545,10 @@ FRAGMENTS = {
         "ISSUE_PATH": "<repo-relative or absolute path>",
         "SG_DESC": GIT_SG_DESC,
         "OUTPUT_FORMAT": GIT_OUTPUT_FORMAT,
-        "PREPARE_TOOL": PREPARE_LAUNCHER_YAML["git"],
-        "LANE_TOOL": LANE_LAUNCHER["git"],
-        "PARSE_TOOL": PARSE_LAUNCHER["git"],
-        "RENDER_TOOL": RENDER_LAUNCHER["git"],
+        "PREPARE_TOOL": PREPARE_LAUNCHER_YAML_SKILL["git"],
+        "LANE_TOOL": LANE_LAUNCHER_SKILL["git"],
+        "PARSE_TOOL": PARSE_LAUNCHER_SKILL["git"],
+        "RENDER_TOOL": RENDER_LAUNCHER_SKILL["git"],
         "LEDGER_RECORD_N": "10",
         "BASELINE_DESC": "the range base SHA advances -- origin/main moves, or HEAD changes for a working-tree review",
     },
@@ -1560,10 +1580,10 @@ FRAGMENTS = {
         "ISSUE_PATH": "<depot or local path>",
         "SG_DESC": P4_SG_DESC,
         "OUTPUT_FORMAT": P4_OUTPUT_FORMAT,
-        "PREPARE_TOOL": PREPARE_LAUNCHER_YAML["p4"],
-        "LANE_TOOL": LANE_LAUNCHER["p4"],
-        "PARSE_TOOL": PARSE_LAUNCHER["p4"],
-        "RENDER_TOOL": RENDER_LAUNCHER["p4"],
+        "PREPARE_TOOL": PREPARE_LAUNCHER_YAML_SKILL["p4"],
+        "LANE_TOOL": LANE_LAUNCHER_SKILL["p4"],
+        "PARSE_TOOL": PARSE_LAUNCHER_SKILL["p4"],
+        "RENDER_TOOL": RENDER_LAUNCHER_SKILL["p4"],
         "LEDGER_RECORD_N": "11",
         "BASELINE_DESC": "the CL is reshelved, its content edited, or its revisions move",
     },

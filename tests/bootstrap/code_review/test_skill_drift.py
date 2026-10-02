@@ -49,11 +49,20 @@ _OTHER_VCS = {"git": "p4", "p4": "git"}
 
 #: script -> the generator constant holding its per-kit launcher, so the
 #: launcher STRING is single-sourced while the variable NAME above is not.
+#: The reference constants carry the `<PLUGIN>_ROOT` form (references/*.md is
+#: not substituted by Claude Code); the `_SKILL` constants carry
+#: `${CLAUDE_PLUGIN_ROOT}` (a SKILL.md body is substituted).
 _LAUNCHER_CONST = {
     "run_review_lane.py": "LANE_LAUNCHER",
     "parse_review_lane.py": "PARSE_LAUNCHER",
     "render_review_profiles.py": "RENDER_LAUNCHER",
 }
+
+
+def _root_var_read(vcs):
+    """The guarded read of a kit's exported root variable, as it would
+    appear in a command (`${GIT_KIT_ROOT:?`)."""
+    return "${" + _ROOT_VAR[vcs] + ":?"
 
 
 class TestRenderedFilesMatchTemplate:
@@ -382,26 +391,32 @@ class TestDeclinedLedgerPresent:
         from bootstrap_lib.interpreter_env import PLUGIN_CALL_SITE_EXPR as expr
         assert expr.startswith('"${BOOTSTRAP_PYTHON:?requires bootstrap >= ')
         for vcs in ("git", "p4"):
-            launcher = gen.PREPARE_LAUNCHER_YAML[vcs]
-            # Each kit anchors on its OWN exported plugin-root variable;
-            # CLAUDE_PLUGIN_ROOT is unset in the Bash tool an agent types into.
-            assert _ROOT_VAR[vcs] in launcher, vcs
-            assert _ROOT_VAR[_OTHER_VCS[vcs]] not in launcher, vcs
+            launcher = gen.PREPARE_LAUNCHER_YAML_SKILL[vcs]
+            # The SKILL.md body is a surface Claude Code substitutes, so the
+            # launcher there is rooted on CLAUDE_PLUGIN_ROOT, never on a kit's
+            # bootstrap-exported variable.
+            assert "${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py" in launcher, vcs
+            assert _root_var_read("git") not in launcher, vcs
+            assert _root_var_read("p4") not in launcher, vcs
             body = gen.render_skill(vcs)
             # Single-quoted as a whole: a YAML scalar cannot start with a
             # quoted segment (PLUGIN_CALL_SITE_EXPR's own double quotes) and
             # continue unquoted -- YAML strips only the outer pair, so the
             # decoded value still starts with the guarded expression.
             assert f"tool: {launcher}" in body, vcs
-            assert _ROOT_VAR[_OTHER_VCS[vcs]] not in body, vcs
-            assert "${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py" not in body
+            assert _root_var_read("git") not in body, vcs
+            assert _root_var_read("p4") not in body, vcs
             assert "python3 ${CLAUDE_PLUGIN_ROOT}" not in body
             assert "uv run --no-project python" not in body
             # ledger-record site (@PREPARE_TOOL@ token, shared
-            # LEDGER_RECORD_STEP body) -- raw, unwrapped launcher there.
+            # LEDGER_RECORD_STEP body) -- raw, unwrapped launcher in a
+            # reference, which Claude Code does not substitute, so it anchors
+            # on the kit's OWN exported plugin-root variable.
             ledger = gen.render_declined_ledger(vcs)
             assert f"{gen.PREPARE_LAUNCHER[vcs]} --ledger-record" in ledger, vcs
+            assert _ROOT_VAR[vcs] in gen.PREPARE_LAUNCHER[vcs], vcs
             assert _ROOT_VAR[_OTHER_VCS[vcs]] not in ledger, vcs
+            assert "${CLAUDE_PLUGIN_ROOT}" not in gen.PREPARE_LAUNCHER[vcs], vcs
 
     @pytest.mark.parametrize("script", [
         "run_review_lane.py", "parse_review_lane.py", "render_review_profiles.py",
@@ -412,31 +427,47 @@ class TestDeclinedLedgerPresent:
         rendered file keeps a `uv run --no-project python` launcher. Each
         script re-execs into its kit's venv (reexec_under_plugin_venv).
 
-        Each kit anchors the script on its OWN exported plugin-root variable
-        (`GIT_KIT_ROOT` in git-kit's rendered files, `P4_KIT_ROOT` in
-        p4-kit's), because `CLAUDE_PLUGIN_ROOT` is unset in the Bash tool an
-        agent types the command into.
+        The rendering surface decides the root. A generated SKILL.md is
+        substituted by Claude Code, so its launchers use
+        `${CLAUDE_PLUGIN_ROOT}` (the `_SKILL` constants). A generated
+        reference is not substituted, so its launchers anchor on the kit's OWN
+        exported plugin-root variable (`GIT_KIT_ROOT` in git-kit's files,
+        `P4_KIT_ROOT` in p4-kit's).
 
         Reverts that turn this RED: set the generator's LANE_TOOL, PARSE_TOOL,
-        or RENDER_TOOL back to the `uv run --no-project python` form, or to
-        `${CLAUDE_PLUGIN_ROOT}`; or render one kit's launcher into the other
-        kit's files, which the per-kit variable name catches.
+        or RENDER_TOOL back to the `uv run --no-project python` form; render a
+        reference launcher with `${CLAUDE_PLUGIN_ROOT}` or a SKILL.md launcher
+        with a `<PLUGIN>_ROOT` variable; or render one kit's launcher into the
+        other kit's files, which the per-kit variable name catches.
         """
         rendered = gen.targets()
         launchers = getattr(gen, _LAUNCHER_CONST[script])
+        skill_launchers = getattr(gen, _LAUNCHER_CONST[script] + "_SKILL")
         for vcs, kit in (("git", "git-kit"), ("p4", "p4-kit")):
             launcher = launchers[vcs]
+            skill_launcher = skill_launchers[vcs]
             assert _ROOT_VAR[vcs] in launcher, (kit, script)
             assert _ROOT_VAR[_OTHER_VCS[vcs]] not in launcher, (kit, script)
-            kit_text = "\n".join(text for path, text in rendered.items()
-                                 if f"/{kit}/" in path.as_posix())
-            assert launcher in kit_text, (kit, script)
-            assert _ROOT_VAR[_OTHER_VCS[vcs]] not in kit_text, (kit, script)
+            assert f"${{CLAUDE_PLUGIN_ROOT}}/scripts/{script}" in skill_launcher, (kit, script)
+            assert _root_var_read("git") not in skill_launcher, (kit, script)
+            assert _root_var_read("p4") not in skill_launcher, (kit, script)
+            kit_files = {path: text for path, text in rendered.items()
+                         if f"/{kit}/" in path.as_posix()}
+            skill_text = "\n".join(text for path, text in kit_files.items()
+                                   if path.name == "SKILL.md")
+            ref_text = "\n".join(text for path, text in kit_files.items()
+                                 if path.name != "SKILL.md")
+            assert skill_launcher in skill_text, (kit, script)
+            assert _root_var_read("git") not in skill_text, (kit, script)
+            assert _root_var_read("p4") not in skill_text, (kit, script)
+            assert f"${{CLAUDE_PLUGIN_ROOT}}/scripts/{script}" not in ref_text, (kit, script)
+            assert _ROOT_VAR[_OTHER_VCS[vcs]] not in "\n".join(kit_files.values()), (kit, script)
             source = (REPO_ROOT / "plugins" / kit / "scripts" / script).read_text(encoding="utf-8")
             assert "reexec_under_plugin_venv(" in source, (kit, script)
         for path, text in rendered.items():
             assert "uv run --no-project python" not in text, path
-            assert f"${{CLAUDE_PLUGIN_ROOT}}/scripts/{script}" not in text, path
+            if path.name != "SKILL.md":
+                assert f"${{CLAUDE_PLUGIN_ROOT}}/scripts/{script}" not in text, path
 
     def test_both_ledger_references_render(self):
         git_ref = gen.render_declined_ledger("git")

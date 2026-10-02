@@ -91,7 +91,6 @@ def test_skill_md_names_the_launcher():
         # Two sites name each launch form: the capability's operation and the
         # tool's command. Both must carry the real call-site expression.
         launch = (f"'{expr} "
-                  f'"${{SKILLS_KIT_ROOT:?requires a bootstrap engine pass; '
-                  f'run bootstrap run}}/scripts/skills_kit_tool.py" {command}')
+                  f'"${{CLAUDE_PLUGIN_ROOT}}/scripts/skills_kit_tool.py" {command}')
         assert len(re.findall(re.escape(launch) + "(?=[ '])", text)) == 2, command
     assert "-m skills_kit_lib." not in text

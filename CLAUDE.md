@@ -585,8 +585,8 @@ Plugins follow the Claude Code plugin spec:
 - **Marketplace manifest** (`.claude-plugin/marketplace.json`): Lists available plugins with name, version, source path
 - **Plugin manifest** (`.claude-plugin/plugin.json`): Per-plugin metadata (name, version, description, keywords)
 - **Skill discovery**: Claude Code scans `skills/` directories for `SKILL.md` files
-- **Variable expansion**: `${CLAUDE_PLUGIN_ROOT}` resolves to the plugin's install path in the values Claude Code expands before executing them. Two surfaces: a hook's `command:` field (worked example: `plugins/bootstrap/hooks/hooks.json`), and a skill's `!` preload line, where Claude Code substitutes only its own names (`${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_SESSION_ID}`) and refuses a preload carrying any other expansion (`plugins/bootstrap/skills/bootstrap/references/python-interpreter.md`, "Skill preload commands").
-  - It is absent from the Bash tool's environment, so a command carrying it that an agent types or copies out of prose runs against a bare `/`-rooted path -- never write it inside a command a skill, reference, or README asks a reader to run.
+- **Variable expansion**: `${CLAUDE_PLUGIN_ROOT}` resolves to the plugin's install path in the values Claude Code expands before executing them. Three surfaces: a hook's `command:` field (worked example: `plugins/bootstrap/hooks/hooks.json`); a skill's `!` preload line, where Claude Code substitutes only its own names (`${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_SESSION_ID}`) and refuses a preload carrying any other expansion (`plugins/bootstrap/skills/bootstrap/references/python-interpreter.md`, "Skill preload commands"); and a plugin skill's markdown body together with Bash rules in its `allowed-tools` frontmatter (https://code.claude.com/docs/en/skills, "Available string substitutions"). A `references/*.md`, README, `CLAUDE.md` or script is none of the three. Skill bodies use the harness variable (`${CLAUDE_SKILL_DIR}` for a target inside the skill's own directory, `${CLAUDE_PLUGIN_ROOT}` elsewhere in the plugin); the other documents use `"${<PLUGIN>_ROOT:?<msg>}"`.
+  - It is absent from the Bash tool's environment, so a command carrying it that an agent types or copies out of a non-substituted document runs against a bare `/`-rooted path -- never write it inside a command a reference, README, `CLAUDE.md` or script asks a reader to run. A skill body is a substituted surface.
 
 **Plugin dependencies on bootstrap.** Every plugin except bootstrap declares
 `"dependencies": ["bootstrap"]`, enforced at pre-commit and again in
@@ -1134,14 +1134,16 @@ claude_md:
       added: "2026-09-16"
     - id: claude_plugin_root_not_in_bash
       keywords: [CLAUDE_PLUGIN_ROOT, unset in Bash, /scripts/x.py, <PLUGIN>_ROOT, plugin_root_env_var_name, CLAUDE_ENV_FILE, gate-skipped session, hooks.json command, preload, CLAUDE_PLUGIN_DATA, sync_to_data]
-      summary: "`CLAUDE_PLUGIN_ROOT` is expanded by Claude Code only in values the harness reads before executing them, and is UNSET in the Bash tool's environment, so a command an agent types or copies from prose runs it as `/scripts/x.py`. An agent-typed command anchors on the bootstrap-exported `<PLUGIN>_ROOT` with a `:?` guard instead."
+      summary: "`CLAUDE_PLUGIN_ROOT` is substituted by Claude Code in three surfaces (a hooks.json `command:`, a skill `!` preload, a plugin skill's markdown body and `allowed-tools` Bash rules) and is UNSET in the Bash tool's environment, so a command an agent types or copies from any other document runs it as `/scripts/x.py`. There, an agent-typed command anchors on the bootstrap-exported `<PLUGIN>_ROOT` with a `:?` guard instead."
       detail: |
-        The mechanism is owned one scope down by `plugins/CLAUDE.md`, under "Two
-        surfaces expand `${CLAUDE_PLUGIN_ROOT}`": the two surfaces the harness
-        expands (a `hooks/hooks.json` `command:` field, and a skill `!` preload,
+        The mechanism is owned one scope down by `plugins/CLAUDE.md`, under "Three
+        surfaces expand `${CLAUDE_PLUGIN_ROOT}`": the three surfaces the harness
+        expands (a `hooks/hooks.json` `command:` field; a skill `!` preload,
         where Claude Code substitutes only its own names such as
         `${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_SESSION_ID}` and refuses a preload
-        carrying any other expansion), the variable's absence everywhere else
+        carrying any other expansion; and a plugin skill's markdown body plus
+        Bash rules in its `allowed-tools` frontmatter, per the Claude Code skills
+        documentation), the variable's absence everywhere else
         including the Bash tool's environment, the `/scripts/x.py` that a command
         carrying it resolves to, the `"${<PLUGIN>_ROOT:?<msg>}"` replacement
         form, `plugin_root_env_var_name` in
@@ -1154,12 +1156,16 @@ claude_md:
         "Skill preload commands", and restated in that skill's SKILL.md.
         Per-site survey, its WORKING / DOC / BROKEN classes and the per-plugin
         counts: docs/reference/plugin-root-variable-sites.md. Guard:
-        tests/repo-scripts/test_claude_plugin_root_expansion.py. Only the two
-        gotchas below are recorded here.
+        tests/repo-scripts/test_claude_plugin_root_expansion.py, which enforces
+        the surface-aware rule: the harness variable in a skill body, the
+        `<PLUGIN>_ROOT` form in every non-substituted document. A skill body
+        needs no bootstrap pass. Only the two gotchas below are recorded here.
       gotchas:
         - "Do not substitute `CLAUDE_PLUGIN_DATA`. It is set, but when measured
           it held the data directory of a DIFFERENT plugin (codex-openai-codex),
-          so anchoring on it silently points one plugin's lookup at another's."
+          so anchoring on it silently points one plugin's lookup at another's.
+          As a `${CLAUDE_PLUGIN_DATA}` substitution in a plugin skill it is
+          that plugin's data directory; the hazard is the Bash-side variable."
         - "The data directory is not a general anchor for a shipped script
           either. `sync_to_data` is null for git-kit, skills-kit, awesome-kit,
           hue-kit and cache-kit, and unreal-kit syncs only `lib`; claude-ui-kit
