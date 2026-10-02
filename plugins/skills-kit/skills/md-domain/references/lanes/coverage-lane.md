@@ -400,8 +400,9 @@ identically to that case.
 
 No `--primitive` is passed and the `standards` map is not consumed: this lane
 does not read it. A standards file naming `applies_to: code_directory` (or the
-deprecated alias `code_subtree`) resolves, but this lane does not apply its
-criteria. `thresholds` is not consumed either -- every
+deprecated alias `code_subtree`) makes the resolver exit non-zero, because this
+lane does not apply authored criteria and would silently ignore the file.
+`thresholds` is not consumed either -- every
 criterion here is judgment, and no coverage criterion reads a threshold.
 
 Announce the run by its canonical analysis name (`Code analysis` -- echoed

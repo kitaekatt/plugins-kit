@@ -302,13 +302,15 @@ a filename convention:
 | `CLAUDE-md-standards.md` | `claude_md` |
 | `reference-standards.md` | `reference_doc` |
 | `doc-standards.md` | `plain_md` |
-| `coverage-standards.md` | `code_directory` (a composition) |
+| `coverage-standards.md` | `code_directory` (shipped only; an authored set is rejected) |
 
 The block's `applies_to:` key is authoritative; the filename is the
 discoverability convention. A subject is a file-type primitive or a composition
-id; `code_directory` is the only composition a standards file may name. The
-former spelling `code_subtree` is still accepted as a deprecated alias and is
-normalised to `code_directory`. Standards files live in a layer directory (user or
+id. A `code_directory` set (or the former spelling `code_subtree`, normalised
+to it) is rejected with a `StandardsConfigError`: the coverage lane applies only
+its shipped criteria, so an authored set would be ignored. To change coverage
+behaviour, disable a shipped criterion with `rules: {<id>: off}`. Standards
+files live in a layer directory (user or
 project, not the gitignored `config.local.yaml` overlay) and union across every
 layer. Each criterion carries a stable `id`, a `statement`, a `severity`, and a
 keyword cluster. For the full block schema, the severity and enforcement
@@ -332,8 +334,9 @@ follows:
   under audit, the disabled-rule set, the threshold overrides, the `audit:` behaviour settings, and the additive
   standards that apply to that file's primitive.
 - Additive criteria for the file-type primitives are enforced by the audit
-  detect lane and reported under taxonomy `N_user_standard_violation`. A
-  `code_directory` set is resolved but not consumed by the coverage lane. The
+  detect lane and reported under taxonomy `N_user_standard_violation`. The
+  coverage lane applies no authored criteria, so a `code_directory` set is
+  rejected at resolution rather than accepted and ignored. The
   enforcement is modeled on the ancestor-CLAUDE.md convention
   mechanism: the finding emits the criterion's exact `statement` text verbatim
   together with the source path of the standards file that declared it. The

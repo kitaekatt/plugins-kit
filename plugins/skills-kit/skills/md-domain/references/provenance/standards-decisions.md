@@ -351,17 +351,25 @@ claude_md:
         as unused until M5), was REJECTED on evidence. Executing it makes
         resolve() raise before returning: the `*-standards.md` glob matches
         shipped documents that carry no `standards_set:` block, and
-        coverage-standards.md's `applies_to: code_subtree` is not one of the four
-        file-type primitives. audit-lane.md treats resolve_standards.py's
+        coverage-standards.md's `applies_to: code_subtree` (renamed
+        `code_directory` in 0.86.0) was not one of the four file-type
+        primitives. audit-lane.md treats resolve_standards.py's
         non-zero exit as STOP, so enabling that route would refuse every skill,
         claude-md and project-doc audit in every project. This is the most
         reusable finding of the entry: `shipped_dir` is fatal to enable as it
-        stands. skills-kit 0.86.0 admitted the `code_directory` composition id,
-        so the second cause is spent; the missing `standards_set:` block still
-        makes `shipped_dir` fatal.
-        Follow-up: none for the seam itself. `shipped_dir` remains unused;
-        narrowing its glob is a prerequisite to any future use of it. The
-        `applies_to` widening it also required landed in 0.86.0.
+        stands. skills-kit 0.86.0 recognised the `code_directory` composition id
+        as an `applies_to` name, which removed the `applies_to` cause. 0.87.0
+        brings that cause back: under `shipped_dir`, coverage-standards.md's
+        `applies_to: code_directory` (its `standards_set` block,
+        coverage-standards.md:54-60) raises via `APPLIES_TO_NOT_CONSUMED`,
+        in addition to the error from the documents that carry no
+        `standards_set:` block. Both make `shipped_dir` fatal.
+        Follow-up: none for the seam itself. `shipped_dir` remains unused.
+        Prerequisites to any future use of it: (1) narrow its glob; (2) exclude
+        coverage-standards.md, or wire the coverage lane to consume authored
+        sets and remove `code_directory` from `APPLIES_TO_NOT_CONSUMED`. The
+        0.86.0 widening of `applies_to` was narrowed for authored sets in
+        0.87.0.
         Verification was behavioural, not a prompt-string assertion: the same
         fixture assessed with the criterion enabled returned COVERAGE-ASSESSED
         with no candidates, and with the id disabled returned GAPS-FOUND with the
