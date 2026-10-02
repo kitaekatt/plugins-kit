@@ -275,7 +275,9 @@ files, or honour instruction files it was not handed. If you can hand the unit
 everything it needs, keep it a completion. Run a completion through
 `platform.call_llm(backend, system, user, model=..., cache_dir=..., pricing=...)`,
 which layers a budget guard, a content-addressed response cache, retry, and
-cost accounting over one `backend.complete`.
+cost accounting over one `backend.complete`. For a cap that two OS processes
+share rather than an in-process `CostBudget`, pass `spend=` as well -- see "The
+cross-process spend cap" in step 10.
 
 For a generation that must satisfy validators, use the validate-until-valid
 loop `platform.submit_validated`:
@@ -645,7 +647,9 @@ Add, as needed:
 
 - **`cli.budget`** -- the preflight / hard-stop guard. `preflight_check(probe)`
   re-raises an auth/credit halt as `BudgetStop` before any unit runs;
-  `check_response` raises `PipelineHaltError` on a hard-stop response text.
+  `check_response` raises `PipelineHaltError` on a hard-stop response text;
+  `spend_stop(...)` is a context manager that turns a spend-ledger verdict into
+  a `BudgetStop` ("The cross-process spend cap" below).
   The tracked `run_wave` records a halt itself (see "The tracked halt
   contract" below).
 - **`cli.unsupported`** -- the sticky-stub registry. An `UnsupportedRegistry`
@@ -659,6 +663,98 @@ Add, as needed:
 Wire the sticky gate into `prepare_run` via its `mark_unsupported` hook
 and a `Gate(name, predicate, sticky=True)`. `Gate` and `run_gates` live in
 `pipeline.gate` (also importable from `pipeline.single_pass`).
+
+### The cross-process spend cap
+
+For a paid pipeline whose work runs in more than one OS process, `CostBudget` is
+not the guard: it is an in-process float accumulator, and two processes each hold
+their own. `llm.spend_ledger` is the shared one -- one SQLite file in WAL mode,
+integer nano-USD with ceiling rounding, and every admission summing the
+outstanding total, comparing it to the cap and inserting its row inside one
+`BEGIN IMMEDIATE` transaction, so two admissions never interleave.
+
+```python
+from content_pipeline.cli.budget import BudgetStop, spend_stop
+from content_pipeline.llm.spend_ledger import (
+    create_ledger, open_ledger, spend_ledger_from_env,
+)
+
+ledger = create_ledger(run_dir / "spend.sqlite", cap_usd=5.00, run_id=run_id)
+# in every worker process on the same run:
+ledger = open_ledger(run_dir / "spend.sqlite")
+# or, for a worker that is handed the path through its environment:
+ledger = spend_ledger_from_env()   # None when CONTENT_PIPELINE_SPEND_LEDGER is unset or empty
+
+try:
+    for unit_id in wave:
+        with spend_stop(done, remaining, unit_id=unit_id):
+            platform.call_llm(backend, system, user, model=model,
+                              pricing=pricing, spend=ledger)
+        done.append(unit_id)
+except BudgetStop as stop:          # reason is "spend_cap" or "spend_halt"
+    report_partial(stop.reason, stop.done, stop.remaining)
+```
+
+Six things to get right when composing one:
+
+1. **The reservation unit is one provider ATTEMPT.** `call_llm(spend=...)`
+   reserves immediately before each `backend.complete` and settles in a
+   `finally`, so a call with `retries=3` takes four reservations, not one. Size
+   the cap for attempts, not for calls: `submit_validated` forwards `spend=`
+   verbatim and can admit `max_attempts * (retries + 1)` of them.
+2. **Pass `pricing=` or `spend_reserve_usd=`.** `spend=` with neither is a
+   `ValueError` before any provider call. Priced automatically, the reservation
+   covers the request plus the full `options.max_tokens`, because a reservation
+   has to cover what the attempt may actually bill.
+3. **Wrap the call site, not the loop body, in `spend_stop`.** It is a context
+   manager (not a probe-taking function like `preflight_check`), and it
+   translates exactly `SpendCapExceeded` and `SpendLedgerHalted`.
+   `sqlite3.OperationalError` from an exhausted busy timeout propagates
+   untranslated and admits nothing -- fail-closed, and not a budget verdict.
+4. **Decide the reclaim posture deliberately.** `orphan_reclaim` defaults to
+   `"manual"`, so a process killed between reserve and settle holds its headroom
+   until the consumer calls `reclaim_orphans()`. Open with
+   `orphan_reclaim="lease"` to sweep inside every `reserve` instead. Either way
+   the overshoot bound of a pass is the SUM of `reserved` over every row that
+   pass reclaimed, so leave `reclaim_batch_limit` at its default of 1 unless a
+   wider bound is acceptable. `call_llm` gives a reservation a lease of
+   `2 * options.timeout_s + 60` seconds; with no `options.timeout_s` the lease is
+   NULL and that reservation is never swept at all. A caller running its own
+   watchdog extends a lease with `ledger.renew(reservation, ttl_s=...)`, which
+   returns a new `Reservation` and also gives a NULL lease its first deadline.
+5. **Report `status()` honestly.** `outstanding_usd` is what admission compares
+   to the cap; `remaining_usd` may be negative; `written_off_usd` is money a
+   reclaim stopped charging against the cap because its settle never arrived.
+   The `SpendStatus` fields are `run_id`, `cap_usd`, `settled_usd`,
+   `reserved_usd`, `unknown_usd`, `leaked_usd`, `reclaimed_usd`,
+   `written_off_usd`, `outstanding_usd`, `remaining_usd`, `reservations_open`,
+   `calls_settled`, `requests`, `halted`, `halt_reason`, `halt_detail` and
+   `as_of`. `outstanding_usd` is `settled + reserved + unknown + leaked`;
+   `reclaimed_usd` and `written_off_usd` are disclosure only.
+6. **Know the halt lifecycle.** `settle(reservation, None)` means the spend is
+   unreadable: the row is held as `unknown` at its reserved amount, never
+   released to zero. A settle with a cost above its reservation records
+   `overbilled`, counts the excess as leaked money, sets a halt when
+   `halt_on_overbilled` is true (the default for `create_ledger` and
+   `open_ledger`), and raises `SpendCapExceeded`. `ledger.halt(reason, detail)`
+   stops every later admission across processes; each `reserve` reads the halt
+   and raises `SpendLedgerHalted`, and `settle` is never gated by it.
+   `ledger.check_halted()` raises the same error between units, as an early
+   stop and not the enforcement. `ledger.resume()` clears a halt, but an
+   `overbilled` halt raises `ValueError` unless called as `resume(force=True)`,
+   and a forced resume is recorded in `halt_history` with `forced = 1`.
+
+The env-var route is explicit: `spend_ledger_from_env()` opens the ledger named
+by `CONTENT_PIPELINE_SPEND_LEDGER`, or returns `None`. `call_llm` never reads
+that variable itself. With `spend=None` it reads no ledger at all, so a cap
+must be passed in deliberately and never materializes mid-run out of an
+inherited environment variable.
+
+What this cannot do, and what a consumer therefore owns: a `call_llm` without
+`spend=` bills the provider with no ledger row, and nothing in the ledger can
+see it. Reserve-before-pay is a property of the call site. A pipeline that wants
+it mechanically gives itself one wrapper around `call_llm` that always supplies
+`spend=` and calls nothing else.
 
 ### The tracked path
 
