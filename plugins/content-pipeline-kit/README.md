@@ -61,139 +61,19 @@ charges are always estimator-based and need a pricing table.
 
 ## The cross-process spend cap (opt-in)
 
-`CostBudget` is an in-process float accumulator. `content_pipeline.llm.spend_ledger`
-is the other thing: a USD cap that every process opening the same SQLite file
-shares. It is stdlib only (`sqlite3` plus `decimal`), opt-in, and the library
-picks no path -- the consumer names the file.
-
-```python
-from content_pipeline.llm.spend_ledger import create_ledger, open_ledger
-
-ledger = create_ledger(run_dir / "spend.sqlite", cap_usd=5.00, run_id=run_id)
-# every other process on the same run:
-ledger = open_ledger(run_dir / "spend.sqlite")
-```
-
-`create_ledger` creates the file exclusively and writes the cap into a pinned
-policy row; a second process racing it gets `FileExistsError` and calls
-`open_ledger`. The cap is read-only after that -- there is no setter, and it is
-re-validated inside every transaction, so a run cannot widen its own cap
-mid-flight. A different cap means a different file.
-`spend_ledger_from_env()` opens the ledger named by
-`CONTENT_PIPELINE_SPEND_LEDGER`, and returns `None` when that variable is unset.
-
-**Reserve and settle happen per PROVIDER ATTEMPT, not per `call_llm`.** Pass the
-ledger as `call_llm(spend=ledger)` and every iteration of the retry loop takes
-its own reservation immediately before the provider call and settles it in a
-`finally`, so exactly one settle runs on every exit of every attempt. That
-matters because `call_llm(retries=N)` bills up to `N + 1` times: one reservation
-per invocation would let a four-attempt call bill four times against one
-admission, and the cap would be wrong by a factor of four.
-`submit_validated` forwards `spend=` verbatim, so its loop admits up to
-`max_attempts * (retries + 1)` attempts against the same cap.
-
-Sizing: left to itself the reservation is priced from the request plus the full
-`options.max_tokens`, so `spend=` with neither `pricing=` nor
-`spend_reserve_usd=` is a `ValueError` raised before any provider call --
-reserving 0 would be admitted by any cap and then billed. `spend_reserve_usd=`
-sets the amount outright. A cache hit returns before the attempt loop: it
-reserves nothing and writes no row.
-
-When an attempt's cost cannot be read, `settle(None)` HOLDS the reservation at
-its reserved amount as `unknown`. There is no release-on-failure rule: a failed
-attempt may well have billed, so the cap keeps counting it. A cost above its
-reservation records `overbilled`, keeps the excess visible as leaked money,
-sets the halt row (`halt_on_overbilled`, default true) and raises.
-
-**Halt.** `ledger.halt(reason, detail)` stops every further admission durably,
-for every process. Each `reserve` reads the halt row inside its own transaction,
-so at most one in-flight attempt per process completes after the halt commits.
-`check_halted()` is a read-only probe a consumer loop calls between units to
-stop sooner; it makes the stop earlier, it is not what enforces it.
-`resume()` clears the halt, but refuses an `overbilled` one with a `ValueError`
-unless called as `resume(force=True)` -- that halt means recorded spend exceeded
-its reservation, so the cap arithmetic is already known to have understated real
-spend; a forced resume is written to `halt_history`.
-
-**Status.** `ledger.status()` returns a `SpendStatus`: `run_id`,
-`cap_usd`, `settled_usd`, `reserved_usd`, `unknown_usd`, `leaked_usd`,
-`reclaimed_usd`, `written_off_usd`, `outstanding_usd`, `remaining_usd`, `reservations_open`,
-`calls_settled`, `requests`, `halted`, `halt_reason`, `halt_detail`, `as_of`.
-`outstanding_usd` is the admission quantity (`settled + reserved + unknown +
-leaked`); `remaining_usd` is `cap - outstanding` and may be negative -- clamp it
-for display, never for arithmetic.
-
-**Two further `BudgetStop.reason` values.** `cli.budget` defines `SPEND_CAP`
-(`"spend_cap"`) and `SPEND_HALT` (`"spend_halt"`), so a driver that switches on
-`BudgetStop.reason` has two tokens to handle beside the `PipelineHaltError`
-kinds. `spend_stop` is a CONTEXT MANAGER, not a function
-taking a probe -- wrap the work that may hit the ledger:
-
-```python
-from content_pipeline.cli.budget import BudgetStop, spend_stop
-
-try:
-    for unit_id in units:
-        with spend_stop(done, remaining, unit_id=unit_id):
-            call_llm(..., spend=ledger, pricing=pricing)
-        done.append(unit_id)
-except BudgetStop as stop:
-    report_partial(stop.reason, stop.done, stop.remaining)
-```
-
-It translates exactly two exceptions -- `SpendCapExceeded` into
-`BudgetStop(SPEND_CAP, ...)` and `SpendLedgerHalted` into
-`BudgetStop(SPEND_HALT, ...)` -- copying `done`, `remaining` and `unit_id` onto
-the stop. Everything else propagates unchanged on purpose, because as a budget
-verdict each would be a lie: `sqlite3.OperationalError` (the busy timeout was
-exhausted, so the ledger admitted nothing and failed closed), `ValueError`,
-`StaleReservationError`, `LedgerStateInvalid`, `LedgerIdentityChanged` and
-`KeyError`.
-
-### The enforcement gap: the ledger cannot enforce reserve-before-pay
-
-`call_llm(spend=None)` bills the provider with no ledger row, and nothing inside
-the ledger can see it. `call_llm` also never reads
-`spend_ledger_from_env()` for itself -- a cap must be passed in deliberately,
-never materialize mid-run out of an inherited environment variable. So
-reserve-before-pay is a property of the CALL SITE, not of the ledger: a caller
-that omits `spend=` spends outside the cap while the ledger's own numbers stay
-internally consistent and wrong about the run. The mitigation is conventional,
-not mechanical -- a consumer that wants it mechanical wraps `call_llm` in its
-own helper that supplies `spend=` and calls only that.
-
-### Orphan reclaim, and the hole in it
-
-A process killed between reserve and settle leaves an `open` row that nothing
-will resolve, and its headroom would consume the cap for the life of the file.
-`reclaim_orphans()` resolves such a row to `reclaimed`, bumps its `generation`,
-and retains it permanently so a late settle can be told apart from a settle
-against an id that never existed.
-
-The hole, stated plainly: an expired lease does not prove the attempt is dead,
-so a sweep may free headroom an attempt still goes on to spend. **The overshoot
-bound of one pass is the SUM of `reserved` over ALL expired-but-live rows that
-pass reclaimed, not one row** -- reported as `ReclaimReport.freed_nano`, and at
-most concurrency times the largest reservation. `reclaim_batch_limit` is what
-keeps the bound tight: its default of 1 holds the bound at one row per pass
-while still converging, because every later sweep takes the next expired row.
-Setting it to 0 means no limit, which widens the bound back to the whole
-expired set.
-
-A reservation made with no `ttl_s` stores a NULL lease, which no sweep ever
-reclaims at any batch limit: no deadline is known, so no elapsed time is
-evidence of anything. `call_llm` sets a lease only when `options.timeout_s` is
-set, at `2 * timeout_s + 60`. `orphan_reclaim` defaults to `"manual"`, the
-shipped default: sweeping happens only when the consumer calls
-`reclaim_orphans()`. Opening with `orphan_reclaim="lease"` also sweeps inside
-every `reserve`, in the same transaction as the admission. No renewal thread,
-poller or signal ships; a consumer with its own watchdog calls `renew`.
-
-`written_off_usd` names the crash case this reclaim exists for: a row whose
-headroom was freed and whose settle never arrived. That is money the ledger
-stopped charging against the cap, and the field is there so it is not unnamed.
-It drops out once a late settle arrives, which is recorded as a leak instead and
-counts in `leaked_usd`.
+`CostBudget` is an in-process float accumulator, so processes that each hold one
+do not share a cap. `content_pipeline.llm.spend_ledger` is a USD cap that every
+process opening the same SQLite file shares. It is stdlib only, opt-in, and the
+library picks no path -- the consumer names the file. Pass the ledger as
+`call_llm(spend=ledger)` and each provider attempt reserves against the cap
+before it pays and settles after; `ledger.halt()` stops further admission for
+every process, and `cli.budget.spend_stop` turns a cap or halt verdict into a
+clean partial `BudgetStop`. The ledger cannot see a `call_llm` made without
+`spend=`, so reserve-before-pay is a property of the call site. Reservation
+sizing, the halt lifecycle, orphan reclaim and its overshoot bound, and the
+`status()` fields:
+`skills/content-pipeline-domain/references/building-a-pipeline.md`, "The
+cross-process spend cap".
 
 ## Durable waits
 

@@ -695,6 +695,13 @@ except BudgetStop as stop:          # reason is "spend_cap" or "spend_halt"
     report_partial(stop.reason, stop.done, stop.remaining)
 ```
 
+`create_ledger` creates the file exclusively and writes the cap into a pinned
+policy row, so of two processes racing it exactly one wins; the loser gets
+`FileExistsError` and calls `open_ledger`. It never repairs an existing file.
+The cap is immutable: there is no setter, and every transaction re-validates it
+against the policy row (a mismatch raises `LedgerIdentityChanged`), so a run
+cannot widen its own cap mid-flight. A different cap means a different file.
+
 Six things to get right when composing one:
 
 1. **The reservation unit is one provider ATTEMPT.** `call_llm(spend=...)`
@@ -705,26 +712,40 @@ Six things to get right when composing one:
 2. **Pass `pricing=` or `spend_reserve_usd=`.** `spend=` with neither is a
    `ValueError` before any provider call. Priced automatically, the reservation
    covers the request plus the full `options.max_tokens`, because a reservation
-   has to cover what the attempt may actually bill.
+   has to cover what the attempt may actually bill. A cache hit returns before
+   the attempt loop, so it reserves nothing and writes no row.
 3. **Wrap the call site, not the loop body, in `spend_stop`.** It is a context
    manager (not a probe-taking function like `preflight_check`), and it
    translates exactly `SpendCapExceeded` and `SpendLedgerHalted`.
-   `sqlite3.OperationalError` from an exhausted busy timeout propagates
-   untranslated and admits nothing -- fail-closed, and not a budget verdict.
+   Everything else propagates unchanged, because as a budget verdict each would
+   be a lie: `sqlite3.OperationalError` from an exhausted busy timeout (it
+   admits nothing -- fail-closed), `ValueError`, `StaleReservationError`,
+   `LedgerStateInvalid`, `LedgerIdentityChanged` and `KeyError`.
 4. **Decide the reclaim posture deliberately.** `orphan_reclaim` defaults to
    `"manual"`, so a process killed between reserve and settle holds its headroom
    until the consumer calls `reclaim_orphans()`. Open with
    `orphan_reclaim="lease"` to sweep inside every `reserve` instead. Either way
    the overshoot bound of a pass is the SUM of `reserved` over every row that
    pass reclaimed, so leave `reclaim_batch_limit` at its default of 1 unless a
-   wider bound is acceptable. `call_llm` gives a reservation a lease of
+   wider bound is acceptable. That sum is the `freed_nano` field of the
+   `ReclaimReport` the pass returns, and it is at most concurrency times the
+   largest reservation. The bound exists because an expired lease does not prove
+   the attempt is dead: a reclaim can free headroom an attempt still goes on to
+   spend. `reclaim_batch_limit=0` means no limit, which widens the bound back to
+   the whole expired set. A reclaimed row is retained permanently with its
+   generation bumped, so a late settle is told apart from a settle against an
+   id that never existed. No renewal thread, poller or signal ships: a lease
+   exists only when a deadline exists. `call_llm` gives a reservation a lease of
    `2 * options.timeout_s + 60` seconds; with no `options.timeout_s` the lease is
    NULL and that reservation is never swept at all. A caller running its own
    watchdog extends a lease with `ledger.renew(reservation, ttl_s=...)`, which
    returns a new `Reservation` and also gives a NULL lease its first deadline.
 5. **Report `status()` honestly.** `outstanding_usd` is what admission compares
-   to the cap; `remaining_usd` may be negative; `written_off_usd` is money a
-   reclaim stopped charging against the cap because its settle never arrived.
+   to the cap; `remaining_usd` may be negative, so clamp it for display only and never in
+   arithmetic; `written_off_usd` is money a
+   reclaim stopped charging against the cap because its settle never arrived;
+   it drops out once a late settle arrives, which is recorded as a leak and
+   counts in `leaked_usd` instead.
    The `SpendStatus` fields are `run_id`, `cap_usd`, `settled_usd`,
    `reserved_usd`, `unknown_usd`, `leaked_usd`, `reclaimed_usd`,
    `written_off_usd`, `outstanding_usd`, `remaining_usd`, `reservations_open`,
@@ -739,6 +760,9 @@ Six things to get right when composing one:
    `open_ledger`), and raises `SpendCapExceeded`. `ledger.halt(reason, detail)`
    stops every later admission across processes; each `reserve` reads the halt
    and raises `SpendLedgerHalted`, and `settle` is never gated by it.
+   Enforcement is pull-side only (no poller, no signal, no background thread),
+   so at most ONE in-flight attempt per process completes after the halt
+   commits, and its settle still charges the cap.
    `ledger.check_halted()` raises the same error between units, as an early
    stop and not the enforcement. `ledger.resume()` clears a halt, but an
    `overbilled` halt raises `ValueError` unless called as `resume(force=True)`,
