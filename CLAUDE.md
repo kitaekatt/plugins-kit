@@ -304,6 +304,10 @@ non-contiguous, review each one individually (`<sha>^..<sha>`) -- several small 
 beat one branch switch. A review never needs a second checkout; see "Worktrees and
 scratch copies" below for the narrow cases that do.
 
+**Do not rebase here either.** A rebase detaches HEAD until `--continue`, and `git pull --rebase`
+starts one silently; merge instead (`git pull --no-rebase`). Detail:
+[docs/reference/shared-tree-git-discipline.md](docs/reference/shared-tree-git-discipline.md).
+
 **Publishing does not need a branch either.** `publish.py` owns the `dev` -> `master`
 flow. The one case that historically wanted a feature branch -- gotcha 1, cherry-picking
 past unrelated `dev` commits -- is a decision to ship alone with `--only`, not to solve by

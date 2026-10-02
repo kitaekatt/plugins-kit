@@ -161,42 +161,29 @@ A plugin declares a `venv` section to request a bootstrap-managed Python environ
 }
 ```
 
-### `<PLUGIN>_VENV` environment variable export
+### Reaching a plugin's venv interpreter
 
-When `CLAUDE_ENV_FILE` is set (always true under SessionStart hooks), a successful venv check also appends an export line of the form:
+A plugin's venv is not exported to the session env (see "What bootstrap writes to the session env" below). Its interpreter lives at a deterministic, version-independent path:
 
-```sh
-export <PLUGIN_NAME_UPPER>_VENV=<absolute path to venv python>
+```text
+Windows:     ~/.claude/plugins/data/<marketplace>/<plugin>/.venv/Scripts/python.exe
+macOS/Linux: ~/.claude/plugins/data/<marketplace>/<plugin>/.venv/bin/python
 ```
 
-`<PLUGIN_NAME_UPPER>` is the plugin manifest name uppercased with hyphens replaced by underscores. Examples:
-
-```sh
-export UNREAL_KIT_VENV=/Users/<you>/.claude/plugins/data/plugins-kit/unreal-kit/.venv/bin/python
-export BOOTSTRAP_VENV=/Users/<you>/.claude/plugins/data/plugins-kit/bootstrap/.venv/bin/python
-```
-
-**Consumer pattern** — scripts re-exec themselves under the plugin's venv without reconstructing bootstrap's data-dir layout:
+**Consumer pattern** -- a plugin script that needs the plugin's venv is launched under `BOOTSTRAP_PYTHON` and re-execs itself with the vendored `bootstrap_guard.reexec_under_plugin_venv("<plugin>")`, which resolves that path (rules: `plugins/CLAUDE.md`, "Shared-lib scripts must re-exec under the plugin venv"):
 
 ```python
-import os, sys
-from pathlib import Path
-
-_venv = os.environ.get("UNREAL_KIT_VENV")
-if not _venv:
-    sys.stderr.write("ERROR: UNREAL_KIT_VENV not set. Is bootstrap running?\n")
-    sys.exit(1)
-if Path(sys.executable).resolve() != Path(_venv).resolve():
-    os.execv(_venv, [_venv] + sys.argv)
+from bootstrap_guard import reexec_under_plugin_venv   # vendored, stdlib-only
+reexec_under_plugin_venv("unreal-kit")
 ```
 
-**Reach**: Exports in `CLAUDE_ENV_FILE` are sourced by Claude Code before every subsequent Bash tool invocation. They do NOT automatically propagate to hook script invocations — hook scripts that need the venv must either re-derive the path or source `$CLAUDE_ENV_FILE` themselves. For the common case (scripts called via Bash or re-exec'd via `os.execv`), the variable is always set.
+A script without a re-exec guard names the venv interpreter by the path above.
 
-**Fail-fast semantics**: if bootstrap cannot create the venv, no export line is written. Consumer scripts then error out on the unset var rather than re-exec'ing an invalid interpreter path.
+**Fail-fast semantics**: if bootstrap cannot create the venv, the plugin's venv check fails and is reported; nothing is exported either way.
 
 ### `<PLUGIN>_ROOT` environment variable export
 
-Every plugin carrying a `bootstrap.json` also gets its **install root** exported, using the same name transform:
+Every plugin carrying a `bootstrap.json` also gets its **install root** exported, named by uppercasing the plugin name and replacing every character outside `[A-Z0-9_]` with an underscore, then suffixing `_ROOT`:
 
 ```sh
 export HUE_KIT_ROOT=/Users/<you>/.claude/plugins/cache/plugins-kit/hue-kit/0.9.1
@@ -205,16 +192,41 @@ export HUE_KIT_ROOT=/Users/<you>/.claude/plugins/cache/plugins-kit/hue-kit/0.9.1
 This is the pointer that lets a consumer **outside** a plugin invoke the scripts that plugin ships. `CLAUDE_PLUGIN_ROOT` only tells a component where its *own* plugin lives, and an install path is version-stamped, so without this a cross-plugin caller has no way to resolve one short of globbing the cache for a version directory.
 
 ```sh
-"$HUE_KIT_VENV" "$HUE_KIT_ROOT/scripts/hue_kit_cli.py" report
+"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${HUE_KIT_ROOT:?hue-kit is not provisioned}/scripts/hue_kit_cli.py" report
 ```
 
 Prefer this over putting a plugin's `bin/` on PATH: PATH would need one entry per plugin per version, and every upgrade would strand the previous one — real cost on Windows, where the engine already repairs PATH bloat that trips `cmd.exe`'s variable-size limit.
 
 **Session-scoped, never persisted.** Unlike `env_vars` entries, this is written only to the live process and `CLAUDE_ENV_FILE` — never to shell rc files or the Windows registry. The value changes on every plugin upgrade, so a persisted copy would point at a version directory that no longer exists.
 
+### What bootstrap writes to the session env
+
+Bootstrap writes `export NAME=value` lines into Claude Code's `$CLAUDE_ENV_FILE`. That file reaches ONLY commands run through the Bash tool; a statusline, a hook, an MCP server and a user terminal never see it. A name therefore earns a line only if all three hold, judged per family (a family with one naming rule for every plugin stands or falls as a unit):
+
+1. **A Bash-tool reader ships in this marketplace.** Some command an agent runs through the Bash tool reads it: a skill example, a reference-doc command, or a shipped script started from Bash. A reader in another process does not count, because the env file never reaches it. A documented contract that nothing of ours uses does not count either.
+2. **Nothing else already provides it.** Claude Code does not substitute it on the surface where it is read, and the environment does not already guarantee it.
+3. **It is there whenever it is read.** It is re-emitted every session, or its reader has a fallback when it is missing.
+
+**Scope.** The razor governs what bootstrap emits on its own. A user-declared `env_vars` entry in a layered `bootstrap.json` is emitted because the user asked; the razor applies to that manifest entry, which is the user's edit.
+
+**Inventory.** A full pass writes these families, and nothing else:
+
+| Family | Names | Reader and fallback |
+|---|---|---|
+| Interpreters | `BOOTSTRAP_PYTHON`, `BOOTSTRAP_PROJECT_PYTHON` | The call-site forms in [python-interpreter.md](python-interpreter.md); the SessionStart hook re-emits them before both skip gates. |
+| Plugin roots | `<PLUGIN>_ROOT` for every plugin with a `bootstrap.json` | Reference, README and script commands use `"${<PLUGIN>_ROOT:?<msg>}"`; the pre-gate record re-emits the name in a gate-skipped session. |
+| User `env_vars` | the names a layered manifest declares | See `env_vars` below. |
+
+`<PLUGIN>_VENV` and `BOOTSTRAP_BIN_<TOOL>` were removed from the session env in bootstrap 0.143.0. Neither had a Bash-tool reader in this marketplace: no shipped command read a `<PLUGIN>_VENV` name, and the one `BOOTSTRAP_BIN_` reader, claude-ui-kit's `statusline.sh`, runs as the statusline process, which never sees the env file. Alternatives:
+
+- The plugin venv interpreter is at the deterministic `~/.claude/plugins/data/<marketplace>/<plugin>/.venv/` path (see "Reaching a plugin's venv interpreter" above).
+- Tool paths stay recorded in `tool_paths.json` under bootstrap's data dir and are read through `bootstrap_lib.tool_paths.resolve`; only the session-env export is gone.
+
+The guard `tests/bootstrap/test_session_env_allowlist.py` runs a full pass and fails when any other name is written, so a new export has to pass this razor by editing that test's allowlist.
+
 ## `project_venv` — Project's Own Python Environment
 
-A **layered** manifest (`~/.claude/bootstrap.json` or `<project>/.claude/bootstrap.json`) declares `project_venv` to have bootstrap provision the *project's* venv — synced from the project's own `pyproject.toml` via `uv sync`, verified with `check_imports`. It runs only when the engine has a `--project-dir` (silently skipped otherwise), and never exports a `*_VENV` env var (the venv belongs to the project, not a plugin) -- the project's interpreter is exposed as `BOOTSTRAP_PROJECT_PYTHON` instead (references/python-interpreter.md).
+A **layered** manifest (`~/.claude/bootstrap.json` or `<project>/.claude/bootstrap.json`) declares `project_venv` to have bootstrap provision the *project's* venv -- synced from the project's own `pyproject.toml` via `uv sync`, verified with `check_imports`. It runs only when the engine has a `--project-dir` (silently skipped otherwise), and the project's interpreter is exposed as `BOOTSTRAP_PROJECT_PYTHON` (references/python-interpreter.md).
 
 Fields (all optional):
 
@@ -490,7 +502,7 @@ install commands in any later phase (e.g. a tool `install` invoking
 
 1. **Live export**: set in the engine process (same-pass install commands
    inherit it) and appended as an export line to `$CLAUDE_ENV_FILE` (same
-   reach as the `<PLUGIN>_VENV` export — subsequent Bash tool invocations
+   reach as the `<PLUGIN>_ROOT` export -- subsequent Bash tool invocations
    in the session see it).
 2. **Persistence** (skipped when already in the wanted state, which logs an
    ok entry): on macOS the `export NAME='value'` line (the value shell-quoted,

@@ -135,6 +135,8 @@ _BUNDLE_PHRASE_MAP_MIN_VERSION = "0.43.0"
 
 _CHUNK_INDEX_MIN_VERSION = "0.49.0"
 
+_EFFORT_MIN_VERSION = "0.60.0"
+
 
 def _supports_claimed_file() -> bool | None:
     """True/False if the probe ran and observed an answer; None if it could
@@ -217,6 +219,26 @@ def _supports_bundle_phrase_map() -> bool | None:
     return "mechanical_check_phrases" in parameters
 
 
+def _supports_effort() -> bool | None:
+    """Return whether run_lane takes the required per-entry ``effort``.
+
+    llm-scripting-kit 0.60.0 is the first version whose ``review_lane`` has
+    the required ``--effort`` flag and ``run_lane(effort=...)``. An older
+    owner ignores or rejects the flag, so the wrapper refuses it by name
+    instead of letting a lane run at an effort nobody chose. None means the
+    probe could not run (run_lane absent or uninspectable); the caller
+    refuses that too.
+    """
+    run_lane = getattr(_review_lane, "run_lane", None)
+    if not callable(run_lane):
+        return None
+    try:
+        parameters = inspect.signature(run_lane).parameters
+    except (TypeError, ValueError):
+        return None
+    return "effort" in parameters
+
+
 def _supports_chunk_index() -> bool | None:
     """Return whether the shared parser accepts --chunk-index.
 
@@ -278,5 +300,15 @@ if __name__ == "__main__":
             "review_lane._parse_args does not accept --chunk-index",
             min_version=_CHUNK_INDEX_MIN_VERSION,
             capability="--chunk-index bundle-derived dispatch support",
+        )
+    # Last, so a more specific refusal above names its own missing capability.
+    # Effort is required on every run, and anything but a confirmed
+    # run_lane(effort=...) -- including a run_lane that is absent or cannot
+    # be inspected -- refuses rather than dispatching at an unchosen effort.
+    if _supports_effort() is not True:
+        _refuse_too_old(
+            "review_lane.run_lane does not accept effort",
+            min_version=_EFFORT_MIN_VERSION,
+            capability="--effort per-entry effort support",
         )
     sys.exit(_main())

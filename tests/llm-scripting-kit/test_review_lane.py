@@ -46,6 +46,7 @@ class FakeResponse:
     finish_reason: Optional[str] = "stop"
     input_tokens: int = 11
     output_tokens: int = 22
+    dropped_params: tuple = ()
 
 
 class FakeBackend:
@@ -73,6 +74,17 @@ class FakeSelection:
     backend: Any
     model: str
     effort: Optional[str] = None
+    capabilities: Any = None
+
+
+@dataclass
+class FakeCaps:
+    params: dict
+
+
+@dataclass
+class FakeParam:
+    emits: str = "--effort"
 
 
 @dataclass
@@ -123,7 +135,8 @@ def seam(monkeypatch: pytest.MonkeyPatch):
 
 def _transport(outcomes: list[Any], endpoint: str = "my-endpoint") -> FakeSelection:
     return FakeSelection(
-        endpoint=endpoint, kind="transport", backend=FakeBackend(outcomes), model="m"
+        endpoint=endpoint, kind="transport", backend=FakeBackend(outcomes), model="m",
+        capabilities=FakeCaps(params={"effort": FakeParam()}),
     )
 
 
@@ -167,15 +180,15 @@ class TestDispatchRefusals:
 
 class TestRunLane:
     def test_cli_distinguishes_no_scan_from_clean_scan(self) -> None:
-        assert lr._parse_args(["--lane", LANE, "--model", "m", "--chunk", "d"]).mechanical_findings is None
+        assert lr._parse_args(["--lane", LANE, "--model", "m", "--effort", "high", "--chunk", "d"]).mechanical_findings is None
         assert lr._parse_args([
-            "--lane", LANE, "--model", "m", "--chunk", "d", "--mechanical-scan-ran"
+            "--lane", LANE, "--model", "m", "--effort", "high", "--chunk", "d", "--mechanical-scan-ran"
         ]).mechanical_findings == []
 
     def test_passes_mechanical_findings_to_prompt(self, seam) -> None:
         seam.selection = _transport([FakeResponse("[]")])
         finding = {"file": "a.py", "line": 4, "check": "abs_path", "detail": "absolute path"}
-        lr.run_lane(lane=LANE, model="my-endpoint", diff_text="d", mechanical_findings=[finding])
+        lr.run_lane(lane=LANE, model="my-endpoint", effort="high", diff_text="d", mechanical_findings=[finding])
         assert "Mechanical scan (added lines only)" in seam.selection.backend.calls[0]["user"]
         assert "abs_path (absolute paths)" in seam.selection.backend.calls[0]["user"]
         assert "a.py:4 [abs_path] absolute path" in seam.selection.backend.calls[0]["user"]
@@ -187,7 +200,7 @@ class TestRunLane:
             "checks_run": ["python_syntax"],
             "findings": [{"check": "python_syntax", "line": 2, "detail": "first compiler diagnostic"}],
         }
-        lr.run_lane(lane=LANE, model="my-endpoint", diff_text="d", mechanical_findings=[record])
+        lr.run_lane(lane=LANE, model="my-endpoint", effort="high", diff_text="d", mechanical_findings=[record])
         message = seam.selection.backend.calls[0]["user"]
         assert "Mechanical scan:" in message
         assert "Mechanical scan (added lines only)" not in message
@@ -199,12 +212,13 @@ class TestRunLane:
             endpoint="my-endpoint",
             kind="harness",
             backend=FakeBackend([FakeResponse("[]")]),
-            model="m",
+            model="m", capabilities=FakeCaps(params={"effort": FakeParam()}),
         )
 
         lr.run_lane(
             lane="reviewer_c_introduced_code",
             model="my-endpoint",
+            effort="high",
             diff_text="d",
             mechanical_check_phrases={"configured_check": "configured check phrase"},
         )
@@ -213,7 +227,7 @@ class TestRunLane:
 
     def test_returns_issues_and_an_audit_envelope(self, seam) -> None:
         seam.selection = _transport([FakeResponse(ONE_ISSUE)])
-        result = lr.run_lane(lane=LANE, model="my-endpoint", diff_text="d", files=["a.py"])
+        result = lr.run_lane(lane=LANE, model="my-endpoint", effort="high", diff_text="d", files=["a.py"])
         assert result["issues"] == [
             {"file": "a.py", "lines": "4", "reason": "bug", "description": "boom"}
         ]
@@ -229,7 +243,7 @@ class TestRunLane:
         from bootstrap_lib.code_review import lane_prompts
 
         seam.selection = _transport([FakeResponse("[]")])
-        lr.run_lane(lane=LANE, model="my-endpoint", diff_text="UNIQUE-DIFF-TEXT")
+        lr.run_lane(lane=LANE, model="my-endpoint", effort="high", diff_text="UNIQUE-DIFF-TEXT")
         call = seam.selection.backend.calls[0]
         assert call["system"] == lane_prompts.REVIEWER_B_SYSTEM
         assert "UNIQUE-DIFF-TEXT" in call["user"]
@@ -237,23 +251,23 @@ class TestRunLane:
     def test_temperature_is_pinned_to_zero(self, seam) -> None:
         """Two runs over one diff that disagree are not two opinions."""
         seam.selection = _transport([FakeResponse("[]")])
-        lr.run_lane(lane=LANE, model="my-endpoint", diff_text="d")
+        lr.run_lane(lane=LANE, model="my-endpoint", effort="high", diff_text="d")
         assert seam.selection.backend.calls[0]["options"].temperature == 0.0
 
     def test_an_unknown_endpoint_is_a_config_error(self, seam) -> None:
         seam.resolve_error = FakeEndpointResolveError("no such endpoint")
         with pytest.raises(lr.LaneConfigError, match="neither an Agent-tool alias"):
-            lr.run_lane(lane=LANE, model="typo-endpoint", diff_text="d")
+            lr.run_lane(lane=LANE, model="typo-endpoint", effort="high", diff_text="d")
 
     def test_a_halt_is_a_lane_failure(self, seam) -> None:
         seam.selection = _transport([FakeHaltError("out of credit")])
         with pytest.raises(lr.LaneRunError, match="halted"):
-            lr.run_lane(lane=LANE, model="my-endpoint", diff_text="d")
+            lr.run_lane(lane=LANE, model="my-endpoint", effort="high", diff_text="d")
 
     def test_a_transport_error_is_a_lane_failure(self, seam) -> None:
         seam.selection = _transport([ConnectionError("refused")])
         with pytest.raises(lr.LaneRunError, match="ConnectionError"):
-            lr.run_lane(lane=LANE, model="my-endpoint", diff_text="d")
+            lr.run_lane(lane=LANE, model="my-endpoint", effort="high", diff_text="d")
 
 
 class TestAgentLoopRefusal:
@@ -261,7 +275,7 @@ class TestAgentLoopRefusal:
     def test_a_repo_reading_lane_is_refused_on_a_transport(self, lane: str) -> None:
         """Refused rather than degraded: a completion cannot fetch the files."""
         selection = FakeSelection(
-            endpoint="e", kind="transport", backend=FakeBackend([]), model="m"
+            endpoint="e", kind="transport", backend=FakeBackend([]), model="m", capabilities=FakeCaps(params={"effort": FakeParam()}),
         )
         with pytest.raises(lr.LaneConfigError, match="needs an agent loop"):
             lr._check_selection(lane, selection)
@@ -269,13 +283,13 @@ class TestAgentLoopRefusal:
     @pytest.mark.parametrize("lane", sorted(lr.LANES_REQUIRING_AGENT_LOOP))
     def test_a_harness_selection_is_accepted(self, lane: str) -> None:
         selection = FakeSelection(
-            endpoint="e", kind="harness", backend=FakeBackend([]), model="m"
+            endpoint="e", kind="harness", backend=FakeBackend([]), model="m", capabilities=FakeCaps(params={"effort": FakeParam()}),
         )
         lr._check_selection(lane, selection)
 
     def test_the_diff_only_lane_accepts_a_transport(self) -> None:
         selection = FakeSelection(
-            endpoint="e", kind="transport", backend=FakeBackend([]), model="m"
+            endpoint="e", kind="transport", backend=FakeBackend([]), model="m", capabilities=FakeCaps(params={"effort": FakeParam()}),
         )
         lr._check_selection(LANE, selection)
 
@@ -299,15 +313,15 @@ class TestAgentLoopRefusal:
     def test_an_agent_loop_lane_is_rooted_in_the_project(self, seam, lane: str) -> None:
         """Repo-relative paths only resolve if the lane is rooted where they are."""
         seam.selection = FakeSelection(
-            endpoint="e", kind="harness", backend=FakeBackend([FakeResponse("[]")]), model="m"
+            endpoint="e", kind="harness", backend=FakeBackend([FakeResponse("[]")]), model="m", capabilities=FakeCaps(params={"effort": FakeParam()}),
         )
-        lr.run_lane(lane=lane, model="e", diff_text="d", project_root="/proj")
+        lr.run_lane(lane=lane, model="e", effort="high", diff_text="d", project_root="/proj")
         assert seam.selection.backend.calls[0]["options"].cwd == Path("/proj")
 
     def test_a_diff_only_lane_inherits_the_process_cwd(self, seam) -> None:
         """It reads nothing, so naming a directory would claim a need it lacks."""
         seam.selection = _transport([FakeResponse("[]")])
-        lr.run_lane(lane=LANE, model="my-endpoint", diff_text="d", project_root="/proj")
+        lr.run_lane(lane=LANE, model="my-endpoint", effort="high", diff_text="d", project_root="/proj")
         assert seam.selection.backend.calls[0]["options"].cwd is None
 
     def test_a_diff_only_lane_stays_a_pure_completion(self) -> None:
@@ -316,7 +330,7 @@ class TestAgentLoopRefusal:
     def test_the_repair_attempt_keeps_the_tool_grant(self, seam) -> None:
         """Rebuilding BackendOptions must not silently drop a field."""
         seam.selection = _transport([FakeResponse("nope"), FakeResponse(ONE_ISSUE)])
-        lr.run_lane(lane=LANE, model="my-endpoint", diff_text="d")
+        lr.run_lane(lane=LANE, model="my-endpoint", effort="high", diff_text="d")
         first, second = seam.selection.backend.calls
         assert second["options"].allowed_tools == first["options"].allowed_tools
         assert second["options"].effort == first["options"].effort
@@ -336,7 +350,7 @@ class TestContextBudget:
         with pytest.raises(lr.LaneRunError, match="does not fit endpoint"):
             lr.run_lane(
                 lane=LANE,
-                model="my-endpoint",
+                model="my-endpoint", effort="high",
                 diff_text="x" * 100_000,
                 max_output_tokens=256,
             )
@@ -345,21 +359,21 @@ class TestContextBudget:
     def test_a_fitting_chunk_dispatches(self, seam) -> None:
         seam.selection = _transport([FakeResponse("[]")])
         seam.entries = {"my-endpoint": FakeEntry(context_window=100_000)}
-        lr.run_lane(lane=LANE, model="my-endpoint", diff_text="x" * 300)
+        lr.run_lane(lane=LANE, model="my-endpoint", effort="high", diff_text="x" * 300)
         assert len(seam.selection.backend.calls) == 1
 
     def test_an_unknown_window_skips_the_check(self, seam) -> None:
         """An unstated limit must not be invented and used to refuse work."""
         seam.selection = _transport([FakeResponse("[]")])
         seam.entries = {"my-endpoint": FakeEntry(context_window=None)}
-        lr.run_lane(lane=LANE, model="my-endpoint", diff_text="x" * 500_000)
+        lr.run_lane(lane=LANE, model="my-endpoint", effort="high", diff_text="x" * 500_000)
         assert len(seam.selection.backend.calls) == 1
 
 
 class TestOutputRepair:
     def test_one_repair_attempt_can_recover(self, seam) -> None:
         seam.selection = _transport([FakeResponse("Sure! Here you go."), FakeResponse(ONE_ISSUE)])
-        result = lr.run_lane(lane=LANE, model="my-endpoint", diff_text="d")
+        result = lr.run_lane(lane=LANE, model="my-endpoint", effort="high", diff_text="d")
         assert result["attempts"] == 2
         assert len(result["issues"]) == 1
         assert "did not parse" in seam.selection.backend.calls[1]["user"]
@@ -368,19 +382,19 @@ class TestOutputRepair:
         """Bounded at one: a third ask buys nothing and is unbounded spend."""
         seam.selection = _transport([FakeResponse("nope"), FakeResponse("still nope")])
         with pytest.raises(lr.LaneRunError, match="after 2 attempt"):
-            lr.run_lane(lane=LANE, model="my-endpoint", diff_text="d")
+            lr.run_lane(lane=LANE, model="my-endpoint", effort="high", diff_text="d")
         assert len(seam.selection.backend.calls) == 2
 
     def test_a_length_stop_names_the_output_budget(self, seam) -> None:
         truncated = FakeResponse("[{", finish_reason="length")
         seam.selection = _transport([truncated, truncated])
         with pytest.raises(lr.LaneRunError, match="max-output-tokens"):
-            lr.run_lane(lane=LANE, model="my-endpoint", diff_text="d")
+            lr.run_lane(lane=LANE, model="my-endpoint", effort="high", diff_text="d")
 
     def test_a_repair_uses_a_fresh_cache_salt(self, seam) -> None:
         """Otherwise a cached bad response is replayed as the repair."""
         seam.selection = _transport([FakeResponse("nope"), FakeResponse(ONE_ISSUE)])
-        lr.run_lane(lane=LANE, model="my-endpoint", diff_text="d")
+        lr.run_lane(lane=LANE, model="my-endpoint", effort="high", diff_text="d")
         assert seam.selection.backend.calls[1]["options"].cache_salt == 1
 
 
@@ -402,7 +416,7 @@ class TestCli:
         chunk.write_text("diff --git a/a.py b/a.py", encoding="utf-8")
         seam.selection = _transport([FakeResponse(ONE_ISSUE)])
         code = lr.main(
-            ["--lane", LANE, "--model", "my-endpoint", "--chunk", str(chunk), "--file", "a.py"]
+            ["--lane", LANE, "--model", "my-endpoint", "--effort", "high", "--chunk", str(chunk), "--file", "a.py"]
         )
         assert code == lr.EXIT_OK
         assert json.loads(capsys.readouterr().out)["issues"][0]["file"] == "a.py"
@@ -424,12 +438,12 @@ class TestCli:
                 "description": "bad path",
                 "citation": "Use pathlib.Path for file paths.",
             }]))]),
-            model="m",
+            model="m", capabilities=FakeCaps(params={"effort": FakeParam()}),
         )
 
         code = lr.main([
             "--lane", "reviewer_a_claude_md_compliance",
-            "--model", "my-endpoint",
+            "--model", "my-endpoint", "--effort", "high",
             "--chunk", str(chunk),
             "--file", "src/a.py",
             "--bundle", str(bundle),
@@ -466,6 +480,7 @@ class TestCli:
             kind=kind,
             backend=FakeBackend([FakeResponse("[]")]),
             model="m",
+            capabilities=FakeCaps(params={"effort": FakeParam()}),
         )
         scan = {
             "file": "config/a.yaml",
@@ -475,7 +490,7 @@ class TestCli:
 
         code = lr.main([
             "--lane", lane,
-            "--model", "my-endpoint",
+            "--model", "my-endpoint", "--effort", "high",
             "--chunk", str(chunk),
             "--file", "config/a.yaml",
             "--mechanical-scan-ran",
@@ -494,7 +509,7 @@ class TestCli:
         chunk = tmp_path / "c.diff"
         chunk.write_text("d", encoding="utf-8")
         code = lr.main(
-            ["--lane", "validator", "--model", "my-endpoint", "--chunk", str(chunk)]
+            ["--lane", "validator", "--model", "my-endpoint", "--effort", "high", "--chunk", str(chunk)]
         )
         assert code == lr.EXIT_USAGE
         assert "not eligible" in capsys.readouterr().err
@@ -504,14 +519,14 @@ class TestCli:
         chunk.write_text("d", encoding="utf-8")
         seam.selection = _transport([FakeHaltError("rate limited")])
         code = lr.main([
-            "--lane", LANE, "--model", "my-endpoint", "--chunk", str(chunk)
+            "--lane", LANE, "--model", "my-endpoint", "--effort", "high", "--chunk", str(chunk)
         ])
         assert code == lr.EXIT_LANE_FAILED
         assert "halted" in capsys.readouterr().err
 
     def test_a_missing_chunk_exits_two(self, seam, tmp_path, capsys) -> None:
         code = lr.main([
-            "--lane", LANE, "--model", "my-endpoint",
+            "--lane", LANE, "--model", "my-endpoint", "--effort", "high",
             "--chunk", str(tmp_path / "nope.diff"),
         ])
         assert code == lr.EXIT_USAGE
@@ -613,20 +628,20 @@ class TestChunkIndexDerivation:
 
     def test_cli_parses_chunk_index_alone(self) -> None:
         args = lr._parse_args([
-            "--lane", LANE, "--model", "m", "--bundle", "b.json", "--chunk-index", "0",
+            "--lane", LANE, "--model", "m", "--effort", "high", "--bundle", "b.json", "--chunk-index", "0",
         ])
         assert args.chunk_index == 0
         assert args.chunk is None
 
     def test_cli_requires_bundle_with_chunk_index(self, capsys) -> None:
         with pytest.raises(SystemExit) as excinfo:
-            lr._parse_args(["--lane", LANE, "--model", "m", "--chunk-index", "0"])
+            lr._parse_args(["--lane", LANE, "--model", "m", "--effort", "high", "--chunk-index", "0"])
         assert excinfo.value.code == 2
         assert "requires --bundle" in capsys.readouterr().err
 
     def test_cli_requires_chunk_or_chunk_index(self, capsys) -> None:
         with pytest.raises(SystemExit) as excinfo:
-            lr._parse_args(["--lane", LANE, "--model", "m"])
+            lr._parse_args(["--lane", LANE, "--model", "m", "--effort", "high"])
         assert excinfo.value.code == 2
         assert "--chunk is required" in capsys.readouterr().err
 
@@ -647,7 +662,7 @@ class TestChunkIndexDerivation:
     ) -> None:
         with pytest.raises(SystemExit) as excinfo:
             lr._parse_args([
-                "--lane", LANE, "--model", "m",
+                "--lane", LANE, "--model", "m", "--effort", "high",
                 "--bundle", "b.json", "--chunk-index", "0",
                 *extra,
             ])
@@ -663,7 +678,7 @@ class TestChunkIndexDerivation:
         seam.selection = _transport([FakeResponse(ONE_ISSUE)])
 
         code = lr.main([
-            "--lane", LANE, "--model", "my-endpoint",
+            "--lane", LANE, "--model", "my-endpoint", "--effort", "high",
             "--bundle", str(bundle_path), "--chunk-index", "0",
         ])
 
@@ -680,7 +695,7 @@ class TestChunkIndexDerivation:
         bundle_path.write_text(json.dumps(self._bundle(tmp_path)), encoding="utf-8")
 
         code = lr.main([
-            "--lane", LANE, "--model", "my-endpoint",
+            "--lane", LANE, "--model", "my-endpoint", "--effort", "high",
             "--bundle", str(bundle_path), "--chunk-index", "99",
         ])
 
@@ -704,7 +719,7 @@ class TestTransportSdkPreflight:
         monkeypatch.setitem(sys.modules, "openai", None)
         seam.selection = _transport([FakeResponse(ONE_ISSUE)])
         with pytest.raises(lr.LaneConfigError, match="endpoint-dispatch") as excinfo:
-            lr.run_lane(lane=LANE, model="my-endpoint", diff_text="d")
+            lr.run_lane(lane=LANE, model="my-endpoint", effort="high", diff_text="d")
         message = str(excinfo.value)
         assert "'openai' package" in message
         assert "transport entry" in message
@@ -716,7 +731,7 @@ class TestTransportSdkPreflight:
     ) -> None:
         monkeypatch.setitem(sys.modules, "openai", types.ModuleType("openai"))
         seam.selection = _transport([FakeResponse(ONE_ISSUE)])
-        result = lr.run_lane(lane=LANE, model="my-endpoint", diff_text="d")
+        result = lr.run_lane(lane=LANE, model="my-endpoint", effort="high", diff_text="d")
         assert result["attempts"] == 1
         assert len(seam.selection.backend.calls) == 1
 
@@ -726,7 +741,7 @@ class TestTransportSdkPreflight:
         """A harness shells out to a CLI carrying its own client."""
         monkeypatch.setitem(sys.modules, "openai", None)
         selection = FakeSelection(
-            endpoint="e", kind="harness", backend=FakeBackend([]), model="m"
+            endpoint="e", kind="harness", backend=FakeBackend([]), model="m", capabilities=FakeCaps(params={"effort": FakeParam()}),
         )
         lr._check_transport_sdk(selection)
 
@@ -748,7 +763,7 @@ class TestEndpointLanesCallDescribe:
 
         monkeypatch.setattr(lr, "describe", floor, raising=False)
         with pytest.raises(lr.LaneRunError, match="out-of-quota"):
-            lr.run_lane(lane=LANE, model="my-endpoint", diff_text="d")
+            lr.run_lane(lane=LANE, model="my-endpoint", effort="high", diff_text="d")
         assert seam.selection.backend.calls == []
 
     def test_describe_is_called_for_a_process_caller_with_the_one_id(self, seam, monkeypatch) -> None:
@@ -761,10 +776,102 @@ class TestEndpointLanesCallDescribe:
 
         monkeypatch.setattr(lr, "describe", spy)
         seam.selection = _transport([FakeResponse(ONE_ISSUE)])
-        lr.run_lane(lane=LANE, model="my-endpoint", diff_text="d")
+        lr.run_lane(lane=LANE, model="my-endpoint", effort="high", diff_text="d")
         assert seen == {"names": ["my-endpoint"], "caller": "process"}
 
     def test_an_unknown_endpoint_is_still_a_config_error(self, seam) -> None:
         seam.resolve_error = FakeEndpointResolveError("no such endpoint")
         with pytest.raises(lr.LaneConfigError, match="neither an Agent-tool alias"):
-            lr.run_lane(lane=LANE, model="typo-endpoint", diff_text="d")
+            lr.run_lane(lane=LANE, model="typo-endpoint", effort="high", diff_text="d")
+
+
+class TestEffortDelivery:
+    def test_the_effort_reaches_backend_options(self, seam) -> None:
+        seam.selection = _transport([FakeResponse("[]")])
+        result = lr.run_lane(lane=LANE, model="my-endpoint", effort="xhigh", diff_text="d")
+        assert seam.selection.backend.calls[0]["options"].effort == "xhigh"
+        assert result["effort"] == "xhigh"
+
+    def test_the_stated_effort_overrides_the_registry_default(self, seam) -> None:
+        seam.selection = _transport([FakeResponse("[]")])
+        seam.selection.effort = "low"
+        lr.run_lane(lane=LANE, model="my-endpoint", effort="max", diff_text="d")
+        assert seam.selection.backend.calls[0]["options"].effort == "max"
+
+    def test_an_effort_outside_the_codex_menu_exits_two(self, seam, tmp_path, capsys) -> None:
+        chunk = tmp_path / "c.diff"
+        chunk.write_text("d", encoding="utf-8")
+        seam.selection = FakeSelection(
+            endpoint="codex-ep", kind="harness",
+            backend=FakeBackend([FakeResponse("[]")], name="codex-cli"), model="m",
+            capabilities=FakeCaps(params={"effort": FakeParam()}),
+        )
+        code = lr.main(["--lane", LANE, "--model", "codex-ep", "--effort", "ultra",
+                        "--chunk", str(chunk)])
+        assert code == lr.EXIT_USAGE
+        assert "does not accept effort 'ultra'" in capsys.readouterr().err
+        assert seam.selection.backend.calls == []
+
+    def test_an_effort_in_the_codex_menu_dispatches(self, seam) -> None:
+        seam.selection = FakeSelection(
+            endpoint="codex-ep", kind="harness",
+            backend=FakeBackend([FakeResponse("[]")], name="codex-cli"), model="m",
+            capabilities=FakeCaps(params={"effort": FakeParam()}),
+        )
+        lr.run_lane(lane=LANE, model="codex-ep", effort="xhigh", diff_text="d")
+        assert seam.selection.backend.calls[0]["options"].effort == "xhigh"
+
+    def test_an_undeliverable_transport_effort_refuses(self, seam) -> None:
+        seam.selection = _transport([FakeResponse("[]")])
+        seam.selection.capabilities = FakeCaps(params={})
+        with pytest.raises(lr.LaneConfigError, match="undeliverable"):
+            lr.run_lane(lane=LANE, model="my-endpoint", effort="high", diff_text="d")
+        assert seam.selection.backend.calls == []
+
+    def test_a_blank_effort_refuses(self, seam) -> None:
+        seam.selection = _transport([FakeResponse("[]")])
+        with pytest.raises(lr.LaneConfigError, match="non-empty"):
+            lr.run_lane(lane=LANE, model="my-endpoint", effort=" ", diff_text="d")
+
+    def test_a_missing_effort_flag_is_an_argparse_error(self, capsys) -> None:
+        with pytest.raises(SystemExit) as exc:
+            lr._parse_args(["--lane", LANE, "--model", "m", "--chunk", "d"])
+        assert exc.value.code == 2
+        assert "--effort" in capsys.readouterr().err
+
+    def test_the_effort_flag_is_forwarded_by_main(self, seam, tmp_path, capsys) -> None:
+        chunk = tmp_path / "c.diff"
+        chunk.write_text("d", encoding="utf-8")
+        seam.selection = _transport([FakeResponse("[]")])
+        code = lr.main(["--lane", LANE, "--model", "my-endpoint", "--effort", "medium",
+                        "--chunk", str(chunk)])
+        assert code == lr.EXIT_OK
+        assert json.loads(capsys.readouterr().out)["effort"] == "medium"
+        assert seam.selection.backend.calls[0]["options"].effort == "medium"
+
+    def test_a_harness_without_advertised_effort_refuses(self, seam) -> None:
+        seam.selection = FakeSelection(
+            endpoint="h", kind="harness", backend=FakeBackend([FakeResponse("[]")]),
+            model="m", capabilities=None,
+        )
+        with pytest.raises(lr.LaneConfigError, match="advertises no delivered effort"):
+            lr.run_lane(lane=LANE, model="h", effort="high", diff_text="d")
+        assert seam.selection.backend.calls == []
+
+    def test_a_response_reporting_effort_dropped_fails_loudly(self, seam, tmp_path, capsys) -> None:
+        chunk = tmp_path / "c.diff"
+        chunk.write_text("d", encoding="utf-8")
+        seam.selection = _transport([FakeResponse("[]", dropped_params=("effort",))])
+        code = lr.main(["--lane", LANE, "--model", "my-endpoint", "--effort", "high",
+                        "--chunk", str(chunk)])
+        assert code == lr.EXIT_USAGE
+        captured = capsys.readouterr()
+        assert "reported effort 'high' as dropped" in captured.err
+        assert captured.out == ""
+
+    def test_the_envelope_records_requested_and_delivered_effort(self, seam) -> None:
+        seam.selection = _transport([FakeResponse("[]")])
+        seam.selection.capabilities = FakeCaps(params={"effort": FakeParam("reasoning_effort")})
+        result = lr.run_lane(lane=LANE, model="my-endpoint", effort="high", diff_text="d")
+        assert result["effort"] == "high"
+        assert result["effort_delivered"] == "reasoning_effort"

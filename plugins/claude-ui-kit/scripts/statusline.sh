@@ -3,8 +3,8 @@ set -euo pipefail
 
 DATA=$(cat)
 
-# Prefer the absolute path bootstrap recorded; fall back to PATH lookup.
-# See docs/planning/bootstrap/tool-resolution-redesign.md.
+# BOOTSTRAP_BIN_JQ is an optional override, set in the statusline's own
+# environment; otherwise jq is found on PATH (bootstrap provisions it).
 JQ="${BOOTSTRAP_BIN_JQ:-jq}"
 
 # Fallback: with set -euo pipefail, malformed stdin (or a missing jq) used to
@@ -241,11 +241,11 @@ if [ -d "$SEGMENTS_DIR" ]; then
     # Resolved ONCE rather than per segment. `command -v` in the loop was a
     # subprocess per *.sh segment per render, and the answer cannot change
     # mid-loop.
-    # Same precedent as JQ above: prefer the absolute path bootstrap recorded,
-    # fall back to a PATH lookup. Set-but-EMPTY is meaningful and distinct from
-    # unset -- it declares "this machine has no timeout binary", which is what
-    # bootstrap records on a stock macOS box and what the test below asserts
-    # against. `${VAR+set}` is the POSIX set-vs-empty test and is safe under
+    # Same precedent as JQ above: BOOTSTRAP_BIN_TIMEOUT is an optional override
+    # set in the statusline's own environment; otherwise PATH lookup.
+    # Set-but-EMPTY is meaningful and distinct from unset -- it declares "this
+    # machine has no timeout binary" (e.g. a stock macOS box), which is what
+    # the test below asserts against. `${VAR+set}` is the POSIX set-vs-empty test and is safe under
     # bash 3.2, zsh, and `set -u`.
     SEG_TIMEOUT_BIN=""
     if [ "${BOOTSTRAP_BIN_TIMEOUT+set}" = set ]; then
