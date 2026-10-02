@@ -71,7 +71,7 @@
     {
       "name": "skills-kit",
       "description": "Author and audit every md file a project loads or ships -- CLAUDE.md, SKILL.md, project docs, and their cross-references -- for placement, cohesion, and drift.",
-      "version": "0.88.1",
+      "version": "0.89.0",
       "author": {
         "name": "Christina"
       },
@@ -202,7 +202,7 @@
     {
       "name": "job-kit",
       "description": "Durable execution for heterogeneous agent jobs through a bounded worker pool, with advertisement-based endpoint selection and command-shaped acceptance.",
-      "version": "0.10.1",
+      "version": "0.11.0",
       "author": {
         "name": "Christina"
       },

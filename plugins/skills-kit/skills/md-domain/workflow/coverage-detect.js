@@ -119,6 +119,10 @@
 //   refs: { criteria: <abs path to the coverage standards doc>,
 //           observationKinds: <abs path to references/standards/claude-md-standards.md>,
 //           pluginRoot: <abs path to plugins/skills-kit> }
+//   laneModels: { run: [{id, effort}], dropped: [{id, effort, reason}] }
+//     // REQUIRED: lane_models.coverage from scripts/resolve_standards.py. Each
+//     // dispatch tries run in order and moves on when agent() throws or returns
+//     // nothing; absent throws. The result carries routes = {dropped, perFile}.
 // }
 //
 // PRECEDENCE: inline `subjects[]` WINS over `subjectsFile` when both are
@@ -129,7 +133,7 @@
 // SELECTED FIRST and only the selected mode is validated -- an ignored
 // subjectsFile must not be able to fail a run it takes no part in.
 //
-// Returns { perSubject, totals }. There is no `review` mode: review mode audits a
+// Returns { perSubject, totals, routes, ... }. There is no `review` mode: review mode audits a
 // CHANGE to a document, and this verb's subject is a directory.
 
 export const meta = {
@@ -181,6 +185,60 @@ if (!input) {
 if (!Array.isArray(input.disabledCriteria) || !input.disabledCriteria.every((d) => typeof d === 'string')) {
   throw new Error(`md-domain detect lane requires args.disabledCriteria = string[] (an empty array when nothing is disabled), got ${JSON.stringify(input.disabledCriteria) ?? 'nothing'}. Pass "disabled" from scripts/resolve_standards.py; an absent list is never read as "nothing disabled".`)
 }
+
+// lane-route: begin (shared chunk; the generator rewrites this region)
+// laneModels is REQUIRED: this lane family's resolved route from
+// scripts/resolve_standards.py (lane_models.<family>), threaded by the caller.
+// run is the ordered list of {id, effort} entries agent() can run; dropped lists
+// the declared entries it cannot run, each with its reason. An absent or
+// malformed value throws before any agent is dispatched: reading "not passed" as
+// "inherit the session model" is the default this argument exists to remove.
+const LANE_CORE_IDS = ['fable', 'haiku', 'opus', 'sonnet']
+const laneModels = input.laneModels
+const isLaneEntry = (e) => !!e && typeof e === 'object' &&
+  typeof e.id === 'string' && e.id.trim() !== '' &&
+  typeof e.effort === 'string' && e.effort.trim() !== ''
+if (!laneModels || typeof laneModels !== 'object' || !Array.isArray(laneModels.run) ||
+    laneModels.run.length === 0 || !laneModels.run.every(isLaneEntry) || !Array.isArray(laneModels.dropped)) {
+  throw new Error(`md-domain lane requires args.laneModels = {run: [{id, effort}, ...], dropped: [...]} with a non-empty run list, got ${JSON.stringify(laneModels) ?? 'nothing'}. Pass this lane family's lane_models entry from scripts/resolve_standards.py; an absent route is never read as "inherit the session model".`)
+}
+const laneUnrunnable = laneModels.run.filter((e) => !LANE_CORE_IDS.includes(e.id))
+if (laneUnrunnable.length > 0) {
+  throw new Error(`md-domain lane: args.laneModels.run names ${laneUnrunnable.map((e) => JSON.stringify(e.id)).join(', ')}, which agent() cannot run (runnable ids: ${LANE_CORE_IDS.join(', ')}). The resolver moves such ids to laneModels.dropped; a run list that still carries one was not produced by it.`)
+}
+const laneEntryText = (e) => String(e.id) + ' (' + String(e.effort) + ')'
+if (laneModels.dropped.length > 0) {
+  log('md-domain lanes: dropped ' + laneModels.dropped.map(laneEntryText).join(', ') +
+    ' -- not runnable on agent(); running ' + laneModels.run.map(laneEntryText).join(', '))
+}
+const laneRoutePerFile = []
+// Dispatch one lane through the run list. Entries are tried in order; the next
+// one runs when agent() throws or returns nothing. A lane whose every entry
+// failed returns null, as a single agent() call that died does, and each
+// failure stays on its route record.
+async function laneAgent(key, prompt, opts) {
+  const failed = []
+  for (const e of laneModels.run) {
+    let r = null
+    try {
+      r = await agent(prompt, { ...opts, model: e.id, effort: e.effort })
+    } catch (err) {
+      failed.push({ id: e.id, effort: e.effort, reason: String((err && err.message) || err) })
+      continue
+    }
+    if (r !== null && r !== undefined) {
+      laneRoutePerFile.push({ path: key, used: { id: e.id, effort: e.effort }, failed })
+      return r
+    }
+    failed.push({ id: e.id, effort: e.effort, reason: 'agent() returned nothing' })
+  }
+  laneRoutePerFile.push({ path: key, used: null, failed })
+  log('md-domain lane route exhausted for ' + key + ': ' +
+    failed.map((f) => laneEntryText(f) + ': ' + f.reason).join('; '))
+  return null
+}
+const laneRoutes = () => ({ dropped: laneModels.dropped, perFile: laneRoutePerFile })
+// lane-route: end
 
 const ceiling = Number.isInteger(input.ceiling) ? input.ceiling : DEFAULT_CEILING
 const batchSize = Number.isInteger(input.batchSize) && input.batchSize > 0
@@ -1077,16 +1135,17 @@ const reconcileBatch = (b, r) => {
 
 phase('Coverage')
 const batchResults = await parallel(batches.map((b, i) => () =>
-  // Detection is this verb's judgment core, so the tier is pinned rather than
-  // inherited. This matters more here than in the document lanes: a coverage run
-  // may have exactly ONE subject, and the audit lane's single-subject shortcut
-  // runs inline at whatever model the session happens to be on. Going through
-  // the workflow regardless of count is what keeps the common case on-pin.
-  agent(batchPrompt(b), {
+  // The model and effort come from args.laneModels through laneAgent (the lane
+  // route above), never from the session. This matters more here than in the
+  // document lanes: a coverage run may have exactly ONE subject, and the audit
+  // lane's single-subject shortcut runs inline at whatever model the session
+  // happens to be on. Going through the workflow regardless of count is what
+  // keeps the common case on the configured route. A batch whose every route
+  // entry failed reaches reconcileBatch as null, which reports its subjects as
+  // not returned.
+  laneAgent(batchLabel(b, i), batchPrompt(b), {
     label: batchLabel(b, i),
     phase: 'Coverage',
-    model: 'opus',
-    effort: 'high',
     schema: BATCH_FINDINGS_SCHEMA,
   }).then((r) => reconcileBatch(b, r))
 ))
@@ -1255,16 +1314,13 @@ const verifyTargets = verifyEnabled
 const verifyByKey = new Map()
 if (verifyTargets.length) {
   const verdictSets = await parallel(verifyTargets.map((r) => () =>
-    agent(verifyPrompt({ root: r.root, codeFiles: codeFilesByKey.get(r.subjectKey) || [] }, r.candidates), {
+    // Routed through args.laneModels like detection. A subject whose every
+    // route entry failed yields no verdict pair and stays UNRETURNED below.
+    laneAgent(`verify ${r.root}`, verifyPrompt({ root: r.root, codeFiles: codeFilesByKey.get(r.subjectKey) || [] }, r.candidates), {
       label: `verify ${r.root}`,
       phase: 'Coverage',
-      // Pinned for the same reason detection is: refuting a universal claim
-      // means reading every file in a directory and noticing the one that does
-      // not conform, which is exactly where a cheaper tier was measured to fail.
-      model: 'opus',
-      effort: 'high',
       schema: VERIFY_FINDINGS_SCHEMA,
-    }).then((v) => [r.subjectKey, v])
+    }).then((v) => (v ? [r.subjectKey, v] : null))
   ))
   for (const pair of verdictSets) {
     if (!pair) continue
@@ -1595,4 +1651,4 @@ const runNoteClause = runNotes.length ? ` NOTE: ${runNotes.join(' ')}` : ''
 
 log(`Coverage (depth=${depth}, ${modeNote}, provenance=${provenance}, ${batches.length} batch(es) of up to ${batchSize}): ${totals.completed} of ${totals.requested} requested directory/ies COMPLETED (${totals.notAssessed} NOT assessed): ${totals.gapsFound} GAPS-FOUND, ${totals.assessed} COVERAGE-ASSESSED, ${totals.candidates} candidate(s)${tierNote}${severeNote}${evidenceNote}${uncoveredNote}${discoveryFailedNote}${incompleteNote}${isolationNote}${destinationNote}${disagreementNote}${duplicateNote}${extraNote}${verifyNote}${ceilingNote}. Advisory and non-idempotent: re-runs may differ, and nothing is applied.${provenanceWarning}${runNoteClause}`)
 
-return { perSubject: verifiedResults, totals, ceiling, depth, batchSize, batches: batches.length, subjectsFile, provenance, notes: runNotes }
+return { perSubject: verifiedResults, totals, ceiling, depth, batchSize, batches: batches.length, subjectsFile, provenance, notes: runNotes, routes: laneRoutes() }

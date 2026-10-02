@@ -73,9 +73,13 @@
 //           lane:      <abs path to references/lanes/generation-lane.md>,
 //           placement: <abs path to references/cohesion-principles.md> }
 //   houseStyle: <abs path to an exemplar CLAUDE.md>|undefined
+//   laneModels: { run: [{id, effort}], dropped: [{id, effort, reason}] }
+//     // REQUIRED: lane_models.generate from scripts/resolve_standards.py. Each
+//     // dispatch tries run in order and moves on when agent() throws or returns
+//     // nothing; absent throws. The result carries routes = {dropped, perFile}.
 // }
 //
-// Returns { perSubject, waves, waveRecords, totals }.
+// Returns { perSubject, waves, waveRecords, totals, routes }.
 //
 // EACH WAVE IS THREE STEPS, NOT ONE: compose (which PROPOSES hoists and writes
 // none), verify (which settles each proposal against exactly the files it named),
@@ -113,6 +117,60 @@ if (typeof input === 'string') {
 if (!input) {
   throw new Error('claude-md-generate.js requires args = { subjects, refs }')
 }
+
+// lane-route: begin (shared chunk; the generator rewrites this region)
+// laneModels is REQUIRED: this lane family's resolved route from
+// scripts/resolve_standards.py (lane_models.<family>), threaded by the caller.
+// run is the ordered list of {id, effort} entries agent() can run; dropped lists
+// the declared entries it cannot run, each with its reason. An absent or
+// malformed value throws before any agent is dispatched: reading "not passed" as
+// "inherit the session model" is the default this argument exists to remove.
+const LANE_CORE_IDS = ['fable', 'haiku', 'opus', 'sonnet']
+const laneModels = input.laneModels
+const isLaneEntry = (e) => !!e && typeof e === 'object' &&
+  typeof e.id === 'string' && e.id.trim() !== '' &&
+  typeof e.effort === 'string' && e.effort.trim() !== ''
+if (!laneModels || typeof laneModels !== 'object' || !Array.isArray(laneModels.run) ||
+    laneModels.run.length === 0 || !laneModels.run.every(isLaneEntry) || !Array.isArray(laneModels.dropped)) {
+  throw new Error(`md-domain lane requires args.laneModels = {run: [{id, effort}, ...], dropped: [...]} with a non-empty run list, got ${JSON.stringify(laneModels) ?? 'nothing'}. Pass this lane family's lane_models entry from scripts/resolve_standards.py; an absent route is never read as "inherit the session model".`)
+}
+const laneUnrunnable = laneModels.run.filter((e) => !LANE_CORE_IDS.includes(e.id))
+if (laneUnrunnable.length > 0) {
+  throw new Error(`md-domain lane: args.laneModels.run names ${laneUnrunnable.map((e) => JSON.stringify(e.id)).join(', ')}, which agent() cannot run (runnable ids: ${LANE_CORE_IDS.join(', ')}). The resolver moves such ids to laneModels.dropped; a run list that still carries one was not produced by it.`)
+}
+const laneEntryText = (e) => String(e.id) + ' (' + String(e.effort) + ')'
+if (laneModels.dropped.length > 0) {
+  log('md-domain lanes: dropped ' + laneModels.dropped.map(laneEntryText).join(', ') +
+    ' -- not runnable on agent(); running ' + laneModels.run.map(laneEntryText).join(', '))
+}
+const laneRoutePerFile = []
+// Dispatch one lane through the run list. Entries are tried in order; the next
+// one runs when agent() throws or returns nothing. A lane whose every entry
+// failed returns null, as a single agent() call that died does, and each
+// failure stays on its route record.
+async function laneAgent(key, prompt, opts) {
+  const failed = []
+  for (const e of laneModels.run) {
+    let r = null
+    try {
+      r = await agent(prompt, { ...opts, model: e.id, effort: e.effort })
+    } catch (err) {
+      failed.push({ id: e.id, effort: e.effort, reason: String((err && err.message) || err) })
+      continue
+    }
+    if (r !== null && r !== undefined) {
+      laneRoutePerFile.push({ path: key, used: { id: e.id, effort: e.effort }, failed })
+      return r
+    }
+    failed.push({ id: e.id, effort: e.effort, reason: 'agent() returned nothing' })
+  }
+  laneRoutePerFile.push({ path: key, used: null, failed })
+  log('md-domain lane route exhausted for ' + key + ': ' +
+    failed.map((f) => laneEntryText(f) + ': ' + f.reason).join('; '))
+  return null
+}
+const laneRoutes = () => ({ dropped: laneModels.dropped, perFile: laneRoutePerFile })
+// lane-route: end
 
 // Fail-closed on the standards seam, same posture as coverage-detect.js. Without
 // the standards doc this lane would generate against REMEMBERED standards, which
@@ -1177,13 +1235,13 @@ for (let w = 0; w < waves.length; w++) {
     // is absent for a legitimate reason.
     const writtenChildren = directChildrenOf(root).filter((c) => writtenByRoot.has(c))
 
-    return agent(lanePrompt(s, root, writtenChildren), {
+    // The model and effort come from args.laneModels through laneAgent (the
+    // lane route above); nothing is inherited and nothing is pinned here.
+    return laneAgent('generate:' + root, lanePrompt(s, root, writtenChildren), {
       label: 'generate:' + root.split('/').pop(),
       phase: 'Generate',
-      model: 'opus',
-      effort: 'high',
       schema: DOC_SCHEMA,
-    }).then((r) => ({ ...r, root }))
+    }).then((r) => (r ? { ...r, root } : null))
   }))
 
   // ---- Step 1 done: COMPOSE (propose). ----
@@ -1210,13 +1268,11 @@ for (let w = 0; w < waves.length; w++) {
   const verdictByRoot = new Map()
   if (proposers.length) {
     const verdicts = await parallel(proposers.map((r) => () =>
-      agent(verifyPrompt(r), {
+      laneAgent('verify-hoists:' + r.root, verifyPrompt(r), {
         label: 'verify-hoists:' + r.root.split('/').pop(),
         phase: 'Generate',
-        model: 'opus',
-        effort: 'high',
         schema: VERIFY_SCHEMA,
-      }).then((v) => ({ ...v, root: r.root }))
+      }).then((v) => (v ? { ...v, root: r.root } : null))
     ))
     for (const v of verdicts.filter(Boolean)) verdictByRoot.set(norm(v.root), v)
   }
@@ -1300,7 +1356,8 @@ for (let w = 0; w < waves.length; w++) {
   const appliedByRoot = new Map()
   if (applyTargets.length) {
     const applied = await parallel(applyTargets.map((t) => () =>
-      agent(
+      laneAgent(
+        (t.r.written ? 'apply-hoists:' : 'create-from-hoists:') + t.r.root,
         t.r.written
           ? applyPrompt(t.r, t.verified)
           : createPrompt(byRoot.get(t.r.root) || {}, t.r, t.verified),
@@ -1308,10 +1365,8 @@ for (let w = 0; w < waves.length; w++) {
           label: (t.r.written ? 'apply-hoists:' : 'create-from-hoists:') +
             t.r.root.split('/').pop(),
           phase: 'Generate',
-          model: 'opus',
-          effort: 'high',
           schema: APPLY_SCHEMA,
-        }).then((a) => ({ ...a, root: t.r.root }))
+        }).then((a) => (a ? { ...a, root: t.r.root } : null))
     ))
     for (const a of applied.filter(Boolean)) appliedByRoot.set(norm(a.root), a)
   }
@@ -1611,4 +1666,4 @@ log('Generate: ' + totals.written + ' document(s) written across ' + waves.lengt
 // tell "the phase ran and nothing qualified" from "the phase never ran", and the
 // documents look identical in both cases -- the record is the only thing that
 // separates them, and its ABSENCE is a failure rather than a silent pass.
-return { perSubject, waves, waveRecords, totals }
+return { perSubject, waves, waveRecords, totals, routes: laneRoutes() }

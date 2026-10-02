@@ -1,0 +1,21 @@
+# Shipped lane_models slot: the model and effort each md-domain lane family
+# runs under, as an ordered list of {id, effort} entries (preference order).
+#
+# Layers (lowest first): this file -> the user layer
+# <user_dir>/skills-kit/config.yaml (+ config.local.yaml) -> the project layer
+# <project>/.claude/skills-kit/config.yaml (+ config.local.yaml). A later layer
+# wins per family key, and its list REPLACES this list wholesale.
+#
+# The agent-only families (detect, classify, coverage, generate, remediate) run
+# through Workflow agent() or the Agent tool; skills_kit_lib.lane_models.agent_route
+# drops any id those cannot run and reports the drop. audit_job runs through
+# job-kit and llm-scripting-kit, where every declared id can run.
+#
+# Resolver and grammar: skills_kit_lib/lane_models.py.
+lane_models:
+  detect:    [{id: sonnet, effort: low}]
+  classify:  [{id: sonnet, effort: low}]
+  coverage:  [{id: sonnet, effort: low}]
+  generate:  [{id: sonnet, effort: low}]
+  remediate: [{id: sonnet, effort: low}]
+  audit_job: [{id: luna, effort: high}, {id: sonnet, effort: low}]

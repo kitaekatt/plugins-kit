@@ -90,10 +90,11 @@ never reaches.
 | subjects per agent | `batchSize`, default 8 |
 | supported flags | `--diff`, `--json`, `--advanced` |
 
-## Model pinning (not negotiable)
+## Lane models
 
-The detect workflow pins `opus` + `high` effort, per
-`${CLAUDE_PLUGIN_ROOT}/CLAUDE.md`.
+The detect workflow takes its model and effort from the `coverage` family of
+the `lane_models` slot (shipped default `sonnet`, `low`), passed as the required
+`laneModels` argument; see audit-lane.md, "Lane models".
 
 **The workflow is entered regardless of subject count.** This is the one place
 coverage must NOT copy the audit lane. audit-lane.md's "Step 2 -- DETECT"
@@ -531,7 +532,7 @@ absent" may claim; this section is what the lane runs to earn it.
 **Shape.** After reconciliation and before the report, ONE agent dispatch per
 subject whose `status` is `ASSESSED` and which holds at least one candidate.
 Subjects with no candidates are not dispatched -- there is nothing to refute.
-The dispatch is pinned `opus` + `high` for the same reason detection is:
+The dispatch uses the `coverage` family route, as detection does:
 refuting a universal claim means reading every file in a directory and noticing
 the one that does not conform.
 
@@ -954,7 +955,7 @@ review; a fossilized one is not.
   PARENT because the target is the CLAUDE.md; here the target is a directory, and
   its own CLAUDE.md is the most ambient file it has.
 - Do not treat an empty ambient chain as an error or a skip. It is the finding.
-- Do not enter the inline single-subject path. See "Model pinning".
+- Do not enter the inline single-subject path. See "Lane models".
 - Do not descend. A file in a subdirectory is not evidence for this directory's
   candidates, and a fact about it is a CV-3 violation however true it is.
 - Do not retarget a candidate to the nearest EXISTING CLAUDE.md when the assessed

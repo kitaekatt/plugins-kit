@@ -301,12 +301,16 @@ technique_skill:
             `scripts/resolve_standards.py` ONCE per review under that venvPython (exact command in
             that reference) and pass its `disabled` list as `disabledCriteria` in EVERY lane args
             object -- an empty list when nothing is disabled; every detect lane throws without it --
-            plus each file's `standardsPaths` from its `standards` map. A non-zero exit is never
-            replaced by `[]`: run no lane and report every non-trivial claimed file
-            `REVIEW INCOMPLETE` with the script's stderr line. Use the Workflow tool when callable, passing
+            plus its `lane_models.detect` route (`{run, dropped}`) as `laneModels` in EVERY lane
+            args object, plus each file's `standardsPaths` from its `standards` map. A non-zero exit
+            is never replaced by `[]`: run no lane and report every non-trivial claimed file
+            `REVIEW INCOMPLETE` with the script's stderr line. A JSON without `lane_models` is
+            version skew: run no lane and report every non-trivial claimed file
+            `REVIEW INCOMPLETE` naming skills-kit >= 0.89.0 -- never guess a model. Use the Workflow tool when callable, passing
             each installed lane's full text as `script` (never its installed path as `scriptPath`)
             per that reference; when the tool is unavailable or rejects the lane, use that reference's
-            "Manual detect invocation" with the SAME installed lanes and args. Transport failure
+            "Manual detect invocation" with the SAME installed lanes and args: it dispatches the
+            `run` entries in order, never a fixed model. Transport failure
             does not make md-domain absent and does not release its claimed files. On a skills-kit
             version skew (a detect lane
             entry point, `discover_claude_md.classify_dimension`, or a documented args contract
@@ -321,7 +325,7 @@ technique_skill:
             same entry point and args contract and would otherwise decline the file silently. Those
             are the only sanctioned second prepare invocations.
             Then proceed with the normal fan-out. When the pass runs, the md-domain lanes execute in
-            PARALLEL with the reviewer fan-out; keep each `{perFile, totals, review}` for step 9's labeled
+            PARALLEL with the reviewer fan-out; keep each `{perFile, totals, review, routes}` for step 9's labeled
             section.
             Then launch one subagent per (reviewer x chunk) pair in parallel via
             a single message with R x K Agent calls, where R = len(profile.reviewers) and
@@ -455,6 +459,15 @@ technique_skill:
               this section and the code-review issues; accepted md-domain remediations are applied as
               normal edits AFTER decisions. If the md-domain pass fell back to the generic review, do NOT
               render this section (the md files were reviewed as ordinary subjects).
+            - md-domain lane disclosure: when the md-domain pass ran and the resolved
+              `lane_models.detect.dropped` list is non-empty, print ONE line for that family at the
+              top of the md-domain section, in the form
+              `md-domain lanes: dropped <id> (<effort>), ... -- not runnable on agent(); ran <id> (<effort>), ...`
+              (e.g. `md-domain lanes: dropped luna (high) -- not runnable on agent(); ran sonnet (low)`),
+              where `ran` lists the distinct `used` entries of the lanes' `routes.perFile` (or of the
+              manual dispatches). A drop is configured behaviour, not a failure; print no line when
+              nothing was dropped. A file whose every `run` entry failed (`used: null`) is
+              `REVIEW INCOMPLETE`, never DIFF-CLEAN.
             - Mechanical checks (audit-skipped) section: for every claimed file with `trivial == true`,
               render a distinct `## Mechanical checks (audit skipped)` section -- kept SEPARATE from both
               the code-review issues and the md-domain findings. For each such file, state in one line what

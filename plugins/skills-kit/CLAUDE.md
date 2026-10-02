@@ -267,15 +267,16 @@ claude_md:
       origin: Arch-review finding S19 (2026-06-09); path updated for the md-domain fold (2026-07-29).
       added: "2026-06-10"
   conventions:
-    - rule: "Audit workflow lanes pin an explicit model AND effort -- never inherit either from the session: detect/classify lanes set model 'opus' + effort 'high'; remediate lanes set model 'sonnet' + effort 'low'. The remediate defaults live once in scripts/gen_workflow_js.py (the canonical template that generates skills/md-domain/workflow/*-remediate.js); the detect/classify defaults live in each hand-authored skills/md-domain/workflow/*-detect.js and references-classify.js agent() call. A new audit workflow script must follow the same split."
+    - rule: "Audit workflow lanes take an explicit model AND effort from the lane_models config slot -- never inherit either from the session and never hard-code a `model:` literal in a workflow script. Every script takes a REQUIRED `laneModels = {run, dropped}` argument and throws when it is absent. The shipped default is sonnet + low for every md-domain lane (audit_job is luna high then sonnet low). Ids that agent()/Agent cannot run (anything outside fable, opus, sonnet, haiku) are dropped and reported, not rejected. Slot, layers and drop rule: skills/md-domain/references/lanes/audit-lane.md, 'Lane models'. A new audit workflow script must follow the same shape."
       keywords:
         - workflow lane model
-        - opus detect high effort
-        - sonnet remediate low effort
+        - lane_models
+        - agent_route drop
+        - sonnet low default
         - no inherited effort
         - token cost
         - agent() model default
-      why: "Without explicit tiers, every fan-out lane inherits the main-loop session model and effort -- a 20-file audit on a top-tier session is 20 top-tier lanes, mostly wasted, while a low-effort session would silently under-power detection. Each lane declares the RIGHT tier for its work instead: remediation applies already-decided edits (the judgment happened at the Q&A gate), so sonnet at low effort suffices; detection/classification IS the audits' judgment core (CCP/CRP/ADP criteria application), the judge stage that warrants opus at high effort. User directive 2026-07-13 (explicitly: pin the right effort, do not inherit)."
+      why: "Without explicit routes, every fan-out lane inherits the main-loop session model and effort. User decision 2026-10-02, replacing the earlier opus/high detect pin (user directive 2026-07-13): 'md-domain: can always be [luna high, sonnet low]'; 'if luna is incompatible drop luna'; 'yeah i get it you can't use luna in a workflow'; 'it should just be dropped if it doesn't work'; 'and it shouldn't be specified for a workflow specific specification, but even if it is, it should be dropped as incompatible'. Coverage and generate lanes: 'All sonnet low'. Frontier models (astra, fable) stay banned from review lanes as a convention."
     - rule: "A workflow lane is shipped only after ONE REAL DISPATCH through the Workflow tool. Reading it is not testing it, `node --check` is not testing it, and the text-substring contract tests in tests/skills-kit are not testing it -- all three pass on a lane that dispatches zero agents. Two known unrunnable shapes, each of which defeated the checks that caught the other: (a) a bare `input` instead of `let input = args` (with the JSON.parse guard for the string form), which throws `Error: input is not defined` on the first line; (b) a markdown-style backtick-quoted word in prompt prose inside a template literal, which ends the template early -- node accepts the result as a tagged template on an undefined identifier while the Workflow parser rejects the whole script. Do not treat either enumerated shape as the rule; the rule is the dispatch."
       keywords:
         - input is not defined

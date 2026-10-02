@@ -8,6 +8,12 @@ rendered reference must (a) run the resolver once, under the skills-kit venv
 interpreter, (b) pass `disabledCriteria` in EVERY lane's args, and (c) report the
 claimed files incomplete -- never substitute `[]` -- when the resolver fails.
 
+The same holds for the lane model route: every detect lane also throws without
+`args.laneModels` = the resolver's `lane_models.detect` (`{run, dropped}`). The
+rendered text must thread it to every lane, dispatch the manual route from
+`run` rather than a fixed model, disclose drops in step 9, and report REVIEW
+INCOMPLETE when the resolver JSON carries no `lane_models`.
+
 These assertions read the RENDERED files, not the generator: a property that a
 regeneration could remove from both sides is invisible to the byte-identity
 drift guard (root CLAUDE.md insight guard_cannot_see_its_own_subject). The
@@ -112,7 +118,87 @@ def test_resolver_failure_reports_incomplete_and_never_defaults(path: Path) -> N
 @pytest.mark.parametrize("path", REFERENCES, ids=("git", "p4"))
 def test_manual_invocation_carries_disabled_criteria(path: Path) -> None:
     body = _flat(path)
-    assert "the top-level `disabledCriteria` and `mechanicalCheckPhrases`" in body
+    assert "the top-level `disabledCriteria`, `laneModels` and `mechanicalCheckPhrases`" in body
+
+
+@pytest.mark.parametrize("path", REFERENCES, ids=("git", "p4"))
+def test_every_detect_lane_receives_lane_models(path: Path) -> None:
+    lanes = _lane_args(path)
+    assert set(lanes) == {"claude-md-detect.js", "skill-detect.js", "project-doc-detect.js"}
+    for lane, args in lanes.items():
+        assert "laneModels: <resolved lane_models.detect>" in args, lane
+    body = _flat(path)
+    assert "`laneModels` = `lane_models.detect`, passed as `{ run, dropped }`" in body
+    assert "the top-level `disabledCriteria`, `laneModels` and `mechanicalCheckPhrases`" in body
+
+
+@pytest.mark.parametrize("path", SKILLS, ids=("git", "p4"))
+def test_skill_body_passes_lane_models_to_every_lane(path: Path) -> None:
+    body = _flat(path)
+    assert (
+        "plus its `lane_models.detect` route (`{run, dropped}`) as `laneModels` in EVERY lane "
+        "args object" in body
+    )
+
+
+def _md_domain_skill_regions(path: Path) -> str:
+    """The step-6 launch and step-9 report text the generator renders for md-domain."""
+    body = _flat(path)
+    launch = body[body.index("Triviality gate (pure-mechanical"):]
+    launch = launch[: launch.index("for step 9's labeled section.")]
+    report = body[body.index("When the md-domain subject-lens pass ran"):]
+    report = report[: report.index("Ruleset self-reference notice")]
+    return launch + "\n" + report
+
+
+@pytest.mark.parametrize("path", REFERENCES + SKILLS, ids=("git-ref", "p4-ref", "git", "p4"))
+def test_md_domain_parts_pin_no_model(path: Path) -> None:
+    text = _flat(path) if path.name == "md-domain-review.md" else _md_domain_skill_regions(path)
+    for pin in ("opus", "Opus", "review-lane-high", "model pin", "effort: 'high'"):
+        assert pin not in text, pin
+
+
+@pytest.mark.parametrize("path", REFERENCES, ids=("git", "p4"))
+def test_manual_route_dispatches_from_the_run_list(path: Path) -> None:
+    body = _flat(path)
+    kit = "git-kit" if "git-kit" in str(path) else "p4-kit"
+    assert "take `laneModels.run[0]` and invoke Agent with" in body
+    assert f"`subagent_type: {kit}:review-lane-<effort>` and `model: <id>`" in body
+    assert "md-domain lane failover: <file> - <id> (<effort>) failed: <reason>;" in body
+    assert "never a `dropped` entry and never a model the route does not name" in body
+
+
+@pytest.mark.parametrize("path", SKILLS, ids=("git", "p4"))
+def test_report_discloses_dropped_lane_models(path: Path) -> None:
+    body = _flat(path)
+    assert (
+        "`md-domain lanes: dropped <id> (<effort>), ... -- not runnable on agent(); "
+        "ran <id> (<effort>), ...`" in body
+    )
+    assert (
+        "`md-domain lanes: dropped luna (high) -- not runnable on agent(); ran sonnet (low)`"
+        in body
+    )
+
+
+@pytest.mark.parametrize("path", REFERENCES, ids=("git", "p4"))
+def test_missing_lane_models_reports_incomplete(path: Path) -> None:
+    body = _flat(path)
+    assert (
+        "`REVIEW INCOMPLETE: <file> - resolve_standards.py output has no lane_models; "
+        "requires skills-kit >= 0.89.0`" in body
+    )
+    assert "Do NOT guess a model" in body
+
+
+@pytest.mark.parametrize("path", SKILLS, ids=("git", "p4"))
+def test_skill_body_missing_lane_models_reports_incomplete(path: Path) -> None:
+    body = _flat(path)
+    assert (
+        "A JSON without `lane_models` is version skew: run no lane and report every "
+        "non-trivial claimed file `REVIEW INCOMPLETE` naming skills-kit >= 0.89.0 -- "
+        "never guess a model." in body
+    )
 
 
 @pytest.mark.parametrize("path", SKILLS, ids=("git", "p4"))
@@ -133,18 +219,30 @@ const fs = require('fs')
 const src = fs.readFileSync(process.argv[2], 'utf8').replace('export const meta', 'const meta')
 const args = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'))
 let calls = 0
-const agent = () => { calls += 1; return Promise.resolve({}) }
+const routes = []
+const agent = (prompt, opts) => {
+  calls += 1
+  routes.push({ model: opts && opts.model, effort: opts && opts.effort })
+  return Promise.resolve({})
+}
 const parallel = (thunks) => Promise.all(thunks.map((t) => t()))
 const noop = () => {}
 const fn = new Function('args', 'agent', 'parallel', 'phase', 'log',
   '"use strict"; return (async () => {\n' + src + '\n})()')
 Promise.resolve()
   .then(() => fn(args, agent, parallel, noop, noop))
-  .then(() => console.log(JSON.stringify({ calls, error: null })))
-  .catch((e) => console.log(JSON.stringify({ calls, error: String((e && e.message) || e) })))
+  .then(() => console.log(JSON.stringify({ calls, routes, error: null })))
+  .catch((e) => console.log(JSON.stringify({ calls, routes, error: String((e && e.message) || e) })))
 """
 
 GUARD_ERROR = "requires args.disabledCriteria"
+LANE_GUARD_ERROR = "requires args.laneModels"
+
+# A resolver-shaped lane_models.detect route: luna declared first and dropped.
+LANE_MODELS = {
+    "run": [{"id": "sonnet", "effort": "low"}],
+    "dropped": [{"id": "luna", "effort": "high", "reason": "not runnable by agent()/Agent"}],
+}
 
 
 def _run_lane(tmp_path: Path, lane: str, args: dict) -> dict:
@@ -169,6 +267,7 @@ def _documented_args(tmp_path: Path, lane: str, keys: list[str]) -> dict:
     values = {
         "files": [file_entry],
         "disabledCriteria": [],
+        "laneModels": json.loads(json.dumps(LANE_MODELS)),
         "mechanicalCheckPhrases": {},
         "review": True,
         "refs": {"pluginRoot": str(tmp_path), "venvPython": str(tmp_path / "python")},
@@ -185,9 +284,18 @@ def test_documented_args_pass_the_real_lane_guard(tmp_path: Path, lane: str) -> 
 
     out = _run_lane(tmp_path, lane, args)
     assert out["error"] is None or GUARD_ERROR not in out["error"], out
+    assert out["error"] is None or LANE_GUARD_ERROR not in out["error"], out
     assert out["calls"] >= 1, out
+    # Every dispatch took the documented route's run entry, never a pinned model.
+    assert out["routes"] and all(
+        r == {"model": "sonnet", "effort": "low"} for r in out["routes"]
+    ), out
 
-    # Counterfactual: the same args without the key never reach an agent.
+    # Counterfactuals: the same args without either key never reach an agent.
+    no_lane_models = {k: v for k, v in args.items() if k != "laneModels"}
+    out = _run_lane(tmp_path, lane, no_lane_models)
+    assert out["calls"] == 0 and LANE_GUARD_ERROR in (out["error"] or ""), out
+
     del args["disabledCriteria"]
     out = _run_lane(tmp_path, lane, args)
     assert out["calls"] == 0 and GUARD_ERROR in (out["error"] or ""), out

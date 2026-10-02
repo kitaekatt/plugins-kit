@@ -26,8 +26,17 @@ Prints one JSON object:
       "thresholds": {"<name>": <int>, ...},
       "standards":  {"<primitive>": ["<abs path>", ...], ...},
       "audit":      {"fix_mode": "apply"|"propose"},
+      "lane_models": {"<family>": {"declared": [{"id", "effort"}, ...],
+                                   "run":      [{"id", "effort"}, ...],
+                                   "dropped":  [{"id", "effort", "reason"}, ...]}},
       "notes":      ["<loud-but-non-fatal diagnostic>", ...]
     }
+
+`lane_models` covers the agent-only lane families (detect, classify, coverage,
+generate, remediate): the layered `lane_models` slot resolved by
+skills_kit_lib.lane_models, routed through its agent_route. A dropped entry is
+not an error; a family with nothing runnable, an incomplete or malformed slot,
+or an unimportable bootstrap_lib exits 1 like any other config error.
 
 Stdlib-only argument handling; the actual resolution (pyyaml + schema
 validation) lives in skills_kit_lib.standards_resolve. Exit 1, with one line on
@@ -109,6 +118,23 @@ def main(argv: list[str] | None = None) -> int:
         print(f"resolve_standards: {exc}", file=sys.stderr)
         return 1
 
+    # lane_models needs bootstrap_lib (EFFORT_LEVELS, model_declaration), which
+    # the skills-kit plugin venv links; standards_resolve stays free of it.
+    try:
+        from skills_kit_lib import lane_models
+    except ImportError as exc:
+        print(
+            f"resolve_standards: cannot resolve lane_models: {exc}. Run under "
+            "the skills-kit plugin venv, which links bootstrap_lib.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        routes = lane_models.agent_routes(lane_models.load_lane_models(project_root))
+    except lane_models.LaneModelsError as exc:
+        print(f"resolve_standards: lane_models: {exc}", file=sys.stderr)
+        return 1
+
     by_primitive = resolved.standards_by_primitive
     if args.primitive:
         wanted = args.primitive
@@ -124,6 +150,7 @@ def main(argv: list[str] | None = None) -> int:
         "thresholds": dict(resolved.thresholds),
         "standards": standards,
         "audit": dict(resolved.audit),
+        "lane_models": routes,
         "notes": list(resolved.notes),
     }
     print(json.dumps(out, indent=2))
@@ -131,4 +158,11 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    # lane_models imports bootstrap_lib, which only the skills-kit plugin venv
+    # links. The vendored guard is stdlib-only; it re-execs under that venv (a
+    # no-op when already there) before main() imports lane_models.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from bootstrap_guard import reexec_under_plugin_venv
+
+    reexec_under_plugin_venv("skills-kit")
     raise SystemExit(main())

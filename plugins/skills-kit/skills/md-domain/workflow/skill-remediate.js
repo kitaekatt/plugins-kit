@@ -28,7 +28,10 @@
 //                                          // refined instruction to apply instead
 //     } ]
 //   } ],
-//   fixMode: "apply"|"propose"  // REQUIRED: audit.fix_mode from
+//   fixMode: "apply"|"propose",  // REQUIRED: audit.fix_mode from
+//                                // scripts/resolve_standards.py; absent throws
+//   laneModels: { run: [{id, effort}], dropped: [{id, effort, reason}] }
+//                               // REQUIRED: lane_models.remediate from
 //                               // scripts/resolve_standards.py; absent throws
 // }
 
@@ -79,6 +82,60 @@ if (input.fixMode !== 'apply' && input.fixMode !== 'propose') {
   throw new Error(`remediate.js requires args.fixMode = "apply" | "propose", got ${JSON.stringify(input.fixMode) ?? 'nothing'}. Pass audit.fix_mode from scripts/resolve_standards.py; an absent fixMode is never read as "apply".`)
 }
 
+// lane-route: begin (shared chunk; the generator rewrites this region)
+// laneModels is REQUIRED: this lane family's resolved route from
+// scripts/resolve_standards.py (lane_models.<family>), threaded by the caller.
+// run is the ordered list of {id, effort} entries agent() can run; dropped lists
+// the declared entries it cannot run, each with its reason. An absent or
+// malformed value throws before any agent is dispatched: reading "not passed" as
+// "inherit the session model" is the default this argument exists to remove.
+const LANE_CORE_IDS = ['fable', 'haiku', 'opus', 'sonnet']
+const laneModels = input.laneModels
+const isLaneEntry = (e) => !!e && typeof e === 'object' &&
+  typeof e.id === 'string' && e.id.trim() !== '' &&
+  typeof e.effort === 'string' && e.effort.trim() !== ''
+if (!laneModels || typeof laneModels !== 'object' || !Array.isArray(laneModels.run) ||
+    laneModels.run.length === 0 || !laneModels.run.every(isLaneEntry) || !Array.isArray(laneModels.dropped)) {
+  throw new Error(`md-domain lane requires args.laneModels = {run: [{id, effort}, ...], dropped: [...]} with a non-empty run list, got ${JSON.stringify(laneModels) ?? 'nothing'}. Pass this lane family's lane_models entry from scripts/resolve_standards.py; an absent route is never read as "inherit the session model".`)
+}
+const laneUnrunnable = laneModels.run.filter((e) => !LANE_CORE_IDS.includes(e.id))
+if (laneUnrunnable.length > 0) {
+  throw new Error(`md-domain lane: args.laneModels.run names ${laneUnrunnable.map((e) => JSON.stringify(e.id)).join(', ')}, which agent() cannot run (runnable ids: ${LANE_CORE_IDS.join(', ')}). The resolver moves such ids to laneModels.dropped; a run list that still carries one was not produced by it.`)
+}
+const laneEntryText = (e) => String(e.id) + ' (' + String(e.effort) + ')'
+if (laneModels.dropped.length > 0) {
+  log('md-domain lanes: dropped ' + laneModels.dropped.map(laneEntryText).join(', ') +
+    ' -- not runnable on agent(); running ' + laneModels.run.map(laneEntryText).join(', '))
+}
+const laneRoutePerFile = []
+// Dispatch one lane through the run list. Entries are tried in order; the next
+// one runs when agent() throws or returns nothing. A lane whose every entry
+// failed returns null, as a single agent() call that died does, and each
+// failure stays on its route record.
+async function laneAgent(key, prompt, opts) {
+  const failed = []
+  for (const e of laneModels.run) {
+    let r = null
+    try {
+      r = await agent(prompt, { ...opts, model: e.id, effort: e.effort })
+    } catch (err) {
+      failed.push({ id: e.id, effort: e.effort, reason: String((err && err.message) || err) })
+      continue
+    }
+    if (r !== null && r !== undefined) {
+      laneRoutePerFile.push({ path: key, used: { id: e.id, effort: e.effort }, failed })
+      return r
+    }
+    failed.push({ id: e.id, effort: e.effort, reason: 'agent() returned nothing' })
+  }
+  laneRoutePerFile.push({ path: key, used: null, failed })
+  log('md-domain lane route exhausted for ' + key + ': ' +
+    failed.map((f) => laneEntryText(f) + ': ' + f.reason).join('; '))
+  return null
+}
+const laneRoutes = () => ({ dropped: laneModels.dropped, perFile: laneRoutePerFile })
+// lane-route: end
+
 // Drop files whose every remediation is a skip — nothing to do, no lane needed.
 const actionable = input.perFile.filter(
   (f) => Array.isArray(f.remediations) && f.remediations.some((r) => r.decision !== 'skip')
@@ -99,7 +156,7 @@ if (input.fixMode === 'propose') {
   }))
   const proposedCount = proposed.reduce((n, f) => n + f.proposed.length, 0)
   log(`Propose-only (audit.fix_mode = propose) -- no edits made; ${proposedCount} remediation(s) across ${proposed.length} skills reported as proposals`)
-  return { perFile: proposed, summary: { applied: 0, skipped: 0, failed: 0, proposed: proposedCount }, fixMode: 'propose' }
+  return { perFile: proposed, summary: { applied: 0, skipped: 0, failed: 0, proposed: proposedCount }, fixMode: 'propose', routes: laneRoutes() }
 }
 
 function lanePrompt(f) {
@@ -124,20 +181,14 @@ Return a summary: counts of applied/skipped/failed and a per-item action list.`
 }
 
 phase('Remediate')
-// Default lane tier: sonnet at low effort. Remediation applies already-decided
-// edits to disjoint files — the judgment happened at the Q&A gate — so the
-// lane needs neither the session's main-loop model nor high reasoning effort.
-// (Detect/classify lanes pin opus at high effort — criteria application is
-// the audits' judgment core; each lane declares its right tier explicitly
-// rather than inheriting whatever the session happens to run.)
+// The model and effort come from args.laneModels through laneAgent (the lane
+// route above); nothing is inherited from the session and nothing is pinned here.
 const results = await parallel(actionable.map((f) => () =>
-  agent(lanePrompt(f), {
+  laneAgent(f.path, lanePrompt(f), {
     label: `fix:${f.path.split(/[\\/]/).slice(-2).join('/')}`,
     phase: 'Remediate',
-    model: 'sonnet',
-    effort: 'low',
     schema: FILE_RESULT_SCHEMA,
-  }).then((r) => ({ ...r, path: f.path }))
+  }).then((r) => (r ? { ...r, path: f.path } : null))
 ))
 
 const summary = results.filter(Boolean).reduce(
@@ -151,4 +202,4 @@ const summary = results.filter(Boolean).reduce(
 )
 log(`Remediation across ${results.filter(Boolean).length} skills — applied ${summary.applied}, skipped ${summary.skipped}, failed ${summary.failed}`)
 
-return { perFile: results.filter(Boolean), summary }
+return { perFile: results.filter(Boolean), summary, routes: laneRoutes() }

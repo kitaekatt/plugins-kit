@@ -216,7 +216,7 @@ class TestReviewModeParityAcrossLanes:
             text = _read(p)
             assert "DIFF-CLEAN" in text
             assert "SERIOUS ALWAYS SURVIVES" in text
-            assert "return { perFile: results, totals, review }" in text
+            assert "return { perFile: results, totals, review, routes: laneRoutes() }" in text
 
     def test_detect_attributability_clause_present(self):
         for p in ALL_DETECT:

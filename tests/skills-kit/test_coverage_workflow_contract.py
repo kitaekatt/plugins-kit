@@ -8,12 +8,13 @@ a specific way of silently regressing:
   * It must never emit COMPLIANT / NON-COMPLIANT. Those belong to the document
     lanes and answer a different question; conflating them is the exact misread
     the whole capability exists to correct.
-  * It must pin opus + high explicitly. A coverage run normally has ONE subject,
-    and the audit lane's single-subject shortcut runs inline at whatever model
-    the session happens to be on -- so an unpinned lane silently drops tier in
-    the common case rather than the rare one.
+  * It must take its model and effort from args.laneModels and never inherit
+    them. A coverage run normally has ONE subject, and the audit lane's
+    single-subject shortcut runs inline at whatever model the session happens to
+    be on -- so a lane without a route silently drops tier in the common case
+    rather than the rare one.
   * It must have NO remediate lane. Report-only is what keeps the discovery phase
-    cheap; a remediate lane would drag in the sonnet+low pin and the generator,
+    cheap; a remediate lane would drag in the remediate route and the generator,
     which assumes per-file edits and applied/skipped/failed results.
   * It must REFUSE to run when the authored criteria path is missing rather than
     improvising. An invented predicate reproduces the hazard sweep two
@@ -133,15 +134,18 @@ class TestVerdictVocabulary:
         assert "verdict: derived" in src
 
 
-class TestModelPinning:
-    def test_pins_opus_high_explicitly(self):
-        src = _detect()
-        assert "model: 'opus'" in src
-        assert "effort: 'high'" in src
+class TestModelRouting:
+    """Runtime behaviour is pinned by test_lane_route_dispatch.py."""
 
-    def test_no_sonnet_low_remediation_pin(self):
+    def test_no_pinned_model_literal(self):
         src = _detect()
-        assert "model: 'sonnet'" not in src
+        assert "model: '" not in src
+        assert "effort: '" not in src
+
+    def test_both_dispatches_go_through_the_lane_route(self):
+        src = _detect()
+        assert "laneAgent(batchLabel(b, i), batchPrompt(b)" in src
+        assert "laneAgent(`verify ${r.root}`, verifyPrompt(" in src
 
     def test_lane_documents_the_single_subject_trap(self):
         """The reason the pin matters more here than in the document lanes."""
@@ -169,7 +173,7 @@ class TestCriteriaWiring:
     def test_guard_precedes_any_agent_dispatch(self):
         """A refusal after fan-out would have already spent the tokens."""
         src = _detect()
-        assert src.index("throw new Error") < src.index("agent(batchPrompt")
+        assert src.index("throw new Error") < src.index("laneAgent(batchLabel(b, i), batchPrompt")
 
     def test_refusal_names_the_rejected_design(self):
         """The guard exists to prevent improvising, not merely to be tidy."""
@@ -406,7 +410,7 @@ class TestDiscoveryFailureRefusal:
         assert (
             src.index("preDecided.push(discoveryFailure(s))")
             < src.index("dispatchable.slice(i, i + batchSize)")
-            < src.index("agent(batchPrompt")
+            < src.index("laneAgent(batchLabel(b, i), batchPrompt")
         )
         assert "preDecided.concat(" in src
 
@@ -644,7 +648,7 @@ class TestCriteriaAreConfigurableById:
         assert "const disabledCriteria = input.disabledCriteria" in src
         # Required, not defaulted: an absent list must not read as "none".
         assert "Array.isArray(input.disabledCriteria) ? input.disabledCriteria : []" not in src
-        assert src.index("requires args.disabledCriteria") < src.index("agent(")
+        assert src.index("requires args.disabledCriteria") < src.index("laneAgent(batchLabel")
 
     def test_disabled_clause_reaches_the_assessment_prompt(self):
         prompt = _lane_prompt_body()

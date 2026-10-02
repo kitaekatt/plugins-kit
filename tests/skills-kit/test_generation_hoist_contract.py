@@ -460,17 +460,18 @@ class TestWaveIsComposeVerifyApply:
     def test_all_three_steps_are_inside_the_wave_loop(self):
         src = _src()
         loop = src[src.index("for (let w = 0; w < waves.length; w++)"):src.index("// Totals.")]
-        assert loop.index("agent(lanePrompt") < loop.index("agent(verifyPrompt")
+        assert loop.index(", lanePrompt(s, root") < loop.index(", verifyPrompt(r)")
         # The third step dispatches applyPrompt OR createPrompt, chosen by whether
         # the composition produced a document; both are inside this loop.
-        assert loop.index("agent(verifyPrompt") < loop.index("applyPrompt(t.r, t.verified)")
-        assert loop.index("agent(verifyPrompt") < loop.index("createPrompt(")
+        assert loop.index(", verifyPrompt(r)") < loop.index("applyPrompt(t.r, t.verified)")
+        assert loop.index(", verifyPrompt(r)") < loop.index("createPrompt(")
 
-    def test_verification_pins_opus_high_like_the_composition(self):
+    def test_verification_is_routed_like_the_composition(self):
+        """Same lane route as compose; no pinned model or effort literal."""
         src = _src()
-        verify = src[src.index("agent(verifyPrompt"):src.index("for (const v of verdicts")]
-        assert "model: 'opus'" in verify
-        assert "effort: 'high'" in verify
+        verify = src[src.index("laneAgent('verify-hoists:'"):src.index("for (const v of verdicts")]
+        assert "model: '" not in verify
+        assert "effort: '" not in verify
 
     def test_a_root_is_resolved_only_after_the_apply_step(self):
         src = _src()
@@ -505,7 +506,7 @@ class TestWaveRecord:
 
     def test_the_record_is_returned_not_only_logged(self):
         src = _src()
-        assert "return { perSubject, waves, waveRecords, totals }" in src
+        assert "return { perSubject, waves, waveRecords, totals, routes: laneRoutes() }" in src
 
     def test_the_absence_of_a_record_is_documented_as_a_failure(self):
         src = _src()
@@ -593,10 +594,11 @@ class TestDriftTestDoesNotOwnThisFile:
     """Verified rather than assumed.
 
     gen_workflow_js.py generates the four remediate lanes and pins shared chunks
-    in the detect/classify lanes; claude-md-generate.js is in neither set, so
-    nothing in test_workflow_js_drift.py pinned the old repetition trigger. The
-    one thing that file DOES apply to every workflow script is the tagged-
-    template check, which is a parse guard rather than a behaviour pin.
+    in the detect/classify lanes; claude-md-generate.js carries only the shared
+    lane-route chunk, so nothing in test_workflow_js_drift.py pins the old
+    repetition trigger. Beyond that chunk, the file applies the tagged-template
+    check and the no-model-literal check to every workflow script; both are
+    guards rather than behaviour pins.
     """
 
     def _gen(self):
@@ -610,8 +612,9 @@ class TestDriftTestDoesNotOwnThisFile:
     def test_not_a_generated_remediate_lane(self):
         assert GENERATE not in set(self._gen().remediate_targets().values())
 
-    def test_not_a_shared_chunk_target(self):
-        assert GENERATE not in set(self._gen().SHARED_CHUNK_TARGETS)
+    def test_only_the_lane_route_chunk_is_pinned_here(self):
+        gen = self._gen()
+        assert gen.SHARED_CHUNK_TARGETS[GENERATE] == [gen.LANE_ROUTE_CHUNK]
 
 
 class TestNoAccidentalTaggedTemplate:

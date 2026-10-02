@@ -720,7 +720,7 @@ domain_skill:
       - id: audit_lane
         path: references/lanes/audit-lane.md
         keywords: [audit procedure, detect remediate, q and a gate, workflow fan-out, pre-image, review mode, non-interactive, decline contract, not-audited, output template, four dispositions]
-        summary: The ONE audit procedure, parameterized by artifact -- DETECT (opus/high) -> Q&A gate -> REMEDIATE (sonnet/low), the fan-out thresholds, pre-image materialization, the report contract, non-interactive inference, the generalized decline contract, and the references-lane special case.
+        summary: The ONE audit procedure, parameterized by artifact -- DETECT (`lane_models` route) -> Q&A gate -> REMEDIATE (`lane_models` route), the fan-out thresholds, pre-image materialization, the report contract, non-interactive inference, the generalized decline contract, and the references-lane special case.
       - id: references_finding_taxonomy
         path: references/references-finding-taxonomy.md
         keywords: [references finding taxonomy, A-K categories, hard dep missing, soft ref missing, name mismatch, shadowing, detection signals, disposition defaults, background-agent brief]

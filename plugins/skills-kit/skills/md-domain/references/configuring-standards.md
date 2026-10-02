@@ -50,7 +50,7 @@ Durability rationale, one line each:
 
 ## `config.yaml` format
 
-A layer's `config.yaml` (and its `config.local.yaml` overlay) carries four
+A layer's `config.yaml` (and its `config.local.yaml` overlay) carries five
 optional top-level keys:
 
 ```yaml
@@ -63,9 +63,19 @@ adapters:
     <setting>: <value>  # opt an adapter in (see Adapters)
 audit:
   fix_mode: apply       # apply | propose (see Audit behaviour)
+lane_models:
+  detect: [{id: sonnet, effort: low}]   # per lane family, in preference order
 ```
 
-All four keys are optional. An absent file is skipped silently; a present file with
+`lane_models` sets the model and effort of each md-domain lane family
+(`detect`, `classify`, `coverage`, `generate`, `remediate`, `audit_job`). A
+layer's list for a family replaces the lower layer's list wholesale. Ids that
+`agent()`/Agent cannot run (anything but `fable`, `opus`, `sonnet`, `haiku`)
+are dropped from the agent families and reported, not rejected. Run
+`skills_kit_tool.py lane-models --check` to validate; the full contract is in
+`references/lanes/audit-lane.md`, "Lane models".
+
+All five keys are optional. An absent file is skipped silently; a present file with
 a malformed root, an un-tunable rule id, or an unknown threshold is a loud error
 (see Troubleshooting).
 
@@ -286,11 +296,13 @@ Three things to know before you add an id:
   markdown audit** -- not that the endpoint is small, local, or likely to
   benefit. Attaching the pack to a model that does not need it costs tokens for
   no gain, so do not widen the set to make a run attach a pack.
-- **A mixed preference list is an error, not a guess.** A `models` list
-  naming both admitted and non-admitted endpoints fails the emit
-  (`emit_audit_jobs.py`, exit 4), because the endpoint is resolved at run
-  time and either choice would be wrong. Emit one job file per endpoint class
-  instead.
+- **A mixed preference list is an error, not a guess.** The `audit_job`
+  family of `lane_models` (the job's `models`) naming both admitted and
+  non-admitted endpoints fails the emit (`emit_audit_jobs.py`, exit 4), because
+  the endpoint is resolved at run time and either choice would be wrong. An
+  admitted list whose slot effort differs from the measured effort also exits 4.
+  Set `audit_job` in a layer so it names one endpoint class, and emit one job
+  file per class.
 
 ## Additive standards files
 

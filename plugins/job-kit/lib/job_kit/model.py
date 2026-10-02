@@ -23,6 +23,20 @@ The pre-declaration keys ``endpoint_preference``, ``endpoint_preferences``,
 migration step 12); a job file using one of them fails loading with an error
 naming ``models``.
 
+The optional ``model_efforts`` mapping states the reasoning effort for each
+declared entry, keyed by the same id ``models`` lists::
+
+    models: [luna, sonnet]
+    model_efforts: {luna: high, sonnet: low}
+
+It is a SIDECAR to ``models`` rather than part of it, so the shared
+declaration grammar (``bootstrap_lib.model_declaration``) stays a plain list
+of ids. When present it must name every declared id and nothing else, and it
+excludes ``options.effort``: effort is stated in one place. The runner sends
+the selected entry's effort as that attempt's effort, and refuses an entry
+whose adapter delivers no effort, or an attempt whose seam reports the effort
+dropped, rather than running it at some other effort.
+
 The job's directory is the declared working directory. Git repositories use
 that directory as the starting point for per-attempt isolation. A contract
 accepts only when its command exits with code zero.
@@ -355,6 +369,61 @@ _LEGACY_DECLARATION_KEYS = (
 _MODEL_DECLARATION_BOOTSTRAP = "0.129.0"
 
 
+def _normalize_model_efforts(
+    value: object,
+    models: tuple[str, ...],
+    options: Mapping[str, object],
+    job_id: str,
+) -> dict[str, str]:
+    """Validate a job's per-entry effort sidecar against its declaration.
+
+    Empty (or absent) means no per-entry effort. Otherwise every declared id
+    must have exactly one non-empty effort string and no other key may
+    appear, and ``options.effort`` must be unset -- a partial map would leave
+    some entries at an effort nobody stated, and two sources would leave the
+    effort ambiguous. The result is ordered like ``models``.
+    """
+    where = f"job {job_id!r} model_efforts"
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError(
+            f"{where} must be a mapping of declared model id -> effort, got "
+            f"{type(value).__name__}"
+        )
+    if not value:
+        return {}
+    efforts: dict[str, str] = {}
+    for key, effort in value.items():
+        if not isinstance(key, str) or not key.strip():
+            raise ValueError(f"{where} has a blank or non-string id {key!r}")
+        name = key.strip()
+        if name in efforts:
+            raise ValueError(f"{where} names {name!r} twice")
+        if name not in models:
+            raise ValueError(
+                f"{where} names {name!r}, which models does not declare "
+                f"(declared: {list(models)})"
+            )
+        if not isinstance(effort, str) or not effort.strip():
+            raise ValueError(
+                f"{where}: {name!r} must have a non-empty effort string, got {effort!r}"
+            )
+        efforts[name] = effort.strip()
+    missing = [name for name in models if name not in efforts]
+    if missing:
+        raise ValueError(
+            f"{where} states no effort for declared model(s) {missing}; state "
+            "one effort per declared entry"
+        )
+    if options.get("effort") is not None:
+        raise ValueError(
+            f"job {job_id!r} sets both options.effort and model_efforts; state "
+            "the effort in one place"
+        )
+    return {name: efforts[name] for name in models}
+
+
 def _parse_declaration(value: object) -> tuple[str, ...]:
     """Validate a model declaration with the shared structural validator.
 
@@ -399,6 +468,7 @@ class Job:
     workspace: Optional[WorkspaceSpec] = None
     max_attempts: int = 1
     options: Mapping[str, object] = field(default_factory=dict)
+    model_efforts: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         job_id = str(self.id).strip()
@@ -434,6 +504,11 @@ class Job:
             raise ValueError("job requirements must be a mapping or list")
 
         object.__setattr__(self, "options", _normalize_job_options(self.options))
+        object.__setattr__(
+            self,
+            "model_efforts",
+            _normalize_model_efforts(self.model_efforts, models, self.options, job_id),
+        )
 
         if self.directory is not None:
             object.__setattr__(self, "directory", Path(self.directory).expanduser().resolve())
@@ -540,6 +615,7 @@ class Job:
             workspace=workspace,
             max_attempts=max_attempts,
             options=options if options is not None else {},
+            model_efforts=value.get("model_efforts"),
         )
 
     def to_mapping(self) -> dict[str, object]:
@@ -553,6 +629,10 @@ class Job:
             "max_attempts": self.max_attempts,
             "options": dict(self.options),
         }
+        # Written only when set, so a job without per-entry effort keeps the
+        # exact definition JSON it always had in the ledger.
+        if self.model_efforts:
+            result["model_efforts"] = dict(self.model_efforts)
         if self.directory is not None:
             result["directory"] = str(self.directory)
         if self.workspace is not None:

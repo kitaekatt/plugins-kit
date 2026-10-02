@@ -13,6 +13,17 @@ class SelectionError(Exception):
     """Base class for endpoint-selection errors."""
 
 
+class EffortUndeliverableError(SelectionError):
+    """The selected entry cannot carry the effort the job states for it.
+
+    Raised before dispatch when a job's ``model_efforts`` names an effort for
+    the selected entry and that entry's adapter advertises no delivered
+    ``effort`` param. A ``SelectionError``, so the runner terminalizes the one
+    job (unroutable, with this message) and keeps the rest of the run going
+    rather than running the job at an effort nobody stated.
+    """
+
+
 # The version the FRONTIER symbol shipped in, not the oldest symbol's: the
 # message names a version the user can act on, so it has to be one that
 # actually carries everything probed below. describe() (llm-scripting-kit's
@@ -277,6 +288,7 @@ def choose_endpoint(
 
 __all__ = [
     "SelectionError",
+    "EffortUndeliverableError",
     "SharedLibTooOldError",
     "NoCompatibleEndpointError",
     "NoUsableRoutingTarget",

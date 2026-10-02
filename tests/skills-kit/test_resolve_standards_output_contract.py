@@ -27,6 +27,18 @@ AUDIT_LANE_MD = (
 SCRIPT = REPO_ROOT / "plugins" / "skills-kit" / "scripts" / "resolve_standards.py"
 
 
+def _env(config_dir) -> dict:
+    """A minimal child env. The plugin venv links bootstrap_lib (lane_models
+    needs it); the test interpreter does not, so the child gets the source tree,
+    and the re-exec into the installed venv is disabled."""
+    return {
+        "CLAUDE_CONFIG_DIR": str(config_dir),
+        "PATH": "/usr/bin:/bin",
+        "PYTHONPATH": str(REPO_ROOT / "plugins" / "bootstrap"),
+        "_BOOTSTRAP_GUARD_VENV_REEXEC": "1",
+    }
+
+
 def _documented_keys() -> list[str]:
     text = AUDIT_LANE_MD.read_text(encoding="utf-8")
     m = re.search(r"parse its JSON `\{([^}]*)\}`", text, re.I)
@@ -52,7 +64,7 @@ def test_script_exits_nonzero_on_config_error(tmp_path):
     config_dir = tmp_path / "config" / "skills-kit"
     config_dir.mkdir(parents=True)
     (config_dir / "config.yaml").write_text("- not-a-mapping\n", encoding="utf-8")
-    env = {"CLAUDE_CONFIG_DIR": str(tmp_path / "config"), "PATH": "/usr/bin:/bin"}
+    env = _env(tmp_path / "config")
     result = subprocess.run(
         [sys.executable, str(SCRIPT), "--project-root", str(tmp_path)],
         capture_output=True,
@@ -67,7 +79,7 @@ def test_script_exits_nonzero_on_config_error(tmp_path):
 def test_output_carries_the_audit_block_with_its_default(tmp_path):
     config_dir = tmp_path / "config"
     config_dir.mkdir()
-    env = {"CLAUDE_CONFIG_DIR": str(config_dir), "PATH": "/usr/bin:/bin"}
+    env = _env(config_dir)
     result = subprocess.run(
         [sys.executable, str(SCRIPT), "--project-root", str(tmp_path)],
         capture_output=True, text=True, env=env,
@@ -80,7 +92,7 @@ def test_output_reflects_a_configured_fix_mode_and_rejects_a_bad_one(tmp_path):
     config_dir = tmp_path / "config" / "skills-kit"
     config_dir.mkdir(parents=True)
     cfg = config_dir / "config.yaml"
-    env = {"CLAUDE_CONFIG_DIR": str(tmp_path / "config"), "PATH": "/usr/bin:/bin"}
+    env = _env(tmp_path / "config")
     cmd = [sys.executable, str(SCRIPT), "--project-root", str(tmp_path)]
     cfg.write_text("audit:\n  fix_mode: propose\n", encoding="utf-8")
     ok = subprocess.run(cmd, capture_output=True, text=True, env=env)

@@ -264,7 +264,9 @@ def by_root(out):
 
 
 # disabledCriteria is a required lane input (an empty list = nothing disabled).
-BASE = {"depth": "basic", "refs": REFS, "disabledCriteria": []}
+# laneModels is a required lane input too: the resolved lane_models.coverage route.
+BASE = {"depth": "basic", "refs": REFS, "disabledCriteria": [],
+        "laneModels": {"run": [{"id": "sonnet", "effort": "low"}], "dropped": []}}
 
 
 class TestTheHarnessItself:
@@ -299,10 +301,13 @@ class TestTheHarnessItself:
         out = run_lane(tmp_path, args, [bad])
         assert any("missing required" in e for e in out["schemaErrors"])
 
-    def test_the_pinned_tier_survives_batching(self, tmp_path):
-        out = run_lane(tmp_path, {**BASE, "subjects": [subject("/r/a"), subject("/r/b")]})
-        assert [c["model"] for c in out["calls"]] == ["opus"]
-        assert [c["effort"] for c in out["calls"]] == ["high"]
+    def test_the_routed_tier_survives_batching(self, tmp_path):
+        # A route unlike the shipped default, so a constant cannot satisfy it.
+        lane_models = {"run": [{"id": "haiku", "effort": "medium"}], "dropped": []}
+        out = run_lane(tmp_path, {**BASE, "laneModels": lane_models,
+                                  "subjects": [subject("/r/a"), subject("/r/b")]})
+        assert [c["model"] for c in out["calls"]] == ["haiku"]
+        assert [c["effort"] for c in out["calls"]] == ["medium"]
 
 
 class TestBatchSlicing:
@@ -336,7 +341,7 @@ class TestBatchSlicing:
     def test_a_single_subject_still_goes_through_the_workflow(self, tmp_path):
         out = run_lane(tmp_path, {**BASE, "subjects": [subject("/r/a")]})
         assert len(out["calls"]) == 1
-        assert out["calls"][0]["model"] == "opus"
+        assert out["calls"][0]["model"] == BASE["laneModels"]["run"][0]["id"]
 
     def test_batch_size_defaults_and_rejects_nonsense(self, tmp_path):
         for bad in (0, -3, "eight", 2.5):
@@ -1045,6 +1050,7 @@ class TestRefutationStage:
             "depth": "advanced",
             "refs": {"criteria": "/abs/coverage-standards.md"},
             "disabledCriteria": [],
+            "laneModels": BASE["laneModels"],
         }
         if verify is not None:
             args["verify"] = verify
@@ -1125,6 +1131,7 @@ class TestRefutationStage:
             "depth": "basic",
             "refs": {"criteria": "/abs/coverage-standards.md"},
             "disabledCriteria": [],
+            "laneModels": BASE["laneModels"],
         }
         out = run_lane(tmp_path, args, responses=[{"subjects": [result_for(
             "S1", "d", self._cands(1), verdict="GAPS-FOUND")]}],
@@ -1148,6 +1155,7 @@ class TestRefutationStage:
             "batchSize": 8,
             "refs": {"criteria": "/abs/coverage-standards.md"},
             "disabledCriteria": [],
+            "laneModels": BASE["laneModels"],
         }
         batch = {"subjects": [
             result_for("S1", "d", self._cands(1), verdict="GAPS-FOUND"),
@@ -1181,11 +1189,11 @@ class TestRefutationStage:
         assert "invent" in brief.lower()
         assert "quote the rule verbatim" in brief
 
-    def test_verify_is_pinned_to_opus_not_inherited(self, tmp_path):
+    def test_verify_takes_the_lane_route_not_the_session(self, tmp_path):
         out = self._run(tmp_path, self._cands(1), [verdict(0)])
         call = self._verify_calls(out)[0]
-        assert call["model"] == "opus"
-        assert call["effort"] == "high"
+        route = BASE["laneModels"]["run"][0]
+        assert (call["model"], call["effort"]) == (route["id"], route["effort"])
 
     def test_verify_responses_satisfy_the_schema_the_lane_passed(self, tmp_path):
         out = self._run(tmp_path, self._cands(1), [verdict(0)])
