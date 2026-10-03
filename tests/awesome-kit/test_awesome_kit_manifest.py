@@ -72,11 +72,11 @@ def test_shipped_skill_md_is_ascii() -> None:
         skill_md.read_bytes().decode("ascii")
 
 
-def test_readme_defers_to_the_landing_page_recipe() -> None:
+def test_readme_defers_to_the_poster_recipe() -> None:
     plugin_root = Path(__file__).resolve().parents[2] / "plugins" / "awesome-kit"
     readme = (plugin_root / "README.md").read_text(encoding="utf-8")
     assert "--marketplace plugins-kit --output ./index.html" not in readme
-    assert "skills/plugin-ecosystem/SKILL.md#generating-a-marketplaces-landing-page" in readme
+    assert "skills/plugin-ecosystem/SKILL.md#how-to-invoke" in readme
     skill = (plugin_root / "skills" / "plugin-ecosystem" / "SKILL.md").read_text(encoding="utf-8")
     assert "### Generating a marketplace's landing page" in skill
 

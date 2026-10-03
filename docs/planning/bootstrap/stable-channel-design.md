@@ -536,7 +536,7 @@ getting latest; the line says so.
   `{version, published_at: <now UTC>, channel: "auto", requires: {...}}` to
   `.claude-plugin/stable.json` -- the `requires` map records the
   built-against dependency floors per section 12.4 -- staged with
-  `marketplace.json` and `index.html` so it rides INSIDE the release commit;
+  `marketplace.json` so it rides INSIDE the release commit;
   `commit_derived`'s amend-or-follow-up logic covers it unchanged.
 - **`--stable` flag**: `--stable` marks every bump in this publish
   `channel: "stable"`; `--stable <plugin>` (repeatable) marks a subset. The

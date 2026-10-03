@@ -142,5 +142,5 @@ class TestInitRefusesTheLiveWorkingDirectory:
                                          force=False))
 
         assert rc == 0
-        assert sorted(f.name for f in dest.iterdir()) == sorted(
-            hue_cli.EXAMPLE_FILES)
+        assert sorted(f.name for f in dest.iterdir()) == [
+            "scene-designs.yaml", "scene-groups.yaml"]

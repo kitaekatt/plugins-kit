@@ -199,7 +199,6 @@ class TestInventoryMain:
             ("registered", "source tree")]
         assert all("state" not in plugin for plugin in plugins)
 
-
 class TestRegistryFlag:
     """--registry replaces ~/.claude/plugins/installed_plugins.json and turns
     off the cache fallback -- the seam publish.py uses to describe a repo

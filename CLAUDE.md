@@ -183,7 +183,7 @@ claude --plugin-dir ~/Dev/plugins-kit/plugins/my-plugin
 
 **Reload vs restart:** edits to hook/skill script content are live; `/reload-plugins` reloads registration in-session; only a SessionStart re-fire or a real version update needs a restart. Details: [plugin-reload-lifecycle.md](plugins/bootstrap/skills/bootstrap/references/plugin-reload-lifecycle.md).
 
-**Publishing** is `uv run python scripts/publish.py` -- the only user-gated action in this repo, and the source of truth for the flow; do not hand-run its steps. Definition of a publish, `marketplace.json` as derived data, the commit-scoped pre-commit check, dev-only filtering, and `index.html` regeneration:
+**Publishing** is `uv run python scripts/publish.py` -- the only user-gated action in this repo, and the source of truth for the flow; do not hand-run its steps. Definition of a publish, `marketplace.json` as derived data, the commit-scoped pre-commit check, and dev-only filtering:
 [docs/reference/publish-reconcile.md](docs/reference/publish-reconcile.md).
 
 **Publication completeness is conditional on configuration.** A plugin is
@@ -802,7 +802,7 @@ claude_md:
       origin: "Built + hardened this session (2026-06-27): single-session protocol added (0.22.0), then live testing on this machine exposed two real bugs only live/script testing could catch -- the --resume session-guard skip (fixed 0.24.0) and the harvest's script-path import failure that meant it had NEVER fired in production (fixed 0.25.0). Verified end-to-end converging 0.26.0 hands-off."
       added: "2026-06-27"
     - id: registry_v2_empty
-      keywords: [installed_plugins.json, empty registry, registry v2, "plugins {}", fresh machine, deleted plugins dir, provisions nothing, rescue, sessionstart missed, sessionstart-rescue, cache fallback, discover_cache_plugins, enabledPlugins, index.html empty, dev-tree synthesize, harvest blind, new machine test]
+      keywords: [installed_plugins.json, empty registry, registry v2, "plugins {}", fresh machine, deleted plugins dir, provisions nothing, rescue, sessionstart missed, sessionstart-rescue, cache fallback, discover_cache_plugins, enabledPlugins, empty inventory, dev-tree synthesize, harvest blind, new machine test]
       summary: Claude Code registry v2 keeps installed_plugins.json PERMANENTLY EMPTY ({"version":2,"plugins":{}}) for marketplace installs -- enablement lives in settings enabledPlugins, code in the cache layout. Everything that read the registry needed a cache-scan fallback (bootstrap 0.47.0) and a SessionStart that races the fresh-machine plugin sync is caught by the UserPromptSubmit rescue (0.46.0).
       detail: |
         Engine-side fixes (rescue 0.46.0, cache-scan fallback 0.47.0) are owned by the bootstrap
@@ -810,10 +810,8 @@ claude_md:
         mechanics. The REPO-specific residue to remember here:
         - dev-tree.py must SYNTHESIZE entries for repo plugins the registry doesn't record,
           or dev-tree mode loads nothing on a v2 machine (claudx's own synthetic registry
-          does the same job for the same reason). publish.py does not use
-          dev-tree.py: its index.html regen passes generate.py a synthetic `--registry` built
-          from the repo's own plugin.json files (the 0.47.0 release shipped an empty
-          index.html when the page was built from the machine registry).
+          does the same job for the same reason). It rewrites install paths and versions
+          in the installed-plugin registry; it does not generate repository artifacts.
         - awesome-kit's generate.py needed the same cache fallback (awesome-kit 0.10.0,
           merge_cache_fallback) or the poster renders empty.
         - Claude Code still WRITES enabledPlugins to the live ~/.claude/settings.json on

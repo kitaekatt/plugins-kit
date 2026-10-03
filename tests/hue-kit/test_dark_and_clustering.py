@@ -9,9 +9,6 @@
    must lie within `smg.BRI_TOL` / `smg.XY_TOL` of every one of the
    cluster's own members, so `_action_diff(member, target)` is always None --
    a scene built from those members validates clean on the first export.
-3. `smg.layered_report`'s family heading names the family "certified
-   minimum" only when the caller passes a certification result.
-
 No network: every fixture below is an in-memory action/scene/cluster dict.
 """
 
@@ -124,15 +121,3 @@ class TestClusterWithinTolerance:
             rep = cluster.sig.bri
             for b in member_bris:
                 assert abs(b - rep) <= smg.BRI_TOL
-
-
-class TestCertifiedMinimumGated:
-    def test_absent_without_certification(self, scene_layers):
-        smg = scene_layers.smg
-        html = smg.layered_report([], [], {})
-        assert "certified minimum" not in html
-
-    def test_present_with_certification(self, scene_layers):
-        smg = scene_layers.smg
-        html = smg.layered_report([], [], {}, certified=True)
-        assert "certified minimum" in html

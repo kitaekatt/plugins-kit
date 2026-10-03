@@ -131,7 +131,7 @@ def cmd_dev() -> int:
     # Registry-v2 fallback: newer Claude Code keeps installed_plugins.json at
     # {"plugins": {}} for marketplace installs, so the rewrite loop above finds
     # nothing to repoint and dev-tree mode silently no-ops (this is how the
-    # 0.47.0 publish shipped an EMPTY index.html -- generate.py crawled the
+    # 0.47.0 publish shipped an EMPTY marketplace listing -- generate.py crawled the
     # empty registry). Synthesize an entry for every repo plugin the registry
     # does not record, pointing at the dev tree. Restore stays lossless: the
     # backup taken above snapshots the (empty) original.

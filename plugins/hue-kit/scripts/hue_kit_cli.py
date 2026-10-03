@@ -2,9 +2,8 @@
 
 Subcommands (the common operations):
 
-    start       THE DEFAULT. First run: build the registry + design, render the
-                report, open it. Afterwards: check whether the bridge still
-                matches the local YAML, and stop for a decision if it does not.
+    start       THE DEFAULT. First run: build the registry + design. Afterwards:
+                check whether the bridge still matches the local YAML.
     report      Read the live bridge, solve the SMALLEST meta-group vocabulary,
                 and print each scene as a layer stack. Read-only. Start here.
     groups      Write a starter group registry (scene-groups.yaml) with
@@ -12,17 +11,15 @@ Subcommands (the common operations):
     export      Materialise scene-designs.yaml from your live scenes + the
                 registry (your current configuration, written to YAML).
                 Read-only against the bridge.
-    render      Render the browsable HTML report (config + source embedded).
     validate    Diff your YAML (scene-groups.yaml + scene-designs.yaml) against
                 the bridge, per light. Read-only.
     apply       Write the YAML layer stacks back to the bridge. DRY-RUN by
                 default; pass --yes to actually write. Backs each scene up first.
-    init        Copy the shipped example scene-groups.yaml, scene-designs.yaml,
-                and index.html into a directory so you can overwrite them with
-                your own.
+    init        Copy the shipped example scene-groups.yaml and scene-designs.yaml
+                into a directory so you can overwrite them with your own.
 
-The YAML/HTML working files (scene-groups.yaml, scene-designs.yaml,
-index.html) live in the plugin data directory
+The YAML working files (scene-groups.yaml, scene-designs.yaml) live in the
+plugin data directory
 (~/.claude/plugins/data/plugins-kit/hue-kit) -- a single source of truth
 regardless of where you run from. Point elsewhere with --dir, or per file
 with the HUE_GROUPS_FILE / HUE_DESIGNS_FILE env vars.
@@ -70,7 +67,7 @@ def _is_windows() -> bool:
 PLUGIN_ROOT = _HERE.parent
 EXAMPLES = PLUGIN_ROOT / "examples"
 SCENE_LAYERS = _HERE / "scene-layers.py"
-EXAMPLE_FILES = ("scene-groups.yaml", "scene-designs.yaml", "index.html")
+EXAMPLE_FILES = ("scene-groups.yaml", "scene-designs.yaml")
 
 # Philips' bridge discovery service: returns LAN bridges keyed to the caller's
 # public IP. Fallback when HUE_BRIDGE_IP is unset. Needs internet.
@@ -80,8 +77,8 @@ PAIRED_KEY_FILE = data_dir("hue-kit") / "app-key.txt"
 # Cached discovered bridge IP, so we do not re-hit the rate-limited discovery
 # service on every verb (env var still wins; delete the file to re-discover).
 BRIDGE_IP_CACHE = data_dir("hue-kit") / "bridge-ip.txt"
-# Default home of the working files (scene-groups.yaml / scene-designs.yaml /
-# index.html), so every verb sees the same files no matter the invocation cwd.
+# Default home of the working files, so every verb sees the same files no matter
+# the invocation cwd.
 DEFAULT_WORKDIR = data_dir("hue-kit")
 
 # scene-layers.py --validate-design's distinct exit code for "ran cleanly and
@@ -496,30 +493,18 @@ def _cmd_pair(args) -> int:
         raise SystemExit(f"hue-kit: pairing error: {err or resp}")
 
 
-def _open_report(path: Path) -> bool:
-    """Open the rendered report in the user's default browser. Returns False if
-    no browser could be launched (headless box, sandbox) -- a non-fatal outcome
-    the caller reports, since the file is written either way."""
-    import webbrowser
-    try:
-        return webbrowser.open(path.as_uri())
-    except Exception:
-        return False
-
-
 def _cmd_start(args) -> int:
-    """The default entry point: get the user to a current report in one command.
+    """The default entry point: compare the bridge with the local YAML.
 
-    Nine verdicts, distinguished by what already exists, whether the bridge
+    Eight verdicts, distinguished by what already exists, whether the bridge
     still matches it, and whether each step actually succeeded:
 
-      first-run        nothing here yet -> build the registry, materialise the
-                        design, render, open. Nothing exists to overwrite, so
-                        this is the one branch that writes without asking.
+      first-run        nothing here yet -> build the registry and materialise
+                        the design. Nothing exists to overwrite, so this is the
+                        one branch that writes without asking.
       accepted         --accept re-baselined the bridge's current shape as the
                         reference without touching any YAML.
-      clean            bridge matches -> ensure a report exists; the caller
-                        offers to view it or to make changes.
+      clean            bridge matches -> the caller can make changes.
       changed          --validate-design ran cleanly and found a real
                         discrepancy (colour/brightness), or the fingerprint
                         shows the SHAPE moved -> report WHAT differs and stop.
@@ -533,9 +518,7 @@ def _cmd_start(args) -> int:
                         `changed`, which means it compared and found a diff.
       bridge-unreachable  the bridge could not be read at all (a fingerprint
                         read failed, or bridge/key resolution raised).
-      setup-failed     a first-run step (registry/design/report) failed.
-      render-failed    the design already matched (clean-equivalent) but
-                        re-rendering the missing report failed.
+      setup-failed     a first-run step (registry/design) failed.
 
     The final `hue-kit-verdict: <state>` line is the machine-readable handoff."""
     # Our prints interleave with those of the scene-layers.py subprocesses, which
@@ -549,7 +532,6 @@ def _cmd_start(args) -> int:
     workdir = Path(args.dir).resolve()
     groups_f = _workfile_path(workdir, "scene-groups.yaml", "HUE_GROUPS_FILE")
     designs_f = _workfile_path(workdir, "scene-designs.yaml", "HUE_DESIGNS_FILE")
-    report_f = workdir / "index.html"
     fp_f = workdir / "bridge-fingerprint.txt"
 
     def verdict(state: str, rc: int = 0) -> int:
@@ -604,8 +586,7 @@ def _cmd_start(args) -> int:
             print("No working files yet -- setting up from your bridge.\n")
             for label, flags in (
                     ("registry (scene-groups.yaml)", ["--export-groups", str(groups_f)]),
-                    ("design (scene-designs.yaml)", ["--export-designs", str(designs_f)]),
-                    ("report (index.html)", ["--html", str(report_f)])):
+                    ("design (scene-designs.yaml)", ["--export-designs", str(designs_f)])):
                 print(f"  building the {label} ...")
                 rc, _ = _call_scene_layers(flags, workdir)
                 if rc != 0:
@@ -613,13 +594,7 @@ def _cmd_start(args) -> int:
                           file=sys.stderr)
                     return verdict("setup-failed", rc)
             _write_text_atomic(fp_f, fp_now + "\n")
-            opened = _open_report(report_f) if args.open else False
             print(f"\nSet up in {workdir}")
-            print(f"Report: {report_f}"
-                  + ("  (opened in your browser)" if opened else ""))
-            if args.open and not opened:
-                print("  (could not launch a browser -- open the path above "
-                      "manually)")
             print("\nThe group names are placeholders (G1, G2, ...). They work "
                   "as-is; rename them in\nscene-groups.yaml whenever a better "
                   "name suggests itself.")
@@ -664,13 +639,7 @@ def _cmd_start(args) -> int:
                   "never applied. Those need opposite fixes.")
             return verdict("changed")
 
-        if not report_f.is_file():
-            print("Report missing -- re-rendering it.")
-            rc, _ = _call_scene_layers(["--html", str(report_f)], workdir)
-            if rc != 0:
-                return verdict("render-failed", rc)
-
-        print(f"\nBridge matches the local design. Report: {report_f}")
+        print("\nBridge matches the local design.")
         return verdict("clean")
     except SystemExit as e:
         # Bridge/key resolution (inside _scene_layers_env, reached from every
@@ -728,7 +697,7 @@ def main(argv: list[str] | None = None) -> int:
         description="Layered Hue scene framework -- read, analyse, and sync "
                     "scenes with your bridge.")
     parser.add_argument("--dir", default=str(DEFAULT_WORKDIR), metavar="PATH",
-                        help="working directory for the YAML/HTML files "
+                        help="working directory for the YAML files "
                              f"(default: the plugin data dir, {DEFAULT_WORKDIR})")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
@@ -743,13 +712,9 @@ def main(argv: list[str] | None = None) -> int:
                              "(for agents: confirm readiness first, then tell "
                              "the user to press the button)")
     p_start = sub.add_parser("start", help="Default entry point: set up on "
-                                           "first run (renders + opens the "
-                                           "report); otherwise check the "
+                                           "first run; otherwise check the "
                                            "bridge against the local design "
-                                           "and print a hue-kit-verdict: "
-                                           "state -- nothing else is written.")
-    p_start.add_argument("--no-open", dest="open", action="store_false",
-                         help="render the report but do not launch a browser")
+                                           "and print a hue-kit-verdict: state.")
     p_start.add_argument("--accept", action="store_true",
                          help="record the bridge's current shape as the "
                               "reference without changing any YAML (clears a "
@@ -766,9 +731,6 @@ def main(argv: list[str] | None = None) -> int:
                                "any you set)")
     sub.add_parser("export", help="Write scene-designs.yaml from live scenes + "
                                   "the registry.")
-    p_render = sub.add_parser("render", help="Render the HTML report.")
-    p_render.add_argument("path", nargs="?",
-                          help="output path (default: <dir>/index.html)")
     sub.add_parser("validate", help="Diff your YAML against the bridge (per light).")
     p_apply = sub.add_parser("apply", help="Write the YAML to the bridge "
                                            "(dry-run unless --yes).")
@@ -776,7 +738,7 @@ def main(argv: list[str] | None = None) -> int:
                          help="actually write to the bridge (else dry-run)")
     p_apply.add_argument("--scene", action="append", dest="scenes", metavar="NAME",
                          help="limit to this scene (repeatable)")
-    p_init = sub.add_parser("init", help="Copy the example YAML + HTML into a "
+    p_init = sub.add_parser("init", help="Copy the example YAML into a "
                                          "directory to overwrite with your own.")
     p_init.add_argument("init_dir", nargs="?", default=None, metavar="DIR",
                         help="destination directory (default: --dir, else the "
@@ -851,9 +813,6 @@ def main(argv: list[str] | None = None) -> int:
                       f"exited {frc}) -- `start` may report a stale shape "
                       "change until this is retried.", file=sys.stderr)
         return rc
-    if args.cmd == "render":
-        out = str(Path(args.path).resolve()) if args.path else str(workdir / "index.html")
-        return _run_scene_layers(["--html", out], workdir)
     if args.cmd == "validate":
         return _run_scene_layers(["--validate-design"], workdir)
     if args.cmd == "apply":

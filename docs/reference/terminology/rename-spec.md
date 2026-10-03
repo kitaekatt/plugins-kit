@@ -549,7 +549,7 @@ Hand-editing any file in this table is forbidden.
 | `plugins/git-kit/skills/git-code-review/references/submit-gates.md` | same | same |
 | `plugins/p4-kit/skills/p4-code-review/references/submit-gates.md` | same | same |
 | `.claude-plugin/marketplace.json` | `scripts/regen_marketplace.py` | `uv run python scripts/regen_marketplace.py` |
-| repo-root `index.html` | awesome-kit `plugin-ecosystem` via `scripts/publish.py` | do NOT run by hand; `publish.py` owns it |
+| repository human-html page | Databench human-html lane | do NOT run by hand; Databench owns it |
 
 **Hand-authored, edit directly (do not confuse with the above):**
 `workflow/coverage-detect.js`, `workflow/skill-detect.js`,

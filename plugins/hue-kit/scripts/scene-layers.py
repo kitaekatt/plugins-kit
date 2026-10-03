@@ -60,23 +60,6 @@ L_S = union of lit cells.
 
 5. INTERPRETABILITY: optionally restrict F to unions of whole named zones and
    report the extra cost (0 on today's data -- the optimum is already nameable).
-------------------------------------------------------------------------------
-HTML RENDERING -- READ BEFORE TOUCHING --html  (repeated-mistake guardrail)
-------------------------------------------------------------------------------
-There is ONE renderer for these reports: scene-meta-groups.py's layered_report()
-(it owns REPORT_CSS, swatch(), and the bar/table markup). It is the single
-source of truth for the report's look.
-
-So any HTML this file emits MUST go through smg.layered_report(): assemble the
-plain report data (family + per-scene layer stacks + baked colour clusters) and
-hand it to it -- that is exactly what layered_view() does below.
-
-Do NOT (this has regressed several times): hand-roll a parallel renderer here,
-copy/duplicate REPORT_CSS or swatch(), or emit your own <table> layout by
-borrowing only the CSS. Every one of those makes this report visually DRIFT from
-the familiar report. If layered_report() needs to render something new, extend
-it in scene-meta-groups.py so both call sites benefit.
-------------------------------------------------------------------------------
 """
 from __future__ import annotations
 
@@ -1363,75 +1346,12 @@ def apply_design(session, design, only, assume_yes):
     return 1 if failed_scenes else 0
 
 
-# ========================================================================
-# HTML report -- the LAYERED report, rendered by smg.layered_report() (the
-# single renderer for the layered model; it owns REPORT_CSS + swatch +
-# scene_bar_svg). GUARDRAIL: never hand-roll a renderer or duplicate
-# REPORT_CSS/swatch/bar markup here -- assemble plain data and hand it to
-# smg.layered_report(). See the "HTML RENDERING" section in the module docstring.
-# ========================================================================
-def layered_view(session):
-    """Assemble the layered-report data (family + per-scene layer stacks + baked
-    colour clusters) for smg.layered_report(). Uses the scene-groups.yaml
-    registry family directly (not a re-solve), so the report reflects the
-    registry exactly; fails loud if a scene is no longer expressible by it."""
-    lights = {l["id"]: l["metadata"]["name"]
-              for l in smg.clip_get(session, "light")}
-    rooms = smg.clip_get(session, "room")
-    zones = smg.clip_get(session, "zone")
-    owners = {g["id"]: g["metadata"]["name"] for g in rooms + zones}
-    members, _ungrouped, _aggregates = smg.build_groups(zones, lights)
-    zone_lightsets = {z["metadata"]["name"]:
-                      sorted(lights[c["rid"]] for c in z["children"]
-                             if c["rid"] in lights) for z in zones}
-    universe = frozenset(lights.values())
-    fam = load_group_registry(zone_lightsets, universe)  # [(name, frozenset)]
-    name_of = {g: n for n, g in fam}
-    F = {g for _, g in fam}
-    tnames = load_template_names()
-
-    scenes_raw = sorted(smg.clip_get(session, "scene"),
-                        key=lambda s: s["metadata"]["name"].lower())
-    scenes = []
-    for s in scenes_raw:
-        res = smg.analyze_scene(s, lights, members,
-                                owners.get(s["group"]["rid"], "?"))
-        clusters = [(list(c.lights), c.sig) for c in res.clusters]
-        lit, sig_by_cell = [], {}
-        for c in res.clusters:
-            fs = frozenset(c.lights)
-            if c.sig.mode == "off":
-                continue
-            lit.append(fs)
-            sig_by_cell[fs] = c.sig
-        L = frozenset().union(*lit) if lit else frozenset()
-        scene_model = {"name": res.name, "cells": lit, "L": L,
-                       "off": universe - L}
-        layers = express(scene_model, F, want_layers=True)
-        if layers is None:
-            raise SystemExit(
-                f"error: scene {res.name!r} is not expressible by "
-                "scene-groups.yaml -- the registry family is stale for the live "
-                "scenes; re-check scene-groups.yaml (run the solver).")
-        stack = [(name_of[g], sig_by_cell[cell]) for g, cell in layers]
-        seq = tuple(n for n, _ in stack)
-        scenes.append({"name": res.name, "owner": res.owner,
-                       "template": seq, "template_name": tnames.get(seq),
-                       "layers": stack, "clusters": clusters})
-    family = [(n, sorted(g)) for n, g in fam]
-    return family, scenes, members
-
-
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     ap.add_argument("--cells", metavar="PATH",
                     help="solve an offline scene-cells.json instead of the bridge")
     ap.add_argument("--json", action="store_true",
                     help="emit machine-readable result instead of the report")
-    ap.add_argument("--html", metavar="PATH",
-                    help="render a browsable HTML report to PATH and exit "
-                    "(standalone use requires PATH -- the CLI always passes "
-                    "one)")
     ap.add_argument("--out", metavar="PATH", help="write output to PATH")
     ap.add_argument("--export-cells", metavar="PATH",
                     help="write the live per-scene cells to PATH and exit (no solve)")
@@ -1472,7 +1392,7 @@ def main() -> int:
         ap.error("--apply and --validate-design are mutually exclusive")
 
     # The layered sync (validate/apply) reads the design file + live bridge --
-    # not the solver -- so handle it before the solve path, like --html.
+    # not the solver -- so handle it before the solve path.
     if args.apply or args.validate_design:
         design_path = Path(args.design)
         if not design_path.exists():
@@ -1489,30 +1409,6 @@ def main() -> int:
         if args.validate_design:
             return validate_design(session, design, only)
         return apply_design(session, design, only, args.yes)
-
-    # --html renders the LAYERED report from the live bridge via
-    # smg.layered_report() (the single renderer). It does not use the solver or
-    # an offline export, so handle it first.
-    if args.html:
-        if args.cells:
-            ap.error("--html renders from the live bridge (it reuses the "
-                     "shared renderer); it cannot use --cells")
-        family, scenes, members = layered_view(bridge_session())
-        # embed the config (YAML) + source (Python) so the report is a
-        # self-contained, buildable spec viewable from the overlay
-        source_docs = [(p.name, p.read_text(), "yaml")
-                       for p in (DESIGNS_YAML, GROUPS_YAML) if p.exists()]
-        source_docs += [(p.name, p.read_text(), "python")
-                        for p in (SCRIPT_DIR / "scene-layers.py",
-                                  SCRIPT_DIR / "scene-meta-groups.py")
-                        if p.exists()]
-        html = smg.layered_report(family, scenes, members,
-                                  source_docs=source_docs)
-        dest = Path(args.html)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        _write_text_atomic(dest, html)
-        print(f"wrote {dest}  ({len(scenes)} scenes)")
-        return 0
 
     data = json.loads(Path(args.cells).read_text()) if args.cells \
         else extract_from_bridge()

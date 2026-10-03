@@ -9,8 +9,8 @@ one command renders them as a single self-contained HTML poster.
 installed Claude Code plugin ecosystem: one column per marketplace, one
 clickable card per plugin, and a side panel listing each plugin's skills.
 The output is a single HTML file with no external dependencies. This
-marketplace's landing page (`index.html`) uses the
-[landing-page recipe](skills/plugin-ecosystem/SKILL.md#generating-a-marketplaces-landing-page).
+machine-local poster output uses the
+[poster recipe](skills/plugin-ecosystem/SKILL.md#how-to-invoke).
 
 Also in the box, one line each:
 

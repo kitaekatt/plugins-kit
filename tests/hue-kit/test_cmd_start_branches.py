@@ -1,9 +1,9 @@
-"""_cmd_start's first-run, accepted, clean and render-failed verdicts.
+"""_cmd_start's first-run, accepted, and incomplete verdicts.
 
 validate-failed, changed and bridge-unreachable are pinned in
-test_cmd_start.py; this module covers the remaining four documented
-verdicts, each driven by a tiny stub `scene-layers.py` subprocess (never the
-real tool, never a bridge) and asserting on the printed
+test_cmd_start.py; this module covers the remaining documented verdicts,
+each driven by a tiny stub `scene-layers.py` subprocess (never the real tool,
+never a bridge) and asserting on the printed
 `hue-kit-verdict:` line and _cmd_start's return code.
 """
 
@@ -26,9 +26,8 @@ def _established_workdir(tmp_path, fingerprint="fp1"):
 
 
 class TestFirstRun:
-    """No working files yet: _cmd_start must build the registry, the
-    design, and the report (three separate scene-layers.py calls), then
-    baseline the fingerprint and report `first-run` -- the one branch that
+    """No working files yet: _cmd_start must build the registry and design,
+    then baseline the fingerprint and report `first-run` -- the one branch that
     writes without an existing baseline to compare against."""
 
     def test_first_run_builds_all_three_files_and_baselines_fingerprint(
@@ -46,9 +45,6 @@ class TestFirstRun:
             "if '--export-designs' in argv:\n"
             "    pathlib.Path(argv[argv.index('--export-designs') + 1]).write_text('d\\n')\n"
             "    sys.exit(0)\n"
-            "if '--html' in argv:\n"
-            "    pathlib.Path(argv[argv.index('--html') + 1]).write_text('h\\n')\n"
-            "    sys.exit(0)\n"
             "sys.exit(0)\n"
         ))
         monkeypatch.setattr(hue_cli, "SCENE_LAYERS", stub)
@@ -62,7 +58,6 @@ class TestFirstRun:
         assert rc == 0
         assert (tmp_path / "scene-groups.yaml").read_text() == "g\n"
         assert (tmp_path / "scene-designs.yaml").read_text() == "d\n"
-        assert (tmp_path / "index.html").read_text() == "h\n"
         assert (tmp_path / "bridge-fingerprint.txt").read_text() == "fpX\n"
 
     def test_first_run_stops_and_reports_setup_failed_when_a_step_fails(
@@ -122,75 +117,6 @@ class TestAccepted:
         assert (workdir / "scene-designs.yaml").read_text() == designs_before
 
 
-class TestClean:
-    """Fingerprint unchanged and --validate-design finds nothing: an
-    existing report is left alone (never re-rendered) and the verdict is
-    `clean`."""
-
-    def test_clean_when_fingerprint_and_design_both_match(
-            self, hue_cli, tmp_path, monkeypatch, capfd):
-        workdir = _established_workdir(tmp_path, fingerprint="fp1")
-        (workdir / "index.html").write_text("EXISTING REPORT\n")
-        stub = _write_stub(tmp_path, (
-            "import sys\n"
-            "argv = sys.argv[1:]\n"
-            "if '--fingerprint' in argv:\n"
-            "    print('fp1')\n"
-            "    sys.exit(0)\n"
-            "if '--validate-design' in argv:\n"
-            "    print('0 discrepancies total -- bridge matches the design')\n"
-            "    sys.exit(0)\n"
-            "if '--html' in argv:\n"
-            "    raise SystemExit('must not re-render an existing report')\n"
-            "sys.exit(0)\n"
-        ))
-        monkeypatch.setattr(hue_cli, "SCENE_LAYERS", stub)
-
-        rc = hue_cli._cmd_start(
-            Namespace(dir=str(workdir), accept=False, open=False))
-
-        captured = capfd.readouterr()
-        lines = [ln for ln in captured.out.splitlines() if ln.strip()]
-        assert lines[-1] == "hue-kit-verdict: clean"
-        assert rc == 0
-        assert (workdir / "index.html").read_text() == "EXISTING REPORT\n"
-
-
-class TestRenderFailed:
-    """Fingerprint and design both match (clean-equivalent), but the report
-    file is missing and re-rendering it fails: the verdict must be
-    `render-failed`, distinct from `clean`, and must carry scene-layers'
-    nonzero exit code."""
-
-    def test_missing_report_that_fails_to_rerender_is_render_failed(
-            self, hue_cli, tmp_path, monkeypatch, capfd):
-        workdir = _established_workdir(tmp_path, fingerprint="fp1")
-        assert not (workdir / "index.html").exists()
-        stub = _write_stub(tmp_path, (
-            "import sys\n"
-            "argv = sys.argv[1:]\n"
-            "if '--fingerprint' in argv:\n"
-            "    print('fp1')\n"
-            "    sys.exit(0)\n"
-            "if '--validate-design' in argv:\n"
-            "    print('0 discrepancies total -- bridge matches the design')\n"
-            "    sys.exit(0)\n"
-            "if '--html' in argv:\n"
-            "    sys.exit(7)\n"
-            "sys.exit(0)\n"
-        ))
-        monkeypatch.setattr(hue_cli, "SCENE_LAYERS", stub)
-
-        rc = hue_cli._cmd_start(
-            Namespace(dir=str(workdir), accept=False, open=False))
-
-        captured = capfd.readouterr()
-        lines = [ln for ln in captured.out.splitlines() if ln.strip()]
-        assert lines[-1] == "hue-kit-verdict: render-failed"
-        assert rc == 7
-        assert not (workdir / "index.html").exists()
-
-
 class TestHalfPresent:
     """Exactly one of the two working files exists.
 
@@ -218,7 +144,6 @@ class TestHalfPresent:
     def _run(self, hue_cli, tmp_path, monkeypatch):
         stub = _write_stub(tmp_path, self._FINGERPRINT_ONLY)
         monkeypatch.setattr(hue_cli, "SCENE_LAYERS", stub)
-        monkeypatch.setattr(hue_cli, "_open_report", lambda *a, **k: False)
         rc = hue_cli._cmd_start(
             Namespace(dir=str(tmp_path), accept=False, open=False))
         calls = (tmp_path / "calls.log")
