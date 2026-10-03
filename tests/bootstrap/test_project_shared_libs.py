@@ -42,8 +42,10 @@ def _publish(data_root, name, mkt=MKT):
     (pkg / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
 
 
-def _real_venv(project):
-    venv.create(project / ".venv", with_pip=False)
+def _real_venv(project: Path) -> str:
+    # The standalone macOS executable locates libpython relative to itself.
+    # Copying it into the venv breaks that lookup; Unix venvs use symlinks.
+    venv.create(project / ".venv", with_pip=False, symlinks=os.name != "nt")
     return venv_check._find_python(str(project / ".venv"))
 
 

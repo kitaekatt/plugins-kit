@@ -154,6 +154,8 @@ class TestCustomBootstrapScript:
         assert not durable.exists()
         assert ctx.action_logs == []
         assert ctx.ok_logs == [
+            "ue-agent: skipped - no .mcp.json",
+            "redirectors: skipped - no Perforce workspace marker",
             "stubs: durable enriched stub refresh deferred to explicit action"
         ]
 
@@ -174,7 +176,11 @@ class TestCustomBootstrapScript:
         module.bootstrap(ctx)
 
         assert ctx.deferred == []
-        assert ctx.ok_logs == ["stubs: durable enriched stub is current"]
+        assert ctx.ok_logs == [
+            "ue-agent: skipped - no .mcp.json",
+            "redirectors: skipped - no Perforce workspace marker",
+            "stubs: durable enriched stub is current",
+        ]
 
     def test_stale_durable_stub_is_deferred(self, tmp_path):
         module = self._load_module()

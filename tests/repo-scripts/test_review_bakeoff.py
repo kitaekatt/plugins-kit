@@ -33,22 +33,31 @@ def launches(monkeypatch, tmp_path):
 
 
 def test_run_passes_the_arm_id_as_the_lane_model(launches):
-    assert _BAKEOFF.main(["run", "--arm", "qwen38-5090-harness"]) == 0
+    assert _BAKEOFF.main(["run", "--arm", "qwen38-5090-harness", "--effort", "high"]) == 0
     assert len(launches) == 1
     command = launches[0]
     assert command[command.index("--model") + 1] == "qwen38-5090-harness"
+    assert command[command.index("--effort") + 1] == "high"
+
+
+def test_run_requires_an_explicit_effort(launches, capsys) -> None:
+    with pytest.raises(SystemExit) as exc:
+        _BAKEOFF.main(["run", "--arm", "qwen38-5090-harness"])
+    assert exc.value.code == 2
+    assert launches == []
+    assert "--effort" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("arm", ["agent:sonnet", "peer:opus"])
 def test_run_refuses_a_prefixed_arm(arm, launches, capsys):
-    assert _BAKEOFF.main(["run", "--arm", arm]) == 1
+    assert _BAKEOFF.main(["run", "--arm", arm, "--effort", "high"]) == 1
     assert launches == []
     assert "registry id" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("arm", ["sonnet", "opus", "fable", "haiku"])
 def test_run_refuses_a_claude_harness_id(arm, launches, capsys):
-    assert _BAKEOFF.main(["run", "--arm", arm]) == 1
+    assert _BAKEOFF.main(["run", "--arm", arm, "--effort", "high"]) == 1
     assert launches == []
     err = capsys.readouterr().err
     assert "harness: claude" in err

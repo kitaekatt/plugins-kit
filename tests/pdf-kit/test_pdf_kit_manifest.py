@@ -26,7 +26,8 @@ def test_html_pdf_skill_resolves_under_pdf_kit() -> None:
 
     assert skill_path.is_file()
     assert not old_skill_path.exists()
-    assert "CLAUDE_PLUGIN_ROOT" in skill_path.read_text(encoding="utf-8")
+    assert '"${CLAUDE_SKILL_DIR}/scripts/html_to_pdf.py"' in skill_path.read_text(encoding="utf-8")
+    assert (skill_path.parent / "scripts" / "html_to_pdf.py").is_file()
 
 
 def test_pdf_kit_manifest_declares_venv_and_script() -> None:

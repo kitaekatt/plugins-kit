@@ -928,7 +928,7 @@ class TestShippedOpencodeBackend:
             "-m example/model --agent build --auto"
         )
         assert re.search(
-            r"llm-scripting-kit resolve\s+--models <entry-id> "
+            r"llm-scripting-kit\s+resolve\s+--models <entry-id> "
             r"--project-root <ABSOLUTE root>",
             rendered,
         )
