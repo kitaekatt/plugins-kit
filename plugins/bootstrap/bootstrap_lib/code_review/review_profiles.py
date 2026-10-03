@@ -326,8 +326,7 @@ def completeness_findings(layer_data: Mapping[str, Any], source: PathLike) -> li
 
     * every non-disabled reviewer record the layer states must state a
       ``model`` list in this layer, and every entry in it must state an effort;
-    * every validator reason the layer states must state its one entry's
-      effort;
+    * every validator reason the layer states must state every entry's effort;
     * a lane-level ``effort`` is the removed shape and is reported with the
       form that replaced it.
 

@@ -59,19 +59,24 @@ its own plugin root), and `CLAUDE_BOOTSTRAP_DATA_ROOT`, which moves everything
 bootstrap owns -- venvs, `_shared_libs`, logs, stamps, cooldowns, config --
 into a separate tree.
 
-The containment is real but PARTIAL: `CLAUDE_BOOTSTRAP_DATA_ROOT` redirects what bootstrap OWNS, not
-what it REACHES OUT TO. Four escapes are known. The first three were observed
-on a 2026-09-20 run; the fourth on a 2026-10-02 run:
+`engine._phase_shared_libs` suppresses the owner broadcast into the machine-wide
+standalone interpreter when `CLAUDE_BOOTSTRAP_DATA_ROOT` is set. It still publishes
+source and links consumer venvs inside the redirected root. A redirected pass does
+not rewrite the standalone interpreter's shared-library `.pth` files.
 
-- **The shared-lib link is the dangerous one.** `shared_lib.py`'s
-  `link_shared_lib` registers `<pkg>.pth` pointing at `<shared_root>/<name>/`
-  on the TARGET INTERPRETER. The shared root follows the data root; the
-  interpreter does not. So a test session rewrites
-  `bootstrap_lib.pth` in the standalone interpreter's site-packages
-  (`~/.local/share/python-standalone/python/Lib/site-packages` on Windows,
-  `.../python/lib/python3.12/site-packages` on macOS/Linux)
-  -- the machine-wide standalone interpreter every plugin on the fleet imports
-  through -- to point INTO the test's data root.
+Redirection also needs the consumer's interpreter: the shared-library root alone
+does not determine Python's imports. Before the fail-loud guard, a missing dev
+venv let `bootstrap_guard.reexec_under_plugin_venv` return to the caller, whose
+standalone interpreter could import an older machine-wide `bootstrap_lib`. The
+guard exits with status 2 before shared imports when the redirected plugin
+interpreter is missing, including when a re-exec loop guard is inherited. The
+missing-venv mechanism is reproduced; the exact invocation behind the earlier
+`claudx -p` observation was not captured and remains unproven.
+
+Containment remains partial: `CLAUDE_BOOTSTRAP_DATA_ROOT` redirects what bootstrap
+owns, not everything it reaches. These remaining escapes were observed on
+2026-09-20 (marketplace and shell writes) and 2026-10-02 (exported plugin roots):
+
 - **Marketplace refresh hits the real clone.** Bootstrap's own
   `bootstrap.json` sets `"alwaysUpdate": true`, so `_phase_marketplaces` runs
   `git fetch` against the real `~/.claude/plugins/marketplaces/plugins-kit`.
@@ -79,8 +84,8 @@ on a 2026-09-20 run; the fourth on a 2026-10-02 run:
   stalled engine holding the lock.
 - **`session-bootstrap.sh` writes `~/.local/bin` and the Windows PATH
   registry**, regardless of the data root. `BOOTSTRAP_SKIP_SHELL_INTEGRATION=1`
-  suppresses the rc-file and registry persistence but gates neither of the two
-  escapes above.
+  suppresses the rc-file and registry persistence but does not suppress
+  marketplace refresh or the `~/.local/bin` writes.
 - **`<PLUGIN>_ROOT` points at the installed plugin.** Bootstrap exports one
   `<PLUGIN>_ROOT` variable per plugin, and `SKILLS_KIT_ROOT` resolved to
   `~/.claude/plugins/cache/plugins-kit/skills-kit/0.83.0` inside a `claudx`

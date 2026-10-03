@@ -9,6 +9,7 @@ runs in one process.
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -1198,11 +1199,19 @@ class TestDataRootRedirect:
         return mod
 
     def test_redirect_moves_the_bundle_root(self, monkeypatch, tmp_path):
+        # This import tests data paths under an already-selected test runtime;
+        # the redirected guard must still find its interpreter before imports.
+        interpreter = tmp_path / "plugins-kit" / "git-kit" / ".venv" / "bin" / "python"
+        interpreter.parent.mkdir(parents=True)
+        shutil.copy2(sys.executable, interpreter)
         monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(tmp_path))
         mod = self._reload_prepare_review()
         assert mod.DEFAULT_BUNDLE_ROOT == tmp_path / "plugins-kit" / "git-kit" / "reviews"
 
     def test_redirect_moves_the_ledger(self, monkeypatch, tmp_path):
+        interpreter = tmp_path / "plugins-kit" / "git-kit" / ".venv" / "bin" / "python"
+        interpreter.parent.mkdir(parents=True)
+        shutil.copy2(sys.executable, interpreter)
         monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(tmp_path))
         mod = self._reload_prepare_review()
         assert mod._ledger_path() == (
