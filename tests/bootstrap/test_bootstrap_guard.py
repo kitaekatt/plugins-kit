@@ -9,7 +9,12 @@ byte-identical to the canonical, so the copies cannot silently drift.
 
 import filecmp
 import importlib.util
+import os
+import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CANON = _REPO_ROOT / "plugins" / "bootstrap" / "bootstrap_lib" / "bootstrap_guard.py"
@@ -153,6 +158,72 @@ class TestReexecUnderPluginVenv:
         monkeypatch.setattr(mod.os, "execv", lambda *a: called.append(a))
         mod.reexec_under_plugin_venv("p4-kit")
         assert called == []
+
+    @pytest.mark.parametrize("inherited_guard", [False, True])
+    @pytest.mark.parametrize("venv_exists", [False, True])
+    def test_redirected_missing_interpreter_refuses_before_shared_import(
+        self, tmp_path: Path, inherited_guard: bool, venv_exists: bool
+    ) -> None:
+        redirected = tmp_path / "data-dev"
+        venv = redirected / "plugins-kit" / "git-kit" / ".venv"
+        if venv_exists:
+            venv.mkdir(parents=True)
+        payload = tmp_path / "production-library"
+        package = payload / "bootstrap_lib"
+        package.mkdir(parents=True)
+        marker = tmp_path / "production-imported"
+        (package / "__init__.py").write_text(
+            f"from pathlib import Path\nPath({str(marker)!r}).touch()\n",
+            encoding="utf-8",
+        )
+        script = tmp_path / "consumer.py"
+        script.write_text(
+            "import sys\n"
+            f"sys.path.insert(0, {str(_CANON.parent)!r})\n"
+            "from bootstrap_guard import reexec_under_plugin_venv\n"
+            "reexec_under_plugin_venv('git-kit')\n"
+            "import bootstrap_lib\n",
+            encoding="utf-8",
+        )
+        env = dict(os.environ)
+        env["CLAUDE_BOOTSTRAP_DATA_ROOT"] = str(redirected)
+        env["PYTHONPATH"] = str(payload)
+        env.pop("_BOOTSTRAP_GUARD_VENV_REEXEC", None)
+        if inherited_guard:
+            env["_BOOTSTRAP_GUARD_VENV_REEXEC"] = "1"
+        result = subprocess.run(
+            [sys.executable, "-S", str(script)], env=env,
+            capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode != 0
+        assert "git-kit" in result.stderr
+        assert "CLAUDE_BOOTSTRAP_DATA_ROOT" in result.stderr
+        assert str(venv) in result.stderr
+        assert not marker.exists(), "production shared library executed"
+
+    def test_redirected_existing_interpreter_reexecs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mod = _load_canon()
+        redirected = tmp_path / "data-dev"
+        interpreter = redirected / "plugins-kit" / "git-kit" / ".venv" / "bin" / "python"
+        interpreter.parent.mkdir(parents=True)
+        interpreter.write_text("", encoding="utf-8")
+        monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(redirected))
+        monkeypatch.delenv(mod._REEXEC_GUARD_ENV, raising=False)
+        monkeypatch.setattr(mod.sys, "prefix", str(tmp_path / "outside"))
+        monkeypatch.setattr(mod, "_is_windows", lambda: False)
+        called: list[str] = []
+
+        def fake_execv(path: str, args: list[str]) -> None:
+            called.append(path)
+            raise SystemExit(0)
+
+        monkeypatch.setattr(mod.os, "execv", fake_execv)
+        with pytest.raises(SystemExit) as exc:
+            mod.reexec_under_plugin_venv("git-kit")
+        assert exc.value.code == 0
+        assert called == [str(interpreter)]
 
     def test_reexec_noop_when_already_under_venv(self, tmp_path, monkeypatch):
         """Being inside the venv is decided by sys.prefix -- the signal Python

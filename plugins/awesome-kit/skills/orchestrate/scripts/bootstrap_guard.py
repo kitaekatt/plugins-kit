@@ -127,12 +127,26 @@ def reexec_under_plugin_venv(plugin: str, marketplace: str = "plugins-kit") -> N
 
     No-op when already running under the provisioned venv, so it is safe to call
     unconditionally. Stdlib-only; loop-guarded via an env flag. If the venv
-    cannot be located, returns quietly and lets the caller's normal
-    `require_bootstrap()` guard report the genuine absence.
+    cannot be located, a redirected data root exits nonzero before shared
+    imports, even with an inherited loop guard. Without redirection, returns
+    quietly and lets the caller's normal `require_bootstrap()` guard report
+    the genuine absence.
     """
+    redirected = bool(os.environ.get("CLAUDE_BOOTSTRAP_DATA_ROOT"))
+    target = plugin_venv_python(plugin, marketplace) if redirected else None
+    if redirected and target is None:
+        venv = data_dir(plugin, marketplace) / ".venv"
+        print(
+            f"{marketplace}:{plugin}: redirected plugin interpreter is missing at "
+            f"{venv} (CLAUDE_BOOTSTRAP_DATA_ROOT is set); "
+            "cannot run against the machine's shared libraries.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
     if os.environ.get(_REEXEC_GUARD_ENV):
         return  # already re-exec'd once in this process tree
-    target = plugin_venv_python(plugin, marketplace)
+    if not redirected:
+        target = plugin_venv_python(plugin, marketplace)
     if target is None:
         return  # not provisioned; let require_bootstrap() report it
     # "Already in the venv" is decided by sys.prefix, NOT by comparing
