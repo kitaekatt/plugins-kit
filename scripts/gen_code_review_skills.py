@@ -737,8 +737,8 @@ technique_skill:
             NEVER merge the review-profile config layers (shipped / user / project)
             yourself -- the renderer is the only merge. Its stdout is the merged `profiles`
             table as YAML -- profile ids, reviewer rosters, each reviewer's `model` list of
-            `{id, effort}` entries, and `validator_models` with one `{id, effort}` entry per
-            reason -- followed by a `---` separator and layer provenance; parse only the
+            `{id, effort}` entries, and `validator_models` with an ordered list of one or more
+            `{id, effort}` entries per reason -- followed by a `---` separator and layer provenance; parse only the
             YAML above the separator. Keep the resolved `profiles` list for steps 6 and 7.
             See references/configuration.md for the full layer/merge/override contract.
           tool: Bash running @RENDER_TOOL@
@@ -2374,8 +2374,8 @@ Three layers are merged from lowest to highest precedence:
 - Every other mapping -- a profile's `selection`, and `validator_models` -- deep-merges key by
   key, so a higher layer states only the keys it changes.
 - `validator_models` reason keys (`bug`, `claude_md`, ...) are extensible: a higher layer can
-  add a new reason without restating the shipped ones. Each reason's value is a list of exactly
-  one `{id, effort}` entry, and a layer stating a reason replaces that reason's list outright.
+  add a new reason without restating the shipped ones. Each reason's value is an ordered list of
+  one or more `{id, effort}` entries, and a layer stating a reason replaces that reason's list outright.
 - `disabled: true` on a profile or a reviewer record removes that record entirely from the
   resolved table, not just its fields.
 - Every other list, such as `selection.data_only_extensions`, is also a PLAIN list that a higher

@@ -755,23 +755,13 @@ claude_md:
         shipped surface. The adapter is still enforced in emit_audit_jobs.py;
         detect lanes still never reach an adapter-admitted endpoint, because
         they run only core ids.
-        Rulings, verbatim:
-        "md-domain: can always be [luna high, sonnet low]"
-        "if luna is incompatible drop luna"
-        "yeah i get it you can't use luna in a workflow"
-        "it should just be dropped if it doesn't work"
-        "and it shouldn't be specified for a workflow specific specification,
-        but even if it is, it should be dropped as incompatible"
-        Scope answers: coverage and generate lanes are "All sonnet low", so
-        every md-domain lane ships sonnet low. For the job-kit project-doc
-        audit (emit_audit_jobs): "That sounds wrong it should do it the same
-        way as everything else". Frontier models (astra, fable) stay banned
-        from review lanes as a convention, with no enforcement added.
+        Rulings and scope answers: see the lane_models convention in ../../CLAUDE.md.
       origin: |
         Original (2026-09-06): audit-lane.md cited the adapter design record
         by a repo-root docs/planning path (OP-1); the pointer moved here.
-        Amended 2026-10-02 by the user's rulings quoted above, which replaced
-        the pinned opus/high detect lanes with the lane_models slot.
+        Amended 2026-10-02 by the user's rulings quoted in the lane_models
+        convention of ../../CLAUDE.md, which replaced the pinned opus/high
+        detect lanes with the lane_models slot.
       added: "2026-09-06"
       updated: "2026-10-02"
     - id: render_is_a_fifth_verb_with_one_command_lane

@@ -70,8 +70,8 @@ layer from the process working directory. It is the same root the prepare bundle
 - Every other mapping -- a profile's `selection`, and `validator_models` -- deep-merges key by
   key, so a higher layer states only the keys it changes.
 - `validator_models` reason keys (`bug`, `claude_md`, ...) are extensible: a higher layer can
-  add a new reason without restating the shipped ones. Each reason's value is a list of exactly
-  one `{id, effort}` entry, and a layer stating a reason replaces that reason's list outright.
+  add a new reason without restating the shipped ones. Each reason's value is an ordered list of
+  one or more `{id, effort}` entries, and a layer stating a reason replaces that reason's list outright.
 - `disabled: true` on a profile or a reviewer record removes that record entirely from the
   resolved table, not just its fields.
 - Every other list, such as `selection.data_only_extensions`, is also a PLAIN list that a higher

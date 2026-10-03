@@ -49,8 +49,8 @@ technique_skill:
             NEVER merge the review-profile config layers (shipped / user / project)
             yourself -- the renderer is the only merge. Its stdout is the merged `profiles`
             table as YAML -- profile ids, reviewer rosters, each reviewer's `model` list of
-            `{id, effort}` entries, and `validator_models` with one `{id, effort}` entry per
-            reason -- followed by a `---` separator and layer provenance; parse only the
+            `{id, effort}` entries, and `validator_models` with an ordered list of one or more
+            `{id, effort}` entries per reason -- followed by a `---` separator and layer provenance; parse only the
             YAML above the separator. Keep the resolved `profiles` list for steps 6 and 7.
             See references/configuration.md for the full layer/merge/override contract.
           tool: Bash running "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py"
