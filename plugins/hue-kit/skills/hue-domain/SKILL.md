@@ -37,7 +37,6 @@ domain_skill:
       - materialising the current bridge configuration to editable YAML
       - authoring scene look/colour/brightness changes as YAML layer edits
       - writing YAML scene definitions back to the bridge (definition-only)
-      - rendering the self-contained browsable HTML report
       - Hue CLIP v2 bridge fundamentals (connect, entity model, xy colour)
     excludes:
       - activating / triggering / turning scenes or lights on at runtime (this
@@ -105,13 +104,8 @@ domain_skill:
         Flag look changes. Redefining a scene is cheap and reversible; whether
         the new look is good is the user's call -- surface it, do not decide it.
       - >-
-        Always close the loop in the browser. ANY change to the working files --
-        a group rename, a colour or brightness edit, an export, an apply -- ends
-        with `hue-kit render` and opening the resulting index.html. The report IS
-        the user-facing view of this domain; a change they cannot see is a change
-        they cannot judge. Do not stop at "edited the YAML" or a terminal diff,
-        and do not ask whether to regenerate -- render and open, then describe
-        what changed.
+        After a change, validate the YAML and show the resulting bridge diff
+        before applying it.
       - >-
         Bridge-agnostic only: never bake one home's IPs, keys, zone names, or
         scene set into this skill's docs. Connection details come from the user's
@@ -178,7 +172,7 @@ domain_skill:
       description: >-
         THE DEFAULT ENTRY POINT -- run this for a bare invocation, or any opening
         request that does not already name a specific operation. Detects which of
-        the nine verdict states applies (see default_flow) and reports a
+        the eight verdict states applies (see default_flow) and reports a
         machine-readable `hue-kit-verdict:` line. Read-only except on first run.
       operation: hue-kit start [--no-open] [--accept]
       tool: scripts/hue_kit_cli.py
@@ -246,19 +240,6 @@ domain_skill:
       operation: hue-kit export
       tool: scripts/hue_kit_cli.py
       reference_section: scene-layers.md (Sync)
-    - id: render
-      keywords: [html, report page, browsable, self-contained, the draw,
-                 index.html, regenerate, refresh the report, show me the result]
-      description: >-
-        Render the self-contained HTML report (config + source embedded) -- the
-        shareable, buildable spec of the scenes. THE MANDATORY LAST STEP of every
-        change: run it after any group rename, colour/brightness edit, export, or
-        apply, then open the printed index.html path in the browser (`open` /
-        `xdg-open` / `start`) so the user sees the result. See the
-        close-the-loop guardrail in behavioral_guardrails.
-      operation: hue-kit render [PATH]
-      tool: scripts/hue_kit_cli.py
-      reference_section: scene-layers.md (The tool -- solver)
     - id: validate
       keywords: [diff, compare, validate, discrepancies, yaml vs bridge, drift]
       description: Diff the YAML design against the live bridge, per light. Read-only.
@@ -279,8 +260,9 @@ domain_skill:
       keywords: [example, scaffold, copy examples, overwrite with your own,
                  starter files]
       description: >-
-        Copy the shipped example scene-groups.yaml / scene-designs.yaml /
-        index.html into a directory to overwrite with the user's own.
+        Copy the shipped example scene-groups.yaml and scene-designs.yaml into
+        DIR (defaulting to the plugin data directory) for the user to overwrite
+        with their own. This creates YAML only; it does not create HTML.
       operation: hue-kit init [DIR]
       tool: scripts/hue_kit_cli.py
       reference_section: scene-layers.md (The two config files)
@@ -293,16 +275,16 @@ domain_skill:
     command: hue-kit start
     note: >-
       The state detection is the script's job, not yours: it decides among the
-      nine verdicts below and prints `hue-kit-verdict: <state>` as its last
+      eight verdicts below and prints `hue-kit-verdict: <state>` as its last
       line. Branch on that line; do not re-derive the state by inspecting
       files.
     verdicts:
       - verdict: first-run
         meaning: Neither working file existed; it built the registry + design,
-          rendered the report, and opened it in the browser. Requires BOTH
+          built the registry + design. Requires BOTH
           absent -- one present yields `incomplete`.
         do: >-
-          Tell the user what was set up and that the report is open, and stop.
+          Tell the user what was set up and stop.
           Mention in ONE line that the group names are placeholders they can
           rename in scene-groups.yaml whenever they like. Do NOT ask them to name
           the groups now, and do NOT propose names or tabulate the groups to help
@@ -328,10 +310,9 @@ domain_skill:
         do: Tell the user the shape was accepted as the new baseline; nothing
           else changed, no further action needed.
       - verdict: clean
-        meaning: The bridge matches the local design; a report exists.
+        meaning: The bridge matches the local design.
         do: >-
-          Ask (AskUserQuestion) whether they want to view the report or change a
-          scene. To view, open the index.html path the command printed.
+          Ask (AskUserQuestion) whether they want to change a scene.
       - verdict: changed
         meaning: >-
           `validate-design` ran cleanly and found a real discrepancy (colour or
@@ -364,14 +345,9 @@ domain_skill:
         do: Show the diagnostic printed above the verdict line; do not retry
           blindly. If it looks like a connectivity problem, route to discover /
           pair.
-      - verdict: render-failed
-        meaning: The design already matched the bridge, but re-rendering a
-          missing report failed.
-        do: Show the diagnostic printed above the verdict line; the YAML is
-          fine, only the report step failed. Suggest retrying `hue-kit render`.
   tools:
     - name: hue-kit
-      command: hue-kit [--dir PATH] <discover|pair|start|report|groups|export|render|validate|apply|init>
+      command: hue-kit [--dir PATH] <discover|pair|start|report|groups|export|validate|apply|init>
       description: >-
         The verb CLI over the layered scene tool. NOTE `--dir` is a top-level
         option and must precede the VERB (argparse rejects it after). Invocation:
@@ -381,11 +357,11 @@ domain_skill:
         installed version, so a bare `hue-kit` resolves in a Claude Code session
         with this plugin enabled; elsewhere run the shim by its path in the
         plugin's install directory. The CLI re-execs under the plugin's
-        bootstrap-provisioned venv either way. Working files (scene-groups.yaml / scene-designs.yaml /
-        index.html) default to the plugin data dir
+        bootstrap-provisioned venv either way. Working files (scene-groups.yaml / scene-designs.yaml)
+        default to the plugin data dir
         (~/.claude/plugins/data/plugins-kit/hue-kit), regardless of cwd.
     - name: scene-layers.py
-      command: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/scene-layers.py" [--html|--export-designs|--validate-design|--apply ...]'
+      command: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/scene-layers.py" [--export-designs|--validate-design|--apply ...]'
       description: >-
         Re-execs under the plugin venv when launched directly.
         The layered solver + bi-directional sync the CLI wraps. Read-only against
@@ -393,7 +369,7 @@ domain_skill:
     - name: scene-meta-groups.py
       command: (imported, not run directly)
       description: >-
-        READ-ONLY primitives library (bridge I/O, colour math, HTML renderer)
+        READ-ONLY primitives library (bridge I/O, colour math)
         that scene-layers.py imports. Never run directly; never write through it.
 ```
 
@@ -405,9 +381,6 @@ asset_dependencies:
   - path: ../../examples/scene-designs.yaml
     consumer: scripts/hue_kit_cli.py (init)
     purpose: shipped example layered design copied by `hue-kit init`
-  - path: ../../examples/index.html
-    consumer: scripts/hue_kit_cli.py (init)
-    purpose: shipped example rendered report copied by `hue-kit init`
   - path: ../../scripts/scene-layers.py
     consumer: scripts/hue_kit_cli.py
     purpose: the solver/sync tool the CLI execs with translated flags
@@ -422,20 +395,15 @@ asset_dependencies:
   ("show me my lights", "what are my scenes") -- run `hue-kit start` and branch
   on its `hue-kit-verdict:` line (see `default_flow` above). This covers both
   first-time setup and the has-anything-changed check; do not hand-run the
-  `report` -> `groups` -> `export` -> `render` chain, and do not open with
+  `report` -> `groups` -> `export` chain, and do not open with
   `report`, which prints solver internals at someone who asked to see a picture.
 - Changing a scene's colour/brightness ("make Reading warmer", "dim the bar in
-  Movie night") -- edit YAML -> `validate` -> `apply` -> `render` -> open.
+  Movie night") -- edit YAML -> `validate` -> `apply`.
 - Renaming meta-groups the user has supplied names for -- rewrite BOTH
   scene-groups.yaml and every `group:` reference in scene-designs.yaml, then
-  `validate` (a pure rename must show 0 discrepancies) -> `render` -> open.
+  `validate` (a pure rename must show 0 discrepancies).
   Nothing is written to the bridge; group names are a local vocabulary.
-- Seeing or regenerating the HTML report, or exporting the current bridge
-  configuration to YAML.
-
-**Every one of those paths ends the same way: `hue-kit render`, then open the
-index.html.** The HTML is how the user actually sees their lights -- finishing
-in the terminal leaves the change invisible to them.
+- Exporting the current bridge configuration to YAML.
 
 Do NOT use to turn scenes/lights on or off at runtime (this edits definitions),
 for non-Hue ecosystems, or for whole-home administration beyond Hue scenes.

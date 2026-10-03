@@ -14,9 +14,7 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _PLUGIN = _REPO_ROOT / "plugins" / "hue-kit"
 
-# examples/index.html embeds a frozen copy of the scripts + config as a
-# worked example; it is excluded from every text-content check below.
-_EXCLUDED = {_PLUGIN / "examples" / "index.html"}
+_EXCLUDED = set()
 
 # Author-decision dates are the shape "Christina[,]? YYYY-MM-DD" or
 # "(Christina, YYYY-MM-DD)" -- a citation naming who decided something and

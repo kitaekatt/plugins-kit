@@ -170,7 +170,6 @@ class TestCmdStartFirstRunNeverNeedsForce:
             return 0, None
 
         monkeypatch.setattr(hue_cli, "_call_scene_layers", fake_call)
-        monkeypatch.setattr(hue_cli, "_open_report", lambda *a, **k: False)
 
         hue_cli._cmd_start(Namespace(dir=str(tmp_path), accept=False, open=False))
 

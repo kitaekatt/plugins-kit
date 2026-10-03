@@ -44,24 +44,19 @@ truth regardless of invocation cwd (override with `--dir`, or the
 Entry point -- `hue-kit start`:
 
 - The verb to reach for when no specific operation was named. On a first run it
-  composes `groups` -> `export` -> `render` and opens the report; afterwards it
+  composes `groups` -> `export`; afterwards it
   reports whether the bridge still matches the local YAML. Prints
   `hue-kit-verdict: <state>` as its last line, one of `first-run`, `accepted`,
-  `clean`, `changed`, `validate-failed`, `bridge-unreachable`, `setup-failed`,
-  `render-failed`.
+  `clean`, `changed`, `validate-failed`, `bridge-unreachable`, `setup-failed`.
 - It writes without asking ONLY in the `first-run` case, where no local file
   exists to overwrite. On any difference it reports and stops: a diff cannot
   distinguish "the bridge moved" from "the YAML holds unapplied edits", and
   pulling (`export`) vs pushing (`apply`) destroy opposite work.
-- `--no-open` skips the browser; `--accept` re-baselines a reviewed shape change
-  without touching the YAML.
+- `--accept` re-baselines a reviewed shape change without touching the YAML.
 
 Solver (read-only) -- `hue-kit report`:
 
 - print the solved group family + per-scene stacks + bake verification.
-- `hue-kit render [PATH]` -- browsable HTML report (config + source embedded),
-  via the shared `scene-meta-groups.py` renderer (guardrail: all HTML goes
-  through `smg.layered_report()` -- never hand-roll one).
 - underlying flags also expose `--json` and offline-cell solving (`--cells`,
   `--export-cells`) for tooling.
 
@@ -136,8 +131,8 @@ To re-capture the live bridge into the design (e.g. after ad-hoc scene edits):
   saturated xy colour.
 - Colour math + the group primitives live in `scene-meta-groups.py`
   (`clip_get`, `Sig`, `analyze_scene`, `build_groups`, `sig_hsl`,
-  `sig_color_label`, `layered_report`); scene-layers.py imports them (single
-  source, no duplication). scene-meta-groups.py is a READ-ONLY library -- never
+  `sig_color_label`); scene-layers.py imports them (single source, no
+  duplication). scene-meta-groups.py is a READ-ONLY library -- never
   run it directly, and never write to the bridge through it.
 - The layered design carries only `xy` (authoritative) or `ct` -- there is no
   `hsl:` hand-authoring field. To shift a hue, edit the `xy` (the `# hsl(...)`

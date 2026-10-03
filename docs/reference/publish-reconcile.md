@@ -1,10 +1,9 @@
-# Publish, reconcile, and landing-page procedures
+# Publish and reconcile procedures
 
 The publish flow and its adjacent procedures, extracted from the root CLAUDE.md
 (2026-07-22 md-audit; publish mechanics added 2026-08-31). Read when: publishing
-a release, authoring a commit-scoped pre-commit check, clearing a
-master-only-content refusal, or previewing the marketplace landing page against
-dev work. The safe-publish gotchas, recovery procedure, and cache-version trap stay
+a release, authoring a commit-scoped pre-commit check, or clearing a
+master-only-content refusal. The safe-publish gotchas, recovery procedure, and cache-version trap stay
 in CLAUDE.md. `scripts/publish.py` remains the source of truth for the publish
 flow itself.
 
@@ -25,14 +24,13 @@ uv run python scripts/publish.py --check    # preflight only; no writes, no push
 **`scripts/publish.py` is the source of truth for the flow** -- steps, guards,
 and post-verification live in code so this document cannot drift from what
 actually runs. Read its module docstring for the mechanics. Do not hand-run the
-steps; the script exists because three of them are easy to get wrong in ways
-that fail silently (a page generated from the build machine's installed
-plugins instead of the repo; a merge that publishes a dev-only plugin; an
-`index.html` that lands outside the release commit).
+steps; the script exists because two of them are easy to get wrong in ways
+that fail silently (a merge that publishes a dev-only plugin, or derived data
+that lands outside the release commit).
 
 **Definition.** "Publish" means **all** of: version bump + regenerated
-`marketplace.json`, regenerated `index.html` inside the release commit, `dev`
-pushed, and the release landed on `master`. Anything less is not a publish
+`marketplace.json` inside the release commit, `dev` pushed, and the release
+landed on `master`. Anything less is not a publish
 -- a bump without the master merge, a bare `git push`, or a master merge without
 a bump each leaves consumers on the release in their cache. `publish.py` refuses
 each of these rather than half-shipping.
@@ -68,19 +66,14 @@ reasons. Three things differ from a bare publish, each on purpose:
 - **The derived artifacts are regenerated from the projected tree**, which
   lives only in the projection's temporary Git index.
   `regen_marketplace.regenerate(from_index=True)` reads that index for
-  `marketplace.json`; for `index.html`, the ~50 generator inputs (each
-  plugin's `plugin.json`, `poster.yaml` and `SKILL.md` files, plus
-  `.claude-plugin/`'s page files) are extracted with `git checkout-index` into
-  a scratch directory that is removed afterwards, and `generate.py --registry`
-  reads them there. So master's `marketplace.json` and `index.html` describe
-  the tree master is about to hold: the named plugins at their new versions,
+  `marketplace.json`. So master's `marketplace.json` describes the tree master
+  is about to hold: the named plugins at their new versions,
   the held-back ones at the versions master still carries. Nothing on dev is
   regenerated or committed -- the dirty gate admits uncommitted work inside
   held-back plugins, and a dev-side regen would read those working-tree
   manifests while `commit_derived` would sweep another session's staged work
   into the publish commit. `verify()` therefore judges master's artifacts
-  against master's manifests rather than dev's; dev's `index.html` catches up
-  at the next bare publish.
+  against master's manifests rather than dev's.
 - **The publish range does not advance.** The projection commit carries
   `Published-Only:` and `Built-From:` trailers, not `Published-From:`, so
   `range_base()` ignores it and the held-back plugins' commits stay in the
@@ -96,8 +89,8 @@ reasons. Three things differ from a bare publish, each on purpose:
 
 Trying it: `--check --only <plugin>` is the dry run (preflight only, no
 writes). After a real run, the script's own `verifying:` step is the
-acceptance test -- it reads master's `marketplace.json` and `index.html`
-back and checks every published plugin against the version master's
+acceptance test -- it reads master's `marketplace.json` back and checks every
+published plugin against the version master's
 `plugin.json` carries. A run that prints `published.` passed; nothing needs
 checking by hand.
 
@@ -195,7 +188,7 @@ second checkout, no branch switch:
 - For each path the refusal names, run `git diff dev origin/master -- <path>`
   and read the `+` lines (content master has that dev LACKS).
 - **Generated / JSON files** (`marketplace.json`, every `plugin.json`,
-  `index.html`): nothing to keep -- dev's versions are >= master's by
+  `marketplace.json`): nothing to keep -- dev's versions are >= master's by
   construction, and the publish regenerates the derived files.
 - **Non-generated text** (`.gitignore`, `CLAUDE.md`, `*.md`, `*.py`, etc.):
   **back-port** any `+` lines worth keeping to dev and commit them there. If
@@ -283,77 +276,3 @@ the regenerator plus `scripts/pre-commit-version-check.sh`. Never copy files
 directly into the plugin cache, and do not omit the version field hoping for
 rolling updates -- Claude Code substitutes a git SHA that becomes a static
 cache key anyway.
-
-## Landing-page preview
-
-The repo-root **`index.html`** is the marketplace's public landing page (the
-GitHub-Pages-style poster listing every plugin and its skills). It is generated,
-not hand-edited, by awesome-kit's plugin-ecosystem skill. `scripts/publish.py`
-invokes that generator, and `regenerate()` in that script carries the flags and
-is the source of truth for the invocation.
-
-Repo-side inputs for the page are all under `.claude-plugin/`:
-`marketplace.json` (the listing), `poster.yaml` (the marketplace subtitle and
-URL), and `index-page.yaml` (the page copy).
-
-At publish time the index.html regen is `publish.py`'s job -- never hand-run it
-there. To **preview** the page against dev work, call the same function the
-publish calls, so the preview cannot drift from the shipped flag set:
-
-```bash
-uv run python -c "import runpy; runpy.run_path('scripts/publish.py')['regenerate']()"
-git diff --stat -- index.html .claude-plugin/marketplace.json   # look, then:
-git restore index.html .claude-plugin/marketplace.json          # unless publishing them
-```
-
-`regenerate()` writes a synthetic registry naming each `plugins/<name>`
-directory with its own `plugin.json` version into a temporary directory,
-passes it as `generate.py --registry`, and removes it afterwards. Nothing under
-`~/.claude` is rewritten, so there is no mode to restore.
-
-**Every flag is load-bearing -- a regen without them produces a page worse
-than the published one, and `--marketplace` produces one that leaks.** The
-generator's default job is to describe the machine it runs on, not the public
-marketplace. Six flags redirect its inputs at the repo:
-`--registry`, `--marketplace`, `--public`, `--marketplace-json`, `--poster`,
-and `--config`. `--registry` supplies the plugin inventory and versions from
-the repo's own manifests instead of `~/.claude/plugins/installed_plugins.json`
-and the plugin-cache fallback, which describe what THIS machine has installed.
-`--marketplace` is the one whose omission **leaks rather than misreports**:
-without `--marketplace plugins-kit`, the page carries every OTHER marketplace
-with a `poster.yaml` installed on the machine, including private marketplaces,
-into the public repository (observed: 23 plugins across 2 marketplaces instead
-of 15 across 1). `--public` drops the on/off/installed state badges,
-which describe the generating machine rather than the marketplace; omit it and
-a checked-in page carries the generating machine's `"state": "on"/"unmanaged"`
-values and loses the flow-to-content-height CSS. `--marketplace-json` overrides
-the listing that the phantom-install filter reads: the **cached**
-`marketplace.json` lags the source by one publish, so a plugin added by the
-release is absent from it and gets dropped from that release's page. That filter
-exists to catch plugins *removed* upstream; it misfires on ones *added*.
-`--poster` does the same for the marketplace's own `poster.yaml` (subtitle,
-URL), which the cached clone lags identically. `--config` takes the page copy
-from `.claude-plugin/index-page.yaml` instead of the per-machine
-plugin-ecosystem poster configuration. `publish.py` passes all six flags, and
-its `verify()` re-parses the generated page to refuse a foreign marketplace or
-embedded machine state.
-
-**At publish time this is `publish.py`'s job -- do not hand-run it.** A bare
-publish regenerates in the project folder and lands `index.html` *inside* the
-release commit, so `master` is never in a state where its page disagrees with
-its own `marketplace.json`. A `--only` publish regenerates from the projected
-tree instead (see "Partial release" above).
-
-**Preview vs publish -- same mechanism, different commit rule.** At publish
-time dev is the about-to-be master, so its page is the published page --
-commit it. Outside a publish, dev contains skills and versions not going out,
-so the page renders a marketplace that does not exist yet -- look at it, then
-restore it. The rule is not "never commit a dev page"; it is "only commit one
-whose content is being published in the same commit."
-
-**Equivalence note.** The `--registry` regen of `origin/master`'s tree
-reproduces master's committed `marketplace.json` byte for byte, and its
-`index.html` differs only in the order of the embedded plugin array
-(alphabetical rather than registry order). The page sorts that array on load,
-so the rendered page is identical (verified 2026-09-16 when `--registry`
-replaced the `dev-tree.py` flip).

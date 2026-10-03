@@ -21,11 +21,11 @@ home's natural structure.
 ## Layout
 
 - `scripts/scene-layers.py` -- THE tool: the solver + the bi-directional sync
-  (report / export / validate / apply). Driven via the CLI below.
+  (export / validate / apply). Driven via the CLI below.
 - `scripts/scene-meta-groups.py` -- a READ-ONLY primitives library imported by
-  scene-layers.py (bridge I/O, colour math, the HTML renderer). Not run directly.
+  scene-layers.py (bridge I/O, colour math). Not run directly.
 - `scripts/hue_kit_cli.py` -- the `hue-kit` verb front-end (discover / pair /
-  start / report / groups / export / render / validate / apply / init).
+  start / report / groups / export / validate / apply / init).
   Re-execs under the plugin venv via `bootstrap_guard.py` (vendored,
   stdlib-only; canonical in bootstrap's `bootstrap_lib/`).
 - `bin/hue-kit`, `bin/hue-kit.cmd` -- Claude Code adds an enabled plugin's
@@ -34,22 +34,19 @@ home's natural structure.
   installed version, so a bare `hue-kit` resolves in a Claude Code session with
   this plugin enabled; elsewhere run the shim by its path in the plugin's install
   directory. The CLI and `scene-layers.py` both re-exec under the plugin venv.
-- `examples/scene-groups.yaml`, `examples/scene-designs.yaml`, `examples/index.html`
-  -- the author's home (42 lights, 12 scenes). **Example data**; a user
-  regenerates their own or overwrites via `hue-kit init`. The rendered report is
-  viewable live (GitHub Pages, served from `master`):
-  <https://kitaekatt.github.io/plugins-kit/plugins/hue-kit/examples/index.html>
-  -- refresh it by copying a current `hue-kit render` output over it.
+- `examples/scene-groups.yaml`, `examples/scene-designs.yaml` -- the author's
+  home (42 lights, 12 scenes). **Example data**; a user copies it via
+  `hue-kit init`.
 
 ## The CLI
 
 `hue-kit <verb>` (from PATH in a Claude Code session with this plugin enabled).
-Working files (`scene-groups.yaml`, `scene-designs.yaml`, `index.html`) default to the plugin
+Working files (`scene-groups.yaml`, `scene-designs.yaml`) default to the plugin
 data dir (`~/.claude/plugins/data/plugins-kit/hue-kit`) -- one source of truth
 regardless of invocation cwd; pass `--dir PATH` to relocate. Verbs map to
 scene-layers.py flags:
 `report` (default report), `groups` (`--export-groups`), `export`
-(`--export-designs`), `render` (`--html`), `validate` (`--validate-design`),
+(`--export-designs`), `validate` (`--validate-design`),
 `apply [--yes]` (`--apply`). `start` is the exception: it composes several of
 these, so it runs them as SUBPROCESSES (`_call_scene_layers`) rather than via
 the `os.execve` runner the single-verb commands use -- exec never returns.
@@ -65,21 +62,20 @@ paired key `hue-kit pair` writes to the plugin data directory.
 
 **Run this first for any opening request that does not already name an
 operation** -- including a bare skill invocation. It replaces hand-running the
-setup chain, and it decides among nine verdict states rather than making you
+setup chain, and it decides among eight verdict states rather than making you
 infer them (the domain skill's `default_flow.verdicts` is the full list with a
 `do:` for each). It prints `hue-kit-verdict: <state>` as its last line; branch
 on that.
 
 - `first-run` -- nothing existed, so it built `scene-groups.yaml` +
-  `scene-designs.yaml`, rendered `index.html`, and opened it. This is the ONLY
+  `scene-designs.yaml`. This is the ONLY
   state that writes without asking, and it requires BOTH working files to be
   absent -- with one present the verdict is `incomplete` and nothing is
   written. Report it and
   stop: the placeholder group names (`G1..`) are a working default, and asking
   the user to name them at setup -- or proposing names -- hands them a question
   their data cannot answer (see the naming guardrail in the domain skill).
-- `clean` -- bridge matches the local design. Ask whether to view the report or
-  change a scene.
+- `clean` -- bridge matches the local design. Ask whether to change a scene.
 - `changed` -- they disagree, in SHAPE (light/zone/scene added, removed, or
   renamed -- caught by the stored fingerprint) or in COLOUR (caught by
   `validate`). **No YAML and no scene data is written** -- it may establish a
@@ -95,7 +91,7 @@ on that.
   `default_flow.verdicts` carries the `do:`).
 - `validate-failed` -- the comparison itself failed; fix the diagnostic, do
   not treat it as drift to sync (see the domain skill).
-- `bridge-unreachable`, `setup-failed`, `render-failed`, `accepted` -- see the
+- `bridge-unreachable`, `setup-failed`, `accepted` -- see the
   domain skill for each.
 
 `bridge-fingerprint.txt` in the working dir stores the bridge's shape (lights,
@@ -113,7 +109,6 @@ the loop after a shape change, so do not remove that coupling.
    adding a `templates:` block naming each stack sequence).
 3. `hue-kit export` -- materialises `scene-designs.yaml` from their live scene
    colours + the registry. Verifies the family expresses AND bakes every scene.
-4. `hue-kit render` -- renders `index.html`.
 
 `groups` refuses to overwrite an existing `scene-groups.yaml` -- it writes
 placeholder names and would destroy the user's renames -- unless `--force` is
@@ -124,7 +119,7 @@ not pass `--force` to "refresh" a registry on the user's behalf.
 
 The domain skill's "When to invoke" and `behavioral_guardrails`
 (`skills/hue-domain/SKILL.md`) own the operating loop for a conversational
-change (edit YAML -> validate -> apply -> render -> open); follow that rather
+change (edit YAML -> validate -> apply); follow that rather
 than re-deriving it here.
 
 ## Safety rules
@@ -143,10 +138,7 @@ than re-deriving it here.
   `validate` round-trip cleanly. Before that guard existed, such a scene
   reported the same discrepancies on every run and no amount of `apply` could
   silence it. Keep the analyzer and the diff agreeing on what "dark" means.
-- After changing scenes, re-run `hue-kit report` -- if the group vocabulary is no
-  longer minimal, or a template's stack order flipped (the solver orders layers
-  by brightness), update `scene-groups.yaml` (see
-  skills/hue-domain/references/scene-layers.md "Template names").
+- After changing scenes, re-run `hue-kit report` to inspect the solver output.
 
 ## Maintenance notes
 
@@ -156,5 +148,5 @@ than re-deriving it here.
 - `bootstrap_guard.py` here is a **vendored** byte-for-byte copy; edit the
   canonical and re-vendor, never this copy directly -- see "bootstrap_guard.py
   is vendored byte-for-byte" in this repo's `plugins/CLAUDE.md`.
-- The example YAML/HTML are the author's home. Keep them buildable but treat them
+- The example YAML is the author's home. Treat it
   as a worked example, not this plugin's own config.

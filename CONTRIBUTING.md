@@ -232,9 +232,8 @@ these, atomically; anything less leaves consumers seeing something other than
 what you meant:
 
 1. Version bump (yours) + regenerated `marketplace.json`.
-2. `index.html` regenerated from the dev tree, **inside** the release commit.
-3. `dev` pushed.
-4. `master` fast-forwarded and pushed.
+2. `dev` pushed.
+3. `master` fast-forwarded and pushed.
 
 The script owns everything derived from your commits and every git step after
 them; you own the code and the version bump on `dev`.

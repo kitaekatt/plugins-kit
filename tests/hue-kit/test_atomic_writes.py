@@ -261,7 +261,6 @@ class TestHueKitCliWiring:
             "sys.exit(0)\n"
         ))
         monkeypatch.setattr(hue_cli, "SCENE_LAYERS", stub)
-        monkeypatch.setattr(hue_cli, "_open_report", lambda *a, **k: False)
         monkeypatch.setattr(hue_cli.os, "replace",
                             lambda src, dst: (_ for _ in ()).throw(OSError("boom")))
         dest = tmp_path / "bridge-fingerprint.txt"
@@ -376,24 +375,6 @@ class TestSceneLayersWiring:
             scene_layers.main()
 
         assert dest.read_text() == "sentinel-cells\n"
-        _assert_no_tmp_files(tmp_path)
-
-    def test_html_failure_leaves_the_report_untouched(
-            self, scene_layers, tmp_path, monkeypatch):
-        dest = tmp_path / "index.html"
-        dest.write_text("sentinel-html\n")
-        monkeypatch.setattr(scene_layers, "bridge_session", lambda: object())
-        monkeypatch.setattr(scene_layers, "layered_view", lambda session: ([], [], {}))
-        monkeypatch.setattr(scene_layers.smg, "layered_report",
-                            lambda *a, **k: "<html></html>")
-        monkeypatch.setattr(scene_layers.os, "replace",
-                            lambda src, dst: (_ for _ in ()).throw(OSError("boom")))
-        monkeypatch.setattr("sys.argv", ["x", "--html", str(dest)])
-
-        with pytest.raises(OSError):
-            scene_layers.main()
-
-        assert dest.read_text() == "sentinel-html\n"
         _assert_no_tmp_files(tmp_path)
 
     def test_json_out_failure_leaves_the_output_file_untouched(

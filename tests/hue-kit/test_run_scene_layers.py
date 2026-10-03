@@ -61,8 +61,8 @@ class TestRunSceneLayersOnWindows:
         monkeypatch.setattr(hue_cli, "_scene_layers_env", lambda wd: {})
 
         try:
-            hue_cli._run_scene_layers(["--html", "x"], tmp_path)
+            hue_cli._run_scene_layers(["--validate-design"], tmp_path)
         except SystemExit:
             pass
 
-        assert "--html" in called["argv"], "POSIX must still hand over via execve"
+        assert "--validate-design" in called["argv"], "POSIX must still hand over via execve"

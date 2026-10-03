@@ -56,7 +56,7 @@ generate.py --marketplace plugins-kit \
             --config ./.claude-plugin/index-page.yaml \
             --registry ./synthetic-registry.json \
             --title "plugins-kit marketplace" \
-            --output ./index.html --public --no-open
+            --output ./plugin-ecosystem.html --public --no-open
 ```
 
 - `--marketplace` scopes the page. **Omitting it publishes every other marketplace installed on the build machine** -- including private ones, into a public repo. Treat it as load-bearing, not cosmetic.
@@ -66,7 +66,8 @@ generate.py --marketplace plugins-kit \
 - `--config` takes the title and tagline from a repo file instead of the operator's own poster config.
 - `--registry` points the plugin inventory at a file built from the repo's own `plugin.json` files, instead of `~/.claude/plugins/installed_plugins.json` and its cache fallback, so the page's plugin list and versions describe the repo rather than the build machine's install.
 
-Automate this rather than typing it: plugins-kit builds its `index.html` from `scripts/publish.py`, which passes all of the above and then re-parses the generated page to confirm no foreign marketplace or machine state got in.
+Use a non-index filename for any source-tree poster. The human-html lane owns
+`index.html` in repositories that use that generated documentation surface.
 
 ## How to Invoke
 

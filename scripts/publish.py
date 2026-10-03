@@ -8,9 +8,8 @@ the intent and points here; the steps live in code so the two cannot drift.
 publish -- it is a state where users see something other than what you meant:
 
   1. Version bump (yours) + regenerate the derived marketplace.json.
-  2. Regenerate index.html from the dev tree, INSIDE the release commit.
-  3. Push dev.
-  4. Fast-forward master and push it. master is the cache source, so nothing
+  2. Push dev.
+  3. Fast-forward master and push it. master is the cache source, so nothing
      reaches a user until this lands. A bump without a merge ships nothing; a
      merge without a bump doesn't change the cache key, so consumers never
      refetch.
@@ -55,9 +54,6 @@ Why a script rather than a checklist -- the footguns it removes:
     computes the tree master should have -- which is exactly what verify()
     asserts -- and stamps `Published-From: <dev sha>` on the commit so the next
     run knows where the range starts instead of inferring it from ancestry.
-  - index.html must ride INSIDE the release commit, or master briefly holds a
-    page that disagrees with its own marketplace.json.
-
 What preflight refuses on (all of it unbypassable -- no environment variable
 turns any of it off, which is the whole point of a gate that sits after the
 escapable pre-commit hooks):
@@ -131,18 +127,11 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 # tests/repo-scripts/test_publish.py. Tests point these two at fixture data.
 REAL_PLUGINS_DIR = REPO_ROOT / "plugins"
 MARKETPLACE_JSON = REPO_ROOT / ".claude-plugin" / "marketplace.json"
-POSTER_YAML = REPO_ROOT / ".claude-plugin" / "poster.yaml"
-INDEX_PAGE_YAML = REPO_ROOT / ".claude-plugin" / "index-page.yaml"
-INDEX_HTML = REPO_ROOT / "index.html"
 
 DEV_BRANCH = "dev"
 MASTER_BRANCH = "master"
 REMOTE = "origin"
 MARKETPLACE_NAME = "plugins-kit"
-PAGE_TITLE = "plugins-kit marketplace"
-
-GENERATE_PY = (PLUGINS_DIR / "awesome-kit" / "skills" / "plugin-ecosystem"
-               / "scripts" / "generate.py")
 REGEN_MARKETPLACE_PY = REPO_ROOT / "scripts" / "regen_marketplace.py"
 
 
@@ -222,30 +211,6 @@ def held_back_for(only: set[str] | None) -> set[str]:
     return published_plugins() - only
 
 
-def is_poster_hidden(plugin: str) -> bool:
-    """True when a plugin opts out of the generated poster / index.html.
-
-    `hidden: true` in plugins/<name>/.claude-plugin/poster.yaml means published
-    (installable, listed in marketplace.json) but deliberately absent from the
-    user-facing page -- see the plugin-ecosystem generator, which owns the
-    feature. verify() must honour it or it reports a missing entry that the
-    generator was correct to omit.
-
-    Deliberately a substring check rather than a YAML parse: publish.py has no
-    YAML dependency, and this file's whole grammar is a handful of scalar keys.
-    """
-    poster = PLUGINS_DIR / plugin / ".claude-plugin" / "poster.yaml"
-    if not poster.is_file():
-        return False
-    for line in poster.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if stripped.startswith("#"):
-            continue
-        if stripped.replace(" ", "").lower() == "hidden:true":
-            return True
-    return False
-
-
 def version_at(ref: str, plugin: str) -> str | None:
     """A plugin's version at a git ref, or None if it doesn't exist there."""
     path = f"plugins/{plugin}/.claude-plugin/plugin.json"
@@ -273,7 +238,7 @@ _RANGE_BASE_SEARCH_DEPTH = 50
 # master's copy is an OUTPUT of the last release rather than content anyone
 # authored there, so dev wins unconditionally -- the same rule the reconcile
 # procedure states in docs/reference/publish-reconcile.md.
-GENERATED_PATHS = frozenset({".claude-plugin/marketplace.json", "index.html"})
+GENERATED_PATHS = frozenset({".claude-plugin/marketplace.json"})
 
 
 def _rc(*args: str) -> int:
@@ -1037,7 +1002,7 @@ def _write_registry(plugin_dirs: dict[str, Path], out_path: Path) -> None:
 
 
 def regenerate() -> bool:
-    """Regenerate marketplace.json and index.html from this working copy. True
+    """Regenerate marketplace.json from this working copy. True
     if anything changed.
 
     generate.py's default job is to describe the MACHINE it runs on -- every
@@ -1079,38 +1044,19 @@ def regenerate() -> bool:
     """
     run([sys.executable, str(REGEN_MARKETPLACE_PY)], "marketplace.json regen")
 
-    registry_dir = Path(tempfile.mkdtemp(prefix="publish-registry-"))
-    try:
-        registry_path = registry_dir / "registry.json"
-        plugin_dirs = {d.name: d for d in sorted(PLUGINS_DIR.iterdir())
-                       if (d / ".claude-plugin" / "plugin.json").is_file()}
-        _write_registry(plugin_dirs, registry_path)
-        run([sys.executable, str(GENERATE_PY),
-             "--registry", str(registry_path),
-             "--marketplace", MARKETPLACE_NAME,
-             "--marketplace-json", f"{MARKETPLACE_NAME}={MARKETPLACE_JSON}",
-             "--poster", f"{MARKETPLACE_NAME}={POSTER_YAML}",
-             "--config", str(INDEX_PAGE_YAML),
-             "--title", PAGE_TITLE,
-             "--output", str(INDEX_HTML),
-             "--public",
-             "--no-open"], "index.html regen")
-    finally:
-        shutil.rmtree(registry_dir, ignore_errors=True)
-
     return bool(git("status", "--porcelain"))
 
 
 def commit_derived(bumps: list[str]) -> None:
     """Land the derived artifacts in the release commit.
 
-    Amend when HEAD is unpushed, so index.html rides INSIDE the release commit
-    and master never holds a page that disagrees with its own marketplace.json.
+    Amend when HEAD is unpushed so the derived marketplace listing rides inside
+    the release commit.
     When HEAD is already pushed, amending would rewrite published history --
     make a follow-up commit instead; dev's tip is still correct before the
     merge, which is what master inherits.
     """
-    git("add", str(MARKETPLACE_JSON), str(INDEX_HTML))
+    git("add", str(MARKETPLACE_JSON))
 
     head = git("rev-parse", "HEAD")
     pushed = git("branch", "-r", "--contains", head, check=False)
@@ -1242,7 +1188,7 @@ def _regenerate_derived_in(env: dict[str, str]) -> dict[str, str]:
     """Rebuild the derived artifacts from the tree held in `env`'s temporary
     index. Returns {repo-relative path: new text} for the caller to hash into
     blobs and stage in that same index -- nothing here touches this project
-    folder's working tree, its real marketplace.json/index.html, or any file
+    folder's working tree, its real marketplace.json, or any file
     outside a scratch directory removed before returning.
 
     A module-level seam so the tests, whose fixture repo has no generator, can
@@ -1254,19 +1200,8 @@ def _regenerate_derived_in(env: dict[str, str]) -> dict[str, str]:
     than taking one as an argument, so this is the one place that mutates
     os.environ, and only for the duration of that one call.
 
-    index.html cannot be produced the same way, because generate.py reads
-    ordinary files (plugin.json, poster.yaml, SKILL.md) rather than a Git
-    index. So the files it needs are extracted from the SAME temporary index
-    into a scratch directory with `git checkout-index`, alongside a synthetic
-    registry (_write_registry) that points generate.py's --registry flag at
-    that scratch checkout instead of ~/.claude state. generate.py itself runs
-    from THIS working copy (GENERATE_PY), not from the scratch checkout --
-    under --only with awesome-kit itself held back, that means dev's copy of
-    the generator renders master's projected page. That is intended: every
-    other held-back plugin's data is already read from master's own content
-    (regen_marketplace.regenerate(from_index=True) reads the projected tree,
-    and the scratch checkout is extracted from that same tree), only the
-    generator CODE is dev's, the same as any other tool this script runs.
+    The projected marketplace listing is serialized directly from the temporary
+    index; no other generated page is part of a partial release.
     """
     regen_module = _load_rule_module("regen_marketplace.py")
     index_file = env["GIT_INDEX_FILE"]
@@ -1322,24 +1257,11 @@ def _regenerate_derived_in(env: dict[str, str]) -> dict[str, str]:
         registry_path = scratch / "registry.json"
         _write_registry(plugin_dirs, registry_path)
 
-        index_scratch = scratch / "index.html"
-        run([sys.executable, str(GENERATE_PY),
-             "--registry", str(registry_path),
-             "--marketplace", MARKETPLACE_NAME,
-             "--marketplace-json", f"{MARKETPLACE_NAME}={marketplace_scratch}",
-             "--poster", f"{MARKETPLACE_NAME}={scratch / '.claude-plugin' / 'poster.yaml'}",
-             "--config", str(scratch / ".claude-plugin" / "index-page.yaml"),
-             "--title", PAGE_TITLE,
-             "--output", str(index_scratch),
-             "--public",
-             "--no-open"], "index.html regen (--only)")
-        index_text_out = index_scratch.read_text(encoding="utf-8")
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 
     return {
         MARKETPLACE_JSON.relative_to(REPO_ROOT).as_posix(): marketplace_text,
-        INDEX_HTML.relative_to(REPO_ROOT).as_posix(): index_text_out,
     }
 
 
@@ -1455,45 +1377,8 @@ def push_and_merge(excluded: dict[str, set[str]] | None = None,
     _publish_projection(excluded or {}, only)
 
 
-def check_index_scope(index_text: str) -> list[str]:
-    """Refuse an index.html that describes anything but this marketplace.
-
-    regenerate() scopes the page with --marketplace, and dropping that flag does
-    not fail or look wrong -- it silently adds every OTHER marketplace installed
-    on the generating machine, private ones included, and commits them to a
-    public repo. That failure is invisible in a diff-free glance at a 100KB
-    generated file, so it is checked against the artifact rather than trusted to
-    the invocation. The same parse catches a --public regression, which would
-    embed this machine's enabledPlugins.
-    """
-    match = re.search(r"^const data = (\{.*\});$", index_text, re.MULTILINE)
-    if not match:
-        return ["index.html does not embed a parseable data block -- "
-                "the generator's output shape changed; update check_index_scope"]
-    try:
-        data = json.loads(match.group(1))
-    except json.JSONDecodeError as exc:
-        return [f"index.html data block is not valid JSON: {exc}"]
-
-    problems = []
-    foreign = sorted({p.get("marketplace") for p in data.get("plugins", [])
-                      if p.get("marketplace") != MARKETPLACE_NAME})
-    foreign += [m for m in data.get("marketplace_order", [])
-                if m != MARKETPLACE_NAME and m not in foreign]
-    if foreign:
-        problems.append(
-            f"index.html describes marketplaces other than {MARKETPLACE_NAME}: "
-            f"{', '.join(str(m) for m in foreign)} -- this page ships to a public "
-            f"repo. regenerate() must pass --marketplace {MARKETPLACE_NAME}.")
-    if any("state" in p for p in data.get("plugins", [])):
-        problems.append(
-            "index.html embeds per-plugin state, which describes the generating "
-            "machine's enabledPlugins. regenerate() must pass --public.")
-    return problems
-
-
 def verify(only: set[str] | None = None) -> list[str]:
-    """Post-publish verification. Returns a list of problems (empty = good).
+    """Verify that master carries the expected marketplace listing.
 
     Identical tips are the strongest possible result, but they are only
     reachable on the fast-forward path. A projection gives master a commit dev
@@ -1538,26 +1423,18 @@ def verify(only: set[str] | None = None) -> list[str]:
                 print(f"  note: {name} stays at its existing master version "
                       f"({len(changed)} file(s) held back on {DEV_BRANCH})")
 
-    # A bare publish regenerated dev's artifacts and projected them, so dev's
-    # files are the ones to judge against dev's manifests. A partial release
-    # left dev alone and regenerated INSIDE the projection, so the artifacts
-    # to judge are master's, against the manifests master carries -- the
-    # only-plugins at their new versions, the held-back ones where they were.
     if only:
         master = f"{REMOTE}/{MASTER_BRANCH}"
         where = f"{master} "
         marketplace_text = git(
             "show", f"{master}:{MARKETPLACE_JSON.relative_to(REPO_ROOT).as_posix()}")
-        index_text = git("show", f"{master}:{INDEX_HTML.relative_to(REPO_ROOT).as_posix()}")
         expected = {name: version_at(master, name) for name in local_plugins()}
     else:
         where = ""
         marketplace_text = MARKETPLACE_JSON.read_text(encoding="utf-8")
-        index_text = INDEX_HTML.read_text(encoding="utf-8")
         expected = {name: m.get("version") for name, m in local_plugins().items()}
     marketplace = json.loads(marketplace_text)
     listed = {p["name"]: p.get("version") for p in marketplace.get("plugins", [])}
-    problems.extend(check_index_scope(index_text))
 
     for name, manifest in local_plugins().items():
         if not is_published(manifest):
@@ -1570,15 +1447,6 @@ def verify(only: set[str] | None = None) -> list[str]:
                 f"{where}marketplace.json has {name}={listed.get(name)}, "
                 f"plugin.json has {version}"
                 + (" (held back)" if name in held_back else ""))
-        # A poster-hidden plugin is published but intentionally off the page;
-        # asserting its presence would fail every publish while it ships.
-        if is_poster_hidden(name):
-            if f'"name": "{name}"' in index_text:
-                problems.append(
-                    f"index.html shows {name}, which opts out via poster.yaml hidden: true")
-        elif f'"name": "{name}", "version": "{version}"' not in index_text:
-            problems.append(f"{where}index.html does not show {name} {version}")
-
     return problems
 
 
@@ -1669,7 +1537,7 @@ def main(argv: list[str]) -> int:
             # would bake their unpublished manifests into dev's listing, and
             # commit_derived's commit would sweep another session's staged
             # work along. master gets its own artifacts, regenerated from
-            # the projected tree; dev's index.html catches up at the next
+            # the projected tree; the dev-side listing catches up at the next
             # bare publish.
             print(f"  --only: {DEV_BRANCH}'s derived artifacts left as "
                   f"committed; {MASTER_BRANCH}'s are regenerated from the "
@@ -1704,7 +1572,7 @@ def main(argv: list[str]) -> int:
                 "dev is held back" if only else
                 "  origin/master carries every shippable commit; "
                 "dev-only work held back"))
-    print("  marketplace.json, index.html, and plugin.json agree")
+    print("  marketplace.json and plugin.json agree")
     print("\npublished. Users with autoUpdate get it next session start.")
     return 0
 

@@ -70,7 +70,6 @@ def repo(tmp_path, monkeypatch):
     (root / ".claude-plugin").mkdir(parents=True, exist_ok=True)
     (root / ".claude-plugin" / "marketplace.json").write_text(
         json.dumps({"plugins": [{"name": "pub-kit", "version": "1.0.0"}]}, indent=2))
-    (root / "index.html").write_text('{"name": "pub-kit", "version": "1.0.0"}')
     # A `dev/` directory alongside a `dev` BRANCH, as the real repo has. Every
     # `git diff <ref> dev` without a trailing "--" is then ambiguous and git
     # refuses it outright, which is a publish that fails on its first command.
@@ -89,7 +88,6 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.setattr(publish, "PLUGINS_DIR", root / "plugins")
     monkeypatch.setattr(publish, "MARKETPLACE_JSON",
                         root / ".claude-plugin" / "marketplace.json")
-    monkeypatch.setattr(publish, "INDEX_HTML", root / "index.html")
     # The repo-wide invariant gates deliberately judge the REAL tree; point
     # them at the fixture so these tests neither read nor depend on it.
     monkeypatch.setattr(publish, "REAL_PLUGINS_DIR", root / "plugins")
@@ -1489,14 +1487,13 @@ class TestVersionReads:
 
 class TestVerify:
     def test_flags_marketplace_disagreeing_with_plugin_json(self, repo):
-        """The drift the whole flow exists to prevent: a page/listing that
+        """The drift the whole flow exists to prevent: a listing that
         disagrees with the manifest it was generated from."""
         _write_manifest(repo, "pub-kit", "9.9.9")
 
         problems = publish.verify()
 
         assert any("marketplace.json has pub-kit=1.0.0" in p for p in problems)
-        assert any("index.html does not show pub-kit 9.9.9" in p for p in problems)
 
     def test_flags_a_dev_only_plugin_leaking_into_the_listing(self, repo):
         marketplace = repo / ".claude-plugin" / "marketplace.json"
@@ -1508,45 +1505,6 @@ class TestVerify:
         problems = publish.verify()
 
         assert any("dev-only plugin dev-kit is listed" in p for p in problems)
-
-
-class TestIndexScopeGuard:
-    """The page ships to a PUBLIC repo, so a dropped --marketplace does not merely
-    misreport -- it publishes every other marketplace installed on the generating
-    machine. Checked against the artifact, not trusted to the invocation."""
-
-    def _page(self, plugins, order=("plugins-kit",)):
-        data = {"plugins": plugins, "marketplace_order": list(order)}
-        return f"<script>\nconst data = {json.dumps(data)};\nfunction el() {{}}\n</script>"
-
-    def test_clean_page_passes(self):
-        page = self._page([{"marketplace": "plugins-kit", "name": "pub-kit"}])
-        assert publish.check_index_scope(page) == []
-
-    def test_foreign_marketplace_flagged(self):
-        page = self._page(
-            [{"marketplace": "plugins-kit", "name": "pub-kit"},
-             {"marketplace": "private-plugins", "name": "secret-kit"}],
-            order=("plugins-kit", "private-plugins"))
-
-        problems = publish.check_index_scope(page)
-
-        assert any("private-plugins" in p and "--marketplace" in p for p in problems)
-
-    def test_foreign_marketplace_in_order_only_flagged(self):
-        """An empty foreign column still names the marketplace on the page."""
-        page = self._page([{"marketplace": "plugins-kit", "name": "pub-kit"}],
-                          order=("plugins-kit", "private-plugins"))
-        assert any("private-plugins" in p for p in publish.check_index_scope(page))
-
-    def test_embedded_state_flagged(self):
-        page = self._page([{"marketplace": "plugins-kit", "name": "pub-kit", "state": "on"}])
-        assert any("--public" in p for p in publish.check_index_scope(page))
-
-    def test_unparseable_page_is_a_problem_not_a_pass(self):
-        """An output-shape change must fail loudly; a silent pass would retire the
-        guard without anyone noticing."""
-        assert publish.check_index_scope("<html>no data block</html>")
 
 
 class TestChangedPluginsUsesNetDiff:
@@ -1632,23 +1590,16 @@ class TestPartialRelease:
                     plugins.append({"name": data["name"], "version": data["version"]})
             plugins.sort(key=lambda p: p["name"])
             marketplace_text = json.dumps({"plugins": plugins}, indent=2) + "\n"
-            page = [dict(p, marketplace=publish.MARKETPLACE_NAME) for p in plugins]
-            index_text = ("const data = " + json.dumps(
-                {"plugins": page, "marketplace_order": [publish.MARKETPLACE_NAME]})
-                + ";\n")
             return {
                 publish.MARKETPLACE_JSON.relative_to(publish.REPO_ROOT).as_posix():
                     marketplace_text,
-                publish.INDEX_HTML.relative_to(publish.REPO_ROOT).as_posix(): index_text,
             }
         monkeypatch.setattr(publish, "_regenerate_derived_in", fake)
 
     def test_projection_marketplace_honors_dev_only_status(self, repo, monkeypatch):
         """A held-back plugin can be published on master but dev-only now.
-
-        The projected index restores master's old manifest, which may not yet
-        contain ``published: false``.  The release listing must still honor
-        the current dev manifest's publication status.
+        The release listing must still honor the current dev manifest's
+        publication status.
         """
         fake_regen = SimpleNamespace(
             regenerate=lambda **_: {
@@ -1852,7 +1803,7 @@ class TestNoWorktreeMechanism:
 
         A text-mode stdin on Windows rewrites "\\n" as "\\r\\n", and
         `hash-object --stdin` stores what it receives, so the committed
-        marketplace.json/index.html would differ from a bare publish's.
+    marketplace.json would differ from a bare publish's.
         """
         sha = publish._hash_object('{\n  "plugins": []\n}\n')
         raw = subprocess.run(["git", "-C", str(repo), "cat-file", "blob", sha],
@@ -1923,7 +1874,3 @@ class TestNoWorktreeMechanism:
         assert not any("dev-tree" in c or "dev_tree" in c for c in flat), calls
         whats = [what for what, _cmd in calls]
         assert "marketplace.json regen" in whats
-        assert "index.html regen" in whats
-        # The registry flag is how the machine-describing default is
-        # redirected at the repo instead -- confirm it is actually passed.
-        assert any("--registry" in cmd for _what, cmd in calls)

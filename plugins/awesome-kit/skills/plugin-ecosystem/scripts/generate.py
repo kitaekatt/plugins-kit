@@ -960,7 +960,6 @@ def main(argv: list[str]) -> int:
 
     project_root = (args.project or Path.cwd()).resolve()
     output = args.output or (home_claude() / "plugin-ecosystem.html")
-
     user_config = load_yaml(args.config)
     title = args.title or user_config.get("title") or "Claude Plugin Ecosystem"
     tagline = user_config.get("tagline", "")
