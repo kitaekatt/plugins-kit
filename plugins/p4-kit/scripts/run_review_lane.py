@@ -138,6 +138,27 @@ _CHUNK_INDEX_MIN_VERSION = "0.49.0"
 _EFFORT_MIN_VERSION = "0.60.0"
 
 
+def _parser_accepts(parse_args, probe_argv: list[str]) -> bool:
+    """Return whether ``parse_args`` accepts ``probe_argv``.
+
+    Each probe asks about ONE capability. llm-scripting-kit 0.60.0 made
+    ``--effort`` required, so a probe argv that omits it fails on that
+    requirement instead of on the capability under test. Parse the bare argv
+    first (a pre-0.60 parser answers it directly); only when that is rejected,
+    retry once with a throwaway ``--effort``. A parser that lacks the probed
+    capability rejects both attempts, so the answer is still False, and a
+    parser that requires ``--effort`` is no longer misread as too old.
+    """
+    for extra in ([], ["--effort", "high"]):
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                parse_args([*probe_argv, *extra])
+        except SystemExit:
+            continue
+        return True
+    return False
+
+
 def _supports_claimed_file() -> bool | None:
     """True/False if the probe ran and observed an answer; None if it could
     not run at all because `_parse_args` is absent.
@@ -165,12 +186,7 @@ def _supports_claimed_file() -> bool | None:
         "--lane", "_probe", "--model", "_probe", "--chunk", "_probe",
         "--claimed-file", "_probe",
     ]
-    try:
-        with contextlib.redirect_stderr(io.StringIO()):
-            parse_args(probe_argv)
-    except SystemExit:
-        return False
-    return True
+    return _parser_accepts(parse_args, probe_argv)
 
 
 def _supports_mechanical_findings() -> bool | None:
@@ -182,12 +198,7 @@ def _supports_mechanical_findings() -> bool | None:
         "--lane", "_probe", "--model", "_probe", "--chunk", "_probe",
         "--mechanical-scan-ran", "--mechanical-finding", "{}",
     ]
-    try:
-        with contextlib.redirect_stderr(io.StringIO()):
-            parse_args(probe_argv)
-    except SystemExit:
-        return False
-    return True
+    return _parser_accepts(parse_args, probe_argv)
 
 
 def _supports_bundle() -> bool | None:
@@ -199,12 +210,7 @@ def _supports_bundle() -> bool | None:
         "--lane", "_probe", "--model", "_probe", "--chunk", "_probe",
         "--bundle", "_probe",
     ]
-    try:
-        with contextlib.redirect_stderr(io.StringIO()):
-            parse_args(probe_argv)
-    except SystemExit:
-        return False
-    return True
+    return _parser_accepts(parse_args, probe_argv)
 
 
 def _supports_bundle_phrase_map() -> bool | None:
@@ -252,12 +258,7 @@ def _supports_chunk_index() -> bool | None:
         "--lane", "_probe", "--model", "_probe",
         "--bundle", "_probe", "--chunk-index", "0",
     ]
-    try:
-        with contextlib.redirect_stderr(io.StringIO()):
-            parse_args(probe_argv)
-    except SystemExit:
-        return False
-    return True
+    return _parser_accepts(parse_args, probe_argv)
 
 
 if __name__ == "__main__":

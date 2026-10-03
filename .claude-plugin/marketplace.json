@@ -45,7 +45,7 @@
     {
       "name": "p4-kit",
       "description": "Multi-agent code review for pending Perforce changelists (/p4-code-review) -- auto-shelves, reviews, cleans up.",
-      "version": "0.64.0",
+      "version": "0.65.0",
       "author": {
         "name": "Christina"
       },
@@ -58,7 +58,7 @@
     {
       "name": "git-kit",
       "description": "Multi-agent pre-push code review for git (/git-code-review) with per-finding validation and declined-findings memory.",
-      "version": "0.46.0",
+      "version": "0.47.0",
       "author": {
         "name": "Christina"
       },
@@ -71,7 +71,7 @@
     {
       "name": "skills-kit",
       "description": "Author and audit every md file a project loads or ships -- CLAUDE.md, SKILL.md, project docs, and their cross-references -- for placement, cohesion, and drift.",
-      "version": "0.89.0",
+      "version": "0.89.1",
       "author": {
         "name": "Christina"
       },
@@ -150,7 +150,7 @@
     {
       "name": "content-pipeline-kit",
       "description": "Library + skills for LLM-in-the-loop batch content pipelines.",
-      "version": "0.34.3",
+      "version": "0.34.4",
       "author": {
         "name": "Christina"
       },

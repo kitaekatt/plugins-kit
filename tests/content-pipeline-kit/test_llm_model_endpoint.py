@@ -381,7 +381,6 @@ _PARITY_REGISTRY = (
     "  u3-frontdoor:\n    base_url: http://fd.invalid/v1\n    model: fd-m\n"
     "    reasoning_effort: medium\n    frontdoor: true\n"
     "  u3-nostyle:\n    base_url: http://plain.invalid/v1\n    model: plain-m\n"
-    "    reasoning_effort: medium\n"
     "  u3-nodefault:\n    base_url: http://nodef.invalid/v1\n    model: nodef-m\n"
     "    routing: {group: u3, order: 3, effort_style: ninfer}\n"
 )
@@ -497,9 +496,12 @@ def test_legacy_effective_options_inject_top_level_whatever_the_style(
     parity_registry, legacy_seam
 ):
     _make_shared_lib_importable()  # the legacy registry read is real
-    for entry in ("u3-ninfer", "u3-ctk", "u3-frontdoor", "u3-nostyle"):
+    for entry in ("u3-ninfer", "u3-ctk", "u3-frontdoor"):
         b = ModelEndpointBackend(endpoint=entry, project_root=parity_registry)
         assert b.effective_options(BackendOptions()).extras == {"reasoning_effort": "medium"}
+    # A valid no-style entry cannot declare an undeliverable default.
+    b = ModelEndpointBackend(endpoint="u3-nostyle", project_root=parity_registry)
+    assert b.effective_options(BackendOptions()).extras == {}
 
 
 # --- harness refusal survives the new seam ----------------------------------
@@ -516,6 +518,7 @@ def _harness_registry(tmp_path, monkeypatch, default):
         "    base_url: http://local.invalid/v1\n"
         "    model: local-model\n"
         "    reasoning_effort: medium\n"
+        "    effort_style: top-level\n"
         "  opencode:\n"
         "    harness: opencode\n"
         "    model: openai/gpt-5\n",

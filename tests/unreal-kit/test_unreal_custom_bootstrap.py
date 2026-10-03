@@ -1,4 +1,8 @@
-"""Outcome logging for the unreal-kit custom bootstrap consumer."""
+"""Outcome logging for the unreal-kit custom bootstrap consumer.
+
+The filename identifies its plugin to avoid pytest's flat-module collision with
+the llm-scripting-kit custom bootstrap tests.
+"""
 
 import importlib.util
 from pathlib import Path

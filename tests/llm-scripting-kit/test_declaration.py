@@ -907,7 +907,6 @@ _EFFORT_REGISTRY = (
     "    reasoning_effort: high\n"
     "    routing: {group: q, order: 1, effort_style: ninfer}\n"
     "  plain:\n    base_url: http://plain.invalid/v1\n    model: plain-m\n"
-    "    reasoning_effort: medium\n"
 )
 
 

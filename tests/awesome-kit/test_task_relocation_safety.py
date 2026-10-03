@@ -19,6 +19,7 @@ import shutil
 import stat
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -46,10 +47,28 @@ class FileGuard:
         self.stuck_under: list[str] = []  # unlink always fails under these
         self.cleared: set[str] = set()
         self.clear_calls = 0
-        real_unlink, real_chmod = os.unlink, os.chmod
+        real_unlink, real_chmod, real_open = os.unlink, os.chmod, os.open
+        opened_paths: dict[int, Path] = {}
+
+        def full_path(
+            path: str | bytes | Path, dir_fd: int | None = None
+        ) -> str:
+            target = Path(os.fsdecode(path))
+            if dir_fd is not None and not target.is_absolute():
+                target = opened_paths[dir_fd] / target
+            return str(target.resolve())
+
+        def open_directory(
+            path: str | bytes | Path, *a: Any, **k: Any
+        ) -> int:
+            fd = real_open(path, *a, **k)
+            opened_paths[fd] = Path(full_path(path, k.get("dir_fd")))
+            return fd
 
         def unlink(path, *a, **k):
-            full = os.fspath(path)
+            # POSIX rmtree unlinks basenames relative to an opened directory;
+            # Windows passes full paths. Apply the same simulated lock to both.
+            full = full_path(path, k.get("dir_fd"))
             name = os.path.basename(full)
             if any(s in full for s in self.stuck_under):
                 raise PermissionError(13, "stuck", full)
@@ -59,11 +78,12 @@ class FileGuard:
 
         def chmod(path, mode, *a, **k):
             self.clear_calls += 1
-            self.cleared.add(os.fspath(path))
+            self.cleared.add(full_path(path, k.get("dir_fd")))
             return real_chmod(path, mode, *a, **k)
 
         monkeypatch.setattr(os, "unlink", unlink)
         monkeypatch.setattr(os, "chmod", chmod)
+        monkeypatch.setattr(os, "open", open_directory)
 
 
 @pytest.fixture

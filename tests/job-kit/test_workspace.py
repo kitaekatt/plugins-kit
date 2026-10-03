@@ -909,6 +909,7 @@ def test_contract_interruption_after_seam_is_recorded(
         timeout_s: Optional[float] = None,
         response_text: str = "",
         context: object = None,
+        interrupt_io: object = None,
     ) -> object:
         raise KeyboardInterrupt
 
@@ -944,6 +945,7 @@ def test_contract_exception_after_seam_is_recorded(
         timeout_s: Optional[float] = None,
         response_text: str = "",
         context: object = None,
+        interrupt_io: object = None,
     ) -> object:
         raise RuntimeError("contract bookkeeping failure")
 

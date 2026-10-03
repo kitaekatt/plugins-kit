@@ -180,7 +180,6 @@ _REGISTRY = (
     "  shape-frontdoor:\n    base_url: http://fd.invalid/v1\n    model: fd-m\n"
     "    reasoning_effort: medium\n    frontdoor: true\n"
     "  shape-nostyle:\n    base_url: http://plain.invalid/v1\n    model: plain-m\n"
-    "    reasoning_effort: medium\n"
 )
 
 # Where the wire request stays byte-identical to 0.28.1's, the key must too.
@@ -238,4 +237,9 @@ def test_legacy_fallback_keeps_every_pre_029_key(shape_registry, monkeypatch, en
     """Against a shared lib predating plan_effort the old injection -- and so
     the old key -- stands on every shape."""
     monkeypatch.setattr(backends, "_effort_seam", lambda: None)
+    # Simulate the older shared lib's permissive registry, which accepted
+    # a medium default even on no-style entries. Today's loader refuses it.
+    monkeypatch.setattr(
+        ModelEndpointBackend, "_entry_reasoning_effort", lambda self: ("medium", None)
+    )
     assert _key(entry, shape_registry, case) == PRE_029_DIGESTS[case]

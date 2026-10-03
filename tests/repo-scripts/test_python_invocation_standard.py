@@ -722,13 +722,6 @@ _PYTHON_ALLOWLIST: dict[str, AllowlistEntry] = {
         "launch-note WARNING prose the generator emits into the p4-kit skill; "
         "its launchers are the guarded BOOTSTRAP_PYTHON form (and uv_run "
         "literals here are never bypassed: _FORCED_REGARDLESS_OF_VARIANT)"),
-    "plugins/hue-kit/scripts/scene-layers.py": AllowlistEntry(
-        'p.read_text(), "python")',
-        "syntax-highlighting language-tag string for the script's own "
-        "generated output, not a command"),
-    "plugins/hue-kit/scripts/scene-meta-groups.py": AllowlistEntry(
-        '_py_highlight(text) if lang == "python"',
-        "same language-tag false positive as scene-layers.py"),
     "plugins/llm-scripting-kit/lib/llm_scripting_kit/completion/backends.py": AllowlistEntry(
         "Path(sys.argv[0]).name or 'python'",
         "display-label fallback string for an API user field, not a spawn"),

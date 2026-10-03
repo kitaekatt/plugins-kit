@@ -26,7 +26,6 @@ _REGISTRY = (
     "    reasoning_effort: high\n"
     "    routing: {group: q, effort_style: ninfer}\n"
     "  plain:\n    base_url: http://plain.invalid/v1\n    model: m\n"
-    "    reasoning_effort: medium\n"
     "  h:\n    harness: codex\n    model: m\n"
 )
 
@@ -49,7 +48,7 @@ def test_profile_carries_the_declared_effort_and_the_delivered_value(registry):
 
 def test_undeliverable_profile_delivers_nothing(registry):
     profile = resolve_endpoint_profile("plain")
-    assert profile.declared_effort == "medium"
+    assert profile.declared_effort is None
     assert profile.effort.deliverable is False
     assert profile.delivered_effort is None
 

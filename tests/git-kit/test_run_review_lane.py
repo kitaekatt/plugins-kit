@@ -392,3 +392,52 @@ def test_unconfirmable_effort_support_refuses_instead_of_falling_through(
 
     assert code != 0
     assert "0.60.0" in capsys.readouterr().err
+
+
+@pytest.fixture
+def real_owner(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the in-repo llm_scripting_kit the one the wrapper imports."""
+    owner_lib = _SCRIPT.parents[2] / "llm-scripting-kit" / "lib"
+    monkeypatch.syspath_prepend(str(owner_lib))
+    for name in [m for m in sys.modules if m.startswith("llm_scripting_kit")]:
+        monkeypatch.delitem(sys.modules, name)
+
+
+def test_every_capability_probe_accepts_the_real_in_repo_owner(
+    real_owner: None,
+) -> None:
+    """The real parser requires --effort; no probe may be fooled by that."""
+    namespace = runpy.run_path(str(_SCRIPT), run_name="probe_only")
+
+    for probe in (
+        "_supports_claimed_file",
+        "_supports_mechanical_findings",
+        "_supports_bundle",
+        "_supports_chunk_index",
+        "_supports_bundle_phrase_map",
+        "_supports_effort",
+    ):
+        assert namespace[probe]() is True, probe
+
+
+def test_probe_still_rejects_a_parser_lacking_the_capability_and_effort(
+    real_owner: None,
+) -> None:
+    """A pre-0.60 parser without the probed flag must still answer False."""
+    import argparse
+
+    namespace = runpy.run_path(str(_SCRIPT), run_name="probe_only")
+
+    def old_parse(argv):
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--lane", required=True)
+        parser.add_argument("--model", required=True)
+        parser.add_argument("--chunk", required=True)
+        return parser.parse_args(argv)
+
+    accepts = namespace["_parser_accepts"]
+    assert accepts(old_parse, ["--lane", "a", "--model", "b", "--chunk", "c"]) is True
+    assert accepts(
+        old_parse,
+        ["--lane", "a", "--model", "b", "--chunk", "c", "--bundle", "x"],
+    ) is False

@@ -370,7 +370,7 @@ def _write_guard_stub(
 
 def _write_unreachable_interpreter_stub(path: Path) -> None:
     """Stands in for LLM_SCRIPTING_KIT_PYTHON itself: an executable that
-    `exec`s a path that does not exist, which bash reports as exit 127 --
+    `exec`s a path that does not exist, which shells report as exit 126 or 127 --
     a real, observed failure shape distinct from this script's own
     pre-invocation `-x` check (which is exercised by a separate test with no
     interpreter present at all)."""
@@ -490,7 +490,7 @@ def test_guard_exec_failure_127_proceeds_with_warning(tmp_path: Path) -> None:
     result = _run("qwen36-server", env=env)
     assert result.returncode == 0
     assert _REAL_SERVER_MARKER in result.stdout
-    assert "exit 127" in result.stderr
+    assert "exit 126" in result.stderr or "exit 127" in result.stderr
     assert "proceeding without it" in result.stderr
 
 

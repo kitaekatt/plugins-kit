@@ -28,9 +28,10 @@ restructure happened to do.
   same fixtures, same `<CORPUS>` normalization, `perFile` sorted by path.
   Recorded 2026-07-28 against skills-kit 0.35.0 by invoking each member's
   `workflow/detect.js` (references: `classify.js`) via the Workflow tool
-  with the models the scripts then pinned (opus, high effort); the shipped
-  lane default is now sonnet, low effort (`lane_models` slot), so these
-  goldens predate it and no test compares lane output to them. See "Lane goldens"
+  with the models the scripts pinned at that version (opus, high effort); the
+  lane default at skills-kit 0.89.0 is sonnet, low effort (`lane_models`
+  slot), so these goldens predate that default and no test compares lane
+  output to them. See "Lane goldens"
   below.
 - `corpus_runner.py` -- staging + per-case runners + normalization (shared).
 - `record.py` -- re-records `expected/`; run only for intended changes and

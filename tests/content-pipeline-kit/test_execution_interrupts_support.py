@@ -131,23 +131,17 @@ _EDGE_MODULES = (
 
 
 @pytest.fixture
-def block_edges():
+def block_edges(monkeypatch):
     """Return a function that makes both edges unimportable for the rest of
     the test: any import of either then raises, through the probe's seam and
-    through a plain import statement alike. The contract module is put back
-    afterwards; the llm-scripting-kit names are removed, as ``lsk`` leaves them.
+    through a plain import statement alike. Restore the exact pre-test
+    modules afterwards, including their package identity.
     """
-    saved_contract = sys.modules.get(CONTRACT_MODULE)
-
     def block():
         for name in _EDGE_MODULES:
-            sys.modules[name] = None
+            monkeypatch.setitem(sys.modules, name, None)
 
-    yield block
-    for name in _EDGE_MODULES:
-        sys.modules.pop(name, None)
-    if saved_contract is not None:
-        sys.modules[CONTRACT_MODULE] = saved_contract
+    return block
 
 
 @pytest.mark.parametrize(
@@ -507,4 +501,5 @@ def test_manifests_gain_no_entry_for_interrupts():
         }
     ]
     assert manifest["shared_lib_imports"] == ["llm_scripting_kit", "bootstrap_lib"]
-    assert "requires_bootstrap" not in manifest
+    # Existing launcher call shapes need this floor; interrupts add none.
+    assert manifest["requires_bootstrap"] == "0.120.0"
