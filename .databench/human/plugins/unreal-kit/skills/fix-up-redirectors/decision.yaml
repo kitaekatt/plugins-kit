@@ -1,11 +1,12 @@
 {
   "schema_version": 1,
   "directory": "plugins/unreal-kit/skills/fix-up-redirectors",
-  "decision": "page",
-  "source_sha": "ec36607524a9acfa60a64a8cbaf570b04fd25195",
-  "generation_spec_sha256": "0805933a1de089dc951a33d702e9d57d569f0584732b017cd3600742a34ba321",
+  "decision": "none",
+  "source_sha": "2b5c8832057b729c47346c2ec2f1bcc9cc6dbf7a",
+  "input_sha256": "1eff8e1d7a334e20692ac499784e287de7746d35be7df9d747f09ffc1b18584c",
+  "input_shape_sha256": "da2cbacb8095d15bfd8a8507a39b3bcc0820b2b50205de43f1061379b40751a4",
   "dirty": false,
-  "identity": "Unreal ObjectRedirector cleanup workflow for Perforce projects with P4-safe fix-up and orphan modes and supporting helper libraries",
+  "identity": "",
   "instructions": "",
   "references": []
 }

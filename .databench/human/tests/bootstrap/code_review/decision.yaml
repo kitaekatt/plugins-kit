@@ -1,11 +1,12 @@
 {
   "schema_version": 1,
   "directory": "tests/bootstrap/code_review",
-  "decision": "page",
-  "source_sha": "99622e15be60cc79d3103b087a1bfcc01ec2166f",
-  "generation_spec_sha256": "0805933a1de089dc951a33d702e9d57d569f0584732b017cd3600742a34ba321",
+  "decision": "none",
+  "source_sha": "1a8f73cb6d1e15c846dd9a49f9e3df920965b82c",
+  "input_sha256": "36ffaab01f6bfcadebff97fbb338c99869555042db1dc32ad0d679fdb29900c7",
+  "input_shape_sha256": "044c9ec6502d5d226390754ff541a9285907be857be1799d1d553b4daea7fcdd",
   "dirty": false,
-  "identity": "Tests for the shared code-review pipeline, reviewer lanes, mechanical checks, and generated git and p4 skill contracts",
+  "identity": "",
   "instructions": "",
   "references": []
 }

@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- human-html: {"generated_by":"md-domain","source_sha":"bce913a291b2c16dd005e8d32674fbd70027813f","directory":"tests/bootstrap","kind":"page"} -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Test suite for the bootstrap plugin: engine, installation backends, CLI, environment checks, marketplace lifecycle, and the code review pipeline</title>
+<link rel="stylesheet" href="../../.databench/human-html.css">
+</head>
+<body>
+<main>
+<h1>Test suite for the bootstrap plugin: engine, installation backends, CLI, environment checks, marketplace lifecycle, and the code review pipeline</h1>
+<p class="hh-orientation">This is the pytest suite for the bootstrap plugin: the engine that provisions a machine, installs CLIs and tools, manages marketplaces and plugin manifests, and repairs the environment on every session start. The suite is flat, one file per plugin module, so the test you need usually shares its name with the module you touched; the one nested directory sets the review pipeline tests apart. Everything runs hermetic: subprocess is mocked or pointed at throwaway repos, HOME and the data root are redirected, and symlink tests skip on unprivileged Windows. Re-entry is a name lookup: open the module, open the matching test, read what it pins.</p><section><h2>Where to start</h2><p>Open <a href="test_engine.py">tests/bootstrap/test_engine.py</a> first: it covers the pass every session start runs. For anything else, open the test that shares its name with the module you changed.</p></section><section><h2>Routes</h2><ul><li><strong>Trace a backend through the engine</strong><ol><li><a href="test_brew.py">tests/bootstrap/test_brew.py</a> - what the backend does on its own: install, ordering, failure messages.</li><li><a href="test_brew_dispatch.py">tests/bootstrap/test_brew_dispatch.py</a> - how the dispatch table consumes it and the failure shape it emits.</li><li><a href="test_brew_cask_elevation.py">tests/bootstrap/test_brew_cask_elevation.py</a> - where a sudo-needing cask routes to the queue instead of attempting.</li></ol></li><li><strong>The agent skills link, two halves</strong><ol><li><a href="test_agent_skills_check.py">tests/bootstrap/test_agent_skills_check.py</a> - the check-and-fix half: the sentinel, git scoping, bounded cleanup.</li><li><a href="test_agent_skills_vcs.py">tests/bootstrap/test_agent_skills_vcs.py</a> - the VCS half: real disposable git repos, recorded p4 output.</li></ol></li><li><strong>The terminal pass, end to end</strong><ol><li><a href="test_engine_personal.py">tests/bootstrap/test_engine_personal.py</a> - builds the isolated world: a minimal plugin root, a fake HOME.</li><li><a href="test_bootstrap_run_pass.py">tests/bootstrap/test_bootstrap_run_pass.py</a> - runs the shell shim against it and pins the same pass the hooks run.</li></ol></li></ul></section><section><h2>Harness plumbing (2)</h2><ul><li><a href="__init__.py">tests/bootstrap/__init__.py</a> - puts the plugin&#x27;s lib and engine on sys.path.</li><li><a href="link_compat.py">tests/bootstrap/link_compat.py</a> - hermetic link_tree: symlink, junction, then copy; symlink tests skip on unprivileged Windows.</li></ul></section><section><h2>The engine pass (19)</h2><ul><li><a href="test_engine.py">tests/bootstrap/test_engine.py</a> - the pass itself; open it before any sibling.</li><li>The 18 engine siblings pin one aspect each: locking, crash, multi-plugin, output modes, profiles, sync.</li></ul></section><section><h2>Install backends (10)</h2><ul><li><a href="test_brew.py">tests/bootstrap/test_brew.py</a> - the brew backend: tap-qualified installs, detect-only ensure.</li><li><a href="test_apt.py">tests/bootstrap/test_apt.py</a> - the apt backend: privilege probes, the once-per-pass update.</li><li><a href="test_install_strategy_dispatch.py">tests/bootstrap/test_install_strategy_dispatch.py</a> - where each strategy sits in the dispatch table.</li></ul></section><section><h2>Elevation and the fix queue (4)</h2><ul><li><a href="test_brew_cask_elevation.py">tests/bootstrap/test_brew_cask_elevation.py</a> - a sudo-needing cask, from detection to the runner&#x27;s briefing.</li><li><a href="test_fix_queue.py">tests/bootstrap/test_fix_queue.py</a> - failures becoming tasks: cost, elevation, briefing text.</li><li><a href="test_fix_runner.py">tests/bootstrap/test_fix_runner.py</a> - prints briefings, holds before anything runs, offers an abort.</li></ul></section><section><h2>The CLI lever and hooks (8)</h2><ul><li><a href="test_bootstrap_cli.py">tests/bootstrap/test_bootstrap_cli.py</a> - the read-only status probe; run refuses a running pass.</li><li><a href="test_bootstrap_run_pass.py">tests/bootstrap/test_bootstrap_run_pass.py</a> - the shell shim&#x27;s run against an isolated world.</li><li>The hook tests install and strip the session, shell, and Codex hooks; the presence guard test pins the check the lever runs first.</li></ul></section><section><h2>Marketplaces and plugins (19)</h2><ul><li><a href="test_marketplace_lifecycle.py">tests/bootstrap/test_marketplace_lifecycle.py</a> - clone, update, pin, and remove; the largest file in the suite.</li><li><a href="test_claude_cli_precondition.py">tests/bootstrap/test_claude_cli_precondition.py</a> - one stand-down line when the claude CLI is missing.</li><li>The plugin files cover resolve, snapshot, registry repair, and project detection.</li></ul></section><section><h2>Environment checks (27)</h2><ul><li><a href="test_env_checks.py">tests/bootstrap/test_env_checks.py</a> - the main check suite; the env_ siblings cover features and variables.</li><li><a href="test_venv_check.py">tests/bootstrap/test_venv_check.py</a> - venv creation and the shared imports.</li><li>One file per probe: PATH, git, npm, pypi, font, ini, json, settings-writable.</li></ul></section><section><h2>Session, interpreter, and state (24)</h2><ul><li><a href="test_session_cooldown.py">tests/bootstrap/test_session_cooldown.py</a> - when a pass stands down, and for how long.</li><li><a href="test_shared_lib.py">tests/bootstrap/test_shared_lib.py</a> - the venv shared library: install and exposed imports.</li><li>The siblings pin the interpreter env, process lock, stamps, and log filters.</li></ul></section><section><h2>Manifests and config (18)</h2><ul><li><a href="test_project_config.py">tests/bootstrap/test_project_config.py</a> - how project layers merge over the user and plugin layers.</li><li><a href="test_config.py">tests/bootstrap/test_config.py</a> - the schema migration, v0 to current, and the atomic save.</li><li>The siblings cover merge, lint, profiles, normalization, autodetect, and self-setup.</li></ul></section><section><h2>Display, events, and outcomes (10)</h2><ul><li><a href="test_execution_event.py">tests/bootstrap/test_execution_event.py</a> - the event format every emitter must produce.</li><li><a href="test_interrupt_contract.py">tests/bootstrap/test_interrupt_contract.py</a> - the interrupt contract and its consumers.</li><li>The siblings cover display relay, harvest, and the transient import retry.</li></ul></section><section><h2>External CLIs and agent integration (6)</h2><ul><li><a href="test_codex.py">tests/bootstrap/test_codex.py</a> - Codex detection and argv building; the binary is never invoked.</li><li><a href="test_bootstrap_guard.py">tests/bootstrap/test_bootstrap_guard.py</a> - pins every vendored guard copy byte-identical to the canonical one.</li><li>The agent skills link, check and VCS halves, and the skill material tests round out the group.</li></ul></section><section><h2>The code review pipeline (30)</h2><ul><li>The code_review directory holds 28 files. <a href="code_review/test_pipeline.py">tests/bootstrap/code_review/test_pipeline.py</a> runs the pipeline end to end; <a href="code_review/test_lane_prompts.py">tests/bootstrap/code_review/test_lane_prompts.py</a> pins each lane&#x27;s prompts.</li><li>The 26 siblings cover chunking, effort, retry prose, triviality, the ledger, and mechanical config.</li><li><a href="test_review_consumer_closure.py">tests/bootstrap/test_review_consumer_closure.py</a> and <a href="test_run_review_lane_drift.py">tests/bootstrap/test_run_review_lane_drift.py</a> are the flat siblings: consumer closure and lane drift.</li></ul></section>
+</main>
+<nav data-human-html-chrome="nav"><ul><li><a href="../../README.md"><span class="hh-nav-label">README.md</span> <span class="hh-nav-identity">The human-facing overview of the repository.</span></a></li><li><a href="../conftest.py"><span class="hh-nav-label">conftest.py</span> <span class="hh-nav-identity">The conftest shared by every suite under the tests tree.</span></a></li></ul></nav>
+<script>
+if (window.parent !== window) {
+  window.parent.postMessage({
+    type: "human-html:announce",
+    version: 1,
+    directory: "tests/bootstrap",
+    file: "index.html",
+    kind: "page",
+    source_sha: "bce913a291b2c16dd005e8d32674fbd70027813f"
+  }, "*");
+  document.addEventListener("click", function (event) {
+    if (event.defaultPrevented || event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    var el = event.target;
+    while (el && el.nodeName !== "A") el = el.parentNode;
+    if (!el) return;
+    var href = el.getAttribute("href");
+    if (!href) return;
+    if (href.charAt(0) === "#" || href.charAt(0) === "/") return;
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
+    var target = href.split("#")[0].split("?")[0];
+    if (!target) return;
+    if (/(^|\/)human(\.[^/]+)?\.html$/.test(target)) return;
+    var parts = "tests/bootstrap".split("/");
+    if (parts.length === 1 && parts[0] === ".") parts = [];
+    var segs = target.split("/");
+    for (var i = 0; i < segs.length; i++) {
+      if (segs[i] === "" || segs[i] === ".") continue;
+      if (segs[i] === "..") { parts.pop(); continue; }
+      parts.push(segs[i]);
+    }
+    event.preventDefault();
+    window.parent.postMessage({
+      type: "human-html:navigate",
+      version: 1,
+      path: parts.join("/")
+    }, "*");
+  });
+}
+</script>
+</body>
+</html>

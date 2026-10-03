@@ -1,12 +1,13 @@
 {
   "schema_version": 1,
   "directory": "plugins/bootstrap/bootstrap_lib",
-  "decision": "none",
-  "source_sha": "376c1329759f42d2b362be9c7ad4c333befa06bb",
-  "input_sha256": "868e4c6cb587f1590122bd27a29eae711d0fa7753a7c53ddf9fd20d184339bd8",
-  "input_shape_sha256": "b6cc42467849cca94f5db8849cb76235b5b6dd8e6b2e3cf3410399c1245f2d1b",
+  "decision": "page",
+  "source_sha": "bce913a291b2c16dd005e8d32674fbd70027813f",
+  "generation_spec_sha256": "9ff6d95c6dfa06e27a9196a26596c8b98ddf698bf2a82b9885b93c69cfaaa1e2",
+  "input_sha256": "679551dde20b69daa1d6764d6c2ae4b71af41f52427e01821d010d85b883db7f",
+  "input_shape_sha256": "0752c000b7a05b8f840f1c14da85abb82beadc008e1c174ef68c665e0262b4dd",
   "dirty": false,
-  "identity": "",
+  "identity": "Bootstrap plugin shared library: the engine pass, platform tool installers, Codex CLI integration, environment and config management, code review pipeline, and remediation queue.",
   "instructions": "",
   "references": []
 }

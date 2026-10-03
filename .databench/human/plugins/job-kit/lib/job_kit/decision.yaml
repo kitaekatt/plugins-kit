@@ -1,11 +1,12 @@
 {
   "schema_version": 1,
   "directory": "plugins/job-kit/lib/job_kit",
-  "decision": "page",
-  "source_sha": "c6a73451857b38dd749e5b2a75eb4c5e93764fa9",
-  "generation_spec_sha256": "0805933a1de089dc951a33d702e9d57d569f0584732b017cd3600742a34ba321",
+  "decision": "none",
+  "source_sha": "1a8f73cb6d1e15c846dd9a49f9e3df920965b82c",
+  "input_sha256": "28e92f59d5cc1768735dac6320ba7d13b1d98b0e1b8e33eb0eefb22291e0718a",
+  "input_shape_sha256": "3fd4307dd7ebd7ca571f828c8478df7fc75a2063dee0626989e3dc8e7f3dab0d",
   "dirty": false,
-  "identity": "The job-kit package that runs heterogeneous agent jobs, records durable runs in SQLite, and manages endpoint selection and worktree isolation.",
+  "identity": "",
   "instructions": "",
   "references": []
 }

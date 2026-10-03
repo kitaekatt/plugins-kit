@@ -2,10 +2,12 @@
   "schema_version": 1,
   "directory": "plugins/workflow-kit",
   "decision": "page",
-  "source_sha": "4ad89c1c0cc5eddc26b1f5334302f4e7e379544b",
-  "generation_spec_sha256": "0805933a1de089dc951a33d702e9d57d569f0584732b017cd3600742a34ba321",
+  "source_sha": "b6c0be600a97cc6d78458959b995d15e743c6af4",
+  "generation_spec_sha256": "9ff6d95c6dfa06e27a9196a26596c8b98ddf698bf2a82b9885b93c69cfaaa1e2",
+  "input_sha256": "b6b8d18f1c5d9e3a8d54f1028f007c253e3b45de8b1ab0d9f04fbb4c45c35c47",
+  "input_shape_sha256": "2cf645450a10498823ea8d8df219043b7ea05a3705e77e6102ea9358a588199b",
   "dirty": false,
-  "identity": "Workflow Kit plugin that adds a declarative .workflow.yaml compiler plus script and OpenRouter node strategies to the native Workflow tool",
+  "identity": "The .workflow.yaml compiler and node-strategy infrastructure (script and OpenRouter runners) that extends the native Workflow tool with file-passing payloads and typed artifacts",
   "instructions": "",
   "references": []
 }

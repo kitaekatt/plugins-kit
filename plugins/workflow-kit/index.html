@@ -1,76 +1,19 @@
 <!doctype html>
 <html lang="en">
 <head>
-<!-- human-html: {"generated_by":"md-domain","source_sha":"4ad89c1c0cc5eddc26b1f5334302f4e7e379544b","directory":"plugins/workflow-kit","kind":"page"} -->
+<!-- human-html: {"generated_by":"md-domain","source_sha":"b6c0be600a97cc6d78458959b995d15e743c6af4","directory":"plugins/workflow-kit","kind":"page"} -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>Workflow Kit plugin that adds a declarative .workflow.yaml compiler plus script and OpenRouter node strategies to the native Workflow tool</title>
+<title>The .workflow.yaml compiler and node-strategy infrastructure (script and OpenRouter runners) that extends the native Workflow tool with file-passing payloads and typed artifacts</title>
 <link rel="stylesheet" href="../../.databench/human-html.css">
 </head>
 <body>
-<nav data-human-html-chrome="nav" aria-label="Orientation pages">
-  <ul>
-    <li><a href="../index.html"><span class="hh-nav-label">plugins</span> <span class="hh-nav-identity">The Claude Code plugin collection: installable plugins including git and Perforce review, secrets provisioning, statusline display, cache reporting, markdown auditing, stuck-bootstrap remediation, and prototype skills.</span></a></li>
-<li><a href="workflow_kit_lib/index.html"><span class="hh-nav-label">workflow_kit_lib</span> <span class="hh-nav-identity">Workflow Kit library that validates workflow YAML and compiles it to Claude Code Workflow tool scripts</span></a></li>
-  </ul>
-</nav>
 <main>
-  <h1>Workflow Kit plugin that adds a declarative .workflow.yaml compiler plus script and OpenRouter node strategies to the native Workflow tool</h1>
-  <p>This plugin layers declarative workflow authoring and two cheap node strategies on top of Claude Code's native Workflow tool and never reimplements execution. A human authors a durable workflow as a YAML file; deterministic Python validates it and compiles it to a native script that only the native tool runs. Hand-written scripts get the same power through node strategies: a deterministic shell command, or a non-Claude model call, run by one small haiku agent that returns only file metadata, so payloads travel on disk and bypass model context. The layout follows that split: a skill that indexes the format docs, two runner scripts, one executor agent, and a matched example set.</p>
-
-  <h2>Where to start</h2>
-  <p>Start with <a href="skills/workflow-kit/SKILL.md"><code>skills/workflow-kit/SKILL.md</code></a>: it indexes the reference docs by task and carries the plugin-venv python path and the exact compile, validate, and run commands. For the shape before the rules, open <a href="examples/review-changes.workflow.yaml"><code>examples/review-changes.workflow.yaml</code></a> instead.</p>
-
-  <h2>Routes</h2>
-  <ul>
-    <li><strong>Compile and run a workflow:</strong> read <a href="skills/workflow-kit/references/workflow-yaml.md"><code>skills/workflow-kit/references/workflow-yaml.md</code></a>, compile with <a href="scripts/compile_workflow.py"><code>scripts/compile_workflow.py</code></a> using <code>-o</code>, then hand the compiled path and args to the native Workflow tool.</li>
-    <li><strong>Validate only:</strong> run <a href="scripts/compile_workflow.py"><code>scripts/compile_workflow.py</code></a> with <code>--validate-only</code>; exit 0 means OK, exit 1 prints the located error.</li>
-    <li><strong>Wire a node strategy by hand:</strong> read <a href="skills/workflow-kit/references/node-strategies.md"><code>skills/workflow-kit/references/node-strategies.md</code></a>, paste <a href="skills/workflow-kit/references/preamble.js"><code>skills/workflow-kit/references/preamble.js</code></a> into the native script, and let its helper run <a href="scripts/openrouter_run.py"><code>scripts/openrouter_run.py</code></a> under the plugin venv python.</li>
-  </ul>
-
-  <h2>The skill index</h2>
-  <ul>
-    <li><a href="skills/workflow-kit/SKILL.md"><code>skills/workflow-kit/SKILL.md</code></a> - the task index for the plugin: coverage, the plugin-venv python path, and the exact commands. Open it first when a task lands.</li>
-  </ul>
-
-  <h2>The workflow format and node docs</h2>
-  <ul>
-    <li><a href="skills/workflow-kit/references/workflow-yaml.md"><code>skills/workflow-kit/references/workflow-yaml.md</code></a> - the declarative YAML format (v1), the compile, validate, run, and scaffold procedures, and the reserved inputs node steps expect. Open it when authoring or debugging a workflow.</li>
-    <li><a href="skills/workflow-kit/references/contract.md"><code>skills/workflow-kit/references/contract.md</code></a> - the node contract: payloads write to $OUT and only exit code, size, and hash come back, so routing rides the small status, never the file body. Open it when placing a step's output.</li>
-    <li><a href="skills/workflow-kit/references/node-strategies.md"><code>skills/workflow-kit/references/node-strategies.md</code></a> - the script and openrouter command templates, the model-declaration rules, and when a node strategy is the wrong tool. Open it when adding a deterministic or non-Claude step.</li>
-    <li><a href="skills/workflow-kit/references/preamble.js"><code>skills/workflow-kit/references/preamble.js</code></a> - the helpers you paste into a hand-written native script to build the node calls, inlined because such scripts cannot import. Open it when wiring nodes outside the compiler.</li>
-  </ul>
-
-  <h2>The compiler and the node runner</h2>
-  <ul>
-    <li><a href="scripts/compile_workflow.py"><code>scripts/compile_workflow.py</code></a> - the CLI that validates a declarative workflow and emits the native script, or validates only. Open it when a compile error needs reading.</li>
-    <li><a href="scripts/openrouter_run.py"><code>scripts/openrouter_run.py</code></a> - the runner behind every openrouter node: one non-Claude model call through the llm-scripting-kit declaration API, reply written to $OUT with a small status file beside it. Open it when a model call fails.</li>
-  </ul>
-  <p>The library both scripts import for the real validation and compilation lives in the sibling workflow_kit_lib directory, which has its own page; go there for the format rules themselves.</p>
-
-  <h2>The node executor</h2>
-  <ul>
-    <li><a href="agents/workflow-kit-agent.md"><code>agents/workflow-kit-agent.md</code></a> - the haiku agent that runs a node's single shell command verbatim, never reads the output file, and returns only its metadata. Open it when a node's behaviour is in question.</li>
-  </ul>
-
-  <h2>Worked examples</h2>
-  <ul>
-    <li><a href="examples/node-strategies.workflow.yaml"><code>examples/node-strategies.workflow.yaml</code></a> - the declarative twin of the hand-written example below: a script node and an openrouter node feed one reasoning node. Open it to see the shape before authoring your own.</li>
-    <li><a href="examples/node-strategies.example.js"><code>examples/node-strategies.example.js</code></a> - the same workflow hand-written as a native script with the preamble inlined. Open it to see what the compiler generates.</li>
-    <li><a href="examples/review-changes.workflow.yaml"><code>examples/review-changes.workflow.yaml</code></a> - a multi-step review that pipelines three dimensions and fans out over findings in parallel. The reference for schemas, pipelines, and fan-out.</li>
-    <li><a href="examples/scripts/wordcount.py"><code>examples/scripts/wordcount.py</code></a> - the tiny deterministic script the example nodes run, stdlib only. A minimal script-strategy payload to imitate.</li>
-  </ul>
-
-  <h2>Packaging and provisioning</h2>
-  <ul>
-    <li><a href=".claude-plugin/plugin.json"><code>.claude-plugin/plugin.json</code></a> - the marketplace manifest: name, version, description, keywords, and the bootstrap dependency. How the plugin is published.</li>
-    <li><a href="bootstrap.json"><code>bootstrap.json</code></a> - the provisioning edges: requires bootstrap 0.129.0, auto-installs the llm-scripting-kit plugin, and declares the shared imports linked onto the plugin venv. Open it when the venv or a shared import is missing.</li>
-    <li><a href="pyproject.toml"><code>pyproject.toml</code></a> - the Python package metadata: version, the pyyaml and openai dependencies, and the package layout. Open it when a dependency question comes up.</li>
-    <li><a href="README.md"><code>README.md</code></a> - the human-facing summary of what the plugin does and why payloads bypass model context. Hand it to someone new.</li>
-    <li><a href=".gitignore"><code>.gitignore</code></a> - keeps compiled workflow scripts out of version control, since they regenerate from the YAML. Open it when a stray generated file shows up.</li>
-  </ul>
+<h1>The .workflow.yaml compiler and node-strategy infrastructure (script and OpenRouter runners) that extends the native Workflow tool with file-passing payloads and typed artifacts</h1>
+<p class="hh-orientation">This plugin adds declarative workflow authoring and two node strategies to Claude Code&#x27;s native Workflow tool. A human writes a durable workflow in YAML, a deterministic compiler validates it and emits a native script, and node runners let deterministic commands and non-Claude model calls pass payloads by file instead of through model context. The directory is organized around that split: a Python compiler package, command-line runners, skill references, and small examples. Everything runs on the native Workflow tool; workflow-kit does not replace execution.</p><section><h2>Where to start</h2><p><a href="README.md">plugins/workflow-kit/README.md</a> first for the one-page model. Open <a href="skills/workflow-kit/references/workflow-yaml.md">plugins/workflow-kit/skills/workflow-kit/references/workflow-yaml.md</a> when authoring, validating, or compiling a workflow document.</p></section><section><h2>Routes</h2><ul><li><strong>Validate a workflow document</strong><ol><li><a href="scripts/compile_workflow.py">plugins/workflow-kit/scripts/compile_workflow.py</a> with validate-only mode on a workflow YAML file</li></ol></li><li><strong>Compile a workflow for the native Workflow tool</strong><ol><li><a href="scripts/compile_workflow.py">plugins/workflow-kit/scripts/compile_workflow.py</a> with an output JavaScript file, then pass the emitted path as scriptPath to the native Workflow tool</li></ol></li><li><strong>Check a typed script artifact</strong><ol><li><a href="scripts/check_artifact.py">plugins/workflow-kit/scripts/check_artifact.py</a> with artifact name, kind, input file, verdict file, and expected command exit</li></ol></li><li><strong>Add node helpers to a hand-written script</strong><ol><li><a href="skills/workflow-kit/references/preamble.js">plugins/workflow-kit/skills/workflow-kit/references/preamble.js</a> <a href="skills/workflow-kit/references/preamble-contracts.js">plugins/workflow-kit/skills/workflow-kit/references/preamble-contracts.js</a> use the second only when a node provides a typed artifact</li></ol></li></ul></section><section><h2>Reader-facing docs</h2><ul><li><a href="README.md">plugins/workflow-kit/README.md</a> The plugin&#x27;s one-page model: declarative compiler plus node strategies; open when re-entering.</li></ul></section><section><h2>Compiler and model</h2><ul><li><a href="scripts/compile_workflow.py">plugins/workflow-kit/scripts/compile_workflow.py</a> CLI that validates a workflow YAML document and compiles it to a native Workflow script; use for validate-only or emitting JavaScript.</li><li><a href="workflow_kit_lib">plugins/workflow-kit/workflow_kit_lib</a> The Python package behind the CLI: eight modules for loading, validating, expression compilation, contract analysis, and code emission.</li><li><a href="workflow_kit_lib/compiler.py">plugins/workflow-kit/workflow_kit_lib/compiler.py</a> Where YAML steps become agent(), parallel(), and pipeline() calls plus node-strategy calls; open for emitted-script behavior.</li><li><a href="workflow_kit_lib/model.py">plugins/workflow-kit/workflow_kit_lib/model.py</a> The typed document model and step grammar; open for accepted keys and validation rules.</li><li><a href="workflow_kit_lib/contracts.py">plugins/workflow-kit/workflow_kit_lib/contracts.py</a> Typed artifact provides and requires checks; open for schema compatibility, ordering, and cardinality errors.</li><li><a href="workflow_kit_lib/expr.py">plugins/workflow-kit/workflow_kit_lib/expr.py</a> The expression grammar compiled to live JavaScript; open for template and unknown-reference errors.</li><li><a href="workflow_kit_lib/loader.py">plugins/workflow-kit/workflow_kit_lib/loader.py</a> YAML entry point that reads and validates a workflow file.</li><li><a href="workflow_kit_lib/errors.py">plugins/workflow-kit/workflow_kit_lib/errors.py</a> The single WorkflowError type returned to authors.</li><li><a href="workflow_kit_lib/declarations.py">plugins/workflow-kit/workflow_kit_lib/declarations.py</a> Model declaration validation and agent-step routing to Claude core ids.</li></ul></section><section><h2>Node execution</h2><ul><li><a href="scripts/openrouter_run.py">plugins/workflow-kit/scripts/openrouter_run.py</a> Runs one non-Claude model call for an openrouter node and writes the reply to OUT; open for model declaration, events, and artifact flags.</li><li><a href="scripts/check_artifact.py">plugins/workflow-kit/scripts/check_artifact.py</a> Judges a script node&#x27;s OUT against its declared type and writes the verdict file; open for verdict and event behavior.</li><li><a href="agents/workflow-kit-agent.md">plugins/workflow-kit/agents/workflow-kit-agent.md</a> The haiku executor that runs one shell command and returns metadata without reading OUT; open to see the node contract.</li></ul></section><section><h2>Authoring references</h2><ul><li><a href="skills/workflow-kit/references/workflow-yaml.md">plugins/workflow-kit/skills/workflow-kit/references/workflow-yaml.md</a> The workflow YAML v1 format and compile, validate, and run procedures; the main authoring reference.</li><li><a href="skills/workflow-kit/references/contract.md">plugins/workflow-kit/skills/workflow-kit/references/contract.md</a> The file-passing node contract and why payloads travel by file; open for OUT, STATUS, and verdict semantics.</li><li><a href="skills/workflow-kit/references/node-strategies.md">plugins/workflow-kit/skills/workflow-kit/references/node-strategies.md</a> How to wire script and openrouter nodes, including hand-written commands and typed providers.</li><li><a href="skills/workflow-kit/references/preamble.js">plugins/workflow-kit/skills/workflow-kit/references/preamble.js</a> The helpers to paste into a hand-written native Workflow script for node strategies.</li><li><a href="skills/workflow-kit/references/preamble-contracts.js">plugins/workflow-kit/skills/workflow-kit/references/preamble-contracts.js</a> Provider helpers to paste after the base helpers when a node provides a typed artifact.</li></ul></section><section><h2>Examples</h2><ul><li><a href="examples/review-changes.workflow.yaml">plugins/workflow-kit/examples/review-changes.workflow.yaml</a> A compact pipeline example with schemas, parallel verification, and fan-out.</li><li><a href="examples/node-strategies.workflow.yaml">plugins/workflow-kit/examples/node-strategies.workflow.yaml</a> A declarative script and openrouter node example that feeds one reasoning node.</li><li><a href="examples/node-strategies.example.js">plugins/workflow-kit/examples/node-strategies.example.js</a> The hand-written native script twin of the previous example; useful for seeing inlined helpers.</li><li><a href="examples/typed-contracts.workflow.yaml">plugins/workflow-kit/examples/typed-contracts.workflow.yaml</a> The same three nodes with provides and requires typed artifacts and schemas.</li><li><a href="examples/scripts/wordcount.py">plugins/workflow-kit/examples/scripts/wordcount.py</a> A tiny deterministic script node used by the examples.</li></ul></section><section><h2>Packaging and provisioning</h2><ul><li><a href=".claude-plugin/plugin.json">plugins/workflow-kit/.claude-plugin/plugin.json</a> Marketplace plugin metadata and dependency declaration.</li><li><a href="bootstrap.json">plugins/workflow-kit/bootstrap.json</a> Bootstrap provisioning edge that installs llm-scripting-kit, links shared libs, and sets venv import checks.</li><li><a href="pyproject.toml">plugins/workflow-kit/pyproject.toml</a> Python package metadata and declared pyyaml and openai dependencies.</li><li><a href=".gitignore">plugins/workflow-kit/.gitignore</a> Ignores compiled workflow JavaScript and the compiled directory, which regenerate from YAML.</li></ul></section>
 </main>
+<nav data-human-html-chrome="nav"><ul><li><a href="../index.html"><span class="hh-nav-label">plugins</span> <span class="hh-nav-identity">The Claude Code plugin marketplace: independently installable plugins sharing the bootstrap provisioning engine and llm-scripting-kit access layer, covering code review, durable job execution, LLM endpoint dispatch, Hue scene synchronization, PDF rendering, fleet secrets provisioning, prompt statusline, cache forensics, markdown auditing, and Unreal Engine automation.</span></a></li></ul></nav>
 <script>
 if (window.parent !== window) {
   window.parent.postMessage({
@@ -79,7 +22,7 @@ if (window.parent !== window) {
     directory: "plugins/workflow-kit",
     file: "index.html",
     kind: "page",
-    source_sha: "4ad89c1c0cc5eddc26b1f5334302f4e7e379544b"
+    source_sha: "b6c0be600a97cc6d78458959b995d15e743c6af4"
   }, "*");
   document.addEventListener("click", function (event) {
     if (event.defaultPrevented || event.button !== 0) return;

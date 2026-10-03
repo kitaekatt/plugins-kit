@@ -9,64 +9,11 @@
 <link rel="stylesheet" href="../../.databench/human-html.css">
 </head>
 <body>
-<nav data-human-html-chrome="nav" aria-label="Orientation pages">
-  <ul></ul>
-</nav>
 <main>
-  <h1>Secrets-kit plugin test suite for convergence, destination safety, pre-commit guards, repository operations, manifest validation, and operation locks</h1>
-  <p>This is the full test suite for the secrets-kit plugin, the code that converges an encrypted fleet secrets repo onto each machine's local files. The tests never run real age and never touch a real remote; a reversible stand-in for age and a stubbed network leave the decision logic as the behavior under test: what gets written, what stays silent, and how a failure is classified. Git setup is paid once per process and copied out cheaply, so the suite drives real commits and real subprocesses. One file pins one behavior area, grouped below by the job the file does.</p>
-  <h2>Where to start</h2>
-  <p>Start with <a href="conftest.py"><code>conftest.py</code></a>: its fleet fixture is the machine every destination test stands on, and its fake age defines what decryption means here. Open <a href="test_converge.py"><code>test_converge.py</code></a> next for the behavior at the center of the suite.</p>
-  <h2>Routes</h2>
-  <ul>
-    <li>Trace a secret end to end: <a href="conftest.py"><code>conftest.py</code></a> &rarr; <a href="test_converge.py"><code>test_converge.py</code></a> &rarr; <a href="test_orphan_retry.py"><code>test_orphan_retry.py</code></a></li>
-    <li>Follow the ownership ledger: <a href="test_destination_ownership.py"><code>test_destination_ownership.py</code></a> &rarr; <a href="test_destination_retirement.py"><code>test_destination_retirement.py</code></a></li>
-    <li>Chase an authoring fault: <a href="test_seed_recovery.py"><code>test_seed_recovery.py</code></a> &rarr; <a href="test_entry_recovery.py"><code>test_entry_recovery.py</code></a></li>
-    <li>See a contender lose the lock: <a href="test_operation_lock.py"><code>test_operation_lock.py</code></a> &rarr; <a href="test_repo_binding.py"><code>test_repo_binding.py</code></a> &rarr; <a href="test_sync_view.py"><code>test_sync_view.py</code></a></li>
-  </ul>
-  <h2>Suite plumbing</h2>
-  <ul>
-    <li><a href="conftest.py"><code>conftest.py</code></a> Shared fixtures: a reversible fake age, a seeded fleet machine, an isolated user home. Read it to know what every test assumes.</li>
-    <li><a href="sk_testlib.py"><code>sk_testlib.py</code></a> Copies a prebuilt git tree into a fresh, independent repo in milliseconds and repoints the absolute paths inside it.</li>
-    <li><a href="sk_publish.py"><code>sk_publish.py</code></a> Two publish helpers kept separate on purpose: an ordinary producer push for fixtures, and the owned path production calls.</li>
-  </ul>
-  <h2>Convergence and destination safety</h2>
-  <ul>
-    <li><a href="test_converge.py"><code>test_converge.py</code></a> The center of the suite: what gets written, what stays silent, what fails, and how each failure class is reported.</li>
-    <li><a href="test_agefile.py"><code>test_agefile.py</code></a> The age subprocess boundary: a completed nonzero exit means a bad identity; a missing binary, spawn fault, or timeout is a dependency fault.</li>
-    <li><a href="test_dest_guard.py"><code>test_dest_guard.py</code></a> The tracked-tree guard: the exposure predicate, parsing of noisy git output, and the add-time refusal.</li>
-    <li><a href="test_destination_leaf.py"><code>test_destination_leaf.py</code></a> Destination slots that are symlinks: exposed, matching, and permitted leaves, driven through the real consumers.</li>
-    <li><a href="test_destination_ownership.py"><code>test_destination_ownership.py</code></a> Two entries claiming one slot, failed moves that reserve the prior slot, and conservative orphan ownership.</li>
-    <li><a href="test_destination_retirement.py"><code>test_destination_retirement.py</code></a> Ownership moves and durable retirements, including unlink failures checkpointed and retried after a process restart.</li>
-    <li><a href="test_orphan_retry.py"><code>test_orphan_retry.py</code></a> When orphan cleanup fails: the row persists, the failure names the file, a later pass finishes the removal.</li>
-    <li><a href="test_permission_drift.py"><code>test_permission_drift.py</code></a> Permission repair on matching content: observed mode drift, cached modes, and the Windows ACL boundary.</li>
-    <li><a href="test_perms.py"><code>test_perms.py</code></a> The perms module itself: the mode and ACL helpers the pass calls.</li>
-  </ul>
-  <h2>Guard and seeding</h2>
-  <ul>
-    <li><a href="test_guard.py"><code>test_guard.py</code></a> The pre-commit hook: installation, plus real git commits proving it actually refuses plaintext.</li>
-    <li><a href="test_init.py"><code>test_init.py</code></a> The one irreversible verb: seeding decided from the remote, and full rollback when a seed cannot publish.</li>
-  </ul>
-  <h2>Authoring and manifest</h2>
-  <ul>
-    <li><a href="test_manifest.py"><code>test_manifest.py</code></a> Declaration loading, validation, and variable expansion: the placeholder rules, cycles, stalls, per-machine variables.</li>
-    <li><a href="test_entry_recovery.py"><code>test_entry_recovery.py</code></a> Add, update, and remove faults that leave the owned epoch untouched, then succeed on a clean retry.</li>
-    <li><a href="test_seed_recovery.py"><code>test_seed_recovery.py</code></a> The seed's own recovery path, and the fixtures the entry tests build on.</li>
-    <li><a href="test_update_metadata.py"><code>test_update_metadata.py</code></a> Metadata-only updates that must not republish or rewrite the encrypted blob.</li>
-    <li><a href="test_rotation_recovery.py"><code>test_rotation_recovery.py</code></a> Identity rotation left half-finished, and the path back to a working unlock.</li>
-  </ul>
-  <h2>Repository operations and locks</h2>
-  <ul>
-    <li><a href="test_repo.py"><code>test_repo.py</code></a> The repo module: clone, refresh, and the owned commit and publish calls.</li>
-    <li><a href="test_repo_binding.py"><code>test_repo_binding.py</code></a> Confirms a clone is bound to the repo its config declares; also the lock tests' snapshot and adapter helpers.</li>
-    <li><a href="test_repo_display_cli.py"><code>test_repo_display_cli.py</code></a> What the CLI prints about the repo.</li>
-    <li><a href="test_sync_view.py"><code>test_sync_view.py</code></a> The git and authoring fixtures the lock and entry tests share.</li>
-    <li><a href="test_operation_lock.py"><code>test_operation_lock.py</code></a> Whole operations contending across real processes: one owner proceeds, every other caller refuses first.</li>
-    <li><a href="test_private_output.py"><code>test_private_output.py</code></a> What may be printed about private state: the rendering rules for notes and messages.</li>
-    <li><a href="test_secrets_bootstrap.py"><code>test_secrets_bootstrap.py</code></a> The bootstrap adapter's test surface, including the context fake the consumer tests reuse.</li>
-    <li><a href="test_terminal.py"><code>test_terminal.py</code></a> The terminal-bound verbs and their tty behavior.</li>
-  </ul>
+<h1>Secrets-kit plugin test suite for convergence, destination safety, pre-commit guards, repository operations, manifest validation, and operation locks</h1>
+<p class="hh-orientation">This directory is the test suite for the secrets-kit plugin. Real age is swapped for a reversible stand-in, so the suite exercises the convergence logic (what gets written, what fails, how it is classified) against a temporary filesystem instead of real crypto. Expensive git trees are built once per process and copied out to keep the run fast. Most of the tests pin destination safety: the plugin must never land plaintext inside a repository.</p><section><h2>Where to start</h2><p>Start with <a href="conftest.py">tests/secrets-kit/conftest.py</a>: the <code>fleet</code> fixture seeds a secrets repo and a configured machine, and <code>fake_age</code> is the reversible crypto every convergence test runs against. <a href="sk_testlib.py">tests/secrets-kit/sk_testlib.py</a> explains why the suite copies git trees instead of initializing them.</p></section><section><h2>Routes</h2><ul><li><strong>Read a convergence test</strong><ol><li><a href="conftest.py">tests/secrets-kit/conftest.py</a> builds the fleet and the reversible crypto.</li><li><a href="test_converge.py">tests/secrets-kit/test_converge.py</a> takes those fixtures and asserts what converge writes, skips, and reports as a failure.</li></ol></li><li><strong>Follow the hardened publish path</strong><ol><li><a href="sk_publish.py">tests/secrets-kit/sk_publish.py</a> offers <code>owned_commit_and_push</code>, which mirrors what the plugin&#x27;s authoring does.</li><li>It calls the plugin&#x27;s <code>_commit_owned</code> and <code>_publish_owned</code> directly, so a security test exercises the real publication, not a stand-in.</li></ol></li></ul></section><section><h2>Harness</h2><ul><li><a href="conftest.py">tests/secrets-kit/conftest.py</a> seeds the repo and a configured machine; <code>fake_age</code> is the reversible crypto every test runs against.</li><li><a href="sk_testlib.py">tests/secrets-kit/sk_testlib.py</a>: <code>copy_git_tree</code> hands each test a real, independent git repo; copying beats <code>git init</code> on cost.</li><li><a href="sk_publish.py">tests/secrets-kit/sk_publish.py</a>: <code>fixture_commit_and_push</code> simulates a peer, while <code>owned_commit_and_push</code> exercises the plugin&#x27;s real publication path.</li></ul></section><section><h2>Convergence and placement</h2><ul><li><a href="test_converge.py">tests/secrets-kit/test_converge.py</a> the core pass: writes a machine&#x27;s profile, self-heals drift, deletes on removal, reports locked and config failures.</li><li><a href="test_agefile.py">tests/secrets-kit/test_agefile.py</a> the age process boundary; only a completed nonzero exit is a <code>DecryptError</code>, so a missing binary never reads as locked.</li><li><a href="test_permission_drift.py">tests/secrets-kit/test_permission_drift.py</a>, <a href="test_perms.py">tests/secrets-kit/test_perms.py</a> and <a href="test_private_output.py">tests/secrets-kit/test_private_output.py</a> cover mode repair, placement, and private-output checks.</li></ul></section><section><h2>Destination safety</h2><ul><li><a href="test_dest_guard.py">tests/secrets-kit/test_dest_guard.py</a> the tracked-tree guard: the exposure predicate plus the add-time and convergence refusals.</li><li><a href="test_destination_leaf.py">tests/secrets-kit/test_destination_leaf.py</a> leaf slots and static links, exercised through real consumers.</li><li><a href="test_destination_ownership.py">tests/secrets-kit/test_destination_ownership.py</a> planning and conservative orphan ownership.</li><li><a href="test_destination_retirement.py">tests/secrets-kit/test_destination_retirement.py</a> ownership moves, durable retirements, and handovers.</li><li><a href="test_orphan_retry.py">tests/secrets-kit/test_orphan_retry.py</a> a failed orphan delete is checkpointed and retried.</li></ul></section><section><h2>The pre-commit guard</h2><ul><li><a href="test_guard.py">tests/secrets-kit/test_guard.py</a> drives the real shell hook through a real git commit; it reads the index, not the worktree.</li></ul></section><section><h2>Seeding and recovery</h2><ul><li><a href="test_init.py">tests/secrets-kit/test_init.py</a> seeding decides from the remote and rolls back if the seed cannot publish.</li><li><a href="test_entry_recovery.py">tests/secrets-kit/test_entry_recovery.py</a> an entry fault preserves the owned epoch for a clean retry.</li><li><a href="test_secrets_bootstrap.py">tests/secrets-kit/test_secrets_bootstrap.py</a>, <a href="test_seed_recovery.py">tests/secrets-kit/test_seed_recovery.py</a>, <a href="test_rotation_recovery.py">tests/secrets-kit/test_rotation_recovery.py</a> and <a href="test_terminal.py">tests/secrets-kit/test_terminal.py</a> cover the bootstrap, seed, and rotation recovery paths.</li></ul></section><section><h2>Repository, manifest, and locks</h2><ul><li><a href="test_manifest.py">tests/secrets-kit/test_manifest.py</a> config and manifest loading, validation, and variable expansion.</li><li><a href="test_operation_lock.py">tests/secrets-kit/test_operation_lock.py</a> whole operations contend across independent processes.</li><li><a href="test_repo.py">tests/secrets-kit/test_repo.py</a>, <a href="test_repo_binding.py">tests/secrets-kit/test_repo_binding.py</a>, <a href="test_repo_display_cli.py">tests/secrets-kit/test_repo_display_cli.py</a>, <a href="test_sync_view.py">tests/secrets-kit/test_sync_view.py</a> and <a href="test_update_metadata.py">tests/secrets-kit/test_update_metadata.py</a> cover repo, binding, display, sync-view, and metadata checks.</li></ul></section>
 </main>
+<nav data-human-html-chrome="nav"><ul><li><a href="../../plugins/secrets-kit"><span class="hh-nav-label">plugins/secrets-kit</span> <span class="hh-nav-identity">The plugin these tests exercise: convergence, the pre-commit guard, seeding, and the CLI.</span></a></li></ul></nav>
 <script>
 if (window.parent !== window) {
   window.parent.postMessage({

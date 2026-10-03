@@ -1,10 +1,13 @@
 {
   "schema_version": 1,
   "directory": "plugins/git-kit/skills/git-code-review",
-  "decision": "none",
-  "source_sha": "9a57413d3efe0f71d67adbd61f0c74fe009dce91",
+  "decision": "page",
+  "source_sha": "b313de791cba8718bfa1bc98947602803869192e",
+  "generation_spec_sha256": "9ff6d95c6dfa06e27a9196a26596c8b98ddf698bf2a82b9885b93c69cfaaa1e2",
+  "input_sha256": "890a316b2fc1c83c49a4c1ed62cd23bf91bf9d275647c6160e31ed85889daaa2",
+  "input_shape_sha256": "f2d08d965364ef801c2936ba02b56c7e60f0913ac60ba547166a50929c8cc173",
   "dirty": false,
-  "identity": "",
+  "identity": "Multi-agent code review for local git changes: partitions a diff into chunks, fans out parallel reviewer and validator subagents, and renders confirmed findings as markdown.",
   "instructions": "",
   "references": []
 }

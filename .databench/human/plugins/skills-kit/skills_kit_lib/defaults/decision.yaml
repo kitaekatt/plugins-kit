@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/skills-kit/skills_kit_lib/defaults",
+  "decision": "none",
+  "source_sha": "1a8f73cb6d1e15c846dd9a49f9e3df920965b82c",
+  "input_sha256": "6547f9b0d14bb568f392dc10fe4318a5b2d2dc3a5ec83cb8ccd6274c35fe6756",
+  "input_shape_sha256": "b53bc452fd3c236be59cc1ee3e169094f6420ae2cbe706bceb7b8bb929b53931",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

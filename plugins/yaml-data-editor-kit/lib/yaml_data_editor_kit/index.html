@@ -1,65 +1,19 @@
 <!doctype html>
 <html lang="en">
 <head>
-<!-- human-html: {"generated_by":"md-domain","source_sha":"4ad89c1c0cc5eddc26b1f5334302f4e7e379544b","directory":"plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit","kind":"page"} -->
+<!-- human-html: {"generated_by":"md-domain","source_sha":"9916e7ad91fc4d072e23b8adb70d12ab8d2b5663","directory":"plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit","kind":"page"} -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>The YAML data editor kit for schema validation, anchored-comment dispatch, and the Databench editor boundary.</title>
+<title>The YAML data dialect that declares and validates corpus type shapes and plans and executes anchored-slice transformations through inline and background LLM dispatch.</title>
 <link rel="stylesheet" href="../../../../.databench/human-html.css">
 </head>
 <body>
-<nav data-human-html-chrome="nav">
-<ul>
-<li><a href="../../index.html"><span class="hh-nav-label">yaml-data-editor-kit</span> <span class="hh-nav-identity">The plugin-level documentation and packaging for the YAML data editor kit, covering the dialect spec, architecture notes, dispatch binding, and editor research.</span></a></li>
-<li><a href="comments/index.html"><span class="hh-nav-label">comments</span> <span class="hh-nav-identity">The anchor and comment model that stores guarded units of intent over a loaded corpus.</span></a></li>
-</ul>
-</nav>
 <main>
-<h1>The YAML data editor kit for schema validation, anchored-comment dispatch, and the Databench editor boundary.</h1>
-<p>This package is the library half of the YAML data editor kit, and it is deliberately project-independent. It reads a directory of YAML data files against a declared dialect profile, so every record carries a type, an identity, and a field-by-field check. A dispatch layer then turns anchored editorial comments into planned work units and executes them inline or as a background wave, refusing any write whose anchored slice has changed in the meantime. One small module exists only to say where the human editor stops being this package's concern. The comment model that carries the anchored intent has its own page one level down, and the plugin-level documentation sits one level up.</p>
-<h2>Where to start</h2>
-<p>Open <a href="dispatch/request.py"><code>dispatch/request.py</code></a> first: the dispatch request YAML is the file seam the editor hands this package, and it names the corpus, the comment store, the run directory, and the driver a run receives. If your work is the dialect rather than execution, open <a href="schema/loader.py"><code>schema/loader.py</code></a> instead, because its fail-closed key checks define what a legal declaration is.</p>
-<h2>Routes</h2>
-<ul>
-<li>Check a corpus: <a href="schema/loader.py"><code>schema/loader.py</code></a> -&gt; <a href="schema/corpus.py"><code>schema/corpus.py</code></a> -&gt; <a href="schema/validate.py"><code>schema/validate.py</code></a>, profile into records into findings.</li>
-<li>Run the inline lane: <a href="dispatch/request.py"><code>dispatch/request.py</code></a> -&gt; <a href="dispatch/planner.py"><code>dispatch/planner.py</code></a> -&gt; <a href="dispatch/run.py"><code>dispatch/run.py</code></a>, a validated request through planned units to the run's attributed store.</li>
-<li>Run the staged background lane: <a href="dispatch/background.py"><code>dispatch/background.py</code></a>, with each worker entering through <a href="dispatch/worker_mount.py"><code>dispatch/worker_mount.py</code></a>, and back to <a href="dispatch/background.py"><code>dispatch/background.py</code></a> for status and finalize.</li>
-<li>Turn a worker ambiguity into an open question: <a href="dispatch/worker_mount.py"><code>dispatch/worker_mount.py</code></a> fail handler into <a href="dispatch/protocol.py"><code>dispatch/protocol.py</code></a>.</li>
-</ul>
-<h2>Declaring and checking record shapes</h2>
-<ul>
-<li><a href="schema/__init__.py"><code>schema/__init__.py</code></a> - The two entry points a caller imports: profile loading and corpus validation.</li>
-<li><a href="schema/loader.py"><code>schema/loader.py</code></a> - Reads type, view, and source documents into the profile; an unknown key is an error, so a typo cannot silently drop a check.</li>
-<li><a href="schema/model.py"><code>schema/model.py</code></a> - The object model a loaded profile becomes; open it when reading or extending a declaration's vocabulary.</li>
-<li><a href="schema/corpus.py"><code>schema/corpus.py</code></a> - Reads the data files a profile names into addressable records, and settles which source owns each file and key.</li>
-<li><a href="schema/validate.py"><code>schema/validate.py</code></a> - Checks every record against its type and returns findings that name the file, the record, and the field.</li>
-<li><a href="schema/merge.py"><code>schema/merge.py</code></a> - The merge algebra for extensible types: how a child record combines with its ancestors, with cycles refused.</li>
-<li><a href="schema/adapter.py"><code>schema/adapter.py</code></a> - Reads a foreign schema-as-data declaration through a type's adapter, for corpora that keep their own schemas as data.</li>
-<li><a href="schema/errors.py"><code>schema/errors.py</code></a> - The two failure channels: an exception for a broken declaration, collected diagnostics for data missing a legal one.</li>
-</ul>
-<h2>Turning anchored comments into applied edits</h2>
-<ul>
-<li><a href="dispatch/__init__.py"><code>dispatch/__init__.py</code></a> - The package facade; its import guard turns a missing content_pipeline dependency into one message that names the remedy.</li>
-<li><a href="dispatch/request.py"><code>dispatch/request.py</code></a> - Loads the file-backed request that starts a run; every problem is a diagnostic, and paths resolve from the request file.</li>
-<li><a href="dispatch/planner.py"><code>dispatch/planner.py</code></a> - Groups open instruction comments into work units, mechanically by anchor or, when a backend is configured, through a model that merges whole units.</li>
-<li><a href="dispatch/run.py"><code>dispatch/run.py</code></a> - The inline lane: plans units, executes them through content-pipeline-kit, and writes the machine slice of the run's attributed store.</li>
-<li><a href="dispatch/background.py"><code>dispatch/background.py</code></a> - The staged background API, prepare through finalize; the run directory is reserved atomically so a failed prepare cannot strand a path.</li>
-<li><a href="dispatch/state.py"><code>dispatch/state.py</code></a> - The durable, digest-authenticated dispatch plan a background run reconstructs from; tampered units or paths are rejected on load.</li>
-<li><a href="dispatch/worker_mount.py"><code>dispatch/worker_mount.py</code></a> - The worker-side protocol mount: claim, read, submit, fail, each re-authenticated against the plan and rechecked for freshness.</li>
-<li><a href="dispatch/protocol.py"><code>dispatch/protocol.py</code></a> - Turns a worker's terminal ambiguity failure into an open question comment, idempotently, so an interrupted worker cannot lose it.</li>
-<li><a href="dispatch/units.py"><code>dispatch/units.py</code></a> - The shared prompt and response-validation source; when the inline lane and a worker disagree about a response, this file decides.</li>
-<li><a href="dispatch/adapter.py"><code>dispatch/adapter.py</code></a> - Derives the execution adapter from a durable plan, so a background run replays with the same unit identity and prompts.</li>
-</ul>
-<h2>The editor boundary</h2>
-<ul>
-<li><a href="editor/__init__.py"><code>editor/__init__.py</code></a> - Code-free on purpose: Databench owns the browser surface, this kit ships no editor, and new work goes to the dialect or to the comment model's page.</li>
-</ul>
-<h2>Package root</h2>
-<ul>
-<li><a href="__init__.py"><code>__init__.py</code></a> - One docstring line: the dialect, the comment model, dispatch, and the editor boundary.</li>
-</ul>
+<h1>The YAML data dialect that declares and validates corpus type shapes and plans and executes anchored-slice transformations through inline and background LLM dispatch.</h1>
+<p class="hh-orientation">This is the Python package that sits between a project&#x27;s YAML data files and whatever edits them. It does two jobs. The first declares what the data is allowed to look like and proves a corpus against that declaration, naming every problem with a file, a record, and a field. The second takes an anchored note about one slice of that data and turns it into a validated transformation, run inline in one process or as a staged background dispatch that workers settle one unit at a time. The two meet at a file-backed request, and a boundary module marks where the browser surface stops being this package&#x27;s concern; the transformation half rides on the shared content-pipeline library and needs it present to run.</p><section><h2>Where to start</h2><p>Open <a href="schema/loader.py">plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/schema/loader.py</a> to see how the dialect reads a profile and refuses a bad declaration, or <a href="dispatch/run.py">plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/dispatch/run.py</a> to follow one inline dispatch from request to applied result. The first is where shape and checking questions land; the second is where execution and staleness questions land.</p></section><section><h2>Routes</h2><ul><li><strong>Check a corpus against its profile</strong><ol><li><a href="schema/loader.py">plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/schema/loader.py</a> load the profile</li><li><a href="schema/corpus.py">plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/schema/corpus.py</a> read every source into records</li><li><a href="schema/validate.py">plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/schema/validate.py</a> collect the findings</li></ol></li><li><strong>Run one inline dispatch</strong><ol><li><a href="dispatch/request.py">plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/dispatch/request.py</a> read the request</li><li><a href="dispatch/planner.py">plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/dispatch/planner.py</a> plan the units</li><li><a href="dispatch/run.py">plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/dispatch/run.py</a> run and apply them</li></ol></li><li><strong>Stage a background dispatch</strong><ol><li><a href="dispatch/background.py">plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/dispatch/background.py</a> prepare and reserve the run</li><li><a href="dispatch/state.py">plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/dispatch/state.py</a> write the authenticated plan</li><li><a href="dispatch/worker_mount.py">plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/dispatch/worker_mount.py</a> mount the worker protocol</li><li><a href="dispatch/background.py">plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/dispatch/background.py</a> run the wave and finalize</li></ol></li></ul></section><section><h2>Read and declare the dialect</h2><ul><li><a href="__init__.py">plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/__init__.py</a> -- the package face; one docstring naming the four parts.</li><li><a href="schema/__init__.py">plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/schema/__init__.py</a> -- the two entry points: load a profile, or validate a corpus.</li><li><a href="schema/loader.py">plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/schema/loader.py</a> -- the fail-closed profile loader; open it when a declaration is refused.</li><li><a href="schema/model.py">plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/schema/model.py</a> -- the in-memory Profile and the spec dataclasses it holds.</li><li><a href="schema/errors.py">plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/schema/errors.py</a> -- two failure channels: a raised ProfileError, a collected Diagnostic.</li><li>Two more dialect files sit here: the extensible-merge algebra and the foreign-adapter shape reader.</li></ul></section><section><h2>Check a corpus against the profile</h2><ul><li><a href="schema/corpus.py">plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/schema/corpus.py</a> -- reads every declared source into addressable records off disk.</li><li><a href="schema/validate.py">plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/schema/validate.py</a> -- the validation pass; every finding names a file, a record, and a field.</li></ul></section><section><h2>Plan a dispatch from open comments</h2><ul><li><a href="dispatch/request.py">plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/dispatch/request.py</a> -- the file-backed request; the seam an editor hands this package.</li><li><a href="dispatch/planner.py">plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/dispatch/planner.py</a> -- groups open comments into units, mechanically or re-grouped by a model.</li><li>A units helper here renders each unit&#x27;s prompt and its response validation.</li></ul></section><section><h2>Run the dispatch</h2><ul><li><a href="dispatch/__init__.py">plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/dispatch/__init__.py</a> -- the public API; one message names the missing shared-library remedy.</li><li><a href="dispatch/run.py">plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/dispatch/run.py</a> -- the inline lane; runs each unit and writes the machine result.</li><li><a href="dispatch/background.py">plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/dispatch/background.py</a> -- the staged lane; prepare, wave, status, and finalize a run.</li><li><a href="dispatch/state.py">plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/dispatch/state.py</a> -- the authenticated durable plan a staged run reloads from.</li><li><a href="dispatch/worker_mount.py">plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/dispatch/worker_mount.py</a> -- the worker protocol mount a staged worker runs under.</li><li><a href="dispatch/protocol.py">plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/dispatch/protocol.py</a> -- turns a worker&#x27;s terminal ambiguity into a durable question.</li><li>A small adapter builder here derives the worker-facing adapter from a plan.</li></ul></section><section><h2>Where the package stops</h2><ul><li><a href="editor/__init__.py">plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/editor/__init__.py</a> -- a boundary in code: the browser surface is Databench&#x27;s, and nothing here imports it.</li></ul></section>
 </main>
+<nav data-human-html-chrome="nav"><ul><li><a href="../../index.html"><span class="hh-nav-label">yaml-data-editor-kit</span> <span class="hh-nav-identity">The plugin-level documentation and packaging for the YAML data editor kit, covering the dialect spec, architecture notes, dispatch binding, and editor research.</span></a></li><li><a href="comments/index.html"><span class="hh-nav-label">comments</span> <span class="hh-nav-identity">The anchor and comment model that stores guarded units of intent over a loaded corpus.</span></a></li></ul></nav>
 <script>
 if (window.parent !== window) {
   window.parent.postMessage({
@@ -68,7 +22,7 @@ if (window.parent !== window) {
     directory: "plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit",
     file: "index.html",
     kind: "page",
-    source_sha: "4ad89c1c0cc5eddc26b1f5334302f4e7e379544b"
+    source_sha: "9916e7ad91fc4d072e23b8adb70d12ab8d2b5663"
   }, "*");
   document.addEventListener("click", function (event) {
     if (event.defaultPrevented || event.button !== 0) return;

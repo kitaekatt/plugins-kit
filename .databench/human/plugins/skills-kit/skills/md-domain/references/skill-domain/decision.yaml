@@ -2,10 +2,12 @@
   "schema_version": 1,
   "directory": "plugins/skills-kit/skills/md-domain/references/skill-domain",
   "decision": "page",
-  "source_sha": "1d479f028f5f2bf653a1e46db69554aae181ef72",
-  "generation_spec_sha256": "a539448e68fbbc8be485dfd60dc62d25ee41602a5cc2dc704720c7c7e226caa9",
+  "source_sha": "753f0aaff0e979840a844e3ecf8e58645760ef79",
+  "generation_spec_sha256": "9ff6d95c6dfa06e27a9196a26596c8b98ddf698bf2a82b9885b93c69cfaaa1e2",
+  "input_sha256": "0a9b634be80090ea73acaffda8049d96812c76fd6897475f191b81440558119c",
+  "input_shape_sha256": "6818d6bb26e7289bbc2346cd004b6d45ee40339f9488987169bf4fef3722216d",
   "dirty": false,
-  "identity": "Skill-domain reference documentation for skill-authoring contracts, vocabulary, and audit tools.",
+  "identity": "Reference material for the skill-domain: type contracts, canonical vocabulary, structural patterns, schema fixtures, and audit tooling documentation.",
   "instructions": "",
   "references": []
 }

@@ -2,10 +2,12 @@
   "schema_version": 1,
   "directory": "plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit",
   "decision": "page",
-  "source_sha": "4ad89c1c0cc5eddc26b1f5334302f4e7e379544b",
-  "generation_spec_sha256": "0805933a1de089dc951a33d702e9d57d569f0584732b017cd3600742a34ba321",
+  "source_sha": "9916e7ad91fc4d072e23b8adb70d12ab8d2b5663",
+  "generation_spec_sha256": "9ff6d95c6dfa06e27a9196a26596c8b98ddf698bf2a82b9885b93c69cfaaa1e2",
+  "input_sha256": "75a7420c6316714c95063ca99c92f68f3d95a56c097ec4e965b5f1f022c65228",
+  "input_shape_sha256": "513e4bc29d25a695f90e5f6334c14072475d2405fbbe6ee643b55e0a170bca9c",
   "dirty": false,
-  "identity": "The YAML data editor kit for schema validation, anchored-comment dispatch, and the Databench editor boundary.",
+  "identity": "The YAML data dialect that declares and validates corpus type shapes and plans and executes anchored-slice transformations through inline and background LLM dispatch.",
   "instructions": "",
   "references": []
 }

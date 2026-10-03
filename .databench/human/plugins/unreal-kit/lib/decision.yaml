@@ -1,11 +1,12 @@
 {
   "schema_version": 1,
   "directory": "plugins/unreal-kit/lib",
-  "decision": "page",
-  "source_sha": "24e90d313c30674622e8ab576591130eb753a473",
-  "generation_spec_sha256": "0805933a1de089dc951a33d702e9d57d569f0584732b017cd3600742a34ba321",
+  "decision": "none",
+  "source_sha": "bce913a291b2c16dd005e8d32674fbd70027813f",
+  "input_sha256": "4fa098fbfb930f41efdba0563cf665f64c37907b3e70845632b1ea2e0cb8a971",
+  "input_shape_sha256": "a55406eed166c608e96723f2fd27cbd6031e82f0904d864fb5a3dcffccaa6f26",
   "dirty": false,
-  "identity": "Python support modules for the unreal-kit plugin: dependency bootstrap, bootstrap-presence guard, Windows PATH repair, Unreal project discovery, editor launch and MCP readiness, configuration, stub refresh, and the Unreal MCP Automation Bridge client.",
+  "identity": "",
   "instructions": "",
   "references": []
 }

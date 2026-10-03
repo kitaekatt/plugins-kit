@@ -1,71 +1,19 @@
 <!doctype html>
 <html lang="en">
 <head>
-<!-- human-html: {"generated_by":"md-domain","source_sha":"9a57413d3efe0f71d67adbd61f0c74fe009dce91","directory":"scripts","kind":"page"} -->
+<!-- human-html: {"generated_by":"md-domain","source_sha":"bce913a291b2c16dd005e8d32674fbd70027813f","directory":"scripts","kind":"page"} -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>Repo-level scripts that run plugins-kit commit gates, marketplace publishing, development tests, sync diagnostics, code-review skill rendering, and the reviewer_b bakeoff</title>
+<title>Commit and publish gates, isolated dev testing, code-review skill rendering, and reviewer-model benchmarking for the plugins-kit marketplace</title>
 <link rel="stylesheet" href="../.databench/human-html.css">
 </head>
 <body>
-<nav data-human-html-chrome="nav" aria-label="Orientation pages">
-<ul></ul>
-</nav>
 <main>
-<h1>Repo-level scripts that run plugins-kit commit gates, marketplace publishing, development tests, sync diagnostics, code-review skill rendering, and the reviewer_b bakeoff</h1>
-<p>This is the maintenance machinery around the plugins-kit marketplace: what a commit, a release, or a dev session passes through before it reaches a consumer. Nearly every tool here judges the git index, not the working tree, because the tree is shared with concurrent sessions. The pieces fall into jobs: commit gates, the publish pipeline, working-copy test harnesses, drift diagnostics, a template renderer for the code-review skills, and a bakeoff measuring one reviewer lane. When a gate blocks you, that script's header carries the reasoning, the escape hatch, and the degraded-mode behavior.</p>
-<h2>Where to start</h2>
-<p>Open <a href="pre-commit-version-check.sh"><code>pre-commit-version-check.sh</code></a> first: it chains the consistency checks that run at commit time, and its header states the layering rule -- escapable advice at commit time, unbypassable preflight at publish time -- that organizes the directory. For a release, go straight to <a href="publish.py"><code>publish.py</code></a>, the source of truth for the four-step release flow.</p>
-<h2>Routes</h2>
-<ul>
-<li><strong>Commit gate chain:</strong> <a href="pre-commit-version-check.sh"><code>pre-commit-version-check.sh</code></a> runs, in order, <a href="regen_marketplace.py"><code>regen_marketplace.py</code></a>, <a href="check-staged-version-bump.sh"><code>check-staged-version-bump.sh</code></a>, <a href="check_pyproject_sync.py"><code>check_pyproject_sync.py</code></a>, <a href="check_bootstrap_dependency.py"><code>check_bootstrap_dependency.py</code></a>, and <a href="check_agent_directives.py"><code>check_agent_directives.py</code></a> against the staged index.</li>
-<li><strong>Ship a publish:</strong> stage the version bump, then <a href="regen_marketplace.py"><code>regen_marketplace.py</code></a> -> <a href="publish.py"><code>publish.py</code></a> (preflight, regenerate, push dev, fast-forward master, verify).</li>
-<li><strong>Point the machine at the working copy:</strong> <a href="dev-tree.py"><code>dev-tree.py</code></a> dev, run a session, <a href="dev-tree.py"><code>dev-tree.py</code></a> normal; status says which mode is active, and restore is lossless.</li>
-<li><strong>Bakeoff the reviewer lane:</strong> <a href="review-bakeoff/run_bakeoff.py"><code>review-bakeoff/run_bakeoff.py</code></a> run for endpoint arms, prompts then ingest for Agent arms, then score.</li>
-</ul>
-<h2>Commit-time gates</h2>
-<ul>
-<li><a href="_gitindex.py"><code>_gitindex.py</code></a> -- the shared helper the Python gates import: index-aware, commit-scoped git reads, with a loud worktree fallback instead of a silent pass.</li>
-<li><a href="pre-commit-version-check.sh"><code>pre-commit-version-check.sh</code></a> -- the chain that runs the marketplace regen and the four consistency checks against the staged index; reports every failure at once, not one per attempt.</li>
-<li><a href="check-staged-version-bump.sh"><code>check-staged-version-bump.sh</code></a> -- blocks a commit leaving a plugin's version equal to the value at the last publish point; it asks about the end state, not this commit's diff.</li>
-<li><a href="check_pyproject_sync.py"><code>check_pyproject_sync.py</code></a> -- blocks a stated pyproject version that disagrees with the authoritative plugin manifest; the gate that closed a five-release drift.</li>
-<li><a href="check_bootstrap_dependency.py"><code>check_bootstrap_dependency.py</code></a> -- blocks a plugin manifest missing the bootstrap dependency; the rule is universal so the whole fleet can rely on bootstrap.</li>
-<li><a href="check_agent_directives.py"><code>check_agent_directives.py</code></a> -- greps shipped plugin text for phrasings the agent-directive standards forbid; a line that quotes a banned phrase to prohibit it carries an inline allow marker.</li>
-<li><a href="precommit_guard.py"><code>precommit_guard.py</code></a> -- the separate, unforgiving leak guard wired to every commit outside this chain: refuses project-derived or machine-emitted data, oversized blobs, and bootstrap write targets that escape the plugin root.</li>
-</ul>
-<h2>Publishing</h2>
-<ul>
-<li><a href="publish.py"><code>publish.py</code></a> -- the four-step release: unbypassable preflight, regenerate derived artifacts, push dev, fast-forward master (a projection when partial or dev-only plugins are in play), verify; also the publish-point oracle the bump check calls.</li>
-<li><a href="regen_marketplace.py"><code>regen_marketplace.py</code></a> -- rebuilds the marketplace manifest from the per-plugin manifests; --check --staged feeds the pre-commit chain, and --only commits one entry without sweeping other sessions' bumps.</li>
-</ul>
-<h2>Running plugins from the working copy</h2>
-<ul>
-<li><a href="claude_plugin_test.py"><code>claude_plugin_test.py</code></a> -- launches a Claude Code session on this working copy without rewriting the machine-global registry; --print previews where a run would write, and the header names three observed escapes to read before deleting its data root.</li>
-<li><a href="claudx_plugin_dirs.py"><code>claudx_plugin_dirs.py</code></a> -- prints the plugin directories the current project has enabled, one per line on stdout.</li>
-<li><a href="dev-tree.py"><code>dev-tree.py</code></a> -- the machine-global switch: dev repoints the install registry at this working copy, normal restores from its backup, status reports the mode.</li>
-</ul>
-<h2>Sync diagnostics</h2>
-<ul>
-<li><a href="cache_status.py"><code>cache_status.py</code></a> -- file-content diff between local source and plugin cache per installed plugin; differs is expected on a dev branch, and --detailed lists the divergent files.</li>
-<li><a href="plugin-versions.sh"><code>plugin-versions.sh</code></a> -- one report lining up version strings across local repo, marketplace clone, install registry, and cache.</li>
-</ul>
-<h2>Code-review skill rendering</h2>
-<ul>
-<li><a href="gen_code_review_skills.py"><code>gen_code_review_skills.py</code></a> -- renders the git-kit and p4-kit code-review skills and their agents from one template; --check is the drift guard the test suite pins.</li>
-</ul>
-<h2>On-demand model validation</h2>
-<ul>
-<li><a href="check_model_dispatch.py"><code>check_model_dispatch.py</code></a> -- proves the orchestration policy's model ids and config keys actually dispatch via live CLI calls; on demand by design, so nothing runs it automatically.</li>
-</ul>
-<h2>reviewer_b bakeoff</h2>
-<ul>
-<li><a href="review-bakeoff/README.md"><code>review-bakeoff/README.md</code></a> -- the runbook: run for endpoint arms, prompts and ingest for Agent arms, then score; results are untracked scratch output.</li>
-<li><a href="review-bakeoff/SPEC.md"><code>review-bakeoff/SPEC.md</code></a> -- the on-disk contract: corpus layout, the one-planted-bug matching rule, four metrics; the decoy false-positive rate is the headline.</li>
-<li><a href="review-bakeoff/run_bakeoff.py"><code>review-bakeoff/run_bakeoff.py</code></a> -- the runner and scorer; endpoint arms dispatch through the git-kit lane runner, Agent arms go out as prompts and back in as issue arrays.</li>
-<li><a href="review-bakeoff/corpus"><code>review-bakeoff/corpus</code></a> -- 24 self-contained cases, each a YAML spec plus the exact diff the lane receives; positives plant one bug, decoys must not elicit anything.</li>
-</ul>
+<h1>Commit and publish gates, isolated dev testing, code-review skill rendering, and reviewer-model benchmarking for the plugins-kit marketplace</h1>
+<p class="hh-orientation">This directory keeps the plugins marketplace honest: commit gates, publish, working-copy testing, and reviewer bakeoff. Commit checks judge the staged index, not the shared working tree; publish re-runs the same invariants unescapeably. The sections below organize those scripts by the flows they support.</p><section><h2>Where to start</h2><p>Open <a href="pre-commit-version-check.sh">scripts/pre-commit-version-check.sh</a>: names every commit check in order and carries the install line. <a href="publish.py">scripts/publish.py</a>: release flow source of truth.</p></section><section><h2>Routes</h2><ul><li><strong>Commit and ship a plugin change</strong><ol><li>Bump the version in the plugin metadata and stage it.</li><li><a href="regen_marketplace.py">scripts/regen_marketplace.py</a> and stage the rewritten marketplace manifest.</li><li><a href="publish.py">scripts/publish.py</a>: preflight, push dev, fast-forward master, verify.</li></ol></li><li><strong>What one commit runs</strong><ol><li><a href="pre-commit-version-check.sh">scripts/pre-commit-version-check.sh</a> chains the five consumer-correctness checks; <a href="precommit_guard.py">scripts/precommit_guard.py</a> runs separately and is unforgiving.</li></ol></li><li><strong>Test a plugin from the working copy</strong><ol><li><a href="claude_plugin_test.py">scripts/claude_plugin_test.py</a> writes a synthetic registry only the dev engine can see.</li><li><a href="dev-tree.py">scripts/dev-tree.py</a> <code>dev</code>; <code>normal</code> restores from the sidecar backup.</li><li><a href="claudx_plugin_dirs.py">scripts/claudx_plugin_dirs.py</a> prints the enabled plugin directories.</li></ol></li><li><strong>Bakeoff one reviewer model</strong><ol><li><a href="review-bakeoff/run_bakeoff.py">scripts/review-bakeoff/run_bakeoff.py</a> uses endpoint arms; harness: claude aliases use prompts and ingest.</li><li>score prints recall, precision, decoy false-positive rate, and positive noise per arm.</li></ol></li></ul></section><section><h2>Publishing</h2><ul><li><a href="publish.py">scripts/publish.py</a> - four-step release: preflight, push dev, fast-forward master, verify. Preflight re-runs skippable checks unescapeably; <code>--only</code> ships one plugin.</li><li><a href="regen_marketplace.py">scripts/regen_marketplace.py</a> - rebuilds marketplace manifest from plugin version files; <code>--check</code> <code>--staged</code> is the drift guard; <code>--only</code> commits one bump.</li></ul></section><section><h2>Commit-time gates</h2><ul><li><a href="pre-commit-version-check.sh">scripts/pre-commit-version-check.sh</a> - chains the five consumer-correctness checks; escapeable here, not at publish.</li><li><a href="precommit_guard.py">scripts/precommit_guard.py</a> - separate leak guard; blocks project-derived and machine-emitted data from staged commits.</li><li><a href="_gitindex.py">scripts/_gitindex.py</a> - one implementation of index-aware checking: bounded git calls, NUL-separated paths, skip, index, or worktree verdict.</li><li><a href="check-staged-version-bump.sh">scripts/check-staged-version-bump.sh</a> - blocks an unchanged plugin version since the last publish point, with a weaker fallback.</li><li><a href="check_pyproject_sync.py">scripts/check_pyproject_sync.py</a> - checks that the version agrees with the authoritative plugin version.</li><li><a href="check_bootstrap_dependency.py">scripts/check_bootstrap_dependency.py</a> - blocks plugins that omit the bootstrap dependency, except bootstrap itself.</li><li><a href="check_agent_directives.py">scripts/check_agent_directives.py</a> - greps shipped plugin text for banned agent-directive phrasing; same-line marker exempts quoted phrases.</li></ul></section><section><h2>Dev testing and cache visibility</h2><ul><li><a href="dev-tree.py">scripts/dev-tree.py</a> - points the machine registry at the working copy (dev) or restores it (normal); lossless backup.</li><li><a href="claude_plugin_test.py">scripts/claude_plugin_test.py</a> - tests working copy without the machine registry; <code>--fresh</code> is the honest periodic check.</li><li><a href="claudx_plugin_dirs.py">scripts/claudx_plugin_dirs.py</a> - prints enabled plugin directories for a plain plugin-dir launch; reads only.</li><li><a href="cache_status.py">scripts/cache_status.py</a> - diffs local source against the plugin cache; a differs verdict on a dev branch is expected.</li><li><a href="plugin-versions.sh">scripts/plugin-versions.sh</a> - reports versions across repo, marketplace clone, registry, and cache.</li></ul></section><section><h2>Code review skill rendering</h2><ul><li><a href="gen_code_review_skills.py">scripts/gen_code_review_skills.py</a> - renders both code review skills and effort agents; <code>--check</code> fails on drift; commit template and rendered files together.</li></ul></section><section><h2>Model dispatch check</h2><ul><li><a href="check_model_dispatch.py">scripts/check_model_dispatch.py</a> - validates orchestrate policy model identifiers by real dispatch; a tool, not an automatic gate.</li></ul></section><section><h2>Reviewer bakeoff</h2><ul><li><a href="review-bakeoff/SPEC.md">scripts/review-bakeoff/SPEC.md</a> - on-disk contract: case format, matching rule, four metrics; decoy false-positive rate is headline.</li><li><a href="review-bakeoff/README.md">scripts/review-bakeoff/README.md</a> - subcommands with exact invocations.</li><li><a href="review-bakeoff/run_bakeoff.py">scripts/review-bakeoff/run_bakeoff.py</a> - runs and scores: run for endpoint arms, prompts and ingest for harness: claude aliases, score for per-arm summary.</li><li><a href="review-bakeoff/corpus">scripts/review-bakeoff/corpus</a> - 24 cases, one directory each: a case file states the planted bug or decoy rule, and the diff bytes a lane sees; add cases here.</li></ul></section>
 </main>
+<nav data-human-html-chrome="nav"><ul><li><a href="../README.md"><span class="hh-nav-label">README.md</span> <span class="hh-nav-identity">Marketplace entry point.</span></a></li><li><a href="../tests/repo-scripts"><span class="hh-nav-label">repo-scripts</span> <span class="hh-nav-identity">Tests that assert these scripts.</span></a></li><li><a href="../docs"><span class="hh-nav-label">docs</span> <span class="hh-nav-identity">Long-form reference: agent directives, publish, testing.</span></a></li></ul></nav>
 <script>
 if (window.parent !== window) {
   window.parent.postMessage({
@@ -74,7 +22,7 @@ if (window.parent !== window) {
     directory: "scripts",
     file: "index.html",
     kind: "page",
-    source_sha: "9a57413d3efe0f71d67adbd61f0c74fe009dce91"
+    source_sha: "bce913a291b2c16dd005e8d32674fbd70027813f"
   }, "*");
   document.addEventListener("click", function (event) {
     if (event.defaultPrevented || event.button !== 0) return;

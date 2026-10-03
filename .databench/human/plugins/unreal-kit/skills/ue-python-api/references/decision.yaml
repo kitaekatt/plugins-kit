@@ -1,11 +1,12 @@
 {
   "schema_version": 1,
   "directory": "plugins/unreal-kit/skills/ue-python-api/references",
-  "decision": "page",
-  "source_sha": "a129b0ad7aa6d94cd8b7f74b1ab08ea011db00bc",
-  "generation_spec_sha256": "0805933a1de089dc951a33d702e9d57d569f0584732b017cd3600742a34ba321",
-  "dirty": false,
-  "identity": "Reference docs for the Unreal Engine Python API skill: execution, bootstrap, setup, and asset patterns.",
+  "decision": "none",
+  "source_sha": "7aeb90b06304ac2124605365473ae527ed666da0",
+  "input_sha256": "521000c3a9e24f7cd1ff632d34ff87e2bc339cd6cf83533eed5a913f68e44727",
+  "input_shape_sha256": "eb60aeb880ecea6285291d6470ed50efc0a67d9a150a8789772c6d761671b17c",
+  "dirty": true,
+  "identity": "",
   "instructions": "",
   "references": []
 }

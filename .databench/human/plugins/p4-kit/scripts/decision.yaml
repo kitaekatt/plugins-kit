@@ -2,10 +2,12 @@
   "schema_version": 1,
   "directory": "plugins/p4-kit/scripts",
   "decision": "page",
-  "source_sha": "9a57413d3efe0f71d67adbd61f0c74fe009dce91",
-  "generation_spec_sha256": "0805933a1de089dc951a33d702e9d57d569f0584732b017cd3600742a34ba321",
+  "source_sha": "bce913a291b2c16dd005e8d32674fbd70027813f",
+  "generation_spec_sha256": "9ff6d95c6dfa06e27a9196a26596c8b98ddf698bf2a82b9885b93c69cfaaa1e2",
+  "input_sha256": "4e0215a727b1066470e0a5cc5e4c108079ec77accc879a8bc06d97ec9ba6579f",
+  "input_shape_sha256": "9ec0f0c0823fb3987058c6af623276dcd85ddb211003bdb17a219e6fc579be1c",
   "dirty": false,
-  "identity": "p4-kit plugin scripts for bootstrap guarding, legacy-config cleanup, and Perforce code-review preparation, dispatch, and profile rendering.",
+  "identity": "The p4-kit scripts that prepare Perforce changelists for code review, dispatch and parse review lanes, render review profiles, and guard the plugin's bootstrap venv.",
   "instructions": "",
   "references": []
 }
