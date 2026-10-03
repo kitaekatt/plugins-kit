@@ -243,24 +243,22 @@ def test_projection_needs_no_interrupt_contract(tmp_path, monkeypatch):
     store = _full_lifecycle(tmp_path)
     expected = project_run(store, RUN)
     # The contract and the validator are gone; the projection is unaffected.
-    saved = sys.modules.get(CONTRACT_MODULE)
     blocked = (
         CONTRACT_MODULE,
         "llm_scripting_kit",
         "llm_scripting_kit.completion",
         "llm_scripting_kit.completion.json_schema",
     )
-    try:
+    saved = {name: sys.modules[name] for name in blocked}
+    with monkeypatch.context() as patch:
         for name in blocked:
-            sys.modules[name] = None
+            patch.setitem(sys.modules, name, None)
         with pytest.raises(InterruptSupportError):
             interrupts.support()
         assert project_run(store, RUN) == expected
-    finally:
-        for name in blocked:
-            sys.modules.pop(name, None)
-        if saved is not None:
-            sys.modules[CONTRACT_MODULE] = saved
+    # Later consumers must see the exact shared modules collected earlier,
+    # rather than a second copy with different class and exception identities.
+    assert all(sys.modules[name] is module for name, module in saved.items())
     assert len([e for e in expected if e["event"] == "interrupt"]) == 7
 
 
