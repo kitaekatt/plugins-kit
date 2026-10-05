@@ -43,10 +43,17 @@ def repair_path() -> PathRepairResult:
     raw_entries = [p for p in raw.split(os.pathsep) if p]
     before_count = len(raw_entries)
 
+    def _key(entry: str) -> str:
+        # normpath drops a trailing separator: the registry often spells a
+        # directory "C:\Program Files\dotnet\" where the inherited PATH has
+        # it without the backslash, and comparing raw strings re-added
+        # every such directory as a duplicate.
+        return os.path.normpath(entry).lower()
+
     deduped: list[str] = []
     seen: set[str] = set()
     for entry in raw_entries:
-        key = entry.lower()
+        key = _key(entry)
         if key not in seen:
             seen.add(key)
             deduped.append(entry)
@@ -72,7 +79,7 @@ def repair_path() -> PathRepairResult:
                 for entry in value.split(os.pathsep):
                     if not entry:
                         continue
-                    key = entry.lower()
+                    key = _key(entry)
                     if key not in seen:
                         seen.add(key)
                         deduped.append(entry)

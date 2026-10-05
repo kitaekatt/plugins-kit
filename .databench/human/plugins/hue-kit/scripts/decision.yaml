@@ -1,11 +1,12 @@
 {
   "schema_version": 1,
   "directory": "plugins/hue-kit/scripts",
-  "decision": "page",
-  "source_sha": "c841dd25a2ba8f38e779495f750986dee9ac6da4",
-  "generation_spec_sha256": "0805933a1de089dc951a33d702e9d57d569f0584732b017cd3600742a34ba321",
+  "decision": "none",
+  "source_sha": "bce913a291b2c16dd005e8d32674fbd70027813f",
+  "input_sha256": "74cf64a4d76158051d3bf8c60b3125c73ed8a7217ac29dfaeb429d6c8e4ba403",
+  "input_shape_sha256": "a50f37b0c8d47a07000306e76a96b16bd349ef4447f0ca429453fbc48060dd75",
   "dirty": false,
-  "identity": "The hue-kit scripts that provide the scene CLI, solve layered meta-groups, and guard plugin bootstrap setup.",
+  "identity": "",
   "instructions": "",
   "references": []
 }

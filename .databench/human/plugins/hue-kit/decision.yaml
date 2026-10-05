@@ -1,11 +1,12 @@
 {
   "schema_version": 1,
   "directory": "plugins/hue-kit",
-  "decision": "page",
-  "source_sha": "c841dd25a2ba8f38e779495f750986dee9ac6da4",
-  "generation_spec_sha256": "0805933a1de089dc951a33d702e9d57d569f0584732b017cd3600742a34ba321",
+  "decision": "none",
+  "source_sha": "bce913a291b2c16dd005e8d32674fbd70027813f",
+  "input_sha256": "7a8cf9f885b3120162edd2d94b7c38cda6f3843fedf0aee0360e74286e4737bc",
+  "input_shape_sha256": "02727e68f0ecb8ebe6b95c56aa43ee34d27d3e8619fa6ba47da785cce43fe752",
   "dirty": false,
-  "identity": "The hue-kit Claude Code plugin that describes Philips Hue scenes as editable layer stacks and syncs them with a bridge, including documentation, examples, command shims, and domain references.",
+  "identity": "",
   "instructions": "",
   "references": []
 }

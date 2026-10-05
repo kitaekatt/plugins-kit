@@ -243,6 +243,37 @@ class TestAddPathToShellConfigWindowsIntegration:
         mock_registry.assert_called_once()
 
     @patch("bootstrap_lib.path_check._add_path_to_windows_registry")
+    def test_registry_write_skips_rc_on_windows(self, mock_registry, tmp_path, monkeypatch):
+        """REGRESSION: Git Bash inherits the User PATH, so an rc export line
+        on top of the registry entry put the directory on PATH twice in every
+        shell (and PATH repair reported the duplicates each pass)."""
+        mock_registry.return_value = (True, r"added C:\Tools\bin to Windows User PATH (registry)")
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.delenv("BOOTSTRAP_SKIP_REGISTRY", raising=False)
+        monkeypatch.setattr("bootstrap_lib.path_check.sys.platform", "win32")
+
+        ok, msg = add_path_to_shell_config(r"C:\Tools\bin")
+
+        assert ok is True
+        assert "Windows User PATH" in msg
+        assert not (tmp_path / ".bashrc").exists()
+
+    @patch("bootstrap_lib.path_check._add_path_to_windows_registry")
+    def test_failed_registry_write_falls_back_to_rc_on_windows(
+        self, mock_registry, tmp_path, monkeypatch
+    ):
+        mock_registry.return_value = (False, "failed to write Windows User PATH: denied")
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.delenv("BOOTSTRAP_SKIP_REGISTRY", raising=False)
+        monkeypatch.setattr("bootstrap_lib.path_check.sys.platform", "win32")
+
+        ok, msg = add_path_to_shell_config(r"C:\Tools\bin")
+
+        assert ok is True
+        assert "registry" in msg
+        assert 'export PATH="/c/Tools/bin:$PATH"' in (tmp_path / ".bashrc").read_text()
+
+    @patch("bootstrap_lib.path_check._add_path_to_windows_registry")
     def test_skips_registry_on_non_windows(self, mock_registry, tmp_path):
         from bootstrap_lib.path_check import add_path_to_shell_config
         # Ensure MSYSTEM is not set and sys.platform is not win32

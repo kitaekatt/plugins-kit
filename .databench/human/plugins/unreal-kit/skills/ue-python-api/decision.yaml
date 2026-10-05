@@ -1,11 +1,12 @@
 {
   "schema_version": 1,
   "directory": "plugins/unreal-kit/skills/ue-python-api",
-  "decision": "page",
-  "source_sha": "24e90d313c30674622e8ab576591130eb753a473",
-  "generation_spec_sha256": "0805933a1de089dc951a33d702e9d57d569f0584732b017cd3600742a34ba321",
+  "decision": "none",
+  "source_sha": "2b5c8832057b729c47346c2ec2f1bcc9cc6dbf7a",
+  "input_sha256": "e635ec4fceccd0b8ab805b0b036ccce3b186f0369dfecda753d81a7a2deed9ab",
+  "input_shape_sha256": "2d2d81d2ca9d215f1a5860dfb509baf7f792296cb13702e680035bf2a2a50277",
   "dirty": false,
-  "identity": "Unreal Engine Python API skill and host-side runner, launcher, and configuration for script execution.",
+  "identity": "",
   "instructions": "",
   "references": []
 }

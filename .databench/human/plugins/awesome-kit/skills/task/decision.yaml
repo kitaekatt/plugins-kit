@@ -1,13 +1,12 @@
 {
   "schema_version": 1,
   "directory": "plugins/awesome-kit/skills/task",
-  "decision": "page",
-  "source_sha": "024e20a944e6b6838ad1cfb00e12dbaff2164993",
-  "generation_spec_sha256": "fc236b0086521fffedc696039900f19579336e4ef8fb657ad60e3dcdf8747288",
-  "input_sha256": "a0b3e5126e152e65e6e31b374969d48e8c963c0eddfb8020812c3d5a739c18a1",
-  "input_shape_sha256": "2b82287fdf82994d6f3542277b81a0163d08411ea79c9ae7292715969f2840e8",
+  "decision": "none",
+  "source_sha": "bce913a291b2c16dd005e8d32674fbd70027813f",
+  "input_sha256": "c74e7537f8ba378c6dff9b99f7240cefe3877a92a27347b40f8f0d6d7046de61",
+  "input_shape_sha256": "c8ed4e3d5a1a91d958dbcdc5e50fbcd48b2e323cd7186fbb8d4ac89f910484e1",
   "dirty": false,
-  "identity": "The task skill's file-backed task folder system: the 14-verb task.py CLI, the embedded-YAML data model and lifecycle states, and the design specs and diagrams",
+  "identity": "",
   "instructions": "",
   "references": []
 }

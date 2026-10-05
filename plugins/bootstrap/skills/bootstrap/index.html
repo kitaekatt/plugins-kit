@@ -1,183 +1,19 @@
 <!doctype html>
 <html lang="en">
 <head>
-<!-- human-html: {"generated_by":"md-domain","source_sha":"8245f70589c3295ff9931641350d23209fdfbbbc","directory":"plugins/bootstrap/skills/bootstrap","kind":"page"} -->
+<!-- human-html: {"generated_by":"md-domain","source_sha":"395d083282d1ff57ea9466f949a594ca2c66cf2f","directory":"plugins/bootstrap/skills/bootstrap","kind":"page"} -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>Bootstrap skill reference for engine behavior, manifest configuration, CLI commands, and remediation</title>
+<title>Reference for the bootstrap engine&#x27;s behavior, the bootstrap.json manifest, the bootstrap CLI, and the patterns for managing plugin dependencies and their lifecycle</title>
 <link rel="stylesheet" href="../../../../.databench/human-html.css">
 </head>
 <body>
-<nav data-human-html-chrome="nav" aria-label="Orientation pages">
-  <ul>
-    <li><a href="../../index.html"><span class="hh-nav-label">bootstrap</span> <span class="hh-nav-identity">Bootstrap plugin that prepares user machines for marketplace plugins by installing tools, Python environments, and configuration, and exposes its command, hooks, shell resolvers, maintenance scripts, and plugin-development skill.</span></a></li>
-    <li>
-      <a href="SKILL.md">
-        <span class="hh-nav-label">SKILL.md</span>
-        <span class="hh-nav-identity">The skill file: the fact set an agent loads the moment a bootstrap question arrives.</span>
-      </a>
-    </li>
-    <li>
-      <a href="references/manifest-reference.md">
-        <span class="hh-nav-label">manifest-reference.md</span>
-        <span class="hh-nav-identity">The manifest schema and per-field reference; the lookup for any configuration question.</span>
-      </a>
-    </li>
-  </ul>
-</nav>
 <main>
-<h1>Bootstrap skill reference for engine behavior, manifest configuration, CLI commands, and remediation</h1>
-<p>
-This directory is the bootstrap plugin's reference skill: what the engine does on
-session start, how manifests configure it, which terminal commands drive a pass, and how
-remediation is decided. The skill file holds the fact set an agent answers from directly,
-and a companion set of long-form documents holds the mechanics, one document per subject,
-cross-referenced by name. Healthy bootstrap is silent, so most questions here start from a
-log line, a fix-all message, or a state file rather than from output. Pick the document
-that matches what you are debugging and follow its cross-references instead of browsing.
-</p>
-
-<h2>Where to start</h2>
-<p>
-Open <a href="SKILL.md"><code>SKILL.md</code></a> first: its facts are what the agent
-loads on demand, and each one names the long-form document that carries the mechanics. If
-the subject is already clear, go straight to the matching group below.
-</p>
-
-<h2>Routes</h2>
-<ul>
-<li>
-<strong>Converge an update by hand:</strong> which layer a change goes live in, per the
-measured tables in
-<a href="references/plugin-reload-lifecycle.md"><code>references/plugin-reload-lifecycle.md</code></a>;
-then whether the engine version has caught up, per the update-lifecycle fact in
-<a href="SKILL.md"><code>SKILL.md</code></a>; then the force-pass and reset commands,
-<code>bootstrap run</code> and <code>bootstrap reset</code>, in
-<a href="references/bootstrap-cli.md"><code>references/bootstrap-cli.md</code></a>.
-</li>
-<li>
-<strong>Decide escalate versus defer:</strong> the rule and the API in
-<a href="references/deferred-requirements.md"><code>references/deferred-requirements.md</code></a>;
-when the missing precondition is a plugin, the install mechanics continue in
-<a href="references/action-triggered-install.md"><code>references/action-triggered-install.md</code></a>.
-</li>
-<li>
-<strong>Author a plugin's manifest:</strong> the config section for user settings in
-<a href="references/plugin-setup-pattern.md"><code>references/plugin-setup-pattern.md</code></a>;
-the field forms in
-<a href="references/manifest-reference.md"><code>references/manifest-reference.md</code></a>;
-then the download-versus-system rubric in
-<a href="references/dependency-philosophy.md"><code>references/dependency-philosophy.md</code></a>
-for every tool entry.
-</li>
-</ul>
-
-<h2>The skill's fact set</h2>
-<ul>
-<li>
-<a href="SKILL.md"><code>SKILL.md</code></a>: the load-bearing fact set: session-start
-outcomes, single-session update convergence, the force-pass lever, the cooldown-reset
-protocol, and the two remediation phases. Open it first for any bootstrap question; every
-fact names the document that holds its mechanics.
-</li>
-</ul>
-
-<h2>Engine behavior and lifecycle</h2>
-<ul>
-<li>
-<a href="references/engine-internals.md"><code>references/engine-internals.md</code></a>:
-how a pass runs: the detached hook, the engine phases in order, the pending-file display
-relay with its age stamp, registry self-repair, and the single-instance lock. Open it when
-the question is what the engine did.
-</li>
-<li>
-<a href="references/plugin-reload-lifecycle.md"><code>references/plugin-reload-lifecycle.md</code></a>:
-which change went live after an edit or an update: code content, registration, and
-re-firing each go live differently, with the measured tables that settle the folklore.
-Open it before advising a restart or a plugin reload.
-</li>
-</ul>
-
-<h2>Manifest and configuration</h2>
-<ul>
-<li>
-<a href="references/manifest-reference.md"><code>references/manifest-reference.md</code></a>:
-the manifest schema and per-field reference: every phase key, merge and layering rules,
-environment exports, and the config section. Open it when writing or debugging a manifest
-entry.
-</li>
-<li>
-<a href="references/dependency-philosophy.md"><code>references/dependency-philosophy.md</code></a>:
-why the engine downloads some tools and defers to system installs for others, with the
-rubric applied to the common tools. Open it before choosing a download block over an
-install command.
-</li>
-<li>
-<a href="references/plugin-setup-pattern.md"><code>references/plugin-setup-pattern.md</code></a>:
-how a plugin declares user-specific settings through the manifest config section, plus the
-legacy setup CLI it replaces. Open it when a plugin needs API keys, preferences, or paths.
-</li>
-</ul>
-
-<h2>Terminal commands and interpreters</h2>
-<ul>
-<li>
-<a href="references/bootstrap-cli.md"><code>references/bootstrap-cli.md</code></a>: every
-verb of the terminal command: status and follow, forced run, reset, profile selection and
-state, and the interpreter resolvers, with exit codes. Open it for anything run from a
-terminal.
-</li>
-<li>
-<a href="references/python-interpreter.md"><code>references/python-interpreter.md</code></a>:
-the interpreter contract: which surfaces get <code>BOOTSTRAP_PYTHON</code> versus
-<code>BOOTSTRAP_PROJECT_PYTHON</code>, the copy-ready call-site expressions, and the
-opt-outs. Open it when a script or terminal cannot find the right interpreter.
-</li>
-</ul>
-
-<h2>Remediation</h2>
-<ul>
-<li>
-<a href="references/remediation-reference.md"><code>references/remediation-reference.md</code></a>:
-check method and remediation for every condition category, the UX ladder that ranks every
-surfacing, and the AUTO versus ASK decision with its structural exceptions. Open it when a
-fix-all message needs explaining.
-</li>
-</ul>
-
-<h2>Patterns for plugin authors</h2>
-<ul>
-<li>
-<a href="references/deferred-requirements.md"><code>references/deferred-requirements.md</code></a>:
-the escalate-versus-defer rule for preconditions only some capability needs: the API, the
-handoff file the point of need reads, and the consumption protocol. Open it when writing a
-custom check.
-</li>
-<li>
-<a href="references/action-triggered-install.md"><code>references/action-triggered-install.md</code></a>:
-the plugin-install instance of deferral: declare the plugin manual, preflight at the
-moment of need, install on consent, and retry without a restart. Open it when wiring an
-optional plugin dependency.
-</li>
-<li>
-<a href="references/library-consumption.md"><code>references/library-consumption.md</code></a>:
-every way a Python process reaches a shared library, which modes are supported, and why
-the pip route is not. Open it when a consumer outside the plugin world needs one.
-</li>
-<li>
-<a href="references/durable-project-data.md"><code>references/durable-project-data.md</code></a>:
-where a plugin writes its own data: the durable and ephemeral project locations,
-user-scoped data, and the rule that keeps writes out of source checkouts. Open it when
-choosing a path for generated artifacts.
-</li>
-<li>
-<a href="references/fleet-management.md"><code>references/fleet-management.md</code></a>:
-how an administrator lands bootstrap on every machine through the <code>ensure-bootstrap</code>
-hook, with the opt-out and the re-run contract. Open it when a fresh clone lacks bootstrap.
-</li>
-</ul>
+<h1>Reference for the bootstrap engine&#x27;s behavior, the bootstrap.json manifest, the bootstrap CLI, and the patterns for managing plugin dependencies and their lifecycle</h1>
+<p class="hh-orientation">This skill sits beside the bootstrap plugin code and is a reference manual for how the bootstrap engine provisions a user machine: what a session-start bootstrap does, how a machine converges after an update, and how to declare the dependencies it installs. It is one entry file plus a references directory of 13 deeper documents. The entry file carries the load-bearing facts, each with a keyword list and a one-line pointer to the document that holds the full mechanics, and each reference states its audience and the failure modes it rules out. You read it when a SessionStart bootstrap message arrives, when a bootstrap.json needs configuring, or when a machine is mid-convergence and someone asks what to do.</p><section><h2>Where to start</h2><p>Open <a href="SKILL.md">plugins/bootstrap/skills/bootstrap/SKILL.md</a>: its contract facts carry keywords and one-line pointers to each of the 13 deeper documents, so it answers most interpretation questions on the spot. For manifest authoring go straight to <a href="references/manifest-reference.md">plugins/bootstrap/skills/bootstrap/references/manifest-reference.md</a>; for a live machine&#x27;s state, the operational references carry it.</p></section><section><h2>Routes</h2><ul><li><strong>Interpret a bootstrap message</strong><ol><li><a href="SKILL.md">plugins/bootstrap/skills/bootstrap/SKILL.md</a> -- the four session-start outcomes: silent pass, silent install, silent skip, fix-all prompt; no output means healthy, not broken.</li><li><a href="references/remediation-reference.md">plugins/bootstrap/skills/bootstrap/references/remediation-reference.md</a> -- the UX ladder, the two outcomes, and the per-condition tables when a fix-all arrived.</li></ol></li><li><strong>A published update lands mid-session</strong><ol><li><a href="SKILL.md">plugins/bootstrap/skills/bootstrap/SKILL.md</a> -- the single-session convergence fact: provisioning is done once <code>engine_ran_version</code> equals the installed version; a restart loads new plugin code only.</li><li><a href="references/plugin-reload-lifecycle.md">plugins/bootstrap/skills/bootstrap/references/plugin-reload-lifecycle.md</a> -- the measured reload versus restart layers, the harvest, and the fresh-machine rescue.</li></ol></li><li><strong>Force a pass from the terminal</strong><ol><li><a href="SKILL.md">plugins/bootstrap/skills/bootstrap/SKILL.md</a> -- the <code>bootstrap run</code> force path and its difference from a hook pass.</li><li><a href="references/bootstrap-cli.md">plugins/bootstrap/skills/bootstrap/references/bootstrap-cli.md</a> -- every verb, exit code, lock refusal, and the profile and python subcommands.</li></ol></li><li><strong>Declare an optional precondition</strong><ol><li><a href="references/deferred-requirements.md">plugins/bootstrap/skills/bootstrap/references/deferred-requirements.md</a> -- the principle: detect early, ask at the point of need, and the <code>add_deferred_requirement</code> handoff.</li><li><a href="references/action-triggered-install.md">plugins/bootstrap/skills/bootstrap/references/action-triggered-install.md</a> -- the plugin-specific instance: <code>install: &quot;manual&quot;</code>, preflight, install on consent, no restart.</li></ol></li></ul></section><section><h2>The entry file</h2><p><a href="SKILL.md">plugins/bootstrap/skills/bootstrap/SKILL.md</a> -- the contract surface: message outcomes, update and convergence lifecycle, the bootstrap CLI lever, cooldown-reset protocol, and remediation phases, each with a keyword list and a pointer to its reference document.</p></section><section><h2>Manifest and command reference</h2><p><a href="references/manifest-reference.md">plugins/bootstrap/skills/bootstrap/references/manifest-reference.md</a> -- the bootstrap.json schema, field semantics, layering and merge rules, profiles, and what bootstrap writes to the session environment; the first stop for authoring or reading a manifest.</p><p><a href="references/bootstrap-cli.md">plugins/bootstrap/skills/bootstrap/references/bootstrap-cli.md</a> -- the terminal <code>bootstrap</code> command: run, reset, profile, python, install-hook, codex-hook, with exit codes, lock behavior, and engine and data discovery.</p></section><section><h2>Operational references</h2><p><a href="references/engine-internals.md">plugins/bootstrap/skills/bootstrap/references/engine-internals.md</a> -- the two-phase session-start model, skip gates, the detached provision subshell, the display relay, registry self-repair, and the marketplace barrier; read it when a machine looks healthy yet nothing bootstrapped.</p><p><a href="references/plugin-reload-lifecycle.md">plugins/bootstrap/skills/bootstrap/references/plugin-reload-lifecycle.md</a> -- when a plugin change goes live: script content versus registration versus firing, the mid-session harvest, the fresh-machine rescue, and the mid-session install relaunch.</p><p><a href="references/remediation-reference.md">plugins/bootstrap/skills/bootstrap/references/remediation-reference.md</a> -- check methods and remediation actions for every condition category, plus the UX ladder that ranks every message bootstrap shows.</p></section><section><h2>Dependency and storage model</h2><p><a href="references/dependency-philosophy.md">plugins/bootstrap/skills/bootstrap/references/dependency-philosophy.md</a> -- why bootstrap downloads some tools and respects system installs for others, the full-execution-chain rule, and the user-override patterns.</p><p><a href="references/deferred-requirements.md">plugins/bootstrap/skills/bootstrap/references/deferred-requirements.md</a> -- the deferred-requirement pattern: the escalate-versus-defer rule, the <code>add_deferred_requirement</code> API, and consuming the record at the point of need.</p><p><a href="references/action-triggered-install.md">plugins/bootstrap/skills/bootstrap/references/action-triggered-install.md</a> -- the plugin-install instance of that pattern: <code>install: &quot;manual&quot;</code>, the preflight check, consent, and the no-restart retry.</p><p><a href="references/library-consumption.md">plugins/bootstrap/skills/bootstrap/references/library-consumption.md</a> -- every way a Python process reaches a published shared library, mode by mode, with version and update behavior.</p><p><a href="references/durable-project-data.md">plugins/bootstrap/skills/bootstrap/references/durable-project-data.md</a> -- where a plugin writes its own data, the durable versus ephemeral discriminator, the three homes, and the write-path rule.</p></section><section><h2>Interpreter and fleet</h2><p><a href="references/python-interpreter.md">plugins/bootstrap/skills/bootstrap/references/python-interpreter.md</a> -- <code>BOOTSTRAP_PYTHON</code> and <code>BOOTSTRAP_PROJECT_PYTHON</code>, the default versus forced call-site forms, every surface each value reaches, and the opt-outs.</p><p><a href="references/fleet-management.md">plugins/bootstrap/skills/bootstrap/references/fleet-management.md</a> -- getting bootstrap onto every machine through the ensure-bootstrap hook, its opt-out, and re-running it to raise the minimum version.</p></section>
 </main>
+<nav data-human-html-chrome="nav"><ul><li><a href="../../index.html"><span class="hh-nav-label">bootstrap</span> <span class="hh-nav-identity">The bootstrap plugin&#x27;s session hooks, bootstrap CLI, and shell Python resolvers that provision user machines, alongside the cross-plugin contracts for dependencies, execution events, interrupts, and model declarations.</span></a></li></ul></nav>
 <script>
 if (window.parent !== window) {
   window.parent.postMessage({
@@ -186,7 +22,7 @@ if (window.parent !== window) {
     directory: "plugins/bootstrap/skills/bootstrap",
     file: "index.html",
     kind: "page",
-    source_sha: "8245f70589c3295ff9931641350d23209fdfbbbc"
+    source_sha: "395d083282d1ff57ea9466f949a594ca2c66cf2f"
   }, "*");
   document.addEventListener("click", function (event) {
     if (event.defaultPrevented || event.button !== 0) return;

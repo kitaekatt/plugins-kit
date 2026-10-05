@@ -1,11 +1,12 @@
 {
   "schema_version": 1,
   "directory": "plugins/skills-kit/skills_kit_lib",
-  "decision": "page",
-  "source_sha": "2892d3d89b9559d5313cbb6bae86d7cf24404084",
-  "generation_spec_sha256": "0805933a1de089dc951a33d702e9d57d569f0584732b017cd3600742a34ba321",
+  "decision": "none",
+  "source_sha": "1a8f73cb6d1e15c846dd9a49f9e3df920965b82c",
+  "input_sha256": "c9c9883800c27f5b2f374013e9113c592c1c81b96fb35d0f27323903df30ce97",
+  "input_shape_sha256": "2baf7521437558ccce4304a4063659b7ee723a59d008dfa53bddce924890fdb0",
   "dirty": false,
-  "identity": "skills_kit_lib validates skill and document YAML contracts and provides audit, classification, tagging, SKILL.md discovery, and standards-resolution tools for skills-kit.",
+  "identity": "",
   "instructions": "",
   "references": []
 }

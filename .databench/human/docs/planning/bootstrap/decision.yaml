@@ -1,11 +1,12 @@
 {
   "schema_version": 1,
   "directory": "docs/planning/bootstrap",
-  "decision": "page",
-  "source_sha": "001afdc4c53ead30409a4b8670713e0adbb04180",
-  "generation_spec_sha256": "0805933a1de089dc951a33d702e9d57d569f0584732b017cd3600742a34ba321",
+  "decision": "none",
+  "source_sha": "b8b01c94c703665f48a72cc384d46d5d4740f85a",
+  "input_sha256": "c71a7a4e3813eff51b696af692db4b583cd3cd384e4b29fa727f6c9305415f98",
+  "input_shape_sha256": "08401f35b7682158fe4f340ca8081df368251e6157339549cb9db9a8da0711a0",
   "dirty": false,
-  "identity": "Bootstrap plugin planning documents for milestones, tool resolution, and stable-channel design.",
+  "identity": "",
   "instructions": "",
   "references": []
 }

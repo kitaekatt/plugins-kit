@@ -1,111 +1,19 @@
 <!doctype html>
 <html lang="en">
 <head>
-<!-- human-html: {"generated_by":"md-domain","source_sha":"99622e15be60cc79d3103b087a1bfcc01ec2166f","directory":"plugins/bootstrap","kind":"page"} -->
+<!-- human-html: {"generated_by":"md-domain","source_sha":"bce913a291b2c16dd005e8d32674fbd70027813f","directory":"plugins/bootstrap","kind":"page"} -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>Bootstrap plugin that prepares user machines for marketplace plugins by installing tools, Python environments, and configuration, and exposes its command, hooks, shell resolvers, maintenance scripts, and plugin-development skill.</title>
+<title>The bootstrap plugin&#x27;s session hooks, bootstrap CLI, and shell Python resolvers that provision user machines, alongside the cross-plugin contracts for dependencies, execution events, interrupts, and model declarations.</title>
 <link rel="stylesheet" href="../../.databench/human-html.css">
 </head>
 <body>
-<nav data-human-html-chrome="nav" aria-label="Orientation pages">
-<ul>
-<li><a href="../index.html"><span class="hh-nav-label">plugins</span> <span class="hh-nav-identity">The Claude Code plugin collection: installable plugins including git and Perforce review, secrets provisioning, statusline display, cache reporting, markdown auditing, stuck-bootstrap remediation, and prototype skills.</span></a></li>
-<li><a href="bootstrap_lib/index.html"><span class="hh-nav-label">bootstrap_lib</span> <span class="hh-nav-identity">Bootstrap plugin shared library that processes manifests, runs tool and environment checks, and defers fixes that need user attention.</span></a></li>
-<li><a href="hooks/sessionstart/index.html"><span class="hh-nav-label">sessionstart</span> <span class="hh-nav-identity">SessionStart hook that starts the bootstrap engine and prepares Windows command shims for extensionless bash levers</span></a></li>
-<li><a href="skills/bootstrap/index.html"><span class="hh-nav-label">bootstrap</span> <span class="hh-nav-identity">Bootstrap skill reference for engine behavior, manifest configuration, CLI commands, and remediation</span></a></li>
-<li>
-<a href="README.md">
-<span class="hh-nav-label">README.md</span>
-<span class="hh-nav-identity">The human account: what a pass does, the bootstrap command, and where the plugin writes on the machine.</span>
-</a>
-</li>
-<li>
-<a href="AGENTS.md">
-<span class="hh-nav-label">AGENTS.md</span>
-<span class="hh-nav-identity">Agent-facing rules for the harness-neutral core and the harness layers; open before changing the split between them.</span>
-</a>
-</li>
-</ul>
-</nav>
 <main>
-<h1>Bootstrap plugin that prepares user machines for marketplace plugins by installing tools, Python environments, and configuration, and exposes its command, hooks, shell resolvers, maintenance scripts, and plugin-development skill.</h1>
-<p>Every plugin in this marketplace can ship scripts, but the machines they land on have no guarantee of the tools, the Python, or the configuration those scripts need; this plugin is the layer that closes the gap. At session start it reads each installed plugin's manifest and brings the machine into the state the plugin declared: tools installed, a virtual environment built, shared libraries linked, configuration seeded. The engine, the SessionStart launcher, and the skill reference sit behind pages of their own; everything here is the face around that work. A healthy machine is silent: no output at session start means every check passed, and what genuinely needs the user is held in one fix-all message.</p>
-
-<section>
-<h2>Where to start</h2>
-<p>Open <a href="README.md"><code>README.md</code></a> first: it is the account of what a pass does, the <code>bootstrap</code> command, and where the plugin writes outside its own directory. For behavior rather than story, <a href="scripts/bootstrap_cli.py"><code>scripts/bootstrap_cli.py</code></a> is where every terminal verb resolves to.</p>
-</section>
-
-<section>
-<h2>Routes</h2>
-<ul>
-<li>Terminal pass: <a href="scripts/bootstrap.sh"><code>scripts/bootstrap.sh</code></a> -&gt; <a href="scripts/bootstrap_cli.py"><code>scripts/bootstrap_cli.py</code></a>. The shim locates the plugin tree and an interpreter, then hands the arguments to the CLI, which runs the same engine pass as the session hook.</li>
-<li>Reset a stuck project: <a href="scripts/bootstrap.sh"><code>scripts/bootstrap.sh</code></a> (reset) -&gt; <a href="scripts/bootstrap-reset-cooldown.sh"><code>scripts/bootstrap-reset-cooldown.sh</code></a>. The shim delegates reset to the bash lever, which clears the cooldown stamp so the next session start is a real pass.</li>
-<li>Force the environment phase: <a href="scripts/env-reset-cooldown.sh"><code>scripts/env-reset-cooldown.sh</code></a> -&gt; <a href="scripts/bootstrap-reset-cooldown.sh"><code>scripts/bootstrap-reset-cooldown.sh</code></a>. It deletes the phase stamp, then calls the sibling lever so the cooldown does not gate the next pass.</li>
-<li>Put a project fleet on a version floor: <a href="scripts/install_bootstrap_hook.py"><code>scripts/install_bootstrap_hook.py</code></a> -&gt; <a href="templates/ensure-bootstrap.sh"><code>templates/ensure-bootstrap.sh</code></a>. The lever renders the template with the current version into the project's hook settings; the written hook installs or updates the plugin via the <code>claude</code> CLI.</li>
-</ul>
-</section>
-
-<section>
-<h2>What the plugin declares about itself</h2>
-<ul>
-<li><a href="bootstrap.json"><code>bootstrap.json</code></a> - its own manifest: a checksummed jq download, the hard dependency on the <code>claude</code> CLI, and the marketplace the pass keeps refreshed.</li>
-<li><a href="pyproject.toml"><code>pyproject.toml</code></a> - the Python project: version, three dependencies, and the entry point that points into the shared library.</li>
-<li><a href=".claude-plugin/plugin.json"><code>.claude-plugin/plugin.json</code></a> - the name, version, and description Claude Code shows for the plugin.</li>
-<li><a href="defaults/config.json"><code>defaults/config.json</code></a> - the default configuration: self-setup tools, PATH entries, and the Windows stub-Python check.</li>
-</ul>
-</section>
-
-<section>
-<h2>Session hooks</h2>
-<ul>
-<li><a href="hooks/hooks.json"><code>hooks/hooks.json</code></a> - declares both hooks: the SessionStart launcher, which has its own page, and the UserPromptSubmit relay below.</li>
-<li><a href="hooks/userpromptsubmit/bootstrap-display.sh"><code>hooks/userpromptsubmit/bootstrap-display.sh</code></a> - the UserPromptSubmit hook: surfaces the pass's one-time verdict on the first prompt, rescues a session whose SessionStart never fired, and picks up mid-session updates.</li>
-</ul>
-</section>
-
-<section>
-<h2>The terminal levers</h2>
-<ul>
-<li><a href="scripts/bootstrap.sh"><code>scripts/bootstrap.sh</code></a> - the thin shim for the <code>bootstrap</code> command: locates the installed plugin tree and an interpreter, then execs the CLI.</li>
-<li><a href="scripts/bootstrap_cli.py"><code>scripts/bootstrap_cli.py</code></a> - the CLI face: status, run, codex-hook, reset, python, install-hook; holds the single-instance discipline and the tail loop.</li>
-<li><a href="scripts/bootstrap-reset-cooldown.sh"><code>scripts/bootstrap-reset-cooldown.sh</code></a> - clears the per-project cooldown stamp and session guard so the next session start is a real pass; the target of the reset verb.</li>
-<li><a href="scripts/env-reset-cooldown.sh"><code>scripts/env-reset-cooldown.sh</code></a> - deletes the environment phase stamp to force that phase next session, then invokes the sibling lever to clear the cooldown.</li>
-<li><a href="scripts/diagnose-python-venv.sh"><code>scripts/diagnose-python-venv.sh</code></a> - read-only diagnostics for uv, the Windows junction problem, and the bootstrap and unreal-kit venvs; the first stop when a venv looks wrong.</li>
-<li><a href="scripts/install_bootstrap_hook.py"><code>scripts/install_bootstrap_hook.py</code></a> - writes the fleet hook into a project: renders the template, adds the hook entry, refuses a read-only target before writing.</li>
-<li><a href="templates/ensure-bootstrap.sh"><code>templates/ensure-bootstrap.sh</code></a> - the hook the lever renders into a project: installs or updates the plugin when missing or below the version floor, and never blocks a session.</li>
-</ul>
-</section>
-
-<section>
-<h2>Shell interpreter resolution</h2>
-<ul>
-<li><a href="shell/project-python.sh"><code>shell/project-python.sh</code></a> - the bash and zsh resolver that keeps <code>BOOTSTRAP_PROJECT_PYTHON</code> in step with the current directory; sourced by the hook preamble and interactive terminals.</li>
-<li><a href="shell/project-python.ps1"><code>shell/project-python.ps1</code></a> - the PowerShell twin, dot-sourced from the profile line the engine appends.</li>
-</ul>
-</section>
-
-<section>
-<h2>Back-compat engine wrappers</h2>
-<ul>
-<li><a href="engine/bootstrap_engine.py"><code>engine/bootstrap_engine.py</code></a> - a backward-compat wrapper: forwards direct callers to the engine in the shared library; on import failure it records a display message so the error still reaches the user.</li>
-<li><a href="engine/config.py"><code>engine/config.py</code></a> - a thin re-export for callers that import the config module by its old path.</li>
-</ul>
-</section>
-
-<section>
-<h2>Plugin-authoring guidance</h2>
-<ul>
-<li><a href="skills/plugin-dev/SKILL.md"><code>skills/plugin-dev/SKILL.md</code></a> - the entry point: when to choose REQUIRED, REFUSE, or DEGRADE for a cross-plugin edge, and where the model-declaration format lives.</li>
-<li><a href="skills/plugin-dev/references/optional-plugin-dependencies.md"><code>skills/plugin-dev/references/optional-plugin-dependencies.md</code></a> - the full contract: the two questions, the three runtime states, each branch's mechanics, and the reviewer checklist.</li>
-<li><a href="skills/plugin-dev/references/enabling.md"><code>skills/plugin-dev/references/enabling.md</code></a> - the enabling contract: a consented probe that discloses a live capability in at most three lines, silent when it is absent or too old.</li>
-<li><a href="skills/plugin-dev/references/model-declaration.md"><code>skills/plugin-dev/references/model-declaration.md</code></a> - the one format every plugin uses to declare which models may do a unit of work, and the shape-only validator it specifies.</li>
-<li><a href="AGENTS.md"><code>AGENTS.md</code></a> - agent-facing standing rules: the harness-neutral core, harness layers that may adapt but never fork it, and thin project-level bootstrap files.</li>
-</ul>
-</section>
+<h1>The bootstrap plugin&#x27;s session hooks, bootstrap CLI, and shell Python resolvers that provision user machines, alongside the cross-plugin contracts for dependencies, execution events, interrupts, and model declarations.</h1>
+<p class="hh-orientation">This is the bootstrap plugin: it provisions plugin tools, Python venvs, git dependencies, and per-user config at session start. This directory holds wiring around the pass, not the pass: the pass runs in the shared library below. Session hooks launch it in the background; terminal levers inspect or force it; shell resolvers keep project Python visible. It also ships cross-plugin contracts: dependency branches, model declarations, execution events, and interrupts. Healthy bootstrap is silent: quiet session start means checks passed.</p><section><h2>Where to start</h2><p>Start with <a href="README.md">plugins/bootstrap/README.md</a>: it states pass scope, command surface, and writes. Hooks are thin launchers.</p></section><section><h2>Routes</h2><ul><li><strong>Session start</strong><ol><li><a href="hooks/hooks.json">plugins/bootstrap/hooks/hooks.json</a> wires SessionStart and UserPromptSubmit to hook scripts.</li><li><a href="hooks/sessionstart/session-bootstrap.sh">plugins/bootstrap/hooks/sessionstart/session-bootstrap.sh</a> resolves interpreter, applies cooldown, delegates to engine.</li></ol></li><li><strong>Terminal levers</strong><ol><li><a href="scripts/bootstrap.sh">plugins/bootstrap/scripts/bootstrap.sh</a> locates plugin tree and interpreter.</li><li><a href="scripts/bootstrap_cli.py">plugins/bootstrap/scripts/bootstrap_cli.py</a> holds status, run, codex-hook, install-hook.</li><li><a href="scripts/bootstrap-reset-cooldown.sh">plugins/bootstrap/scripts/bootstrap-reset-cooldown.sh</a> clears cooldown.</li></ol></li><li><strong>Onboard</strong><ol><li><a href="scripts/install_bootstrap_hook.py">plugins/bootstrap/scripts/install_bootstrap_hook.py</a> renders <a href="templates/ensure-bootstrap.sh">plugins/bootstrap/templates/ensure-bootstrap.sh</a> into project hooks and merges settings.</li><li>After that, project SessionStart installs or updates bootstrap first.</li></ol></li></ul></section><section><h2>Core files</h2><ul><li><a href="hooks/hooks.json">plugins/bootstrap/hooks/hooks.json</a> hook wiring.</li><li><a href="hooks/sessionstart/session-bootstrap.sh">plugins/bootstrap/hooks/sessionstart/session-bootstrap.sh</a> session launcher.</li><li><a href="scripts/bootstrap.sh">plugins/bootstrap/scripts/bootstrap.sh</a> PATH shim.</li><li><a href="scripts/bootstrap_cli.py">plugins/bootstrap/scripts/bootstrap_cli.py</a> command behavior.</li><li><a href="scripts/bootstrap-reset-cooldown.sh">plugins/bootstrap/scripts/bootstrap-reset-cooldown.sh</a> cooldown reset.</li><li><a href="shell/project-python.sh">plugins/bootstrap/shell/project-python.sh</a> shell resolver.</li><li><a href="shell/project-python.ps1">plugins/bootstrap/shell/project-python.ps1</a> PowerShell resolver.</li><li><a href="bootstrap.json">plugins/bootstrap/bootstrap.json</a> plugin manifest.</li><li><a href=".claude-plugin/plugin.json">plugins/bootstrap/.claude-plugin/plugin.json</a> marketplace entry.</li><li><a href="defaults/config.json">plugins/bootstrap/defaults/config.json</a> default config.</li></ul></section><section><h2>Contracts</h2><ul><li><a href="skills/plugin-dev/SKILL.md">plugins/bootstrap/skills/plugin-dev/SKILL.md</a> edge entry.</li><li><a href="skills/plugin-dev/references/optional-plugin-dependencies.md">plugins/bootstrap/skills/plugin-dev/references/optional-plugin-dependencies.md</a> dependency probe states.</li><li><a href="skills/plugin-dev/references/enabling.md">plugins/bootstrap/skills/plugin-dev/references/enabling.md</a> consented probe.</li><li><a href="skills/plugin-dev/references/model-declaration.md">plugins/bootstrap/skills/plugin-dev/references/model-declaration.md</a> model list format.</li><li><a href="skills/plugin-dev/references/execution-events.md">plugins/bootstrap/skills/plugin-dev/references/execution-events.md</a> event envelope.</li><li><a href="skills/plugin-dev/references/interrupt-contract.md">plugins/bootstrap/skills/plugin-dev/references/interrupt-contract.md</a> interrupt contract.</li><li><a href="skills/plugin-dev/references/skill-material.md">plugins/bootstrap/skills/plugin-dev/references/skill-material.md</a> skill material.</li></ul></section><section><h2>More files</h2><ul><li><a href="engine/bootstrap_engine.py">plugins/bootstrap/engine/bootstrap_engine.py</a> engine compat shim.</li><li><a href="engine/config.py">plugins/bootstrap/engine/config.py</a> config re-export.</li><li><a href=".claude-plugin/poster.yaml">plugins/bootstrap/.claude-plugin/poster.yaml</a> poster display.</li><li><a href="pyproject.toml">plugins/bootstrap/pyproject.toml</a> package entry.</li><li><a href="scripts/env-reset-cooldown.sh">plugins/bootstrap/scripts/env-reset-cooldown.sh</a> env phase reset.</li><li><a href="scripts/diagnose-python-venv.sh">plugins/bootstrap/scripts/diagnose-python-venv.sh</a> venv check.</li><li><a href="AGENTS.md">plugins/bootstrap/AGENTS.md</a> dev policy.</li><li><a href="templates/ensure-bootstrap.sh">plugins/bootstrap/templates/ensure-bootstrap.sh</a> fleet hook template.</li></ul></section>
 </main>
+<nav data-human-html-chrome="nav"><ul><li><a href="../index.html"><span class="hh-nav-label">plugins</span> <span class="hh-nav-identity">The Claude Code plugin marketplace: independently installable plugins sharing the bootstrap provisioning engine and llm-scripting-kit access layer, covering code review, durable job execution, LLM endpoint dispatch, Hue scene synchronization, PDF rendering, fleet secrets provisioning, prompt statusline, cache forensics, markdown auditing, and Unreal Engine automation.</span></a></li><li><a href="bootstrap_lib/index.html"><span class="hh-nav-label">bootstrap_lib</span> <span class="hh-nav-identity">Bootstrap plugin shared library: the engine pass, platform tool installers, Codex CLI integration, environment and config management, code review pipeline, and remediation queue.</span></a></li><li><a href="skills/bootstrap/index.html"><span class="hh-nav-label">bootstrap</span> <span class="hh-nav-identity">Reference for the bootstrap engine&#x27;s behavior, the bootstrap.json manifest, the bootstrap CLI, and the patterns for managing plugin dependencies and their lifecycle</span></a></li><li><a href="README.md"><span class="hh-nav-label">README.md</span> <span class="hh-nav-identity">Human overview: pass scope, command surface, and what bootstrap writes.</span></a></li><li><a href="skills/plugin-dev/SKILL.md"><span class="hh-nav-label">plugin-dev</span> <span class="hh-nav-identity">Authoring contracts for cross-plugin edges.</span></a></li></ul></nav>
 <script>
 if (window.parent !== window) {
   window.parent.postMessage({
@@ -114,7 +22,7 @@ if (window.parent !== window) {
     directory: "plugins/bootstrap",
     file: "index.html",
     kind: "page",
-    source_sha: "99622e15be60cc79d3103b087a1bfcc01ec2166f"
+    source_sha: "bce913a291b2c16dd005e8d32674fbd70027813f"
   }, "*");
   document.addEventListener("click", function (event) {
     if (event.defaultPrevented || event.button !== 0) return;

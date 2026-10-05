@@ -3,7 +3,7 @@
   "directory": "plugins/bootstrap/bootstrap_lib/managed_state",
   "decision": "page",
   "source_sha": "446de4db4bb09b296abee38e0d36ae28a0a3b8c7",
-  "generation_spec_sha256": "fc236b0086521fffedc696039900f19579336e4ef8fb657ad60e3dcdf8747288",
+  "generation_spec_sha256": "9ff6d95c6dfa06e27a9196a26596c8b98ddf698bf2a82b9885b93c69cfaaa1e2",
   "dirty": false,
   "identity": "Harness-independent declarative state management and safe symlink convergence for bootstrap projects.",
   "instructions": "",

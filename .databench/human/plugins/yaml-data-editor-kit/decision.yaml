@@ -3,7 +3,7 @@
   "directory": "plugins/yaml-data-editor-kit",
   "decision": "page",
   "source_sha": "4ad89c1c0cc5eddc26b1f5334302f4e7e379544b",
-  "generation_spec_sha256": "0805933a1de089dc951a33d702e9d57d569f0584732b017cd3600742a34ba321",
+  "generation_spec_sha256": "9ff6d95c6dfa06e27a9196a26596c8b98ddf698bf2a82b9885b93c69cfaaa1e2",
   "dirty": false,
   "identity": "The plugin-level documentation and packaging for the YAML data editor kit, covering the dialect spec, architecture notes, dispatch binding, and editor research.",
   "instructions": "",

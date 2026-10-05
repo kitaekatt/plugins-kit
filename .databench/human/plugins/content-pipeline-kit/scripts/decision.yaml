@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/content-pipeline-kit/scripts",
+  "decision": "none",
+  "source_sha": "5c96fcb83a1088cec97699317b2c546104566edf",
+  "input_sha256": "1653817d9f2d9dd52e1f7aa3c0210a2f0387dce0304c3441b6b1851e89b39703",
+  "input_shape_sha256": "3aeee55092f5bb98508fe1c3d1b495661ea2f59353d628cd88e691b25059e893",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

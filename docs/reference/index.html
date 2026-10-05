@@ -1,76 +1,19 @@
 <!doctype html>
 <html lang="en">
 <head>
-<!-- human-html: {"generated_by":"md-domain","source_sha":"e634345b81bd87b36a71df1ad07bcfd5ec3822c7","directory":"docs/reference","kind":"page"} -->
+<!-- human-html: {"generated_by":"md-domain","source_sha":"bce913a291b2c16dd005e8d32674fbd70027813f","directory":"docs/reference","kind":"page"} -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>plugins-kit maintainer reference for design rationale, standards, publish procedure, test guidance, and terminology records.</title>
+<title>plugins-kit maintainer reference: standards, design records, procedures, platform facts, and dated measurements</title>
 <link rel="stylesheet" href="../../.databench/human-html.css">
 </head>
 <body>
-<nav data-human-html-chrome="nav">
-  <ul>
-    <li><a href="../index.html"><span class="hh-nav-label">docs</span> <span class="hh-nav-identity">Documents plugins-kit bootstrap operations, historical architecture, CLI gotchas, and plugin proposals</span></a></li>
-  </ul>
-</nav>
 <main>
-<h1>plugins-kit maintainer reference for design rationale, standards, publish procedure, test guidance, and terminology records.</h1>
-<p>This directory holds the maintainer-facing reference documents for the plugins marketplace: the working behind the one-line rules, standards, and procedures the repo root points at instead of carrying inline. Each document exists because its rule needed room for the rationale, the verdicts, and the evidence that survive outside a session transcript. They are grouped by the job they do - standards shipped text must meet, rationale that re-derives a decision before you re-propose it, publish and test procedure, dated measurement records, and lookup tables. One habit separates the useful reads: the dated records and incident logs are frozen against the tree they measured, so open them as evidence, never as live guidance.</p>
-<h2>Where to start</h2>
-<p>Open <a href="plugin-opinion-razor.md"><code>plugin-opinion-razor.md</code></a> first. Most of the questions this directory answers - will this opinion earn a seam, will this shipped text stand - resolve through its scenario test, and it sets the evidentiary posture the rest of the reference assumes.</p>
-<h2>Routes</h2>
-<ul>
-<li>Screen a new model-task adapter: <a href="adapters.md"><code>adapters.md</code></a> for the ground rule and admission bar, then <a href="adapters-negative-results.md"><code>adapters-negative-results.md</code></a> to check the candidate against everything that already did not pay.</li>
-<li>Trace how a term was settled: <a href="terminology/terminology-audit.md"><code>terminology/terminology-audit.md</code></a> for the divergence table, then <a href="terminology/rename-spec.md"><code>terminology/rename-spec.md</code></a> for the packets that convert the decisions into edits.</li>
-</ul>
-<h2>Standards shipped text must meet</h2>
-<ul>
-<li><a href="plugin-opinion-razor.md"><code>plugin-opinion-razor.md</code></a> - the scenario test that decides whether a workflow opinion earns a config seam, with detection greps and worked examples in both directions. Open before shipping an opinion, or when asked why one is hardcoded.</li>
-<li><a href="agent-directive-standards.md"><code>agent-directive-standards.md</code></a> - the true, checkable, non-suppressive test for instructions plugins ship into a consumer's session, plus the sweep verdicts. Open when authoring hook output, skill instructions, or subagent prompts.</li>
-</ul>
-<h2>Design rationale and boundaries</h2>
-<ul>
-<li><a href="first-run-experience.md"><code>first-run-experience.md</code></a> - the preset-plus-interview pattern for capturing first-run settings, and why the count settles at two presets. Open when adding a first-run question or a new preset.</li>
-<li><a href="orchestrate-codex-boundaries.md"><code>orchestrate-codex-boundaries.md</code></a> - the standing rationale behind the two root one-line rules on orchestrate's capabilities record and silent codex dispatch failures. Read before re-proposing either design.</li>
-<li><a href="shared-lib-architecture.md"><code>shared-lib-architecture.md</code></a> - six review findings on the bootstrap shared-library mechanism, each with a status line that outlives this summary. Open when touching that code.</li>
-<li><a href="task-folders.md"><code>task-folders.md</code></a> - why the tasks root is a link into the private task repository, the guard that keeps git from staging private content, and the CLI misreporting bug. Open for missing task folders or odd task CLI results.</li>
-<li><a href="code-review-mechanical-surface.md"><code>code-review-mechanical-surface.md</code></a> - which reviewer-lane criteria a script can answer at full recall and which genuinely need a model. Open when deciding how far the deterministic code-review scan should extend.</li>
-</ul>
-<h2>Publish procedure</h2>
-<ul>
-<li><a href="publish-reconcile.md"><code>publish-reconcile.md</code></a> - the publish flow, the partial-release projection, the master-only-content reconciliation, and the safe-publish gotcha explanations. Open when publishing or clearing a refusal; the flow is scripted, so the doc cannot drift from what runs.</li>
-</ul>
-<h2>Test guidance</h2>
-<ul>
-<li><a href="testing.md"><code>testing.md</code></a> - the parallelism measurements behind the explicit -n rule, the load-failure patterns, and the containment limits of the test harness. Open for pytest worker choices or failures that appear only under load.</li>
-<li><a href="vacuous-checks.md"><code>vacuous-checks.md</code></a> - the three shapes of tests and guards that pass without checking anything, and the revert check that exposes them. Open when a green result feels unearned, or before trusting a new drift guard.</li>
-</ul>
-<h2>Model-task adapters</h2>
-<ul>
-<li><a href="adapters.md"><code>adapters.md</code></a> - the provisional reference for building model-task adapters: the corpus-independence ground rule, the empirical admission bar, the artifact contract, and the enforcement seam. Open before building or admitting an adapter.</li>
-<li><a href="adapters-negative-results.md"><code>adapters-negative-results.md</code></a> - the catalog of adapter candidates that did not pay, each entry naming which of the four meanings applies. Open before spending a run on a candidate that feels new.</li>
-</ul>
-<h2>Dated records and worked incidents</h2>
-<ul>
-<li><a href="md-audit-lane-precision-2026-09-03.md"><code>md-audit-lane-precision-2026-09-03.md</code></a> - a dated precision measurement of the audit lane, frozen against the 2026-09-03 tree. Open as the before-picture when re-measuring after a criteria change; its citations are not to be repointed.</li>
-<li><a href="shared-tree-git-discipline.md"><code>shared-tree-git-discipline.md</code></a> - worked incidents from concurrent sessions touching the shared tree's index and branches, with the staging exception worked out. Open when a staging or merge refusal looks like another session's work.</li>
-</ul>
-<h2>Lookup tables</h2>
-<ul>
-<li><a href="claude-code-plugin-platform.md"><code>claude-code-plugin-platform.md</code></a> - static platform facts: the hook JSON contract, the attended-session variables, the on-disk plugin cache and registry layout. Open when you need a shape without reading code; the upstream docs win on conflict.</li>
-<li><a href="reusable-libraries.md"><code>reusable-libraries.md</code></a> - the index of the bootstrap shared libraries, their entry points, and when to consume one. Open before building project-local machinery, to pick an existing library first.</li>
-</ul>
-<h2>Terminology records</h2>
-<ul>
-<li><a href="terminology/rename-spec.md"><code>terminology/rename-spec.md</code></a> - executable packets that convert the ratified terminology decisions into token-level edits, keyed on tokens rather than line numbers. Open to apply or verify the rename; a second application is a no-op.</li>
-<li><a href="terminology/terminology-audit.md"><code>terminology/terminology-audit.md</code></a> - the divergence table the spec executes, with path and line evidence against the pre-rename tree. Open to see why a term was settled the way it was.</li>
-</ul>
-<h2>Plugin maintenance notes</h2>
-<ul>
-<li><a href="unreal-kit-maintenance.md"><code>unreal-kit-maintenance.md</code></a> - the vendored-helper rule for unreal-kit runtime files: keep the copies byte-identical to their bootstrap originals, and how to extend the redirector filter. Open when a vendored helper changes.</li>
-</ul>
+<h1>plugins-kit maintainer reference: standards, design records, procedures, platform facts, and dated measurements</h1>
+<p class="hh-orientation">This directory is the maintainer reference layer for plugins-kit: the detail that one-line rules at the repository root point to on demand. Most records expand a single governing rule and say at the top which trigger sends a reader to them. A few set standards for new work; others are dated measurements and audit records, which describe the tree as it stood on their date and are superseded rather than edited. Nothing here is copied into a consumer&#x27;s plugin cache, and that boundary is why maintainer material lives here instead of inside published plugins. When a record and a root rule disagree, the rule governs and the record is the evidence behind it.</p><section><h2>Where to start</h2><p>Start with <a href="plugin-opinion-razor.md">docs/reference/plugin-opinion-razor.md</a> when the question is whether an opinion should ship at all, and with <a href="publish-reconcile.md">docs/reference/publish-reconcile.md</a> when a release is in front of you. Every record names the rule it expands and the trigger to read it on, so a phrase from a session usually picks the file for you.</p></section><section><h2>Routes</h2><ul><li><strong>Ship a release</strong><ol><li>Read the range and hold-back rules in <a href="publish-reconcile.md">docs/reference/publish-reconcile.md</a></li><li>Perform the dry-run check; when shipping one plugin, hold the rest at master&#x27;s content.</li><li>A bare run re-projects and verifies master; a master-only refusal routes to the back-port procedure in the same file.</li></ol></li><li><strong>Evaluate an adapter</strong><ol><li>Read the ground rule and admission bar in <a href="adapters.md">docs/reference/adapters.md</a></li><li>Check <a href="adapters-negative-results.md">docs/reference/adapters-negative-results.md</a> first; a closed or disqualified candidate stays closed without a new measurement.</li><li>Admit only after two control and two candidate arms clear the controls&#x27; own spread.</li></ol></li><li><strong>Audit agent-facing text</strong><ol><li><a href="agent-directive-standards.md">docs/reference/agent-directive-standards.md</a> -- enumerate the shipped agent-facing text and apply the five criteria site by site.</li><li>Quote each finding verbatim and verify every citation the directive makes.</li><li>The pre-commit directive check blocks on-sight phrases; the criterion with no keyword still needs a human read.</li></ol></li><li><strong>Consume a shared library</strong><ol><li><a href="reusable-libraries.md">docs/reference/reusable-libraries.md</a> -- pick the package and read its entry points.</li><li>Declare the package in the consuming plugin&#x27;s shared-lib imports.</li><li>Check the library&#x27;s public-surface listing before assuming a name is stable, per <a href="deprecation-policy.md">docs/reference/deprecation-policy.md</a>.</li></ol></li></ul></section><section><h2>Standards for shipped work</h2><ul><li><a href="plugin-opinion-razor.md">docs/reference/plugin-opinion-razor.md</a> -- The scenario test behind every plugin opinion; open before adding a knob or hardcoding one.</li><li><a href="agent-directive-standards.md">docs/reference/agent-directive-standards.md</a> -- Criteria for agent-facing text shipped into consumer sessions; the razor&#x27;s companion.</li><li><a href="deprecation-policy.md">docs/reference/deprecation-policy.md</a> -- The two-minor-version shim rule for public names, with the consumer contract shape.</li></ul></section><section><h2>Release and shared-tree procedures</h2><ul><li><a href="publish-reconcile.md">docs/reference/publish-reconcile.md</a> -- The publish flow, partial releases, and the master-only reconcile; read before any release.</li><li><a href="shared-tree-git-discipline.md">docs/reference/shared-tree-git-discipline.md</a> -- Worked index and branch incidents in the shared tree; read when a git refusal looks wrong.</li><li><a href="task-folders.md">docs/reference/task-folders.md</a> -- The linked task-root model and the load-bearing ignore guard; for missing task folders.</li></ul></section><section><h2>Platform and environment facts</h2><ul><li><a href="claude-code-plugin-platform.md">docs/reference/claude-code-plugin-platform.md</a> -- Hook output contract, cache and registry layout, and session environment facts.</li><li><a href="plugin-root-variable-sites.md">docs/reference/plugin-root-variable-sites.md</a> -- The plugin-root variable migration: mechanism, classes, and the replacement contract.</li><li><a href="skills-kit-generated-catalog.md">docs/reference/skills-kit-generated-catalog.md</a> -- Which rule-catalog region of the md-domain config doc is generated and how to regenerate it.</li></ul></section><section><h2>Design records and architecture findings</h2><ul><li><a href="adapters.md">docs/reference/adapters.md</a> -- The adapter method: corpus-independence ground rule, admission bar, and the ownership seam.</li><li><a href="adapters-negative-results.md">docs/reference/adapters-negative-results.md</a> -- Adapter candidates that did not pay; check before spending a run on a new one.</li><li><a href="first-run-experience.md">docs/reference/first-run-experience.md</a> -- How a plugin captures preferences once, with presets and an interview.</li><li><a href="orchestrate-codex-boundaries.md">docs/reference/orchestrate-codex-boundaries.md</a> -- Why two root rules stay as they are; read before re-proposing either design.</li><li><a href="code-review-mechanical-surface.md">docs/reference/code-review-mechanical-surface.md</a> -- Which review criteria a script can answer at full recall and which still need a model.</li><li><a href="shared-lib-architecture.md">docs/reference/shared-lib-architecture.md</a> -- Six reviewed findings on the shared-lib mechanism, each with its own live status.</li><li><a href="reusable-libraries.md">docs/reference/reusable-libraries.md</a> -- Index of the shared Python packages; use before building project-local machinery.</li></ul></section><section><h2>Measurements and dated records</h2><ul><li><a href="md-audit-lane-precision-2026-09-03.md">docs/reference/md-audit-lane-precision-2026-09-03.md</a> -- A dated precision measurement of the audit lane; citations are frozen evidence, not live guidance.</li><li><a href="testing.md">docs/reference/testing.md</a> -- Parallelism measurements and load-failure mechanics behind the test-workflow rule.</li><li><a href="vacuous-checks.md">docs/reference/vacuous-checks.md</a> -- Checks that pass without exercising their guard; open when a green result feels hollow.</li><li><a href="unreal-kit-maintenance.md">docs/reference/unreal-kit-maintenance.md</a> -- Maintenance notes for the unreal-kit plugin; the shortest record here.</li><li><a href="terminology/rename-spec.md">docs/reference/terminology/rename-spec.md</a> -- The terminology rename spec, split into five parallel-safe implementation packets.</li><li><a href="terminology/terminology-audit.md">docs/reference/terminology/terminology-audit.md</a> -- The dated audit the rename was based on; its citations describe the pre-rename tree.</li></ul></section>
 </main>
+<nav data-human-html-chrome="nav"><ul><li><a href="../index.html"><span class="hh-nav-label">docs</span> <span class="hh-nav-identity">Design records, implementation plans, and investigation reports for the plugins-kit project</span></a></li><li><a href="../../CLAUDE.md"><span class="hh-nav-label">CLAUDE.md</span> <span class="hh-nav-identity">The governing rules at the repository root that these records expand on demand.</span></a></li></ul></nav>
 <script>
 if (window.parent !== window) {
   window.parent.postMessage({
@@ -79,7 +22,7 @@ if (window.parent !== window) {
     directory: "docs/reference",
     file: "index.html",
     kind: "page",
-    source_sha: "e634345b81bd87b36a71df1ad07bcfd5ec3822c7"
+    source_sha: "bce913a291b2c16dd005e8d32674fbd70027813f"
   }, "*");
   document.addEventListener("click", function (event) {
     if (event.defaultPrevented || event.button !== 0) return;

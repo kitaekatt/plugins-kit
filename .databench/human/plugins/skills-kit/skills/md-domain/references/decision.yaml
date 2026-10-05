@@ -2,12 +2,12 @@
   "schema_version": 1,
   "directory": "plugins/skills-kit/skills/md-domain/references",
   "decision": "page",
-  "source_sha": "8b7703103d66ed91d4577b183e5b7e5f2dfffe36",
-  "generation_spec_sha256": "0805933a1de089dc951a33d702e9d57d569f0584732b017cd3600742a34ba321",
-  "input_sha256": "32e98aaf5a1415d14c168e72bb0fa51300ea6bb6ec58863da7ca5c80c5c88c38",
-  "input_shape_sha256": "dcd037c2a862c875666a6b1ade8b7b75988b95973167355cd960595196a5c178",
+  "source_sha": "1a8f73cb6d1e15c846dd9a49f9e3df920965b82c",
+  "generation_spec_sha256": "9ff6d95c6dfa06e27a9196a26596c8b98ddf698bf2a82b9885b93c69cfaaa1e2",
+  "input_sha256": "3558a458f9fc64e857e03e6dea3282f26a0ce4aae5f0e71006ed8ceba0444461",
+  "input_shape_sha256": "be54a532dfb7f1053a3b97343f4b15bca5d79c317c3276337ae52f058f9ef6f2",
   "dirty": false,
-  "identity": "Reference documentation for the md-domain skill: audit framework, per-artifact standards, lane procedures, authoring patterns, and provenance records",
+  "identity": "Reference documentation for the md-domain skill: audit framework, per-artifact standards, lane procedures, authoring patterns, provenance records, and cross-cutting guidance on cohesion, capability boundaries, and standards configuration.",
   "instructions": "",
   "references": []
 }

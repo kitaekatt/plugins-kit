@@ -109,6 +109,29 @@ class TestRepairPath:
         assert result.restored == 3
         assert result.changed is True
 
+    def test_trailing_separator_does_not_restore_present_entry(self):
+        """REGRESSION: the registry spells some directories with a trailing
+        separator ("C:\\Program Files\\dotnet\\") that the inherited PATH
+        lacks; comparing raw strings re-added each one, so every pass
+        reported "restored N from registry" for entries already present."""
+        fake = FakeWinreg()
+        system_key = r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"
+        fake.set_value(fake.HKEY_LOCAL_MACHINE, system_key, "Path",
+                       "/system/;/tools/")
+        fake.set_value(fake.HKEY_CURRENT_USER, "Environment", "Path", "/user")
+
+        with patch.dict(os.environ, {"PATH": ";".join(["/system", "/tools"])},
+                        clear=True), \
+             patch.dict(sys.modules, {"winreg": fake}), \
+             patch("bootstrap_lib.path_repair.os.pathsep", ";"), \
+             patch("bootstrap_lib.path_repair.sys") as mock_sys:
+            mock_sys.platform = "win32"
+            result = repair_path()
+            actual_path = os.environ["PATH"]
+
+        assert actual_path == ";".join(["/system", "/tools", "/user"])
+        assert result.restored == 1
+
     def test_registry_merge_is_idempotent(self):
         fake = FakeWinreg()
         system_key = r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"

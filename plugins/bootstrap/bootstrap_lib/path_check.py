@@ -92,11 +92,14 @@ def check_path_entry(path_entry: str) -> Result:
 
 
 def add_path_to_shell_config(path_entry: str) -> Tuple[bool, str]:
-    """Persistently add a path entry to shell RC files and Windows User PATH.
+    """Persistently add a path entry to shell RC files or Windows User PATH.
 
     Appends `export PATH="<path>:$PATH"` to the appropriate RC file(s).
-    On Windows, also writes to the Windows User PATH (registry) so the entry
-    is visible to all new processes regardless of shell.
+    On Windows, writes the Windows User PATH (registry) instead, so the entry
+    is visible to all new processes regardless of shell. Git Bash inherits
+    that PATH, so an rc line as well would add the entry a second time in
+    every shell; the rc file is written on Windows only when the registry
+    write did not persist.
     Idempotent: skips files/registry where the path is already declared.
 
     Returns:
@@ -113,6 +116,8 @@ def add_path_to_shell_config(path_entry: str) -> Tuple[bool, str]:
         registry_ok, registry_msg = _add_path_to_windows_registry(path_entry)
         # A skipped registry write (BOOTSTRAP_SKIP_REGISTRY) persists nothing.
         durable = registry_ok and not os.environ.get("BOOTSTRAP_SKIP_REGISTRY")
+        if durable:
+            return True, registry_msg
         if not registry_ok:
             failures.append(f"Windows User PATH registry: {registry_msg}")
 

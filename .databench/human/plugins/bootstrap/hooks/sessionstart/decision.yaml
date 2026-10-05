@@ -1,11 +1,12 @@
 {
   "schema_version": 1,
   "directory": "plugins/bootstrap/hooks/sessionstart",
-  "decision": "page",
-  "source_sha": "0fe42a1ea068a329846c9fcf3c10b4c00da12c26",
-  "generation_spec_sha256": "fc236b0086521fffedc696039900f19579336e4ef8fb657ad60e3dcdf8747288",
+  "decision": "none",
+  "source_sha": "01f63c9e4b768568b053870caf18d4cf53b203bf",
+  "input_sha256": "5bc4df788580aceba582b281824a730b67d3aaad32eb3f7559b84dc78a4d2121",
+  "input_shape_sha256": "4bae6339efe853e036166e4c4afb480ef16339459be0518914e4f203c59c8ed0",
   "dirty": false,
-  "identity": "SessionStart hook that starts the bootstrap engine and prepares Windows command shims for extensionless bash levers",
+  "identity": "",
   "instructions": "",
   "references": []
 }

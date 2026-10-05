@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/content-pipeline-kit/contract",
+  "decision": "none",
+  "source_sha": "3cb521aeb8383fa67cc0fc40818b531799166deb",
+  "input_sha256": "4515312191cec87594dad174330f32f04327de1042111f68d02f1fe500fc232e",
+  "input_shape_sha256": "589776fd99ef96ac375c19ab4d69b02d39e93cbc7fb285e78ec9ce0de405180e",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

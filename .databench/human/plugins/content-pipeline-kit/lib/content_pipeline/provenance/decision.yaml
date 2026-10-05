@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/content-pipeline-kit/lib/content_pipeline/provenance",
+  "decision": "none",
+  "source_sha": "781e5fb4118057c55673fc3c7a182ceab1e5cc6d",
+  "input_sha256": "0d93ae74186602431ca16d981ff0032d2e45be1342d50040a77d87b8fc450c18",
+  "input_shape_sha256": "bb4607e35dee84ba9057cdfb5c109655394b8d48afcfca7595e6d858477a0b89",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

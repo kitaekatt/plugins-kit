@@ -2,10 +2,12 @@
   "schema_version": 1,
   "directory": "docs/reference",
   "decision": "page",
-  "source_sha": "e634345b81bd87b36a71df1ad07bcfd5ec3822c7",
-  "generation_spec_sha256": "0805933a1de089dc951a33d702e9d57d569f0584732b017cd3600742a34ba321",
+  "source_sha": "bce913a291b2c16dd005e8d32674fbd70027813f",
+  "generation_spec_sha256": "9ff6d95c6dfa06e27a9196a26596c8b98ddf698bf2a82b9885b93c69cfaaa1e2",
+  "input_sha256": "be9a52e5e95fc876c89ffbaaf59448b060b564a009f9bb125796dc73378088f6",
+  "input_shape_sha256": "0ce4ffc317306c549c7ae561b55b9f8c4d0c8291da98173f4e56c417c90cb533",
   "dirty": false,
-  "identity": "plugins-kit maintainer reference for design rationale, standards, publish procedure, test guidance, and terminology records.",
+  "identity": "plugins-kit maintainer reference: standards, design records, procedures, platform facts, and dated measurements",
   "instructions": "",
   "references": []
 }

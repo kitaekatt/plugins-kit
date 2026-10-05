@@ -3,7 +3,7 @@
   "directory": "plugins/secrets-kit/lib/secrets_kit",
   "decision": "page",
   "source_sha": "a863cb7a2407c95dccd23afc574c8070d880429e",
-  "generation_spec_sha256": "0805933a1de089dc951a33d702e9d57d569f0584732b017cd3600742a34ba321",
+  "generation_spec_sha256": "9ff6d95c6dfa06e27a9196a26596c8b98ddf698bf2a82b9885b93c69cfaaa1e2",
   "dirty": false,
   "identity": "The secrets-kit package that provisions fleet secrets from age-encrypted blobs into machine-local files and guards authoring operations.",
   "instructions": "",

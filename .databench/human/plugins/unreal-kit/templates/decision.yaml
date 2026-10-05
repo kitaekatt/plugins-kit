@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/unreal-kit/templates",
+  "decision": "none",
+  "source_sha": "958730520935778d0869fa5cea3de38d41bfb807",
+  "input_sha256": "85747fa9da439c87e06463b7c7387508e2a5195f5dc04a86e620f1888ac09aa6",
+  "input_shape_sha256": "94e8bcc6e862457e386036e4276648f9a6ef5870f46c4c3e20d40efd19c6875f",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}
