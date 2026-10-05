@@ -1,23 +1,23 @@
 <!doctype html>
 <html lang="en">
 <head>
-<!-- human-html: {"generated_by":"md-domain","source_sha":"0efe12959ba27c3375ab14109ab79abd10f30353","directory":"plugins/content-pipeline-kit","kind":"page"} -->
+<!-- index-pages: {"generated_by":"md-domain","source_sha":"0efe12959ba27c3375ab14109ab79abd10f30353","directory":"plugins/content-pipeline-kit","kind":"page"} -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>Content-pipeline-kit plugin packaging: bootstrap configuration, public API surface contract, one-unit worker agent, consumer contract checker, and parallel wave workflow.</title>
-<link rel="stylesheet" href="../../.databench/human-html.css">
+<link rel="stylesheet" href="../../.databench/index-pages.css">
 </head>
 <body>
 <main>
 <h1>Content-pipeline-kit plugin packaging: bootstrap configuration, public API surface contract, one-unit worker agent, consumer contract checker, and parallel wave workflow.</h1>
 <p class="hh-orientation">This level is the consumer-facing surface around the pipeline library. It includes packaging that installs the plugin, the contract that lists public names, a worker agent definition for one unit, and a workflow script that runs a prepared wave across parallel lanes. A consumer imports the library from its own entry point. The version triple must stay equal, and a repository test enforces lockstep.</p><section><h2>Where to start</h2><p><a href="README.md">plugins/content-pipeline-kit/README.md</a> states features and the layer boundary. <a href="bootstrap.json">plugins/content-pipeline-kit/bootstrap.json</a> is for install setup.</p></section><section><h2>Routes</h2><ul><li><strong>Consumer arrives</strong><ol><li><a href="README.md">plugins/content-pipeline-kit/README.md</a> states features and boundary.</li><li><a href="contract/public-surface.json">plugins/content-pipeline-kit/contract/public-surface.json</a> lists public names.</li><li><a href="scripts/check_consumer_contract.py">plugins/content-pipeline-kit/scripts/check_consumer_contract.py</a> checks consumer imports.</li></ol></li><li><strong>Change a public name</strong><ol><li><a href="contract/public-surface.json">plugins/content-pipeline-kit/contract/public-surface.json</a> records status, removal version, replacement.</li><li><a href="scripts/check_consumer_contract.py">plugins/content-pipeline-kit/scripts/check_consumer_contract.py</a> reads that file.</li></ol></li><li><strong>Bump the version</strong><ol><li><a href=".claude-plugin/plugin.json">plugins/content-pipeline-kit/.claude-plugin/plugin.json</a> and <a href="pyproject.toml">plugins/content-pipeline-kit/pyproject.toml</a> carry visible halves of the triple.</li><li>The library version constant is third; a repository test enforces lockstep.</li></ol></li><li><strong>Dispatch a wave</strong><ol><li><a href="workflows/run-ready-wave.js">plugins/content-pipeline-kit/workflows/run-ready-wave.js</a> runs a prepared wave across N agent lanes.</li><li><a href="agents/pipeline-worker.md">plugins/content-pipeline-kit/agents/pipeline-worker.md</a> is the dispatched worker for one unit.</li><li>Returned counts are advisory; the execution store is truth.</li></ol></li></ul></section><section><h2>Packaging</h2><table><thead><tr><th>Path</th><th>What it does</th><th>When you open it</th></tr></thead><tbody><tr><td><a href="bootstrap.json">plugins/content-pipeline-kit/bootstrap.json</a></td><td>Pins bootstrap version, auto-installs scripting-kit dependency, names shared library and imports, declares three config fields.</td><td>Installing, or odd install/config prompt.</td></tr><tr><td><a href=".claude-plugin/plugin.json">plugins/content-pipeline-kit/.claude-plugin/plugin.json</a></td><td>Marketplace manifest: name, version, dependency on bootstrap plugin.</td><td>Bumping version or changing metadata.</td></tr><tr><td><a href="pyproject.toml">plugins/content-pipeline-kit/pyproject.toml</a></td><td>Python package definition: version, runtime dependencies, package discovery rooted at library directory.</td><td>Bumping version or tracing dependency.</td></tr></tbody></table></section><section><h2>Surface, worker, and gate</h2><ul><li><a href="contract/public-surface.json">plugins/content-pipeline-kit/contract/public-surface.json</a> lists every exported name as public, deprecated, or removed, with removal version and replacement.</li><li><a href="agents/pipeline-worker.md">plugins/content-pipeline-kit/agents/pipeline-worker.md</a> defines one worker unit: claim, answer, submit, revise on compact feedback, report unaddressable failures.</li><li><a href="workflows/run-ready-wave.js">plugins/content-pipeline-kit/workflows/run-ready-wave.js</a> runs a prepared wave across parallel lanes; it writes no files, and per-unit results are advisory.</li><li><a href="scripts/check_consumer_contract.py">plugins/content-pipeline-kit/scripts/check_consumer_contract.py</a> scans Python for content_pipeline names, reports deprecated or removed uses, exits nonzero on removed names, and strict also fails deprecated; static detection misses getattr and string imports.</li></ul></section>
 </main>
-<nav data-human-html-chrome="nav"><ul><li><a href="../index.html"><span class="hh-nav-label">plugins</span> <span class="hh-nav-identity">The Claude Code plugin marketplace: independently installable plugins sharing the bootstrap provisioning engine and llm-scripting-kit access layer, covering code review, durable job execution, LLM endpoint dispatch, Hue scene synchronization, PDF rendering, fleet secrets provisioning, prompt statusline, cache forensics, markdown auditing, and Unreal Engine automation.</span></a></li><li><a href="lib/index.html"><span class="hh-nav-label">lib</span> <span class="hh-nav-identity">The library for LLM-in-the-loop batch content pipelines, providing an attributed store, freshness engine, durable execution plane with run tracking and worker protocol, delivery modes, VCS seam, and audit.</span></a></li><li><a href="skills/index.html"><span class="hh-nav-label">skills</span> <span class="hh-nav-identity">Content-pipeline skills: the domain architecture and vocabulary, background-lane and workflow-lane orchestration, and one-unit worker execution.</span></a></li><li><a href="README.md"><span class="hh-nav-label">README</span> <span class="hh-nav-identity">Consumer-facing documentation: structured output, cost and budget, the cross-process spend cap, durable waits, run provenance, and the consumer check.</span></a></li></ul></nav>
+<nav data-index-pages-chrome="nav"><ul><li><a href="../index.html"><span class="hh-nav-label">plugins</span> <span class="hh-nav-identity">The Claude Code plugin marketplace: independently installable plugins sharing the bootstrap provisioning engine and llm-scripting-kit access layer, covering code review, durable job execution, LLM endpoint dispatch, Hue scene synchronization, PDF rendering, fleet secrets provisioning, prompt statusline, cache forensics, markdown auditing, and Unreal Engine automation.</span></a></li><li><a href="lib/index.html"><span class="hh-nav-label">lib</span> <span class="hh-nav-identity">The library for LLM-in-the-loop batch content pipelines, providing an attributed store, freshness engine, durable execution plane with run tracking and worker protocol, delivery modes, VCS seam, and audit.</span></a></li><li><a href="skills/index.html"><span class="hh-nav-label">skills</span> <span class="hh-nav-identity">Content-pipeline skills: the domain architecture and vocabulary, background-lane and workflow-lane orchestration, and one-unit worker execution.</span></a></li><li><a href="README.md"><span class="hh-nav-label">README</span> <span class="hh-nav-identity">Consumer-facing documentation: structured output, cost and budget, the cross-process spend cap, durable waits, run provenance, and the consumer check.</span></a></li></ul></nav>
 <script>
 if (window.parent !== window) {
   window.parent.postMessage({
-    type: "human-html:announce",
+    type: "index-pages:announce",
     version: 1,
     directory: "plugins/content-pipeline-kit",
     file: "index.html",
@@ -36,7 +36,7 @@ if (window.parent !== window) {
     if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
     var target = href.split("#")[0].split("?")[0];
     if (!target) return;
-    if (/(^|\/)human(\.[^/]+)?\.html$/.test(target)) return;
+    if (/(^|\/)index-page(\.[^/]+)?\.html$/.test(target)) return;
     var parts = "plugins/content-pipeline-kit".split("/");
     if (parts.length === 1 && parts[0] === ".") parts = [];
     var segs = target.split("/");
@@ -47,7 +47,7 @@ if (window.parent !== window) {
     }
     event.preventDefault();
     window.parent.postMessage({
-      type: "human-html:navigate",
+      type: "index-pages:navigate",
       version: 1,
       path: parts.join("/")
     }, "*");

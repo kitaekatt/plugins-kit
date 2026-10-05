@@ -1,15 +1,15 @@
 <!doctype html>
 <html lang="en">
 <head>
-<!-- human-html: {"generated_by":"md-domain","source_sha":"9a57413d3efe0f71d67adbd61f0c74fe009dce91","directory":"plugins/llm-scripting-kit/lib/llm_scripting_kit","kind":"page"} -->
+<!-- index-pages: {"generated_by":"md-domain","source_sha":"9a57413d3efe0f71d67adbd61f0c74fe009dce91","directory":"plugins/llm-scripting-kit/lib/llm_scripting_kit","kind":"page"} -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>The llm-scripting-kit package that resolves credentials, endpoints, models, reachability, quota pacing, and completion backends for configured model calls.</title>
-<link rel="stylesheet" href="../../../../.databench/human-html.css">
+<link rel="stylesheet" href="../../../../.databench/index-pages.css">
 </head>
 <body>
-<nav data-human-html-chrome="nav" aria-label="Orientation pages">
+<nav data-index-pages-chrome="nav" aria-label="Orientation pages">
   <ul>
     <li><a href="../../index.html"><span class="hh-nav-label">llm-scripting-kit</span> <span class="hh-nav-identity">The llm-scripting-kit plugin distribution that provides the installed CLI, local Qwen server scripts, credential setup, and completion-seam reference</span></a></li>
 <li><a href="frontdoor/index.html"><span class="hh-nav-label">frontdoor</span> <span class="hh-nav-identity">The OpenAI-compatible front door that routes chat requests to configured transport deployments.</span></a></li>
@@ -97,7 +97,7 @@
 <script>
 if (window.parent !== window) {
   window.parent.postMessage({
-    type: "human-html:announce",
+    type: "index-pages:announce",
     version: 1,
     directory: "plugins/llm-scripting-kit/lib/llm_scripting_kit",
     file: "index.html",
@@ -116,7 +116,7 @@ if (window.parent !== window) {
     if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
     var target = href.split("#")[0].split("?")[0];
     if (!target) return;
-    if (/(^|\/)human(\.[^/]+)?\.html$/.test(target)) return;
+    if (/(^|\/)index-page(\.[^/]+)?\.html$/.test(target)) return;
     var parts = "plugins/llm-scripting-kit/lib/llm_scripting_kit".split("/");
     if (parts.length === 1 && parts[0] === ".") parts = [];
     var segs = target.split("/");
@@ -127,7 +127,7 @@ if (window.parent !== window) {
     }
     event.preventDefault();
     window.parent.postMessage({
-      type: "human-html:navigate",
+      type: "index-pages:navigate",
       version: 1,
       path: parts.join("/")
     }, "*");

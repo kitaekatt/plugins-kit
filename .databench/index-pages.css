@@ -1,7 +1,7 @@
-/* human-html shared style asset -- SA-1.
+/* index-pages shared style asset -- SA-1.
  *
- * The single source of truth for human-html page styling. Each repository
- * carries ONE copy of these exact bytes at .databench/human-html.css, and
+ * The single source of truth for index page styling. Each repository
+ * carries ONE copy of these exact bytes at .databench/index-pages.css, and
  * every generated page links that copy (PC-4); the host viewer imports the
  * same resource for matching chrome (HV-3). Do not copy these values anywhere
  * else -- a second copy is the visual drift this asset exists to prevent.
@@ -133,7 +133,7 @@ a:focus-visible {
 
 small,
 .hh-muted,
-[data-human-html-muted] {
+[data-index-pages-muted] {
   color: var(--hh-muted);
 }
 
@@ -246,7 +246,7 @@ article,
   padding: var(--hh-space-3);
 }
 
-[data-human-html-chrome="nav"] {
+[data-index-pages-chrome="nav"] {
   border-bottom: 1px solid var(--hh-border);
   padding-bottom: var(--hh-space-4);
   margin-bottom: var(--hh-space-4);
@@ -254,7 +254,7 @@ article,
   color: var(--hh-muted);
 }
 
-[data-human-html-chrome="nav"] ul {
+[data-index-pages-chrome="nav"] ul {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
   gap: var(--hh-space-2) var(--hh-space-5);
@@ -263,12 +263,12 @@ article,
   padding-left: 0;
 }
 
-[data-human-html-chrome="nav"] li {
+[data-index-pages-chrome="nav"] li {
   min-width: 0;
   margin: 0;
 }
 
-[data-human-html-chrome="nav"] a {
+[data-index-pages-chrome="nav"] a {
   display: grid;
   gap: var(--hh-space-1);
   min-width: 0;
@@ -276,8 +276,8 @@ article,
   text-decoration: none;
 }
 
-[data-human-html-chrome="nav"] a:hover,
-[data-human-html-chrome="nav"] a:focus {
+[data-index-pages-chrome="nav"] a:hover,
+[data-index-pages-chrome="nav"] a:focus {
   color: var(--hh-link-hover);
 }
 
@@ -296,7 +296,7 @@ article,
   line-height: 1.45;
 }
 
-/* The human-page card marker (PC-2). A card whose target is another
+/* The index-page card marker (PC-2). A card whose target is another
  * `index.html` carries this icon; a card pointing at anything else does not,
  * so the two card kinds stay distinguishable at a glance.
  *
@@ -310,17 +310,17 @@ article,
  * beneath it, and it scales with the label, so it stays legible at phone
  * width where the card list collapses to one column.
  */
-[data-human-html-chrome="nav"] a[href="index.html"],
-[data-human-html-chrome="nav"] a[href="human.html"],
-[data-human-html-chrome="nav"] a[href$="/index.html"],
-[data-human-html-chrome="nav"] a[href$="/human.html"] {
+[data-index-pages-chrome="nav"] a[href="index.html"],
+[data-index-pages-chrome="nav"] a[href="index-page.html"],
+[data-index-pages-chrome="nav"] a[href$="/index.html"],
+[data-index-pages-chrome="nav"] a[href$="/index-page.html"] {
   grid-template-columns: 1.1em minmax(0, 1fr);
 }
 
-[data-human-html-chrome="nav"] a[href="index.html"]::before,
-[data-human-html-chrome="nav"] a[href="human.html"]::before,
-[data-human-html-chrome="nav"] a[href$="/index.html"]::before,
-[data-human-html-chrome="nav"] a[href$="/human.html"]::before {
+[data-index-pages-chrome="nav"] a[href="index.html"]::before,
+[data-index-pages-chrome="nav"] a[href="index-page.html"]::before,
+[data-index-pages-chrome="nav"] a[href$="/index.html"]::before,
+[data-index-pages-chrome="nav"] a[href$="/index-page.html"]::before {
   content: "";
   grid-column: 1;
   grid-row: 1;
@@ -330,18 +330,18 @@ article,
   background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cg fill='%235789f4'%3E%3Ccircle cx='8' cy='4.3' r='3.1'/%3E%3Cpath d='M1.5 15.3c0-3.6 2.9-6.3 6.5-6.3s6.5 2.7 6.5 6.3z'/%3E%3C/g%3E%3C/svg%3E") center / contain no-repeat;
 }
 
-[data-human-html-chrome="nav"] a[href="index.html"] .hh-nav-label,
-[data-human-html-chrome="nav"] a[href="human.html"] .hh-nav-label,
-[data-human-html-chrome="nav"] a[href$="/index.html"] .hh-nav-label,
-[data-human-html-chrome="nav"] a[href$="/human.html"] .hh-nav-label {
+[data-index-pages-chrome="nav"] a[href="index.html"] .hh-nav-label,
+[data-index-pages-chrome="nav"] a[href="index-page.html"] .hh-nav-label,
+[data-index-pages-chrome="nav"] a[href$="/index.html"] .hh-nav-label,
+[data-index-pages-chrome="nav"] a[href$="/index-page.html"] .hh-nav-label {
   grid-column: 2;
   grid-row: 1;
 }
 
-[data-human-html-chrome="nav"] a[href="index.html"] .hh-nav-identity,
-[data-human-html-chrome="nav"] a[href="human.html"] .hh-nav-identity,
-[data-human-html-chrome="nav"] a[href$="/index.html"] .hh-nav-identity,
-[data-human-html-chrome="nav"] a[href$="/human.html"] .hh-nav-identity {
+[data-index-pages-chrome="nav"] a[href="index.html"] .hh-nav-identity,
+[data-index-pages-chrome="nav"] a[href="index-page.html"] .hh-nav-identity,
+[data-index-pages-chrome="nav"] a[href$="/index.html"] .hh-nav-identity,
+[data-index-pages-chrome="nav"] a[href$="/index-page.html"] .hh-nav-identity {
   grid-column: 2;
   grid-row: 2;
 }
@@ -362,7 +362,7 @@ svg {
     padding: var(--hh-space-4) var(--hh-space-2);
   }
 
-  [data-human-html-chrome="nav"] ul,
+  [data-index-pages-chrome="nav"] ul,
   dl {
     grid-template-columns: minmax(0, 1fr);
   }

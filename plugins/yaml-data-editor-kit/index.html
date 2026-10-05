@@ -1,23 +1,23 @@
 <!doctype html>
 <html lang="en">
 <head>
-<!-- human-html: {"generated_by":"md-domain","source_sha":"4ad89c1c0cc5eddc26b1f5334302f4e7e379544b","directory":"plugins/yaml-data-editor-kit","kind":"page"} -->
+<!-- index-pages: {"generated_by":"md-domain","source_sha":"4ad89c1c0cc5eddc26b1f5334302f4e7e379544b","directory":"plugins/yaml-data-editor-kit","kind":"page"} -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>The plugin-level documentation and packaging for the YAML data editor kit, covering the dialect spec, architecture notes, dispatch binding, and editor research.</title>
-<link rel="stylesheet" href="../../.databench/human-html.css">
+<link rel="stylesheet" href="../../.databench/index-pages.css">
 </head>
 <body>
 <main>
 <h1>The plugin-level documentation and packaging for the YAML data editor kit, covering the dialect spec, architecture notes, dispatch binding, and editor research.</h1>
 <p class="hh-orientation">This is the documentation and packaging for the yaml-data-editor-kit plugin; the code is one level down. The plugin is a library, not a tool. It defines a project-independent YAML dialect for describing a data corpus and ships the Python side that plans and dispatches the work a consumer queues against that corpus. The organizing idea is the profile boundary: a consuming project writes its own profile in the dialect, and nothing here knows one of the project&#x27;s nouns. That boundary is why the dialect spec, the dispatch binding, and the editor research can live here at all, and why the browser editor is owned elsewhere and meets this kit only at files on disk.</p><section><h2>Where to start</h2><p>Open <a href="docs/dialect.md">plugins/yaml-data-editor-kit/docs/dialect.md</a> first -- it is the normative spec for the dialect the whole kit exists to define, and it is written for someone authoring a profile. Pair it with <a href="docs/architecture.html">plugins/yaml-data-editor-kit/docs/architecture.html</a> when you need the package boundaries and what is implemented versus planned.</p></section><section><h2>Routes</h2><ul><li><strong>Recover the design intent</strong><ol><li><a href="docs/motivation.md">plugins/yaml-data-editor-kit/docs/motivation.md</a> -- why the kit exists and the everything-is-data idea.</li><li><a href="docs/architecture.html">plugins/yaml-data-editor-kit/docs/architecture.html</a> -- the package shape and build status; the motivation note points here for the boundaries.</li></ol></li><li><strong>Read the spec, then its amendment log</strong><ol><li><a href="docs/dialect.md">plugins/yaml-data-editor-kit/docs/dialect.md</a> -- the normative language, read first.</li><li><a href="docs/dialect-gaps.md">plugins/yaml-data-editor-kit/docs/dialect-gaps.md</a> -- the record of how it got there, marked row by row against the spec.</li></ol></li><li><strong>Trace the content-pipeline-kit seam</strong><ol><li><a href="docs/content-pipeline-binding.md">plugins/yaml-data-editor-kit/docs/content-pipeline-binding.md</a> -- what dispatch adopts and refuses.</li><li><a href="bootstrap.json">plugins/yaml-data-editor-kit/bootstrap.json</a> -- the provisioning that declares the same dependency.</li></ol></li></ul></section><section><h2>The plugin envelope</h2><ul><li><a href="CLAUDE.md">plugins/yaml-data-editor-kit/CLAUDE.md</a> -- the plugin charter in agent-facing form: the profile boundary, the file seam, and the four packages. Open it when you are changing the boundaries or the agent guidance.</li><li><a href=".claude-plugin/plugin.json">plugins/yaml-data-editor-kit/.claude-plugin/plugin.json</a> -- the marketplace manifest: name, version, the bootstrap dependency, and the published flag. Open it to change what the plugin advertises.</li><li><a href="bootstrap.json">plugins/yaml-data-editor-kit/bootstrap.json</a> -- provisioning: the shared library, the content-pipeline-kit plugin it pulls in, and the venv import checks. Open it to change what the kit installs.</li><li><a href="pyproject.toml">plugins/yaml-data-editor-kit/pyproject.toml</a> -- the Python package: name, version, the pyyaml and openai dependencies, and the lib package discovery. Open it to change the build.</li></ul></section><section><h2>The dialect spec</h2><ul><li><a href="docs/dialect.md">plugins/yaml-data-editor-kit/docs/dialect.md</a> -- the normative spec: the three document kinds, the field types, and the annotations. The center of the kit; open it to read or extend the language.</li><li><a href="docs/dialect-gaps.md">plugins/yaml-data-editor-kit/docs/dialect-gaps.md</a> -- the amendment record: each gap found writing the first profile, marked APPLIED, RESOLVED, or UNAPPLIED against the spec. Open it to see why a construct exists.</li></ul></section><section><h2>Design and architecture</h2><ul><li><a href="docs/motivation.md">plugins/yaml-data-editor-kit/docs/motivation.md</a> -- why the kit exists: the problem, the everything-is-data idea, and what the kit is and is not. Background, not a contract.</li><li><a href="docs/architecture.html">plugins/yaml-data-editor-kit/docs/architecture.html</a> -- the package shape and current implementation status, with the file seam. Open it for the boundaries in diagram form.</li></ul></section><section><h2>The dispatch binding</h2><ul><li><a href="docs/content-pipeline-binding.md">plugins/yaml-data-editor-kit/docs/content-pipeline-binding.md</a> -- what dispatch adopts from content-pipeline-kit and what it refuses. Open it before touching the dispatch side so you do not re-litigate the seam.</li></ul></section><section><h2>Editor research</h2><ul><li><a href="docs/editor-library-research.md">plugins/yaml-data-editor-kit/docs/editor-library-research.md</a> -- the browser library decision menu: candidate grids, forms, and structured editors scored against the dialect. Open it when choosing the editor front end.</li></ul></section>
 </main>
-<nav data-human-html-chrome="nav"><ul><li><a href="../index.html"><span class="hh-nav-label">plugins</span> <span class="hh-nav-identity">The Claude Code plugin marketplace: independently installable plugins sharing the bootstrap provisioning engine and llm-scripting-kit access layer, covering code review, durable job execution, LLM endpoint dispatch, Hue scene synchronization, PDF rendering, fleet secrets provisioning, prompt statusline, cache forensics, markdown auditing, and Unreal Engine automation.</span></a></li><li><a href="lib/yaml_data_editor_kit/index.html"><span class="hh-nav-label">yaml_data_editor_kit</span> <span class="hh-nav-identity">The YAML data dialect that declares and validates corpus type shapes and plans and executes anchored-slice transformations through inline and background LLM dispatch.</span></a></li></ul></nav>
+<nav data-index-pages-chrome="nav"><ul><li><a href="../index.html"><span class="hh-nav-label">plugins</span> <span class="hh-nav-identity">The Claude Code plugin marketplace: independently installable plugins sharing the bootstrap provisioning engine and llm-scripting-kit access layer, covering code review, durable job execution, LLM endpoint dispatch, Hue scene synchronization, PDF rendering, fleet secrets provisioning, prompt statusline, cache forensics, markdown auditing, and Unreal Engine automation.</span></a></li><li><a href="lib/yaml_data_editor_kit/index.html"><span class="hh-nav-label">yaml_data_editor_kit</span> <span class="hh-nav-identity">The YAML data dialect that declares and validates corpus type shapes and plans and executes anchored-slice transformations through inline and background LLM dispatch.</span></a></li></ul></nav>
 <script>
 if (window.parent !== window) {
   window.parent.postMessage({
-    type: "human-html:announce",
+    type: "index-pages:announce",
     version: 1,
     directory: "plugins/yaml-data-editor-kit",
     file: "index.html",
@@ -36,7 +36,7 @@ if (window.parent !== window) {
     if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
     var target = href.split("#")[0].split("?")[0];
     if (!target) return;
-    if (/(^|\/)human(\.[^/]+)?\.html$/.test(target)) return;
+    if (/(^|\/)index-page(\.[^/]+)?\.html$/.test(target)) return;
     var parts = "plugins/yaml-data-editor-kit".split("/");
     if (parts.length === 1 && parts[0] === ".") parts = [];
     var segs = target.split("/");
@@ -47,7 +47,7 @@ if (window.parent !== window) {
     }
     event.preventDefault();
     window.parent.postMessage({
-      type: "human-html:navigate",
+      type: "index-pages:navigate",
       version: 1,
       path: parts.join("/")
     }, "*");

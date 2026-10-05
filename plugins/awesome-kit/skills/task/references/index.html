@@ -1,23 +1,23 @@
 <!doctype html>
 <html lang="en">
 <head>
-<!-- human-html: {"generated_by":"md-domain","source_sha":"e3003f604b11bb60f0afa2916a846bae7430343e","directory":"plugins/awesome-kit/skills/task/references","kind":"page"} -->
+<!-- index-pages: {"generated_by":"md-domain","source_sha":"e3003f604b11bb60f0afa2916a846bae7430343e","directory":"plugins/awesome-kit/skills/task/references","kind":"page"} -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>Task skill reference documents for communication, hand-off authoring, and triage</title>
-<link rel="stylesheet" href="../../../../../.databench/human-html.css">
+<link rel="stylesheet" href="../../../../../.databench/index-pages.css">
 </head>
 <body>
 <main>
 <h1>Task skill reference documents for communication, hand-off authoring, and triage</h1>
 <p class="hh-orientation">Four Markdown documents set the task skill&#x27;s working agreements for work that outlives a single session: a canonical glossary the others cite instead of redefining, an authoring contract for the folders the skill scaffolds, with a worked example of the file those folders auto-load, and an audit protocol for the tasks those folders track. None of them is code; they are the text a task&#x27;s agents are held to, so a change here changes what every later session of a task does before it touches a tool. The dependency runs one way: the glossary feeds the authoring contract, and the contract feeds both the example and the triage protocol. The contracts are checked, not just read: the task CLI&#x27;s <code>validate</code> verb enforces the template&#x27;s line budgets, and the triage protocol audits task folders against live repository state.</p><section><h2>Where to start</h2><p>Open <a href="communication-framework.md">plugins/awesome-kit/skills/task/references/communication-framework.md</a> first: it defines the small set of terms (work-unit, the auto-loaded versus on-demand gates, State A and State B, the hand-off baton) that the other three documents use without redefining. With those terms in hand, the template reads as a contract and the example as its worked proof.</p></section><section><h2>Routes</h2><ul><li><strong>Author or rotate a task folder</strong><ol><li><a href="communication-framework.md">plugins/awesome-kit/skills/task/references/communication-framework.md</a> - read once for the terms; every document downstream assumes them.</li><li><a href="handoff-template.md">plugins/awesome-kit/skills/task/references/handoff-template.md</a> - the section-by-section contract for the folder&#x27;s three documents, including the line budgets the validator enforces and the rotation fix for a document that has outgrown them.</li><li><a href="example-claude-md.md">plugins/awesome-kit/skills/task/references/example-claude-md.md</a> - when a section of the contract feels abstract, this is the populated shape to imitate.</li></ol></li><li><strong>Triage the open tasks</strong><ol><li><a href="task-triage-protocol.md">plugins/awesome-kit/skills/task/references/task-triage-protocol.md</a> - select every open and deferred task, audit each against live repository state, and present one recommendation at a time.</li><li><a href="handoff-template.md">plugins/awesome-kit/skills/task/references/handoff-template.md</a> - the update and merge rulings rotate the folder per this guide before the CLI verb runs.</li></ol></li></ul></section><section><h2>The shared vocabulary</h2><ul><li><a href="communication-framework.md">plugins/awesome-kit/skills/task/references/communication-framework.md</a> - the canonical glossary: work-unit, the auto-loaded versus on-demand gates, the three-part end-of-turn template, State A and State B, the hand-off baton, and the provenance triad. Open it whenever a term in a task folder, a skill, or one of the documents here needs its definition.</li></ul></section><section><h2>Authoring a task folder</h2><ul><li><a href="handoff-template.md">plugins/awesome-kit/skills/task/references/handoff-template.md</a> - how to fill in and keep healthy the folder&#x27;s three live documents, with the required section shape and the enforced line budgets. Open it when scaffolding a folder or rotating one that has grown.</li><li><a href="example-claude-md.md">plugins/awesome-kit/skills/task/references/example-claude-md.md</a> - a generalized, fully populated example of the folder&#x27;s auto-loaded file, with project specifics replaced by placeholders. Open it when a template section feels abstract.</li></ul></section><section><h2>Triage and disposition</h2><ul><li><a href="task-triage-protocol.md">plugins/awesome-kit/skills/task/references/task-triage-protocol.md</a> - the agent-side protocol, which has no CLI verb, for auditing open and deferred tasks and applying the user&#x27;s ruling: archive, close, defer, update, merge, or reviewed-keep. Open it when a project&#x27;s task list needs cleaning up.</li></ul></section>
 </main>
-<nav data-human-html-chrome="nav"><ul><li><a href="../../index.html"><span class="hh-nav-label">skills</span> <span class="hh-nav-identity">awesome-kit skills: session-interaction skills (debug-context, recap, verbose-updates), the task-folder system with its 14-verb CLI and design diagrams, and the plugin-ecosystem poster generator</span></a></li><li><a href="../SKILL.md"><span class="hh-nav-label">SKILL.md</span> <span class="hh-nav-identity">The task skill definition one level up: the CLI verbs and the skill&#x27;s own pointers into these documents.</span></a></li><li><a href="../design"><span class="hh-nav-label">design</span> <span class="hh-nav-identity">Design diagrams for the task-folder system, in the sibling directory beside the CLI.</span></a></li></ul></nav>
+<nav data-index-pages-chrome="nav"><ul><li><a href="../../index.html"><span class="hh-nav-label">skills</span> <span class="hh-nav-identity">awesome-kit skills: session-interaction skills (debug-context, recap, verbose-updates), the task-folder system with its 14-verb CLI and design diagrams, and the plugin-ecosystem poster generator</span></a></li><li><a href="../SKILL.md"><span class="hh-nav-label">SKILL.md</span> <span class="hh-nav-identity">The task skill definition one level up: the CLI verbs and the skill&#x27;s own pointers into these documents.</span></a></li><li><a href="../design"><span class="hh-nav-label">design</span> <span class="hh-nav-identity">Design diagrams for the task-folder system, in the sibling directory beside the CLI.</span></a></li></ul></nav>
 <script>
 if (window.parent !== window) {
   window.parent.postMessage({
-    type: "human-html:announce",
+    type: "index-pages:announce",
     version: 1,
     directory: "plugins/awesome-kit/skills/task/references",
     file: "index.html",
@@ -36,7 +36,7 @@ if (window.parent !== window) {
     if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
     var target = href.split("#")[0].split("?")[0];
     if (!target) return;
-    if (/(^|\/)human(\.[^/]+)?\.html$/.test(target)) return;
+    if (/(^|\/)index-page(\.[^/]+)?\.html$/.test(target)) return;
     var parts = "plugins/awesome-kit/skills/task/references".split("/");
     if (parts.length === 1 && parts[0] === ".") parts = [];
     var segs = target.split("/");
@@ -47,7 +47,7 @@ if (window.parent !== window) {
     }
     event.preventDefault();
     window.parent.postMessage({
-      type: "human-html:navigate",
+      type: "index-pages:navigate",
       version: 1,
       path: parts.join("/")
     }, "*");

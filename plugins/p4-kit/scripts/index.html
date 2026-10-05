@@ -1,23 +1,23 @@
 <!doctype html>
 <html lang="en">
 <head>
-<!-- human-html: {"generated_by":"md-domain","source_sha":"bce913a291b2c16dd005e8d32674fbd70027813f","directory":"plugins/p4-kit/scripts","kind":"page"} -->
+<!-- index-pages: {"generated_by":"md-domain","source_sha":"bce913a291b2c16dd005e8d32674fbd70027813f","directory":"plugins/p4-kit/scripts","kind":"page"} -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>The p4-kit scripts that prepare Perforce changelists for code review, dispatch and parse review lanes, render review profiles, and guard the plugin&#x27;s bootstrap venv.</title>
-<link rel="stylesheet" href="../../../.databench/human-html.css">
+<link rel="stylesheet" href="../../../.databench/index-pages.css">
 </head>
 <body>
 <main>
 <h1>The p4-kit scripts that prepare Perforce changelists for code review, dispatch and parse review lanes, render review profiles, and guard the plugin&#x27;s bootstrap venv.</h1>
 <p class="hh-orientation">Six scripts in <a href=".">plugins/p4-kit/scripts</a> back the p4-kit code-review skill. Three are thin launchers that fix up the Python environment and hand off to a shared library; one, <a href="prepare_review.py">plugins/p4-kit/scripts/prepare_review.py</a> (about a hundred kilobytes), does the real Perforce work; one guards the plugin&#x27;s bootstrap venv; and one sweeps out a dead config file. Open <a href="prepare_review.py">plugins/p4-kit/scripts/prepare_review.py</a> first: it is the script you run on a changelist, and reading its docstring puts you in the review flow. The shared logic the thin launchers delegate to lives outside this directory, so most of what you need to change lives one level down in the plugin&#x27;s <code>lib</code> or in a sibling plugin.</p><section><h2>Where to start</h2><p>Open <a href="prepare_review.py">plugins/p4-kit/scripts/prepare_review.py</a> and read its docstring: it covers every <code>p4</code> call the script makes, the full bundle JSON schema, the claim and ledger modes, and all three CLI shapes. If a script exits with a bootstrap error or picks the wrong interpreter, open <a href="bootstrap_guard.py">plugins/p4-kit/scripts/bootstrap_guard.py</a> second; the re-exec and venv logic is documented in its comments.</p></section><section><h2>Prepare a changelist</h2><ul><li><a href="prepare_review.py">plugins/p4-kit/scripts/prepare_review.py</a> Describe the changelist (shelved or submitted), resolve depot files to local paths, walk each file&#x27;s ancestors for review rules, run the workspace hygiene scans, split the diff into chunk files, and print the bundle JSON on stdout. <code>--claim</code> holds selected files out of the generic fan-out, <code>--ledger-record</code> files declined findings, and <code>--cleanup</code> undoes a shelf this run created. Open it to change what a review sees or how the bundle is shaped.</li><li><a href="bootstrap_guard.py">plugins/p4-kit/scripts/bootstrap_guard.py</a> Canonical copy of the bootstrap-presence guard, vendored byte-for-byte into each plugin that needs it; a drift test asserts the copies stay in sync. Stdlib only, so it can run when bootstrap is exactly what is missing. It checks for the per-plugin <code>bootstrap.log</code> marker, exits 3 with an install-bootstrap message when it is absent, locates the venv interpreter, and re-execs the process under it (spawn and wait on Windows). Open it to change the failure message, the venv detection, or the re-exec behavior.</li><li><a href="cleanup_legacy_config.py">plugins/p4-kit/scripts/cleanup_legacy_config.py</a> Session bootstrap step that deletes the legacy per-project config files earlier releases wrote. A no-op when nothing is present, so it stays wired in for several releases and is then deleted along with its bootstrap hook entry. Open it when you retire those last files.</li></ul></section><section><h2>Thin entry points</h2><ul><li><a href="parse_review_lane.py">plugins/p4-kit/scripts/parse_review_lane.py</a> P4&#x27;s side of lane parsing: re-exec under the plugin venv, then run the shared lane-output parser and exit with its code. Open it when a lane&#x27;s JSON output changes shape.</li><li><a href="run_review_lane.py">plugins/p4-kit/scripts/run_review_lane.py</a> Dispatches one configured endpoint review lane. The wrapper owns the bootstrap setup and the capability probes; the seam-calling implementation lives in a sibling plugin&#x27;s shared library. The probes parse throwaway argv to detect a too-old owner and exit 2 with an update instruction instead of dispatching into an incompatible one. Open it to add a probe for a new shared-library flag.</li><li><a href="render_review_profiles.py">plugins/p4-kit/scripts/render_review_profiles.py</a> Prints the resolved review-profile configuration plus provenance. A stable per-plugin path so the skill never reaches into another plugin&#x27;s tree; the resolver itself is shared. Open it when the profile table looks wrong.</li></ul></section><section><h2>Review mechanics worth knowing</h2><ul><li>Every entry point re-execs under the plugin venv before it imports shared libraries, and re-exec is a no-op when the process is already inside the venv. <a href="bootstrap_guard.py">plugins/p4-kit/scripts/bootstrap_guard.py</a> and <a href="prepare_review.py">plugins/p4-kit/scripts/prepare_review.py</a> say why: a plain <code>python</code> or <code>uv run</code> lands in an environment that lacks the shared-library link, and the venv check compares <code>sys.prefix</code> rather than interpreter paths.</li><li>Hygiene failures and clean results are never folded into one list: a scan that could not run is recorded under the bundle&#x27;s <code>hygiene_incomplete</code> key with the reason, while an empty <code>unreconciled</code> list means the scan ran and found nothing. A <code>stale_open</code> entry means the changelist will fail <code>p4 submit</code> as it stands.</li><li>Diff text is never inlined: it is partitioned into chunk files beside the review bundle and indexed by <code>diff_chunks</code> so one large changelist fans out across parallel reviewers. Ledger keys let previously declined findings render collapsed instead of being re-litigated on the next review of the same changelist.</li><li>Claimed files are carved out of the generic fan-out and materialized with their <code>#have</code> pre-image under the bundle&#x27;s <code>pre-images</code> directory; an exclusion glob prefixed with <code>!</code> beats every positive claim pattern. <code>--claim</code> is refused for submitted changelists, because post-change pre-images would misrepresent the change.</li></ul></section>
 </main>
-<nav data-human-html-chrome="nav"><ul><li><a href="../../index.html"><span class="hh-nav-label">plugins</span> <span class="hh-nav-identity">The Claude Code plugin marketplace: independently installable plugins sharing the bootstrap provisioning engine and llm-scripting-kit access layer, covering code review, durable job execution, LLM endpoint dispatch, Hue scene synchronization, PDF rendering, fleet secrets provisioning, prompt statusline, cache forensics, markdown auditing, and Unreal Engine automation.</span></a></li></ul></nav>
+<nav data-index-pages-chrome="nav"><ul><li><a href="../../index.html"><span class="hh-nav-label">plugins</span> <span class="hh-nav-identity">The Claude Code plugin marketplace: independently installable plugins sharing the bootstrap provisioning engine and llm-scripting-kit access layer, covering code review, durable job execution, LLM endpoint dispatch, Hue scene synchronization, PDF rendering, fleet secrets provisioning, prompt statusline, cache forensics, markdown auditing, and Unreal Engine automation.</span></a></li></ul></nav>
 <script>
 if (window.parent !== window) {
   window.parent.postMessage({
-    type: "human-html:announce",
+    type: "index-pages:announce",
     version: 1,
     directory: "plugins/p4-kit/scripts",
     file: "index.html",
@@ -36,7 +36,7 @@ if (window.parent !== window) {
     if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
     var target = href.split("#")[0].split("?")[0];
     if (!target) return;
-    if (/(^|\/)human(\.[^/]+)?\.html$/.test(target)) return;
+    if (/(^|\/)index-page(\.[^/]+)?\.html$/.test(target)) return;
     var parts = "plugins/p4-kit/scripts".split("/");
     if (parts.length === 1 && parts[0] === ".") parts = [];
     var segs = target.split("/");
@@ -47,7 +47,7 @@ if (window.parent !== window) {
     }
     event.preventDefault();
     window.parent.postMessage({
-      type: "human-html:navigate",
+      type: "index-pages:navigate",
       version: 1,
       path: parts.join("/")
     }, "*");

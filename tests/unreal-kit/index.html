@@ -1,15 +1,15 @@
 <!doctype html>
 <html lang="en">
 <head>
-<!-- human-html: {"generated_by":"md-domain","source_sha":"ec36607524a9acfa60a64a8cbaf570b04fd25195","directory":"tests/unreal-kit","kind":"page"} -->
+<!-- index-pages: {"generated_by":"md-domain","source_sha":"ec36607524a9acfa60a64a8cbaf570b04fd25195","directory":"tests/unreal-kit","kind":"page"} -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>Unreal Kit plugin test suite: script runner, redirector cleanup, bootstrap, config, hooks, and MCP client</title>
-<link rel="stylesheet" href="../../.databench/human-html.css">
+<link rel="stylesheet" href="../../.databench/index-pages.css">
 </head>
 <body>
-<nav data-human-html-chrome="nav" aria-label="Orientation pages">
+<nav data-index-pages-chrome="nav" aria-label="Orientation pages">
   <ul></ul>
 </nav>
 <main>
@@ -84,7 +84,7 @@
 <script>
 if (window.parent !== window) {
   window.parent.postMessage({
-    type: "human-html:announce",
+    type: "index-pages:announce",
     version: 1,
     directory: "tests/unreal-kit",
     file: "index.html",
@@ -103,7 +103,7 @@ if (window.parent !== window) {
     if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
     var target = href.split("#")[0].split("?")[0];
     if (!target) return;
-    if (/(^|\/)human(\.[^/]+)?\.html$/.test(target)) return;
+    if (/(^|\/)index-page(\.[^/]+)?\.html$/.test(target)) return;
     var parts = "tests/unreal-kit".split("/");
     if (parts.length === 1 && parts[0] === ".") parts = [];
     var segs = target.split("/");
@@ -114,7 +114,7 @@ if (window.parent !== window) {
     }
     event.preventDefault();
     window.parent.postMessage({
-      type: "human-html:navigate",
+      type: "index-pages:navigate",
       version: 1,
       path: parts.join("/")
     }, "*");

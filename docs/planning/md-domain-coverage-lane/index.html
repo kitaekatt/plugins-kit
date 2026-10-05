@@ -1,16 +1,16 @@
 <!doctype html>
 <html lang="en">
 <head>
-<!-- human-html: {"generated_by":"md-domain","source_sha":"e855325b47bca0fe8f0edc2484e695805d323355","directory":"docs/planning/md-domain-coverage-lane","kind":"page"} -->
+<!-- index-pages: {"generated_by":"md-domain","source_sha":"e855325b47bca0fe8f0edc2484e695805d323355","directory":"docs/planning/md-domain-coverage-lane","kind":"page"} -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>Planning documents that design, measure, and validate md-domain CLAUDE.md coverage and generation.</title>
-<link rel="stylesheet" href="../../../.databench/human-html.css">
+<link rel="stylesheet" href="../../../.databench/index-pages.css">
 </head>
 <body>
 <main>
-<nav data-human-html-chrome="nav" aria-label="Orientation pages">
+<nav data-index-pages-chrome="nav" aria-label="Orientation pages">
 <ul>
 <li><a href="../index.html"><span class="hh-nav-label">planning</span> <span class="hh-nav-identity">Maintainer planning and design records for plugin subsystems, task-system design, defect triage, and model dispatch.</span></a></li>
 <li>
@@ -71,7 +71,7 @@
 <script>
 if (window.parent !== window) {
   window.parent.postMessage({
-    type: "human-html:announce",
+    type: "index-pages:announce",
     version: 1,
     directory: "docs/planning/md-domain-coverage-lane",
     file: "index.html",
@@ -90,7 +90,7 @@ if (window.parent !== window) {
     if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
     var target = href.split("#")[0].split("?")[0];
     if (!target) return;
-    if (/(^|\/)human(\.[^/]+)?\.html$/.test(target)) return;
+    if (/(^|\/)index-page(\.[^/]+)?\.html$/.test(target)) return;
     var parts = "docs/planning/md-domain-coverage-lane".split("/");
     if (parts.length === 1 && parts[0] === ".") parts = [];
     var segs = target.split("/");
@@ -101,7 +101,7 @@ if (window.parent !== window) {
     }
     event.preventDefault();
     window.parent.postMessage({
-      type: "human-html:navigate",
+      type: "index-pages:navigate",
       version: 1,
       path: parts.join("/")
     }, "*");

@@ -1,23 +1,23 @@
 <!doctype html>
 <html lang="en">
 <head>
-<!-- human-html: {"generated_by":"md-domain","source_sha":"446de4db4bb09b296abee38e0d36ae28a0a3b8c7","directory":"plugins/bootstrap/bootstrap_lib/managed_state","kind":"page"} -->
+<!-- index-pages: {"generated_by":"md-domain","source_sha":"446de4db4bb09b296abee38e0d36ae28a0a3b8c7","directory":"plugins/bootstrap/bootstrap_lib/managed_state","kind":"page"} -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>Harness-independent declarative state management and safe symlink convergence for bootstrap projects.</title>
-<link rel="stylesheet" href="../../../../.databench/human-html.css">
+<link rel="stylesheet" href="../../../../.databench/index-pages.css">
 </head>
 <body>
 <main>
 <h1>Harness-independent declarative state management and safe symlink convergence for bootstrap projects.</h1>
 <p class="hh-orientation">This package is the harness-independent state half of bootstrap. A project declares desired working-tree items; each item is left, created, or repaired. The plan is re-checked before mutation so concurrent convergence is not clobbered.</p><section><h2>Where to start</h2><p><a href="model.py">plugins/bootstrap/bootstrap_lib/managed_state/model.py</a> defines Operation, State, Status, Resource, and ResourceApplyError. <a href="runner.py">plugins/bootstrap/bootstrap_lib/managed_state/runner.py</a> turns inspect results into plan and run outcomes. <a href="__init__.py">plugins/bootstrap/bootstrap_lib/managed_state/__init__.py</a> exposes the public surface.</p></section><section><h2>Routes</h2><ul><li><strong>Follow one operation</strong><ol><li><a href="model.py">plugins/bootstrap/bootstrap_lib/managed_state/model.py</a> declare resources.</li><li><a href="runner.py">plugins/bootstrap/bootstrap_lib/managed_state/runner.py</a> plan() marks will_change or blocked; run() executes changes and converts failures to report data.</li><li><a href="cli.py">plugins/bootstrap/bootstrap_lib/managed_state/cli.py</a> run_cli() prints JSON or a one-line report and exits 0 or 1.</li></ol></li><li><strong>Add a resource</strong><ol><li><a href="model.py">plugins/bootstrap/bootstrap_lib/managed_state/model.py</a> implement Resource inspect() and converge().</li><li><a href="symlink.py">plugins/bootstrap/bootstrap_lib/managed_state/symlink.py</a> use the built-in symlink resource, including backup and rollback, as reference.</li></ol></li></ul></section>
 </main>
-<nav data-human-html-chrome="nav"><ul><li><a href="../index.html"><span class="hh-nav-label">bootstrap_lib</span> <span class="hh-nav-identity">Bootstrap plugin shared library: the engine pass, platform tool installers, Codex CLI integration, environment and config management, code review pipeline, and remediation queue.</span></a></li></ul></nav>
+<nav data-index-pages-chrome="nav"><ul><li><a href="../index.html"><span class="hh-nav-label">bootstrap_lib</span> <span class="hh-nav-identity">Bootstrap plugin shared library: the engine pass, platform tool installers, Codex CLI integration, environment and config management, code review pipeline, and remediation queue.</span></a></li></ul></nav>
 <script>
 if (window.parent !== window) {
   window.parent.postMessage({
-    type: "human-html:announce",
+    type: "index-pages:announce",
     version: 1,
     directory: "plugins/bootstrap/bootstrap_lib/managed_state",
     file: "index.html",
@@ -36,7 +36,7 @@ if (window.parent !== window) {
     if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
     var target = href.split("#")[0].split("?")[0];
     if (!target) return;
-    if (/(^|\/)human(\.[^/]+)?\.html$/.test(target)) return;
+    if (/(^|\/)index-page(\.[^/]+)?\.html$/.test(target)) return;
     var parts = "plugins/bootstrap/bootstrap_lib/managed_state".split("/");
     if (parts.length === 1 && parts[0] === ".") parts = [];
     var segs = target.split("/");
@@ -47,7 +47,7 @@ if (window.parent !== window) {
     }
     event.preventDefault();
     window.parent.postMessage({
-      type: "human-html:navigate",
+      type: "index-pages:navigate",
       version: 1,
       path: parts.join("/")
     }, "*");

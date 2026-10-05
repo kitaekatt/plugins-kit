@@ -1,23 +1,23 @@
 <!doctype html>
 <html lang="en">
 <head>
-<!-- human-html: {"generated_by":"md-domain","source_sha":"753f0aaff0e979840a844e3ecf8e58645760ef79","directory":"plugins/skills-kit/skills/md-domain/references/skill-domain","kind":"page"} -->
+<!-- index-pages: {"generated_by":"md-domain","source_sha":"753f0aaff0e979840a844e3ecf8e58645760ef79","directory":"plugins/skills-kit/skills/md-domain/references/skill-domain","kind":"page"} -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>Reference material for the skill-domain: type contracts, canonical vocabulary, structural patterns, schema fixtures, and audit tooling documentation.</title>
-<link rel="stylesheet" href="../../../../../../.databench/human-html.css">
+<link rel="stylesheet" href="../../../../../../.databench/index-pages.css">
 </head>
 <body>
 <main>
 <h1>Reference material for the skill-domain: type contracts, canonical vocabulary, structural patterns, schema fixtures, and audit tooling documentation.</h1>
 <p class="hh-orientation">This reference set documents how skills in this project are typed, contracted, structured, and audited. It separates canonical vocabulary from the per-type contracts, gives minimal schema examples, and describes the scripts that check or classify a skill main file. Open it when a skill feels inconsistent, when a new sub-domain needs a routing surface, or when audit output needs interpretation.</p><section><h2>Where to start</h2><p><a href="glossary.md">plugins/skills-kit/skills/md-domain/references/skill-domain/glossary.md</a> first, because the contract tables use its terms without redefining them. <a href="framework.md">plugins/skills-kit/skills/md-domain/references/skill-domain/framework.md</a> is the next stop for per-type requirements, audit procedure, and conditional-requirement grammar.</p></section><section><h2>Routes</h2><ul><li><strong>Recover the authoring rules</strong><ol><li><a href="glossary.md">plugins/skills-kit/skills/md-domain/references/skill-domain/glossary.md</a> for the canonical terms.</li><li><a href="framework.md">plugins/skills-kit/skills/md-domain/references/skill-domain/framework.md</a> for type contracts and audit procedure.</li><li><a href="schema-fixtures.md">plugins/skills-kit/skills/md-domain/references/skill-domain/schema-fixtures.md</a> for minimal valid blocks.</li></ol></li><li><strong>Interpret an audit</strong><ol><li><a href="scripts.md">plugins/skills-kit/skills/md-domain/references/skill-domain/scripts.md</a> for audit, classify, tag, and material behavior.</li><li><a href="framework.md">plugins/skills-kit/skills/md-domain/references/skill-domain/framework.md</a> for the contract rows the script checks.</li><li><a href="example-audit.md">plugins/skills-kit/skills/md-domain/references/skill-domain/example-audit.md</a> for a worked audit with friction notes.</li></ol></li></ul></section><section><h2>Contracts and vocabulary</h2><ul><li><a href="glossary.md">plugins/skills-kit/skills/md-domain/references/skill-domain/glossary.md</a> Canonical skill terms; open it before interpreting contracts or audit rows.</li><li><a href="framework.md">plugins/skills-kit/skills/md-domain/references/skill-domain/framework.md</a> Per-type contracts, audit procedure, and conditional-requirement grammar; open it when deciding whether a skill is well-formed.</li></ul></section><section><h2>Structural patterns and schemas</h2><ul><li><a href="domain-layering.md">plugins/skills-kit/skills/md-domain/references/skill-domain/domain-layering.md</a> Routing surface for domain skills with multiple sub-areas; open it before adding a greeting menu or argument dispatch.</li><li><a href="subdomain-schema.md">plugins/skills-kit/skills/md-domain/references/skill-domain/subdomain-schema.md</a> Fields a sub-area config carries; open it when canonical states, operations, or scopes need a shared shape.</li><li><a href="patterns-actions.md">plugins/skills-kit/skills/md-domain/references/skill-domain/patterns-actions.md</a> YAML step sequences for repeatable workflows; open it when a recipe must run the same steps in order.</li><li><a href="schema-fixtures.md">plugins/skills-kit/skills/md-domain/references/skill-domain/schema-fixtures.md</a> Minimal valid YAML blocks for the type schemas; open it before authoring or editing a contract block.</li></ul></section><section><h2>Audit, reporting, and verification</h2><ul><li><a href="scripts.md">plugins/skills-kit/skills/md-domain/references/skill-domain/scripts.md</a> CLI behavior for audit, classify, tag, and material; open it when running or debugging the skill-authoring scripts.</li><li><a href="report-usage.md">plugins/skills-kit/skills/md-domain/references/skill-domain/report-usage.md</a> Usage for roster and hierarchy reports; open it when generating or reading corpus-wide skill reports.</li><li><a href="example-audit.md">plugins/skills-kit/skills/md-domain/references/skill-domain/example-audit.md</a> A preserved audit of a real skill against the discipline-skill contract; open it to see how checklist rows play out.</li><li><a href="example-verification.md">plugins/skills-kit/skills/md-domain/references/skill-domain/example-verification.md</a> Pre-ship rules for skill examples; open it before shipping commands that users or agents copy literally.</li></ul></section>
 </main>
-<nav data-human-html-chrome="nav"><ul><li><a href="../index.html"><span class="hh-nav-label">references</span> <span class="hh-nav-identity">Reference documentation for the md-domain skill: audit framework, per-artifact standards, lane procedures, authoring patterns, provenance records, and cross-cutting guidance on cohesion, capability boundaries, and standards configuration.</span></a></li></ul></nav>
+<nav data-index-pages-chrome="nav"><ul><li><a href="../index.html"><span class="hh-nav-label">references</span> <span class="hh-nav-identity">Reference documentation for the md-domain skill: audit framework, per-artifact standards, lane procedures, authoring patterns, provenance records, and cross-cutting guidance on cohesion, capability boundaries, and standards configuration.</span></a></li></ul></nav>
 <script>
 if (window.parent !== window) {
   window.parent.postMessage({
-    type: "human-html:announce",
+    type: "index-pages:announce",
     version: 1,
     directory: "plugins/skills-kit/skills/md-domain/references/skill-domain",
     file: "index.html",
@@ -36,7 +36,7 @@ if (window.parent !== window) {
     if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
     var target = href.split("#")[0].split("?")[0];
     if (!target) return;
-    if (/(^|\/)human(\.[^/]+)?\.html$/.test(target)) return;
+    if (/(^|\/)index-page(\.[^/]+)?\.html$/.test(target)) return;
     var parts = "plugins/skills-kit/skills/md-domain/references/skill-domain".split("/");
     if (parts.length === 1 && parts[0] === ".") parts = [];
     var segs = target.split("/");
@@ -47,7 +47,7 @@ if (window.parent !== window) {
     }
     event.preventDefault();
     window.parent.postMessage({
-      type: "human-html:navigate",
+      type: "index-pages:navigate",
       version: 1,
       path: parts.join("/")
     }, "*");
