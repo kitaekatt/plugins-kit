@@ -934,7 +934,7 @@ recorded and linked.
 
 When a tool resolves via `installPath` (or `which` from a dir off the persistent
 PATH) but its directory isn't on PATH, the engine adds that directory to PATH
-itself — shell RC files + Windows User PATH (registry) + the live process PATH —
+itself -- shell RC files (Windows: the User PATH registry instead) + the live process PATH --
 and logs `tool: on disk but not on PATH — added <dir>`. This is the linkage
 between `tools[]` and `path_entries[]`: a resolved tool pulls its own dir onto
 PATH, so you don't have to declare a separate `path_entries` entry, and a tool
@@ -942,7 +942,11 @@ that's present-but-unreachable becomes reachable without any "restart your shell
 instruction (per dependency-philosophy.md principle 4).
 
 For both `path_entries` and tool-to-PATH linkage, `add_path_to_shell_config`
-writes new Windows shell RC declarations in Git Bash form: forward slashes
+writes the Windows User PATH (registry) on Windows and no shell RC line: Git
+Bash inherits that PATH, so an RC line as well would put the directory on
+PATH twice in every shell. It falls back to an RC line only when the registry
+write does not persist (a failed write, or `BOOTSTRAP_SKIP_REGISTRY`). That
+fallback line is in Git Bash form: forward slashes
 and `/<lowercase-drive-letter>/...`, with the PATH expression double-quoted
 so spaces stay within one entry. Paths under the home directory retain
 `$HOME` form. Windows User PATH registry writes retain native Windows paths.
