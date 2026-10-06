@@ -2,7 +2,7 @@
   "schema_version": 1,
   "directory": "plugins/awesome-kit/skills/task",
   "decision": "none",
-  "source_sha": "bce913a291b2c16dd005e8d32674fbd70027813f",
+  "source_sha": "fbc34cb104a77cad71b071e4a792a7f2ca11d6f0",
   "input_sha256": "c74e7537f8ba378c6dff9b99f7240cefe3877a92a27347b40f8f0d6d7046de61",
   "input_shape_sha256": "c8ed4e3d5a1a91d958dbcdc5e50fbcd48b2e323cd7186fbb8d4ac89f910484e1",
   "dirty": false,

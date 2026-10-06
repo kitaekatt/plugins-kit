@@ -1,99 +1,19 @@
 <!doctype html>
 <html lang="en">
 <head>
-<!-- index-pages: {"generated_by":"md-domain","source_sha":"9a57413d3efe0f71d67adbd61f0c74fe009dce91","directory":"plugins/llm-scripting-kit/lib/llm_scripting_kit","kind":"page"} -->
+<!-- index-pages: {"generated_by":"md-domain","source_sha":"fbc34cb104a77cad71b071e4a792a7f2ca11d6f0","directory":"plugins/llm-scripting-kit/lib/llm_scripting_kit","kind":"page"} -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>The llm-scripting-kit package that resolves credentials, endpoints, models, reachability, quota pacing, and completion backends for configured model calls.</title>
+<title>The llm-scripting-kit library that configures, verifies, and dispatches LLM model calls across OpenAI-compatible servers and CLI harnesses, with layered credential resolution, reachability checks, and subscription quota pacing.</title>
 <link rel="stylesheet" href="../../../../.databench/index-pages.css">
 </head>
 <body>
-<nav data-index-pages-chrome="nav" aria-label="Orientation pages">
-  <ul>
-    <li><a href="../../index.html"><span class="hh-nav-label">llm-scripting-kit</span> <span class="hh-nav-identity">The llm-scripting-kit plugin distribution that provides the installed CLI, local Qwen server scripts, credential setup, and completion-seam reference</span></a></li>
-<li><a href="frontdoor/index.html"><span class="hh-nav-label">frontdoor</span> <span class="hh-nav-identity">The OpenAI-compatible front door that routes chat requests to configured transport deployments.</span></a></li>
-  </ul>
-</nav>
 <main>
-  <h1>The llm-scripting-kit package that resolves credentials, endpoints, models, reachability, quota pacing, and completion backends for configured model calls.</h1>
-  <p>This package is the shared layer that every plugin in this kit uses when it makes a configured model call. A caller names a model or endpoint by id, and the package answers what this machine can actually do: which credentials resolve, which servers answer, which subscription windows still have budget, and which backend can dispatch the work. It is stdlib-only by default, and the few places that reach for optional dependencies import them lazily. Everything a user configures lives in layered files outside this directory, so the code here reads configuration rather than owning it.</p>
-
-  <h2>Where to start</h2>
-  <p>Open <a href="cli.py"><code>cli.py</code></a> to read every subcommand and exit code the package promises from a terminal. <a href="__init__.py"><code>__init__.py</code></a> is the import surface when you call the package from Python.</p>
-
-  <h2>Routes</h2>
-  <ul>
-    <li>Store a key: <a href="cli.py"><code>cli.py</code></a> set-key -> <a href="env_file.py"><code>env_file.py</code></a> -> <a href="api_key.py"><code>api_key.py</code></a></li>
-    <li>Verify an endpoint: <a href="cli.py"><code>cli.py</code></a> endpoints --verify -> <a href="reachability.py"><code>reachability.py</code></a> -> <a href="account.py"><code>account.py</code></a></li>
-    <li>Render a declaration: <a href="cli.py"><code>cli.py</code></a> describe -> <a href="declaration.py"><code>declaration.py</code></a> (reads <a href="usage_budget.py"><code>usage_budget.py</code></a> and <a href="reachability.py"><code>reachability.py</code></a>)</li>
-    <li>Run a completion: <a href="cli.py"><code>cli.py</code></a> complete -> <a href="request_protocol.py"><code>request_protocol.py</code></a> -> <a href="completion/"><code>completion/</code></a></li>
-  </ul>
-
-  <h2>The command line</h2>
-  <dl>
-    <dt><a href="cli.py"><code>cli.py</code></a></dt>
-    <dd>Every subcommand: status, set-key, endpoints, probe, describe, usage, seats, models, resolve, complete. The exit codes split a failed call from bad input, so a caller can tell what to retry. Open it first when a command misbehaves.</dd>
-    <dt><a href="request_protocol.py"><code>request_protocol.py</code></a></dt>
-    <dd>The versioned JSON request behind complete --request-file, so a machine consumer has one surface instead of a flag wall. Read it when you send requests from outside Python.</dd>
-    <dt><a href="review_lane.py"><code>review_lane.py</code></a></dt>
-    <dd>Runs one code-review lane against a configured endpoint and refuses loudly instead of falling back to another reviewer. Open it when a review dispatch is refused.</dd>
-  </dl>
-
-  <h2>Credentials</h2>
-  <dl>
-    <dt><a href="api_key.py"><code>api_key.py</code></a></dt>
-    <dd>Resolves an endpoint's key through five layers, from environment variable to configured key file, and says which one won. Open it when a key comes from the wrong place.</dd>
-    <dt><a href="account.py"><code>account.py</code></a></dt>
-    <dd>Checks a key against the auth check an endpoint declares, and pings the models endpoint without ever raising. Open it to see how a credential verdict becomes a value, not an exception.</dd>
-    <dt><a href="client.py"><code>client.py</code></a></dt>
-    <dd>Builds an OpenAI client for any endpoint, importing the SDK only when asked and sending a stand-in key to keyless servers. Open it when you construct a client from Python.</dd>
-    <dt><a href="constants.py"><code>constants.py</code></a></dt>
-    <dd>The default endpoint's values and the canonical credential-file locations, including the superseded project path. Open it to find where credential files live.</dd>
-    <dt><a href="env_file.py"><code>env_file.py</code></a></dt>
-    <dd>The reader and writer for the plugin's small credential files: quotes a value only when needed and creates the file at 0600. Open it when a credential file is malformed or world-readable.</dd>
-  </dl>
-
-  <h2>Configuration</h2>
-  <dl>
-    <dt><a href="default_config.yaml"><code>default_config.yaml</code></a></dt>
-    <dd>The shipped baseline: named endpoints, model aliases, and the default and defaultCheap selectors, with the layering rules in the comments on top. Read it to see what every machine gets before overrides.</dd>
-    <dt><a href="models.py"><code>models.py</code></a></dt>
-    <dd>Resolves a model name or endpoint to a concrete slug and base URL by deep-merging the shipped baseline under the fleet, machine, and project layers. Open it when a name resolves to something you did not expect.</dd>
-    <dt><a href="model_endpoints.py"><code>model_endpoints.py</code></a></dt>
-    <dd>Reads the user-owned registry of machine-specific endpoints, a YAML file outside this package. Open it when an entry id resolves from a file you do not see here.</dd>
-  </dl>
-
-  <h2>Availability</h2>
-  <dl>
-    <dt><a href="reachability.py"><code>reachability.py</code></a></dt>
-    <dd>Answers whether a configured endpoint answers right now, with three verdicts: reachable, unreachable, unknown. A check that could not run is never reported as down, and no completion is ever sent. Open it when a verdict says unknown.</dd>
-    <dt><a href="usage_budget.py"><code>usage_budget.py</code></a></dt>
-    <dd>The third axis: whether a subscription window still has budget, from files the harnesses already wrote. A spent pool disables a model; one merely behind pace only de-prioritizes it. Open it when a paced model is missing or ordered last.</dd>
-    <dt><a href="seats.py"><code>seats.py</code></a></dt>
-    <dd>Finds reachable harness seats UP and BESIDE a given model, using the reachability and quota verdicts. Open it when you choose a stronger or independent model for a unit of work.</dd>
-  </dl>
-
-  <h2>Selection and dispatch</h2>
-  <dl>
-    <dt><a href="declaration.py"><code>declaration.py</code></a></dt>
-    <dd>The one API over a model declaration: describe renders what this machine can run in pace order, run dispatches it, and the floor itemizes every entry when none is usable. Open it when a declaration fails.</dd>
-    <dt><a href="harness_adapters.py"><code>harness_adapters.py</code></a></dt>
-    <dd>Builds the argv for a codex or opencode dispatch, leaving the brief on stdin. Read it before you change how a harness is invoked or its effort menu.</dd>
-  </dl>
-
-  <h2>The completion seam</h2>
-  <dl>
-    <dt><a href="completion/"><code>completion/</code></a></dt>
-    <dd>13 modules making one complete() protocol run over four transports: the OpenRouter HTTP endpoint and the claude, codex, and opencode CLIs. Open <a href="completion/halt.py"><code>completion/halt.py</code></a> for the halt taxonomy every backend reports, <a href="completion/types.py"><code>completion/types.py</code></a> for the shared types, and <a href="completion/backends.py"><code>completion/backends.py</code></a> for the transports.</dd>
-  </dl>
-
-  <h2>Package root</h2>
-  <dl>
-    <dt><a href="__init__.py"><code>__init__.py</code></a></dt>
-    <dd>The import surface: every name a consumer takes from this package is re-exported here, so the export list maps the package. Open it when you add a public name or look up where one lives.</dd>
-  </dl>
+<h1>The llm-scripting-kit library that configures, verifies, and dispatches LLM model calls across OpenAI-compatible servers and CLI harnesses, with layered credential resolution, reachability checks, and subscription quota pacing.</h1>
+<p class="hh-orientation">This is the shared LLM access layer for the plugins. It turns a named model into a concrete endpoint and a credential, checks that the endpoint is usable right now, and runs the call over whatever transport a machine can reach -- an OpenAI-compatible HTTP server or one of three local CLI harnesses. Configuration is layered, from a shipped baseline up through fleet-wide, machine-local, and per-project files, so a machine-specific choice beats the fleet default. The import boundary is stdlib-only: the openai SDK, psutil, and the shared bootstrap library load lazily, so a consumer that only needs a raw key or a reachability check pays nothing for the transports.</p><section><h2>Where to start</h2><p>Open <a href="__init__.py">plugins/llm-scripting-kit/lib/llm_scripting_kit/__init__.py</a> first: its re-exports are the whole public surface, and the module docstring names the four transports and the config layering together. To read the command surface instead of the import surface, start with <a href="cli.py">plugins/llm-scripting-kit/lib/llm_scripting_kit/cli.py</a>.</p></section><section><h2>Routes</h2><ul><li><strong>Dispatch a completion through the seam</strong><ol><li><a href="completion/factory.py">plugins/llm-scripting-kit/lib/llm_scripting_kit/completion/factory.py</a></li><li><a href="completion/backends.py">plugins/llm-scripting-kit/lib/llm_scripting_kit/completion/backends.py</a></li><li><a href="completion/types.py">plugins/llm-scripting-kit/lib/llm_scripting_kit/completion/types.py</a></li></ol></li><li><strong>Resolve a named model into a client</strong><ol><li><a href="models.py">plugins/llm-scripting-kit/lib/llm_scripting_kit/models.py</a></li><li><a href="api_key.py">plugins/llm-scripting-kit/lib/llm_scripting_kit/api_key.py</a></li><li><a href="client.py">plugins/llm-scripting-kit/lib/llm_scripting_kit/client.py</a></li></ol></li><li><strong>Verify an endpoint before trusting it</strong><ol><li><a href="reachability.py">plugins/llm-scripting-kit/lib/llm_scripting_kit/reachability.py</a></li><li><a href="account.py">plugins/llm-scripting-kit/lib/llm_scripting_kit/account.py</a></li></ol></li></ul></section><section><h2>Configuration and model registry</h2><ul><li><a href="__init__.py">plugins/llm-scripting-kit/lib/llm_scripting_kit/__init__.py</a> -- the package&#x27;s re-export map; its docstring names the four transports and the config layering in one place.</li><li><a href="models.py">plugins/llm-scripting-kit/lib/llm_scripting_kit/models.py</a> -- layered config resolved to the effective model and endpoint map; <code>resolve_model</code> and <code>resolve_endpoint</code>.</li><li><a href="model_endpoints.py">plugins/llm-scripting-kit/lib/llm_scripting_kit/model_endpoints.py</a> -- reads the user-owned model-endpoints registry; the entry schema and per-entry effort-style resolution.</li><li><a href="constants.py">plugins/llm-scripting-kit/lib/llm_scripting_kit/constants.py</a> -- the shipped default endpoint values and the canonical key and config file paths.</li><li><a href="default_config.yaml">plugins/llm-scripting-kit/lib/llm_scripting_kit/default_config.yaml</a> -- the shipped baseline config, the lowest layer; a test keeps it in sync with the model map.</li></ul></section><section><h2>Credentials and the client</h2><ul><li><a href="api_key.py">plugins/llm-scripting-kit/lib/llm_scripting_kit/api_key.py</a> -- resolves an endpoint&#x27;s key through env, project, user, then key_file; records the source and flags the superseded project path.</li><li><a href="client.py">plugins/llm-scripting-kit/lib/llm_scripting_kit/client.py</a> -- <code>make_openai_client</code>, a lazily-imported openai SDK client pointed at the resolved endpoint.</li><li><a href="env_file.py">plugins/llm-scripting-kit/lib/llm_scripting_kit/env_file.py</a> -- the minimal KEY=VALUE reader and writer the credential layers build on.</li></ul></section><section><h2>Dispatch: the completion seam</h2><ul><li><a href="declaration.py">plugins/llm-scripting-kit/lib/llm_scripting_kit/declaration.py</a> -- <code>describe</code> and <code>run</code>, the one API over a model declaration; pace ordering and the floor diagnostic.</li><li><a href="completion/factory.py">plugins/llm-scripting-kit/lib/llm_scripting_kit/completion/factory.py</a> -- <code>create_backend</code>, where a named transport becomes a runnable backend.</li><li><a href="completion/backends.py">plugins/llm-scripting-kit/lib/llm_scripting_kit/completion/backends.py</a> -- the four transports: the OpenRouter HTTP endpoint and the claude, codex, and opencode CLIs.</li><li><a href="completion/types.py">plugins/llm-scripting-kit/lib/llm_scripting_kit/completion/types.py</a> -- <code>BackendOptions</code>, <code>LLMResponse</code>, and the seam&#x27;s error vocabulary.</li><li>The remaining seam modules -- capability tables, the output contract, halt and result handling, and the per-harness runners -- support the four backends.</li></ul></section><section><h2>Verification and health</h2><ul><li><a href="reachability.py">plugins/llm-scripting-kit/lib/llm_scripting_kit/reachability.py</a> -- liveness checks (a GET of a transport&#x27;s models endpoint, a harness&#x27;s version probe); three verdicts, never a bare boolean.</li><li><a href="account.py">plugins/llm-scripting-kit/lib/llm_scripting_kit/account.py</a> -- OpenRouter auth/key validation and the models endpoint probes.</li></ul></section><section><h2>Quota pacing and seats</h2><ul><li><a href="usage_budget.py">plugins/llm-scripting-kit/lib/llm_scripting_kit/usage_budget.py</a> -- <code>conserve_usage</code> quota pacing and the session-pinned verdict that gates selection.</li><li><a href="seats.py">plugins/llm-scripting-kit/lib/llm_scripting_kit/seats.py</a> -- frontier seat discovery: which harness seats are up and beside a given model.</li></ul></section><section><h2>Harness, effort, and the local swapper</h2><ul><li><a href="harness_adapters.py">plugins/llm-scripting-kit/lib/llm_scripting_kit/harness_adapters.py</a> -- argv builders for the codex and opencode harness dispatches.</li><li><a href="effort.py">plugins/llm-scripting-kit/lib/llm_scripting_kit/effort.py</a> -- the reasoning-effort wire vocabulary shared by the front door and the direct seam.</li><li><a href="swapper.py">plugins/llm-scripting-kit/lib/llm_scripting_kit/swapper.py</a> -- the local model-swapper client and lifecycle: launch guard, terminate, strays, and acceptance fixtures.</li></ul></section><section><h2>The front door</h2><ul><li><a href="frontdoor/server.py">plugins/llm-scripting-kit/lib/llm_scripting_kit/frontdoor/server.py</a> -- the OpenAI-compatible fill-first front door HTTP server and its acceptance checks.</li></ul></section><section><h2>The CLI</h2><ul><li><a href="cli.py">plugins/llm-scripting-kit/lib/llm_scripting_kit/cli.py</a> -- the public subcommands: status, set-key, probe, usage, describe, seats, complete, swapper, frontdoor.</li><li><a href="request_protocol.py">plugins/llm-scripting-kit/lib/llm_scripting_kit/request_protocol.py</a> -- the versioned <code>complete --request-file</code> request half of the protocol.</li><li><a href="review_lane.py">plugins/llm-scripting-kit/lib/llm_scripting_kit/review_lane.py</a> -- dispatch one code-review lane against a configured endpoint.</li></ul></section>
 </main>
+<nav data-index-pages-chrome="nav"><ul><li><a href="../../../index.html"><span class="hh-nav-label">plugins</span> <span class="hh-nav-identity">The Claude Code plugin marketplace: independently installable plugins sharing the bootstrap provisioning engine and llm-scripting-kit access layer, covering code review, durable job execution, LLM endpoint dispatch, Hue scene synchronization, PDF rendering, fleet secrets provisioning, prompt statusline, cache forensics, markdown auditing, and Unreal Engine automation.</span></a></li><li><a href="../../README.md"><span class="hh-nav-label">README.md</span> <span class="hh-nav-identity">The plugin&#x27;s human-facing docs: invoking the CLI, the layered config, and credential setup.</span></a></li></ul></nav>
 <script>
 if (window.parent !== window) {
   window.parent.postMessage({
@@ -102,7 +22,7 @@ if (window.parent !== window) {
     directory: "plugins/llm-scripting-kit/lib/llm_scripting_kit",
     file: "index.html",
     kind: "page",
-    source_sha: "9a57413d3efe0f71d67adbd61f0c74fe009dce91"
+    source_sha: "fbc34cb104a77cad71b071e4a792a7f2ca11d6f0"
   }, "*");
   document.addEventListener("click", function (event) {
     if (event.defaultPrevented || event.button !== 0) return;

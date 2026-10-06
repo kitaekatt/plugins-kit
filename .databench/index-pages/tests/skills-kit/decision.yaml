@@ -2,7 +2,7 @@
   "schema_version": 1,
   "directory": "tests/skills-kit",
   "decision": "none",
-  "source_sha": "b313de791cba8718bfa1bc98947602803869192e",
+  "source_sha": "fbc34cb104a77cad71b071e4a792a7f2ca11d6f0",
   "input_sha256": "00dde31df6fead3633c9dd3d1c670230beb2dbbdbb80a1eef7ff4910e99b55ea",
   "input_shape_sha256": "3b6d89b78469f01e58c0e85cbe9488d72be18205477d819a29b719278b1e79cf",
   "dirty": false,

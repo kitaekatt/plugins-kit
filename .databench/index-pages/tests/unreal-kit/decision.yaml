@@ -1,11 +1,12 @@
 {
   "schema_version": 1,
   "directory": "tests/unreal-kit",
-  "decision": "page",
-  "source_sha": "ec36607524a9acfa60a64a8cbaf570b04fd25195",
-  "generation_spec_sha256": "0805933a1de089dc951a33d702e9d57d569f0584732b017cd3600742a34ba321",
-  "dirty": false,
-  "identity": "Unreal Kit plugin test suite: script runner, redirector cleanup, bootstrap, config, hooks, and MCP client",
+  "decision": "none",
+  "source_sha": "cb60628a74e7921fb4d2c4b32bdc24607d993670",
+  "input_sha256": "666975f33a43942eb4deecb0d2eb5936267c432ecbe21a72f89793881f729189",
+  "input_shape_sha256": "876d896b34ba82c51cc10e8cdd1e897ef0003f78ff2b3a503c4c58c0166034b2",
+  "dirty": true,
+  "identity": "",
   "instructions": "",
   "references": []
 }

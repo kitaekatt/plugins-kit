@@ -2,7 +2,7 @@
   "schema_version": 1,
   "directory": "plugins/llm-scripting-kit",
   "decision": "none",
-  "source_sha": "ff1b0a8fad5f43470f9d899347795fcec6bf2ef1",
+  "source_sha": "fbc34cb104a77cad71b071e4a792a7f2ca11d6f0",
   "input_sha256": "b93aa5bfd312ee5f65f14f715c6ee2623154c6c196a0c39cf9ac2503f1929ee1",
   "input_shape_sha256": "45a22c05c444b5d91409610465400189c5d26660821bef60946cc9c1d81ab2e5",
   "dirty": false,

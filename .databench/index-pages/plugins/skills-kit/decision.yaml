@@ -2,7 +2,7 @@
   "schema_version": 1,
   "directory": "plugins/skills-kit",
   "decision": "none",
-  "source_sha": "bce913a291b2c16dd005e8d32674fbd70027813f",
+  "source_sha": "fbc34cb104a77cad71b071e4a792a7f2ca11d6f0",
   "input_sha256": "fd05588e3cf7d24f9a8bfde85b447955743b7b115a2dba671257ca2986a361a2",
   "input_shape_sha256": "0aae4bcb1136d90f0c6440be2b3194cd75e1cb5f75178262f69e950bd4158ff2",
   "dirty": false,
