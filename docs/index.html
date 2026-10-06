@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- index-pages: {"generated_by":"md-domain","source_sha":"fbc34cb104a77cad71b071e4a792a7f2ca11d6f0","directory":"docs","kind":"page"} -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Design records, implementation plans, and investigation reports for the plugins-kit project</title>
+<link rel="stylesheet" href="../.databench/index-pages.css">
+</head>
+<body>
+<main>
+<h1>Design records, implementation plans, and investigation reports for the plugins-kit project</h1>
+<p class="hh-orientation">This directory is the project&#x27;s working paper trail: the design records, implementation plans, and investigation reports written while the plugins were built. Each document describes code that lives beside it but is never shipped into a plugin cache, so it may carry maintainer-only detail a consumer&#x27;s machine would never see. Folders are named for the plugin or subsystem they serve, and a file sits at the top level when a question crosses that boundary. Two areas have pages of their own and are left out of this one: the md-domain coverage planning and the maintainer reference. The cards above route to them.</p><section><h2>Where to start</h2><p>There is no single entry point; the folders are the map. Open the <a href="planning/bootstrap/MILESTONES.md">docs/planning/bootstrap/MILESTONES.md</a> when you are picking up the plugin foundation, because it records what shipped in each milestone and which gaps each one closed.</p></section><section><h2>Bootstrap: the SessionStart provisioner</h2><ul><li><a href="historical/session-bootstrap-architecture/session-bootstrap-architecture-proposal.md">docs/historical/session-bootstrap-architecture/session-bootstrap-architecture-proposal.md</a> The founding design: three manifests, one bash hook, and fail-fast remediation into context.</li><li><a href="historical/session-bootstrap-architecture/session-bootstrap-architecture-tasks.md">docs/historical/session-bootstrap-architecture/session-bootstrap-architecture-tasks.md</a> The eight implementation tasks, all done, with the macOS test results.</li><li><a href="planning/bootstrap/MILESTONES.md">docs/planning/bootstrap/MILESTONES.md</a> What shipped in each milestone and the gap each one closed.</li><li><a href="planning/bootstrap/stable-channel-design.md">docs/planning/bootstrap/stable-channel-design.md</a> A not-yet-built design for syncing plugins to an aged stable channel.</li><li><a href="planning/bootstrap/tool-resolution-redesign.md">docs/planning/bootstrap/tool-resolution-redesign.md</a> The move from PATH lookup to recorded absolute tool paths.</li><li><a href="planning/bootstrap/path-reachability-check.md">docs/planning/bootstrap/path-reachability-check.md</a> Treating a tool that is on disk but off PATH as installed.</li><li><a href="planning/bootstrap/path-reachability-STATUS.md">docs/planning/bootstrap/path-reachability-STATUS.md</a> The status and publish-resume note for that PATH work.</li></ul></section><section><h2>Bootstrap reference and workarounds</h2><ul><li><a href="bootstrap/reference/env-config-project-notes.md">docs/bootstrap/reference/env-config-project-notes.md</a> Patterns mined from a separate project; the design source for the bootstrap manifests.</li><li><a href="bootstrap/reference/case-studies/unreal-kit.md">docs/bootstrap/reference/case-studies/unreal-kit.md</a> The Unreal Engine plugin&#x27;s bootstrap case study.</li><li><a href="bootstrap/reference/case-studies/p4-kit.md">docs/bootstrap/reference/case-studies/p4-kit.md</a> The Perforce VCS plugin&#x27;s bootstrap case study.</li><li><a href="bootstrap/reference/case-studies/update01-bootstrap.md">docs/bootstrap/reference/case-studies/update01-bootstrap.md</a> The marketplace bootstrapper&#x27;s bootstrap case study.</li><li><a href="bootstrap/plugins-kit-auto-update-disabled-workaround.md">docs/bootstrap/plugins-kit-auto-update-disabled-workaround.md</a> The update06 seed path for machines that never auto-update.</li><li><a href="historical/add-claude-driven-bootstrap-setup-pattern.md">docs/historical/add-claude-driven-bootstrap-setup-pattern.md</a> An archived pattern for guided first-run configuration collection.</li></ul></section><section><h2>The awesome-kit task system</h2><ul><li><a href="planning/awesome-kit-task-system/prior-systems-exploration.md">docs/planning/awesome-kit-task-system/prior-systems-exploration.md</a> The two prior task and issue generations the new system derives from.</li><li><a href="planning/awesome-kit-task-system/task-system-design-decisions.md">docs/planning/awesome-kit-task-system/task-system-design-decisions.md</a> The dated decision record for what the task system is and is not.</li><li><a href="planning/awesome-kit-task-system/task-items-evidence.md">docs/planning/awesome-kit-task-system/task-items-evidence.md</a> The maintainer-only evidence archive behind the task-items design; it does not ship.</li></ul></section><section><h2>Design records for the other kits</h2><ul><li><a href="planning/adapters/adapter-design.md">docs/planning/adapters/adapter-design.md</a> The historical md-audit adapter design; current guidance is on the reference page.</li><li><a href="planning/content-pipeline-kit/session-recipients-plan.md">docs/planning/content-pipeline-kit/session-recipients-plan.md</a> The plan of record for adding background and workflow execution.</li><li><a href="planning/quota-resilient-dispatch/declaration-format-design.md">docs/planning/quota-resilient-dispatch/declaration-format-design.md</a> One model-declaration format across providers; requirements and a drill report accompany it.</li><li><a href="planning/orchestrate/deferred-evidence-experiments.md">docs/planning/orchestrate/deferred-evidence-experiments.md</a> The retained ledger of evidence gaps behind the orchestrate routing policy.</li><li><a href="planning/secrets-kit/dest-policy-and-tracked-tree-guard.md">docs/planning/secrets-kit/dest-policy-and-tracked-tree-guard.md</a> A secrets-kit note on destination policy; a sibling note covers the profileless skip rule.</li><li><a href="planning/skills-kit/repo-independent-standards.md">docs/planning/skills-kit/repo-independent-standards.md</a> The standards that keep skills working across repositories.</li><li><a href="planning/plugin-improvements.md">docs/planning/plugin-improvements.md</a> Candidate fixes found while documenting the LLM and pipeline kits.</li></ul></section><section><h2>Top-level proposals and catch-alls</h2><ul><li><a href="dippy-plugin-proposal.md">docs/dippy-plugin-proposal.md</a> The plan to wrap the Dippy approval autopilot as a plugin.</li><li><a href="p4-cli-gotchas.md">docs/p4-cli-gotchas.md</a> The cross-plugin catch-all of Perforce CLI output traps; add an entry when one bites.</li></ul></section><section><h2>Investigation reports</h2><ul><li><a href="reports/codex-command-window-investigation.md">docs/reports/codex-command-window-investigation.md</a> A read-only diagnosis of transient Command Prompt windows.</li></ul></section>
+</main>
+<nav data-index-pages-chrome="nav"><ul><li><a href="planning/md-domain-coverage-lane/index.html"><span class="hh-nav-label">md-domain-coverage-lane</span> <span class="hh-nav-identity">Planning documents that design, measure, and validate md-domain CLAUDE.md coverage and generation.</span></a></li><li><a href="reference/index.html"><span class="hh-nav-label">reference</span> <span class="hh-nav-identity">plugins-kit maintainer reference: standards, design records, procedures, platform facts, and dated measurements</span></a></li><li><a href="../README.md"><span class="hh-nav-label">README.md</span> <span class="hh-nav-identity">The repository&#x27;s human-facing overview and how to contribute.</span></a></li></ul></nav>
+<script>
+if (window.parent !== window) {
+  window.parent.postMessage({
+    type: "index-pages:announce",
+    version: 1,
+    directory: "docs",
+    file: "index.html",
+    kind: "page",
+    source_sha: "fbc34cb104a77cad71b071e4a792a7f2ca11d6f0"
+  }, "*");
+  document.addEventListener("click", function (event) {
+    if (event.defaultPrevented || event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    var el = event.target;
+    while (el && el.nodeName !== "A") el = el.parentNode;
+    if (!el) return;
+    var href = el.getAttribute("href");
+    if (!href) return;
+    if (href.charAt(0) === "#" || href.charAt(0) === "/") return;
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
+    var target = href.split("#")[0].split("?")[0];
+    if (!target) return;
+    if (/(^|\/)index-page(\.[^/]+)?\.html$/.test(target)) return;
+    var parts = "docs".split("/");
+    if (parts.length === 1 && parts[0] === ".") parts = [];
+    var segs = target.split("/");
+    for (var i = 0; i < segs.length; i++) {
+      if (segs[i] === "" || segs[i] === ".") continue;
+      if (segs[i] === "..") { parts.pop(); continue; }
+      parts.push(segs[i]);
+    }
+    event.preventDefault();
+    window.parent.postMessage({
+      type: "index-pages:navigate",
+      version: 1,
+      path: parts.join("/")
+    }, "*");
+  });
+}
+</script>
+</body>
+</html>

@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "state": "in-progress",
+  "state": "complete",
   "finished": {
     "plugins/skills-kit/skills/md-domain/references/skill-domain": "de4510c883d51ae5714d05e0b3428fc2fa3f1d05cc522da7a5b911f96c1326aa",
     "plugins/awesome-kit/skills/task/references": "b80ff74f271500b0c1a0e674265d94b4441ed2e9bd94f115e78de236f4026852",
@@ -15,6 +15,7 @@
     "plugins/llm-scripting-kit/lib/llm_scripting_kit": "a684f36255747e7c1252a83c9a248031fcdbeaa51dc899fcd71254ae08c5685a",
     "plugins/secrets-kit/lib/secrets_kit": "c48dd279f31c7ae19c13112a21e2919408a74eec666c9ebc527465137a7cfd29",
     "plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit": "81569f8b1da42d8d1c20bf2797099daf211dee9cce70711d3eb857999881e3eb",
+    "docs/planning/md-domain-coverage-lane": "643430ad260d90d81863881a7f46e0f47fd350765e6c249e2edc3fe221a8afdf",
     "plugins/awesome-kit/skills": "e68557ccf32cdd6f750090addc5af901654075cc66f36dcb1bda64ab1e194c33",
     "plugins/bootstrap/bootstrap_lib": "532b379736f59b82c66d8c74b9feff66f0bf7d49cc57c4d5eca9a81cbd86d74d",
     "plugins/content-pipeline-kit/lib": "ec366415c21094d2c9c3c2989b6f929da8672db2c7f6e27d7101fdb45be4e63b",
@@ -29,6 +30,7 @@
     "plugins/yaml-data-editor-kit": "cda640d6aa64a6885dea78eacaaa99494b14932a4de801f6b6dfc2d77effceeb",
     "tests/bootstrap": "053e7ae01ac3cc023a654709469ccab257fd03372b82575e05284cc672ded9a4",
     "tests/secrets-kit": "76cc97d15e121bdaa300880a76c8f933fe2a21dcca1ea2ec893f1f2226fc2f34",
+    "docs": "302de7bfc47c1686ac91e8d5fc496cad2987ce36b4875db4d698db81eecfbe91",
     "plugins": "30ef60908c04911d2f2e2ae68f8d0f638b8ade987c9d673d2c84838a994147d6",
     "scripts": "cfd423e273e13c717899e6b9ac1e46bfa6545aae3768aa4f0747a3bef192663d"
   }

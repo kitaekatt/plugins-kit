@@ -3,6 +3,7 @@
   "directory": "docs/planning/md-domain-coverage-lane",
   "decision": "page",
   "source_sha": "e855325b47bca0fe8f0edc2484e695805d323355",
+  "generation_spec_sha256": "b7b9f7aaf6f16133a09fac78a4e7742e22711672ed4e717b06a96a3539451723",
   "dirty": false,
   "identity": "Planning documents that design, measure, and validate md-domain CLAUDE.md coverage and generation.",
   "instructions": "These documents discuss CLAUDE.md files as a document type, not as files in this directory. Call them \"agent instruction files\" (or \"CLAUDE-dot-md files\") in prose, and never write the bare file name CLAUDE.md in text or code, since it cannot be linked from this page.",
