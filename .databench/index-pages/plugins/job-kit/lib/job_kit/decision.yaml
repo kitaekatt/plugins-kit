@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/job-kit/lib/job_kit",
+  "decision": "none",
+  "source_sha": "fbc34cb104a77cad71b071e4a792a7f2ca11d6f0",
+  "input_sha256": "28e92f59d5cc1768735dac6320ba7d13b1d98b0e1b8e33eb0eefb22291e0718a",
+  "input_shape_sha256": "3fd4307dd7ebd7ca571f828c8478df7fc75a2063dee0626989e3dc8e7f3dab0d",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

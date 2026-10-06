@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "tests/p4-kit",
+  "decision": "none",
+  "source_sha": "bd042fd6c0f99ec957a075a9edfff3aee91a2827",
+  "input_sha256": "aa0e966d89a1cfebd3a3a1f4478a5714447f4d0b587e14d27657e404c5527b82",
+  "input_shape_sha256": "8033cf7a1736a7070b554ffc5f77b0627a2b2e9a84029755e1b93844a6865ca9",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

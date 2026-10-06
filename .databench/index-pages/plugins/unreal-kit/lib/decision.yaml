@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/unreal-kit/lib",
+  "decision": "none",
+  "source_sha": "92ac2e223c4f5bcb176565ecd80ee2b120bf893f",
+  "input_sha256": "89e4c7984737e1022695272db2bc3b9200c105932a73e0450302394db1f41fef",
+  "input_shape_sha256": "a55406eed166c608e96723f2fd27cbd6031e82f0904d864fb5a3dcffccaa6f26",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

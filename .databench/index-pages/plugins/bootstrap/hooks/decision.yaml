@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/bootstrap/hooks",
+  "decision": "none",
+  "source_sha": "fbc34cb104a77cad71b071e4a792a7f2ca11d6f0",
+  "input_sha256": "66db8cc6db3ee258c46c1137f0bc099716d874a7c551c3e58f212aecab1eaad9",
+  "input_shape_sha256": "1fa9216854daaf9343feea93c743cecc1eb1a2f7a284a62cbce9d7e3403dd9c1",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

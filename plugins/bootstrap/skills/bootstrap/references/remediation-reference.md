@@ -183,7 +183,11 @@ each task records the project (`origin`) whose pass deferred it, a pass replaces
 only its own origin's tasks and keeps the others', and the queue and its
 `bootstrap-fix.{sh,bat}` launcher shim are deleted once the merged queue holds
 nothing -- so the offer disappears when the operations succeed, and one
-project's clean pass cannot discard another's deferrals. A pass launches and
+project's clean pass cannot discard another's deferrals. A pass also drops
+three kinds of record no origin would ever replace: one with no `origin` key
+(written before origins existed), a machine-wide finding (`path_prune`, which
+every pass re-derives), and a duplicate of an operation the pass itself queued
+(same id, kind, command, packages, entries and target). A pass launches and
 discloses the merged queue, not only its own tasks. A stale queue or shim that
 cannot be removed is reported, never silently kept.
 

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": ".claude-plugin",
+  "decision": "none",
+  "source_sha": "92ac2e223c4f5bcb176565ecd80ee2b120bf893f",
+  "input_sha256": "46d342c8273c864fc4e7bcc515eccd9b513ea81b85a481650d5b23a6104066ae",
+  "input_shape_sha256": "e966bef081fd46f8a48b18817106e3ab44f9cce72c417407d0af01a8a2325fda",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

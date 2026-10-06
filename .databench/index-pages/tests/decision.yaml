@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "tests",
+  "decision": "none",
+  "source_sha": "2ae68fddc22a52c87829314b25a887be1559246e",
+  "input_sha256": "fd4230b585e86645f1c034be56e25216cedcb3d06c6718004f8d6307200ea613",
+  "input_shape_sha256": "58e4e2edcad04fc7375a7941a98f990eef8dad574721b9e58c0b6470408c078b",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

@@ -1,23 +1,23 @@
 <!doctype html>
 <html lang="en">
 <head>
-<!-- human-html: {"generated_by":"md-domain","source_sha":"bce913a291b2c16dd005e8d32674fbd70027813f","directory":"scripts","kind":"page"} -->
+<!-- index-pages: {"generated_by":"md-domain","source_sha":"bce913a291b2c16dd005e8d32674fbd70027813f","directory":"scripts","kind":"page"} -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>Commit and publish gates, isolated dev testing, code-review skill rendering, and reviewer-model benchmarking for the plugins-kit marketplace</title>
-<link rel="stylesheet" href="../.databench/human-html.css">
+<link rel="stylesheet" href="../.databench/index-pages.css">
 </head>
 <body>
 <main>
 <h1>Commit and publish gates, isolated dev testing, code-review skill rendering, and reviewer-model benchmarking for the plugins-kit marketplace</h1>
 <p class="hh-orientation">This directory keeps the plugins marketplace honest: commit gates, publish, working-copy testing, and reviewer bakeoff. Commit checks judge the staged index, not the shared working tree; publish re-runs the same invariants unescapeably. The sections below organize those scripts by the flows they support.</p><section><h2>Where to start</h2><p>Open <a href="pre-commit-version-check.sh">scripts/pre-commit-version-check.sh</a>: names every commit check in order and carries the install line. <a href="publish.py">scripts/publish.py</a>: release flow source of truth.</p></section><section><h2>Routes</h2><ul><li><strong>Commit and ship a plugin change</strong><ol><li>Bump the version in the plugin metadata and stage it.</li><li><a href="regen_marketplace.py">scripts/regen_marketplace.py</a> and stage the rewritten marketplace manifest.</li><li><a href="publish.py">scripts/publish.py</a>: preflight, push dev, fast-forward master, verify.</li></ol></li><li><strong>What one commit runs</strong><ol><li><a href="pre-commit-version-check.sh">scripts/pre-commit-version-check.sh</a> chains the five consumer-correctness checks; <a href="precommit_guard.py">scripts/precommit_guard.py</a> runs separately and is unforgiving.</li></ol></li><li><strong>Test a plugin from the working copy</strong><ol><li><a href="claude_plugin_test.py">scripts/claude_plugin_test.py</a> writes a synthetic registry only the dev engine can see.</li><li><a href="dev-tree.py">scripts/dev-tree.py</a> <code>dev</code>; <code>normal</code> restores from the sidecar backup.</li><li><a href="claudx_plugin_dirs.py">scripts/claudx_plugin_dirs.py</a> prints the enabled plugin directories.</li></ol></li><li><strong>Bakeoff one reviewer model</strong><ol><li><a href="review-bakeoff/run_bakeoff.py">scripts/review-bakeoff/run_bakeoff.py</a> uses endpoint arms; harness: claude aliases use prompts and ingest.</li><li>score prints recall, precision, decoy false-positive rate, and positive noise per arm.</li></ol></li></ul></section><section><h2>Publishing</h2><ul><li><a href="publish.py">scripts/publish.py</a> - four-step release: preflight, push dev, fast-forward master, verify. Preflight re-runs skippable checks unescapeably; <code>--only</code> ships one plugin.</li><li><a href="regen_marketplace.py">scripts/regen_marketplace.py</a> - rebuilds marketplace manifest from plugin version files; <code>--check</code> <code>--staged</code> is the drift guard; <code>--only</code> commits one bump.</li></ul></section><section><h2>Commit-time gates</h2><ul><li><a href="pre-commit-version-check.sh">scripts/pre-commit-version-check.sh</a> - chains the five consumer-correctness checks; escapeable here, not at publish.</li><li><a href="precommit_guard.py">scripts/precommit_guard.py</a> - separate leak guard; blocks project-derived and machine-emitted data from staged commits.</li><li><a href="_gitindex.py">scripts/_gitindex.py</a> - one implementation of index-aware checking: bounded git calls, NUL-separated paths, skip, index, or worktree verdict.</li><li><a href="check-staged-version-bump.sh">scripts/check-staged-version-bump.sh</a> - blocks an unchanged plugin version since the last publish point, with a weaker fallback.</li><li><a href="check_pyproject_sync.py">scripts/check_pyproject_sync.py</a> - checks that the version agrees with the authoritative plugin version.</li><li><a href="check_bootstrap_dependency.py">scripts/check_bootstrap_dependency.py</a> - blocks plugins that omit the bootstrap dependency, except bootstrap itself.</li><li><a href="check_agent_directives.py">scripts/check_agent_directives.py</a> - greps shipped plugin text for banned agent-directive phrasing; same-line marker exempts quoted phrases.</li></ul></section><section><h2>Dev testing and cache visibility</h2><ul><li><a href="dev-tree.py">scripts/dev-tree.py</a> - points the machine registry at the working copy (dev) or restores it (normal); lossless backup.</li><li><a href="claude_plugin_test.py">scripts/claude_plugin_test.py</a> - tests working copy without the machine registry; <code>--fresh</code> is the honest periodic check.</li><li><a href="claudx_plugin_dirs.py">scripts/claudx_plugin_dirs.py</a> - prints enabled plugin directories for a plain plugin-dir launch; reads only.</li><li><a href="cache_status.py">scripts/cache_status.py</a> - diffs local source against the plugin cache; a differs verdict on a dev branch is expected.</li><li><a href="plugin-versions.sh">scripts/plugin-versions.sh</a> - reports versions across repo, marketplace clone, registry, and cache.</li></ul></section><section><h2>Code review skill rendering</h2><ul><li><a href="gen_code_review_skills.py">scripts/gen_code_review_skills.py</a> - renders both code review skills and effort agents; <code>--check</code> fails on drift; commit template and rendered files together.</li></ul></section><section><h2>Model dispatch check</h2><ul><li><a href="check_model_dispatch.py">scripts/check_model_dispatch.py</a> - validates orchestrate policy model identifiers by real dispatch; a tool, not an automatic gate.</li></ul></section><section><h2>Reviewer bakeoff</h2><ul><li><a href="review-bakeoff/SPEC.md">scripts/review-bakeoff/SPEC.md</a> - on-disk contract: case format, matching rule, four metrics; decoy false-positive rate is headline.</li><li><a href="review-bakeoff/README.md">scripts/review-bakeoff/README.md</a> - subcommands with exact invocations.</li><li><a href="review-bakeoff/run_bakeoff.py">scripts/review-bakeoff/run_bakeoff.py</a> - runs and scores: run for endpoint arms, prompts and ingest for harness: claude aliases, score for per-arm summary.</li><li><a href="review-bakeoff/corpus">scripts/review-bakeoff/corpus</a> - 24 cases, one directory each: a case file states the planted bug or decoy rule, and the diff bytes a lane sees; add cases here.</li></ul></section>
 </main>
-<nav data-human-html-chrome="nav"><ul><li><a href="../README.md"><span class="hh-nav-label">README.md</span> <span class="hh-nav-identity">Marketplace entry point.</span></a></li><li><a href="../tests/repo-scripts"><span class="hh-nav-label">repo-scripts</span> <span class="hh-nav-identity">Tests that assert these scripts.</span></a></li><li><a href="../docs"><span class="hh-nav-label">docs</span> <span class="hh-nav-identity">Long-form reference: agent directives, publish, testing.</span></a></li></ul></nav>
+<nav data-index-pages-chrome="nav"><ul><li><a href="../README.md"><span class="hh-nav-label">README.md</span> <span class="hh-nav-identity">Marketplace entry point.</span></a></li><li><a href="../tests/repo-scripts"><span class="hh-nav-label">repo-scripts</span> <span class="hh-nav-identity">Tests that assert these scripts.</span></a></li><li><a href="../docs"><span class="hh-nav-label">docs</span> <span class="hh-nav-identity">Long-form reference: agent directives, publish, testing.</span></a></li></ul></nav>
 <script>
 if (window.parent !== window) {
   window.parent.postMessage({
-    type: "human-html:announce",
+    type: "index-pages:announce",
     version: 1,
     directory: "scripts",
     file: "index.html",
@@ -36,7 +36,7 @@ if (window.parent !== window) {
     if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
     var target = href.split("#")[0].split("?")[0];
     if (!target) return;
-    if (/(^|\/)human(\.[^/]+)?\.html$/.test(target)) return;
+    if (/(^|\/)index-page(\.[^/]+)?\.html$/.test(target)) return;
     var parts = "scripts".split("/");
     if (parts.length === 1 && parts[0] === ".") parts = [];
     var segs = target.split("/");
@@ -47,7 +47,7 @@ if (window.parent !== window) {
     }
     event.preventDefault();
     window.parent.postMessage({
-      type: "human-html:navigate",
+      type: "index-pages:navigate",
       version: 1,
       path: parts.join("/")
     }, "*");

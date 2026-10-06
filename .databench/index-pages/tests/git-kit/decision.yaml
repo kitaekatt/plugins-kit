@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "tests/git-kit",
+  "decision": "none",
+  "source_sha": "bd042fd6c0f99ec957a075a9edfff3aee91a2827",
+  "input_sha256": "69768272d6ea9c71f7cfab60cdea4c1553e1c30b50deda5a378535ed7cda6101",
+  "input_shape_sha256": "e77d71a219769e235eef8409cfc20c71d14d5605b1b23add9c2c0c2e9938892a",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

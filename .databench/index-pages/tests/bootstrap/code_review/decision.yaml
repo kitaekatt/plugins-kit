@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "tests/bootstrap/code_review",
+  "decision": "none",
+  "source_sha": "fbc34cb104a77cad71b071e4a792a7f2ca11d6f0",
+  "input_sha256": "36ffaab01f6bfcadebff97fbb338c99869555042db1dc32ad0d679fdb29900c7",
+  "input_shape_sha256": "044c9ec6502d5d226390754ff541a9285907be857be1799d1d553b4daea7fcdd",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/hue-kit/scripts",
+  "decision": "none",
+  "source_sha": "fbc34cb104a77cad71b071e4a792a7f2ca11d6f0",
+  "input_sha256": "74cf64a4d76158051d3bf8c60b3125c73ed8a7217ac29dfaeb429d6c8e4ba403",
+  "input_shape_sha256": "a50f37b0c8d47a07000306e76a96b16bd349ef4447f0ca429453fbc48060dd75",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

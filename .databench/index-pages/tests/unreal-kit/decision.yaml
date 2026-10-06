@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "tests/unreal-kit",
+  "decision": "none",
+  "source_sha": "2ae68fddc22a52c87829314b25a887be1559246e",
+  "input_sha256": "666975f33a43942eb4deecb0d2eb5936267c432ecbe21a72f89793881f729189",
+  "input_shape_sha256": "876d896b34ba82c51cc10e8cdd1e897ef0003f78ff2b3a503c4c58c0166034b2",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}
