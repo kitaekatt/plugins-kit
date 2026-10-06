@@ -65,10 +65,13 @@ def _queue_kind(kind: str) -> str:
 
 
 from .fix_runner import (
-    COST_QUICK, COST_SLOW, EXIT_ABORTED, EXIT_BAD_QUEUE, LOG_BASENAME,
-    QUEUE_VERSION,
+    COST_QUICK, COST_SLOW, EXIT_ABORTED, EXIT_BAD_QUEUE, EXIT_STALE_BLOCKED,
+    LOG_BASENAME, QUEUE_VERSION,
 )
 from .messages import item_label, numbered
+from .queue_records import (
+    dedupe_records, describe_parse_error, describe_stale, split_stale,
+)
 
 
 def privileges_available(current_os: str) -> bool:
@@ -133,6 +136,11 @@ class FixTask:
     # could not do it unattended. Data, not shell text, so the wording lives
     # with the strategy that knows the answer -- see fix_runner.print_briefings.
     explain: List[str] = field(default_factory=list)
+    # env_check:/symlink: only: sha256 of the declared env.json entry this
+    # task came from (queue_records.entry_sha256). It is what lets a later
+    # rewrite, and the runner, refuse a fix whose entry was deleted or changed
+    # in the origin's manifest since it was queued.
+    entry_sha256: Optional[str] = None
 
     def to_json(self) -> dict:
         # Drop unset optionals so the queue file stays readable -- it is a
@@ -169,6 +177,8 @@ class FixTask:
             out["backup"] = self.backup
         if self.explain:
             out["explain"] = self.explain
+        if self.entry_sha256 is not None:
+            out["entry_sha256"] = self.entry_sha256
         return out
 
 
@@ -325,6 +335,7 @@ def queue_from_failures(failures, current_os: str,
                     timeout=desc.get("timeout"),
                     cost=cost_of(desc),
                     opportunistic=bool(desc.get("opportunistic")),
+                    entry_sha256=desc.get("entry_sha256"),
                 ))
         elif method == "brew_cask":
             token = desc.get("cask")
@@ -536,10 +547,12 @@ def load_queue_tasks(path: str) -> List[FixTask]:
 
     A pass launches and discloses this list, not only its own tasks -- the file
     may carry another project's deferrals, and the runner runs them all.
+    Identical operations queued by several origins are counted once, exactly
+    as the runner runs them once (queue_records.dedupe_records).
     """
     records, _bash = _read_existing_queue(path)
     tasks = []
-    for record in records:
+    for record in dedupe_records(records):
         known = {k: v for k, v in record.items() if k in _FIX_TASK_FIELDS}
         if {"id", "kind", "label"} <= known.keys():
             tasks.append(FixTask(**known))
@@ -552,42 +565,46 @@ def load_queue_tasks(path: str) -> List[FixTask]:
 MACHINE_SCOPED_TASK_IDS = frozenset({"path_prune"})
 
 
-def _task_identity(record: dict) -> tuple:
-    """What makes two queued records the same operation, origin aside."""
-    return (record.get("id"), record.get("kind"), record.get("command"),
-            tuple(record.get("packages") or ()),
-            tuple(record.get("entries") or ()), record.get("target"))
-
-
-def _kept_from_other_origins(existing: List[dict], origin: str,
-                             current: List[dict]) -> List[dict]:
-    """The on-disk records this pass does not own and must preserve.
+def _kept_from_other_origins(existing: List[dict], origin: str) -> List[dict]:
+    """The on-disk records this pass does not own and may preserve.
 
     Dropped besides this origin's own records: a record with no ``origin`` key
-    (written before origins existed, so no pass would ever replace it), a
-    machine-scoped finding (this pass re-derived it), and a duplicate of an
-    operation this pass queued (the runner would run it twice).
+    (written before origins existed, so no pass would ever replace it) and a
+    machine-scoped finding (this pass re-derived it). An identical operation
+    queued by another origin is KEPT: each copy is validated against its own
+    origin's env.json layers, and the runner runs it once
+    (queue_records.dedupe_records).
     """
-    current_identities = {_task_identity(record) for record in current}
     return [record for record in existing
             if "origin" in record
             and record["origin"] != origin
-            and record.get("id") not in MACHINE_SCOPED_TASK_IDS
-            and _task_identity(record) not in current_identities]
+            and record.get("id") not in MACHINE_SCOPED_TASK_IDS]
 
 
 def write_or_clear_queue(tasks: List[FixTask], data_dir: str,
-                         current_os: str, origin: str = "") -> Optional[str]:
+                         current_os: str, origin: str = "",
+                         report: Optional[List[str]] = None) -> Optional[str]:
     """Write queue + shim, or remove both when nothing is deferred.
 
     Returns the queue path when written, else None. Clearing is what makes the
     fix-all offer vanish once its operations succeed.
+
+    Other origins' env.json-derived records are judged against their origin's
+    current manifest first (queue_records.split_stale) and stale ones are
+    dropped; this pass's own records are fresh by construction. ``report``,
+    when given, receives one line per dropped record and per unreadable
+    env.json layer met while judging -- the caller logs them.
     """
     qpath = queue_path(data_dir)
     spath = shim_path(data_dir, current_os)
     existing, existing_bash = _read_existing_queue(qpath)
     current = [replace(task, origin=origin).to_json() for task in tasks]
-    kept = _kept_from_other_origins(existing, origin, current)
+    kept, stale, parse_errors = split_stale(
+        _kept_from_other_origins(existing, origin))
+    if report is not None:
+        report.extend(f"dropped stale fix {describe_stale(record, reason)}"
+                      for record, reason in stale)
+        report.extend(describe_parse_error(error) for error in parse_errors)
     merged = kept + current
     if not merged:
         errors = []
@@ -768,6 +785,15 @@ def launch_fix_runner(queue: str, current_os: str,
     first = next((ln.strip() for ln in stderr.splitlines() if ln.strip()), "")
     if first:
         return LaunchResult(launched=False, succeeded=False, detail=first)
+    if proc.returncode == EXIT_STALE_BLOCKED:
+        # The runner ran everything else and refused records whose env.json
+        # entry was deleted or changed after this pass rewrote the queue. Not
+        # a failed fix: the re-check pass rewrites the queue, which prunes
+        # them, so this proceeds like a success.
+        return LaunchResult(
+            launched=True, succeeded=True,
+            detail=(f"exit code {proc.returncode}: queued fix(es) no longer "
+                    f"declared in env.json were not run"))
     if proc.returncode == EXIT_ABORTED:
         detail = "you declined at the briefing"
     elif proc.returncode == EXIT_BAD_QUEUE:

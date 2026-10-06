@@ -649,9 +649,16 @@ class TestEnvGate:
         write_env_state(str(data_dir), "hash1", "1.2.3", "clean")
         age = env_state_age(str(data_dir))
         assert age is not None and 0 <= age < 60
+        # The age is the origin's own record's, not the shared file's mtime:
+        # another origin's write must not make this record look fresh.
         old = time.time() - (ENV_STATE_MAX_AGE_SECONDS + 120)
-        os.utime(data_dir / ENV_STATE_STAMP, (old, old))
+        doc = json.loads((data_dir / ENV_STATE_STAMP).read_text())
+        doc["projects"]["_global_"]["written_at"] = old
+        (data_dir / ENV_STATE_STAMP).write_text(json.dumps(doc))
+        write_env_state(str(data_dir), "hash1", "1.2.3", "clean",
+                        project_key="other-origin")
         assert env_state_age(str(data_dir)) > ENV_STATE_MAX_AGE_SECONDS
+        assert env_state_age(str(data_dir), "other-origin") < 60
 
     def test_corrupt_stamp_treated_as_absent(self, tmp_path):
         data_dir = tmp_path / "data"

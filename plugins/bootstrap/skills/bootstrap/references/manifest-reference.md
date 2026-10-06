@@ -809,6 +809,11 @@ current OS into **ONE queue file**, plus a small launcher shim:
   task carrying all queued packages (a single `apt-get install` resolves
   co-dependent packages that would fail installed one at a time), then the
   deferred commands in pass order.
+- **An env.json-derived task (`env_check:<name>`, `symlink:<name>`) carries
+  `entry_sha256`**, the fingerprint of the entry it came from. A later rewrite
+  drops it, and the runner refuses it, once its origin's env.json no longer
+  declares that entry unchanged -- see
+  [remediation-reference.md](./remediation-reference.md#the-fix-queue-and-its-runner).
 - **The runnable is `bootstrap_lib/fix_runner.py`**, not a generated script. It
   prints the plan, executes each task, continues past a failure, and reports a
   summary. The shim just invokes it. Full behavior — task kinds, the plan, exit
@@ -1340,10 +1345,11 @@ Three traits distinguish it from `bootstrap.json`:
 
 1. A **required `machines` registry** and per-entry `os`/`hosts` filters — entries
    are keyed by machine identity, and an unknown machine is a hard error.
-2. It is **gated** by a dedicated `env_state.json` stamp: unlike `bootstrap.json`
-   (re-checked every session because upstream software drifts underneath it),
-   `env.json` runs only when its merged content changed, its last pass was not
-   clean, the engine was upgraded, or a reset was requested.
+2. It is **gated** by a dedicated `env_state.json` stamp, one record per project:
+   unlike `bootstrap.json` (re-checked every session because upstream software
+   drifts underneath it), `env.json` runs only when its merged content changed,
+   its last pass for that project was not clean, the engine was upgraded, the
+   record is a day old, or a reset was requested.
 3. **Backwards-readable from v1** (same discipline as `bootstrap.json`): unknown
    top-level sections are ignored with a verbose log line, user files are never
    rewritten on disk, and an engine too old to know `env.json` skips the file
@@ -1471,11 +1477,25 @@ registry-level machinery as a hosts-filter typo.
 ## The env gate (`env_state.json`)
 
 `env.json` runs only when it needs to. The engine keeps a dedicated stamp,
-`env_state.json`, in bootstrap's data dir, recording exactly three fields:
+`env_state.json`, in bootstrap's data dir, holding ONE RECORD PER ORIGIN --
+keyed by the pass's project key (the sha1 of the project directory the hook
+derives for its cooldown, or `_global_` for a pass with no project):
 
 ```json
-{"manifest_sha256": "<hash>", "engine_version": "<v>", "last_result": "clean|failed"}
+{"version": 2, "projects": {"<project key>": {
+  "manifest_sha256": "<hash>", "engine_version": "<v>",
+  "last_result": "clean|failed", "written_at": <epoch seconds>}}}
 ```
+
+Per-origin keying is what makes the gate safe for the fix queue: under one
+machine-wide record, a clean pass from project B (whose check happened to pass)
+closed the gate for project A, A's next pass skipped the phase, reported no env
+failures, and its queue rewrite dropped A's still-failing elevated fix. Each
+origin now closes only its own gate. The costs, accepted: the 24h TTL and the
+engine-version trigger fire once per project, so a cwd-independent check runs
+once per project visited per day; and a stamp written before per-origin keying
+(a single top-level record) reads as "no stamp" for every key, so each project
+re-runs the phase once after the update.
 
 - `manifest_sha256` — sha256 of the **canonical merged manifest** (sorted-key,
   compact JSON over the *full* merged dict, unknown keys included). "Modified"
@@ -1503,9 +1523,10 @@ without restamping `env_state.json`; see the `cadence` row under `env_checks`):
 5. **the stamp is older than the periodic re-check TTL** (24h,
    `ENV_STATE_MAX_AGE_SECONDS`) — a clean, unchanged machine still re-runs the
    phase about once a day, which bounds the out-of-band-drift window (see the
-   drift tradeoff below). The stamp's mtime is the clock: every real run
-   rewrites the stamp, so the TTL measures time since the phase last ran, not
-   time since anything changed;
+   drift tradeoff below). The record's own `written_at` is the clock (not the
+   file mtime, which every origin's write moves): every real run rewrites the
+   record, so the TTL measures time since the phase last ran for that origin,
+   not time since anything changed;
 6. **a reset was requested** (below).
 
 A **parse error** in any layer also forces the pass and stamps it `failed`, so a
@@ -1513,10 +1534,18 @@ broken `env.json` re-runs every session until the JSON is fixed. A missing/corru
 stamp is treated as absent (reopen the gate and re-converge). When no `env.json`
 exists in any layer, there is nothing to gate or stamp — the phase is a no-op.
 
+**Which passes write the stamp.** Every SessionStart/background pass, a
+`--fix-all` pass, and the re-check pass a fix-all spawns. A plain `--console`
+pass (`bootstrap run`, a debug run) reads the gate but writes **no** stamp, for
+the same reason it writes no fix queue: the console "no file writes" contract.
+A console pass that stamped the gate without rewriting the queue would leave
+the two disagreeing about whether an elevated check still fails.
+
 ### `env-reset-cooldown.sh` — the "re-converge my machine" lever
 
-`plugins/bootstrap/scripts/env-reset-cooldown.sh` deletes the env stamp so the next
-session runs the phase. Because the per-project **bootstrap cooldown** gates the
+`plugins/bootstrap/scripts/env-reset-cooldown.sh` deletes the env stamp -- every
+origin's record, since they share the one file -- so the next session runs the
+phase. Because the per-project **bootstrap cooldown** gates the
 *whole* SessionStart pass (env phase included), the reset script **also clears that
 cooldown** (by calling `bootstrap-reset-cooldown.sh`) — otherwise "next session runs
 the env phase" would not hold inside the cooldown window. `--status` prints the

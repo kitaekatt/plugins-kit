@@ -2,10 +2,10 @@
 # env-reset-cooldown — force the next session's env.json pass
 #
 # The env.json personalization phase is gated by a dedicated stamp
-# (env_state.json in bootstrap's data dir) recording the merged-manifest
-# sha256, the engine version, and the last result; a clean, unchanged pass
-# is skipped. Deleting the stamp forces the phase to run on the next
-# SessionStart — the explicit "re-converge my machine" lever. The bootstrap
+# (env_state.json in bootstrap's data dir) recording, per project, the merged-
+# manifest sha256, engine version, and last result; a clean, unchanged pass is
+# skipped. Deleting the stamp clears every project's record, so the phase runs
+# next session in each project ("re-converge my machine"). The bootstrap
 # per-project cooldown gates the WHOLE SessionStart pass, so it is cleared
 # too (via bootstrap-reset-cooldown.sh) — otherwise "next session runs the
 # env phase" would not hold inside the cooldown window.

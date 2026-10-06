@@ -660,6 +660,12 @@ def _main_pass():
         help="Key naming this project's interpreter record (the hook's "
              "_PROJECT_KEY). When absent it is the sha1 of --project-dir. "
              "'_global_' reads and writes no record (`bootstrap run`).")
+    parser.add_argument("--recheck", dest="recheck", action="store_true",
+        help="Internal: the re-check pass a --fix-all run spawns after the fix "
+             "runner completes (_spawn_recheck_pass). With --console it still "
+             "rewrites the fix queue (no launch, no fix-all item) and writes "
+             "this origin's env stamp, so queue and stamp stay consistent; a "
+             "plain --console pass writes neither.")
     parser.add_argument("--exit-status", dest="exit_status", action="store_true",
         help="Exit 1 when the pass reports failures and 2 when it stands "
              "down on a held lock. For terminal callers (`bootstrap run`); "
@@ -1182,8 +1188,10 @@ def _main_pass():
     # load-bearing: immediately AFTER the layered bootstrap.json manifest
     # (env_vars -> tools -> fonts -> path -> project_venv -> project_npm have
     # all run, so every variable and binary a personalization entry references
-    # already exists) and BEFORE plugin manifests (Step 4). Gated by the
-    # env_state.json stamp -- see _process_env_pass. env.json failures never
+    # already exists) and BEFORE plugin manifests (Step 4). Gated by this
+    # origin's record in the env_state.json stamp -- see _process_env_pass; a
+    # plain --console pass reads the gate but writes no stamp, exactly as it
+    # writes no queue (Step 7b). env.json failures never
     # affect the bootstrap.json phases above: software still provisions;
     # personalization refuses to guess.
     env_action_entries = []
@@ -1193,6 +1201,8 @@ def _main_pass():
         args.project_dir, current_os, data_dir, plugin_root,
         env_action_entries, env_ok_entries, engine_version=version,
         quiet_entries=env_quiet_entries,
+        project_key=project_key,
+        write_stamp=_pass_writes_queue_and_stamp(args),
     )
     bootstrap_action_entries.extend(_reprefix(e, "env: ") for e in env_action_entries)
     bootstrap_ok_entries.extend(_reprefix(e, "env: ") for e in env_ok_entries)
@@ -1478,7 +1488,11 @@ def _main_pass():
     # and on success spawns a re-check pass so the deferred items clear in the
     # same fix-all cycle. SessionStart/background passes never launch. Plain
     # --console debug runs (no --fix-all) skip the step entirely, preserving
-    # their "no file writes" contract.
+    # their "no file writes" contract -- and, for the same reason, write no env
+    # stamp, so a console pass can never close the env gate without updating
+    # the queue. The console re-check pass a fix-all spawns (--recheck) is the
+    # exception: it rewrites the queue (no launch, no fix-all item) AND stamps,
+    # so the fixed items clear in the same fix-all cycle.
     if not args.console or args.fix_all:
         if _elevation_step(all_failures, current_os, data_dir, args, plugin_root,
                            bootstrap_label):
@@ -1488,6 +1502,9 @@ def _main_pass():
             # that motivated the run would exist nowhere.
             _record_failures(recorder, all_failures)
             return
+    elif getattr(args, "recheck", False):
+        _elevation_step(all_failures, current_os, data_dir, args, plugin_root,
+                        bootstrap_label, rewrite_only=True)
 
     # Record every failure dict VERBATIM, before any of it is rendered, and
     # before the console branch returns. A failure carries far more than its
@@ -1605,8 +1622,20 @@ def _main_pass():
         pass
 
 
+def _pass_writes_queue_and_stamp(args) -> bool:
+    """Whether this pass may write the fix queue and its env stamp.
+
+    Every non-console pass does, as does a --fix-all run and the re-check pass
+    it spawns. A plain --console pass (`bootstrap run`, a debug run) writes
+    neither -- the console "no file writes" contract -- so the two can never
+    disagree about whether an elevated check is still failing.
+    """
+    return (not args.console or bool(getattr(args, "fix_all", False))
+            or bool(getattr(args, "recheck", False)))
+
+
 def _elevation_step(all_failures, current_os, data_dir, args, plugin_root,
-                    label="bootstrap"):
+                    label="bootstrap", rewrite_only=False):
     """Step 7b: deferred-op queue -> queue.json (+ interactive launch on fix-all).
 
     Harvests the pass's elevation descriptors, writes/clears queue.json and its
@@ -1630,6 +1659,14 @@ def _elevation_step(all_failures, current_os, data_dir, args, plugin_root,
     SessionStart/background passes never pass --fix-all, so their behavior is
     exactly the pre-launch behavior: write the queue, surface the item.
 
+    ``rewrite_only`` (the console re-check pass): write/clear the queue and
+    stop -- no launch and no aggregated item.
+
+    The rewrite drops other origins' queued env.json fixes whose entry is no
+    longer declared, or changed, in that origin's manifest
+    (queue_records.split_stale); each drop, and each unreadable env.json
+    layer met while judging, is logged.
+
     Returns True when a re-check pass was spawned (caller stops), else False.
     """
     from .fix_queue import (
@@ -1638,8 +1675,10 @@ def _elevation_step(all_failures, current_os, data_dir, args, plugin_root,
     )
     origin = getattr(args, "project_dir", None) or ""
     tasks = queue_from_failures(all_failures, current_os, origin=origin)
+    report = []
     try:
-        path = write_or_clear_queue(tasks, data_dir, current_os, origin=origin)
+        path = write_or_clear_queue(tasks, data_dir, current_os, origin=origin,
+                                    report=report)
     except RuntimeError as exc:
         # render_queue raises when bash can't be resolved at write time and the
         # queue holds command/brew tasks (shell strings the runner needs bash
@@ -1660,7 +1699,14 @@ def _elevation_step(all_failures, current_os, data_dir, args, plugin_root,
             "persist_across_sessions": True,
         })
         return False
-    if not path:
+    if report:
+        if args.console:
+            for line in report:
+                print(f"{label} fix queue: {line}")
+        else:
+            from .log import write_log_block
+            write_log_block(data_dir, f"{label} fix queue", report)
+    if not path or rewrite_only:
         return False
 
     if not has_actionable(tasks):
@@ -1753,12 +1799,20 @@ def _spawn_recheck_pass(args, plugin_root) -> bool:
     ]
     if args.project_dir:
         cmd += ["--project-dir", args.project_dir]
+    if getattr(args, "project_key", None):
+        # Same origin key as this pass, so the child reads and writes the same
+        # env-stamp record (a hashed --project-dir would differ from an
+        # explicit key such as `_global_`).
+        cmd += ["--project-key", args.project_key]
     if args.verbose:
         cmd += ["--verbose"]
     if args.console:
         cmd += ["--console"]
     if args.background:
         cmd += ["--background"]
+    # Marks the child as the re-check: a console child still rewrites the
+    # queue and stamps its origin (see _pass_writes_queue_and_stamp).
+    cmd += ["--recheck"]
     result = subprocess.run(cmd)
     if result.returncode == 0:
         return True
@@ -6968,6 +7022,12 @@ def _env_report_fix(ctx, phase, failure_type, name, fix_ok, fix_msg,
     return False
 
 
+def _entry_sha256(entry):
+    """Fingerprint of a declared env.json entry, for its queued fix."""
+    from .queue_records import entry_sha256
+    return entry_sha256(entry)
+
+
 def _env_phase_symlinks(ctx):
     """symlinks: ensure target is a symlink pointing at source (spec 4.3).
 
@@ -7052,6 +7112,9 @@ def _env_phase_symlinks(ctx):
                 elevation={
                     "method": "command", "command": manual_cmd,
                     "os": ctx.current_os, "id": f"symlink:{name}",
+                    # Lets a later rewrite, and the runner, refuse this fix
+                    # once the entry is deleted or changed (queue_records).
+                    "entry_sha256": _entry_sha256(entry),
                     # The label stands alone in the runner's plan and in the
                     # session message's item list, so it names the entry rather
                     # than restating the WinError. `description` is taken only
@@ -7572,6 +7635,10 @@ def _env_phase_env_checks(ctx):
                 elevation={
                     "method": "command", "command": fix,
                     "os": ctx.current_os, "id": f"env_check:{name}",
+                    # Lets a later rewrite, and the runner, refuse this fix
+                    # once the entry is deleted or changed -- a changed
+                    # `check` with an unchanged `fix` included (queue_records).
+                    "entry_sha256": _entry_sha256(entry),
                     # `description` is the entry's own human phrasing, but it
                     # doubles as prose documentation and is often far too long
                     # to collate; the name is the honest fallback (better a
@@ -7786,8 +7853,16 @@ def _validate_env_machines(ctx, merged, hostname, current_os):
 
 def _process_env_pass(project_dir, current_os, data_dir, plugin_root,
                       action_entries, ok_entries, engine_version="",
-                      hostname=None, quiet_entries=None):
+                      hostname=None, quiet_entries=None, project_key=None,
+                      write_stamp=True):
     """Step 3e: process the layered env.json manifest, gated by env_state.json.
+
+    The gate record is this ORIGIN's: ``project_key`` (the pass's key; when
+    None, the sha1 of ``project_dir``, or ``_global_`` without one) selects it,
+    so one project's clean pass cannot close the gate of another project whose
+    elevated check still fails -- the closed gate would hide that failure and
+    the queue rewrite would drop its fix. ``write_stamp`` False (a plain
+    --console pass) reads the gate but records nothing.
 
     Returns the list of failure dicts (empty when green, skipped, or when no
     env.json exists anywhere). The gate (spec 4.4): the phase runs only when
@@ -7800,10 +7875,15 @@ def _process_env_pass(project_dir, current_os, data_dir, plugin_root,
     re-runs every session until fixed.
     """
     from .env_manifest import (
-        canonical_manifest_hash, current_hostname, env_gate_reason,
-        env_state_age, load_layered_env_manifests, read_env_state,
-        write_env_state,
+        GLOBAL_ENV_KEY, canonical_manifest_hash, current_hostname,
+        env_gate_reason, env_state_age, load_layered_env_manifests,
+        read_env_state, write_env_state,
     )
+    from .interpreter_env import project_key as _hash_project_dir
+
+    if project_key is None:
+        project_key = (_hash_project_dir(project_dir) if project_dir
+                       else GLOBAL_ENV_KEY)
 
     merged, parse_errors = load_layered_env_manifests(project_dir)
     if not merged and not parse_errors:
@@ -7814,8 +7894,9 @@ def _process_env_pass(project_dir, current_os, data_dir, plugin_root,
         reason = "manifest parse error"
     else:
         reason = env_gate_reason(
-            read_env_state(data_dir), manifest_hash, engine_version,
-            stamp_age=env_state_age(data_dir))
+            read_env_state(data_dir, project_key), manifest_hash,
+            engine_version,
+            stamp_age=env_state_age(data_dir, project_key))
     if reason is None:
         ok_entries.append("up to date (merged manifest unchanged, last pass clean)")
         # The gate is closed for the manifest as a whole -- but `cadence: always`
@@ -7889,7 +7970,12 @@ def _process_env_pass(project_dir, current_os, data_dir, plugin_root,
                 ctx.ok(f"section '{section}' ignored (not supported by this engine)")
 
     result = "failed" if ctx.failures else "clean"
-    write_env_state(data_dir, manifest_hash, engine_version, result)
+    if write_stamp:
+        write_env_state(data_dir, manifest_hash, engine_version, result,
+                        project_key)
+    else:
+        ok_entries.append(f"env stamp not written (console pass; result "
+                          f"{result})")
     return ctx.failures
 
 

@@ -1913,7 +1913,8 @@ class TestFullEngineEnvE2E:
         )
 
     @requires_symlinks
-    def test_console_pass_applies_features_then_gate_skips(self, tmp_path):
+    def test_console_pass_applies_features_then_reruns_idempotently(
+            self, tmp_path):
         fake_root, data_dir, home, env, target, bashrc = self._setup(tmp_path)
 
         first = self._run(fake_root, data_dir, env)
@@ -1930,14 +1931,15 @@ class TestFullEngineEnvE2E:
         assert 'eval "$(starship init bash)"' in text
         assert "# export TERM=xterm" in text
         assert "\nexport TERM=xterm" not in text
-        # The env stamp recorded a clean pass.
-        state = json.loads((data_dir / ENV_STATE_STAMP).read_text())
-        assert state["last_result"] == "clean"
+        # A plain console pass writes no env stamp (it writes no fix queue
+        # either, so the two cannot disagree; test_env_gate_per_origin.py).
+        assert not (data_dir / ENV_STATE_STAMP).exists()
 
         second = self._run(fake_root, data_dir, env)
 
         assert second.returncode == 0, second.stderr
-        # Gate closed: no env actions, nothing re-applied, files unchanged.
+        # No stamp, so the phase re-ran -- and found everything converged:
+        # no env actions, nothing re-applied, files unchanged.
         assert "env: symlink" not in second.stdout
         assert "env: shell_rc" not in second.stdout
         assert bashrc.read_text() == text

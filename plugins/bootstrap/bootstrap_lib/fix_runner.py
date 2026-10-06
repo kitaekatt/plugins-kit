@@ -64,7 +64,19 @@ keypress, not correctness.
 
 Stdlib-only, and run as a SCRIPT (``python fix_runner.py <queue.json>``), so it
 must not rely on package-relative imports -- the same trap that made the harvest
-silently no-op in 0.22.0.
+silently no-op in 0.22.0. The one bootstrap_lib module it needs, the staleness
+predicate in :mod:`bootstrap_lib.queue_records`, is reached through a GUARDED
+package import of this file's own ``bootstrap_lib`` (see
+:func:`_queue_records_module`), which fails loudly rather than run unjudged.
+
+Stale records
+-------------
+Before anything runs, every ``env_check:`` / ``symlink:`` record is judged
+against its origin's CURRENT env.json (queue_records.split_stale): a record
+whose entry was deleted or changed since it was queued is not run, and is named
+with its reason. The hand-run shim reads queue.json exactly as last written, so
+this is the only guard on that path. Identical records queued by several
+origins run once.
 """
 
 import json
@@ -84,6 +96,12 @@ EXIT_BAD_QUEUE = 3
 # consent on. Distinct from a task failure: nothing was attempted at all, so the
 # queue stays on disk and the engine re-offers it next session.
 EXIT_ABORTED = 4
+# At least one queued env.json fix was refused because its entry is no longer
+# declared, or changed, in its origin's manifest; everything else ran and
+# succeeded. Distinct from EXIT_TASK_FAILED so the engine does not read a
+# refused record as a failed fix -- its re-check rewrites the queue, which
+# prunes the record. A task that ran and failed still exits EXIT_TASK_FAILED.
+EXIT_STALE_BLOCKED = 5
 
 QUEUE_VERSION = 1
 
@@ -185,6 +203,61 @@ def _msys_home(win_home: str) -> str:
     if len(win_home) >= 2 and win_home[1] == ":":
         return "/" + win_home[0].lower() + win_home[2:].replace("\\", "/")
     return win_home.replace("\\", "/")
+
+
+def _invoking_user_home():
+    """The home of the user who started the runner, captured before any sudo."""
+    return os.path.expanduser("~")
+
+
+class QueueRecordsUnavailable(RuntimeError):
+    """bootstrap_lib.queue_records could not be imported beside this runner."""
+
+
+def _queue_records_module():
+    """The staleness predicate, from THIS runner's own bootstrap_lib.
+
+    Imported as a package module when the runner itself is one; otherwise
+    (``python fix_runner.py``) by putting this file's PARENT directory first on
+    sys.path and importing ``bootstrap_lib.queue_records`` -- a sibling import
+    cannot work, because queue_records and env_manifest use package-relative
+    imports. Inserted FIRST so a different bootstrap_lib that a .pth file put on
+    sys.path cannot be picked instead, and checked after import for the same
+    reason. Any failure raises QueueRecordsUnavailable: running env fixes that
+    could not be judged is the failure this guard exists to prevent.
+    """
+    if __package__:
+        from . import queue_records
+        return queue_records
+    here = os.path.dirname(os.path.abspath(__file__))
+    sys.path.insert(0, os.path.dirname(here))
+    try:
+        import importlib
+        module = importlib.import_module("bootstrap_lib.queue_records")
+    except ImportError as e:
+        raise QueueRecordsUnavailable(
+            f"cannot import bootstrap_lib.queue_records from {here}: {e}") from e
+    loaded_from = os.path.dirname(os.path.abspath(module.__file__))
+    if os.path.normcase(loaded_from) != os.path.normcase(here):
+        raise QueueRecordsUnavailable(
+            f"bootstrap_lib.queue_records resolved to {loaded_from}, not to "
+            f"this runner's own {here}")
+    return module
+
+
+def print_stale(stale, parse_errors, describe_stale, describe_parse_error):
+    """Name every refused record, and every unreadable env.json layer."""
+    if not stale and not parse_errors:
+        return
+    print("-" * 62)
+    if stale:
+        print(f"  Not running {len(stale)} queued fix(es) that no longer match "
+              f"env.json:")
+        for record, reason in stale:
+            print(f"    - {describe_stale(record, reason)}")
+    for error in parse_errors:
+        print(f"  ! {describe_parse_error(error)}")
+    print()
 
 
 def is_slow(task):
@@ -406,7 +479,7 @@ class Runner:
         self._env = None
         # The runner runs as the invoking user, so this is the user's home --
         # captured before any sudo, which is the whole point (see _shell_argv).
-        self.home = os.path.expanduser("~")
+        self.home = _invoking_user_home()
 
     @property
     def bash(self):
@@ -848,11 +921,35 @@ def _main_teed(path, argv):
         _hold_after_outcome(engine_launch)
         return EXIT_BAD_QUEUE
 
+    try:
+        records = _queue_records_module()
+    except QueueRecordsUnavailable as e:
+        print(f"refusing to run {path}: {e}. Reinstall or update the bootstrap "
+              f"plugin; nothing was run.", file=sys.stderr)
+        _hold_after_outcome(engine_launch)
+        return EXIT_BAD_QUEUE
+    # The runner is never itself run under sudo (sudo wraps single tasks), so
+    # this is the invoking user's home -- passed explicitly all the same.
+    fresh, stale, parse_errors = records.split_stale(
+        queue["tasks"], home=_invoking_user_home())
+    queue = dict(queue, tasks=records.dedupe_records(fresh))
+
+    if not queue["tasks"]:
+        print_stale(stale, parse_errors, records.describe_stale,
+                    records.describe_parse_error)
+        print("  Nothing left to run.")
+        _hold_after_outcome(engine_launch)
+        return EXIT_STALE_BLOCKED
+
     print_plan(queue)
+    print_stale(stale, parse_errors, records.describe_stale,
+                records.describe_parse_error)
     if not print_briefings(queue):
         _hold_after_outcome(engine_launch)
         return EXIT_ABORTED
     code = run_queue(queue)
+    if stale and code == EXIT_OK:
+        code = EXIT_STALE_BLOCKED
 
     # Always hold. This window is the only account the user gets of what ran
     # elevated on their machine, and it is spawned detached -- closing it on

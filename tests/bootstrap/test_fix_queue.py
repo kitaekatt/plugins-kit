@@ -453,8 +453,12 @@ class TestWriteOrClearQueue:
         body = json.load(open(fq.queue_path(str(tmp_path))))
         assert [task["label"] for task in body["tasks"]] == ["A"]
 
-    def test_identical_task_from_two_origins_is_queued_once(self, tmp_path):
-        task = FixTask(id="env_check:x", kind="command", label="X",
+    def test_identical_task_from_two_origins_keeps_one_record_per_origin(
+            self, tmp_path):
+        """Each origin's copy is validated against that origin's own env.json
+        layers, so queue.json keeps both; the runner and the engine's budget
+        view run and count the operation once (test_fix_queue_staleness.py)."""
+        task = FixTask(id="tool:x", kind="command", label="X",
                        command="fix-x", elevated=True)
         fq.write_or_clear_queue([task], str(tmp_path), "ubuntu",
                                 origin="/project-a")
@@ -462,14 +466,16 @@ class TestWriteOrClearQueue:
                                 origin="/project-b")
         body = json.load(open(fq.queue_path(str(tmp_path))))
         assert [(t["label"], t["origin"]) for t in body["tasks"]] == [
-            ("X", "/project-b")]
+            ("X", "/project-a"), ("X", "/project-b")]
 
     def test_same_id_with_different_command_keeps_both(self, tmp_path):
+        # A non-env id: env_check: records from another origin are judged
+        # against that origin's manifest (test_fix_queue_staleness.py).
         fq.write_or_clear_queue(
-            [FixTask(id="env_check:x", kind="command", label="X", command="a")],
+            [FixTask(id="tool:x", kind="command", label="X", command="a")],
             str(tmp_path), "ubuntu", origin="/project-a")
         fq.write_or_clear_queue(
-            [FixTask(id="env_check:x", kind="command", label="X", command="b")],
+            [FixTask(id="tool:x", kind="command", label="X", command="b")],
             str(tmp_path), "ubuntu", origin="/project-b")
         body = json.load(open(fq.queue_path(str(tmp_path))))
         assert {t["command"] for t in body["tasks"]} == {"a", "b"}
