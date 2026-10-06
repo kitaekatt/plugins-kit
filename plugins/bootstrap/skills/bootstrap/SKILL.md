@@ -394,11 +394,14 @@ reference_skill:
         `os` is cross-checked against detect_os(), and every `hosts` filter must name
         a registered machine.
 
-        The gate (env_state.json = merged-manifest sha256 + engine version + last
-        result): the phase runs on first-run / hash-change / non-clean-last / engine-bump
-        / stamp older than 24h (periodic re-check TTL, stamp mtime) / reset, else logs
-        one "env: up to date" line. env-reset-cooldown.sh deletes the stamp AND clears
-        the project bootstrap cooldown (which gates the whole pass).
+        The gate (env_state.json = one record per project_key, each holding merged-manifest
+        sha256 + engine version + last result + written_at): the phase runs on first-run /
+        hash-change / non-clean-last / engine-bump / record older than 24h (periodic
+        re-check TTL, the record's written_at) / reset, else logs one "env: up to date"
+        line. A plain --console pass writes no stamp (and no fix queue); the --recheck pass
+        a fix-all spawns rewrites both. env-reset-cooldown.sh deletes the stamp (every
+        project's record) AND clears the project bootstrap cooldown (which gates the whole
+        pass).
         DRIFT TRADEOFF: the hostname is NOT in the stamp, so out-of-band drift (a
         hand-edited rc line, a deleted symlink, a machine rename with unchanged manifest,
         a remote repo drifting ahead of a repo-sync'd clone) is not auto-healed until an

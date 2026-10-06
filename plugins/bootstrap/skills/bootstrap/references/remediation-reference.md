@@ -183,13 +183,44 @@ each task records the project (`origin`) whose pass deferred it, a pass replaces
 only its own origin's tasks and keeps the others', and the queue and its
 `bootstrap-fix.{sh,bat}` launcher shim are deleted once the merged queue holds
 nothing -- so the offer disappears when the operations succeed, and one
-project's clean pass cannot discard another's deferrals. A pass also drops
-three kinds of record no origin would ever replace: one with no `origin` key
-(written before origins existed), a machine-wide finding (`path_prune`, which
-every pass re-derives), and a duplicate of an operation the pass itself queued
-(same id, kind, command, packages, entries and target). A pass launches and
-discloses the merged queue, not only its own tasks. A stale queue or shim that
-cannot be removed is reported, never silently kept.
+project's clean pass cannot discard another's deferrals. A pass also drops two
+kinds of record no origin would ever replace: one with no `origin` key (written
+before origins existed) and a machine-wide finding (`path_prune`, which every
+pass re-derives). A pass launches and discloses the merged queue, not only its
+own tasks. A stale queue or shim that cannot be removed is reported, never
+silently kept.
+
+**A queued env.json fix must still match its origin's manifest.** A task
+produced from an env.json entry (`env_check:<name>` or `symlink:<name>`)
+carries `entry_sha256`, the fingerprint of the declared entry it came from.
+One predicate (`bootstrap_lib/queue_records.py`, `split_stale`) judges such a
+record against its origin's CURRENT layered env.json: it is **stale** when the
+entry is no longer declared, is declared with different content (a changed
+`check` with an unchanged `fix` included), or the record has no fingerprint
+(written by an older engine). The predicate runs at both places a queued fix
+can be reached:
+
+- **the rewrite** -- every pass drops other origins' stale records before
+  writing, and logs one line per dropped record (printed on a console pass).
+  This pass's own records are fresh by construction. A `--fix-all` pass
+  rewrites right before launching, so it never launches a stale record;
+- **the runner** -- before running anything it refuses stale records, names
+  each with its reason, still runs the rest, and exits `EXIT_STALE_BLOCKED`
+  (5) when everything it ran succeeded. This is the only guard on the
+  hand-run `bootstrap-fix` shim, which reads `queue.json` as last written.
+  An engine-launched run treats 5 as a success (its re-check rewrite prunes
+  the record); a task that ran and failed still exits `EXIT_TASK_FAILED` (2).
+
+An env.json layer that fails to parse is skipped and reported; an entry
+declared only in that layer then reads as undeclared, so the failure is
+closed per entry, not per origin. A project directory that no longer exists
+leaves only the user layers, so its project-only fixes are dropped.
+
+**Identical operations stay one per origin on disk and run once.** Each
+origin's copy is judged against that origin's own layers, so `queue.json`
+keeps both; the runner's workload and the engine's budget and disclosure view
+(`load_queue_tasks`) collapse records with the same id, kind, command,
+packages, entries and target.
 
 | Task kind | What the runner does |
 |-----------|----------------------|
@@ -274,7 +305,12 @@ not the runner -- is the authority on what actually cleared, so a task that fail
 here simply stays failed there. Exit codes: `0` every task completed, `2` at
 least one did not, `3` the queue is unreadable or names an unknown kind (a
 version skew -- failing loudly beats skipping an elevated task silently, which
-would look like success to the re-check).
+would look like success to the re-check), `4` the user declined at the briefing
+or there was no console to consent on (nothing ran; the queue stays for the next
+session), `5` the runner refused one or more `env_check`/`symlink` records that
+no longer match their origin's manifest (stale) while the other tasks ran; the
+engine treats `5` as a completed run, so its re-check still happens and prunes
+the refused records.
 
 **Privilege is per task, not per run.** On Unix the runner runs **as the user**
 and wraps only `elevated` tasks in `sudo`, so anything it creates stays the
@@ -381,8 +417,9 @@ relaunches itself and exits early. The UAC prompt appears, the engine waits for
 the queue's declared budget clamped just under the Bash tool's 10-minute ceiling
 (`MAX_LAUNCH_WAIT`; a queue that needs longer is told the runner may still be
 working after the pass returns), and on success runs a re-check pass (without
-`--fix-all` -- it can never loop the prompt) so the elevated items clear in the
-same cycle. If the runner could not be launched (UAC declined, PowerShell
+`--fix-all` -- it can never loop the prompt; with the internal `--recheck`
+flag, so a console re-check still rewrites the queue and stamps its origin's
+env gate) so the elevated items clear in the same cycle. If the runner could not be launched (UAC declined, PowerShell
 refused), a task fails, or the wait times out, the engine reports that outcome
 -- a launch that never happened claims no transcript -- and falls back to the
 run-it-yourself shim.
@@ -417,7 +454,9 @@ The per-task `needs_elevation` items are **suppressed** from the numbered list
 while the aggregate exists, since it speaks for them; without an aggregate they
 surface raw rather than vanishing. There is **no `fixed` ritual on this path**:
 the env gate re-runs the phase every session until `last_result` is clean, so
-confirming would be redundant.
+confirming would be redundant. The gate record is per origin (see
+manifest-reference.md, "The env gate"), so another project's clean pass cannot
+close it while this project's deferred check still fails.
 
 ### What the user sees when a collapse happened but stragglers remain
 

@@ -22,12 +22,17 @@ builds on:
   unregistered hostname are all hard errors surfaced by the engine; there
   are no fallbacks.
 - **The env gate** (spec 4.4): a dedicated stamp, ``env_state.json`` in
-  bootstrap's data dir, records the sha256 of the canonical merged
-  manifest, the engine version, and the last result. The env phase runs
+  bootstrap's data dir, records -- PER ORIGIN, keyed by the pass's project
+  key -- the sha256 of the canonical merged manifest, the engine version,
+  the last result, and when that record was written. The env phase runs
   only on first run / merged-hash change / non-clean last result / engine
-  version change / explicit reset (scripts/env-reset-cooldown.sh deletes
-  the stamp); a clean, unchanged pass is skipped. The stamp is independent
-  of the per-project bootstrap cooldown and is the ONLY gate for the phase.
+  version change / record older than the TTL / explicit reset
+  (scripts/env-reset-cooldown.sh deletes the stamp file, clearing every
+  origin); a clean, unchanged pass is skipped. The stamp is independent of
+  the per-project bootstrap cooldown and is the ONLY gate for the phase.
+  Per-origin keying is what stops one project's clean pass from closing the
+  gate of another project whose elevated check is still failing (and whose
+  queued fix a closed gate would otherwise drop).
 
 Backwards-readable evolution (spec 4.5): v1 is the canonical form; unknown
 keys are ignored with a verbose log line (the engine's job), user files are
@@ -59,9 +64,15 @@ ENV_STATE_MAX_AGE_SECONDS = 24 * 60 * 60
 # Layered loading
 # ---------------------------------------------------------------------------
 
-def env_manifest_paths(project_dir):
-    """The four env.json layer paths, lowest priority first (spec 4.1)."""
-    home = os.environ.get("HOME") or os.path.expanduser("~")
+def env_manifest_paths(project_dir, home=None):
+    """The four env.json layer paths, lowest priority first (spec 4.1).
+
+    ``home`` overrides the user home the two user layers live under; by
+    default it is ``$HOME``, else ``~``. The elevated fix runner passes its
+    own invoking user's home explicitly (queue_records).
+    """
+    if home is None:
+        home = os.environ.get("HOME") or os.path.expanduser("~")
     claude_home = os.path.join(home, ".claude")
     paths = [
         os.path.join(claude_home, "env.json"),
@@ -74,8 +85,8 @@ def env_manifest_paths(project_dir):
     return paths
 
 
-def load_layered_env_manifests(project_dir):
-    """Load and merge the four env.json layers.
+def load_layered_env_manifests(project_dir, home=None):
+    """Load and merge the four env.json layers (``home``: see env_manifest_paths).
 
     Returns ``(merged_manifest, parse_errors)`` where parse_errors is a list
     of ``{"path": <path>, "error": <message>}`` dicts. Layers that fail to
@@ -85,7 +96,7 @@ def load_layered_env_manifests(project_dir):
     """
     merged = {}
     parse_errors = []
-    for path in env_manifest_paths(project_dir):
+    for path in env_manifest_paths(project_dir, home=home):
         if not os.path.isfile(path):
             continue
         try:
@@ -116,7 +127,8 @@ def canonical_manifest_hash(merged):
     Canonical form: JSON with sorted keys and compact separators, over the
     FULL merged dict (unknown keys included) -- so "modified" means the
     merged content changed in any way, covering edits, additions, and
-    removals of any layer file (spec 4.4).
+    removals of any layer file (spec 4.4). The same form fingerprints a
+    single declared entry for the fix queue (queue_records.entry_sha256).
     """
     canonical = json.dumps(merged, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -330,23 +342,57 @@ def entry_applies(entry, current_os, machine_key):
 # The env gate (spec 4.4)
 # ---------------------------------------------------------------------------
 
-def read_env_state(data_dir):
-    """Read the env stamp. Returns the state dict, or ``None`` when absent.
+# The stamp file holds one record per origin under "projects", keyed by the
+# pass's project key (the sha1 the hook derives from $PWD, or "_global_" for a
+# pass with no project). A file in any other shape -- including the single
+# machine-wide record written before per-origin keying -- reads as "no stamp"
+# for every key, which simply reopens the gate once per origin.
+ENV_STATE_VERSION = 2
 
-    An unreadable/corrupt stamp is treated as absent: the stamp is
-    engine-owned state, and "absent" simply reopens the gate (the reset
-    semantics), converging back to a valid stamp on the next pass.
-    """
+# The key of a pass with no project directory. Matches stamps._GLOBAL_PROJECT_KEY
+# and the hook's fallback _PROJECT_KEY.
+GLOBAL_ENV_KEY = "_global_"
+
+# Fields of a per-origin record that the gate compares (env_gate_reason).
+# "written_at" is stored beside them and read only by env_state_age.
+_GATE_FIELDS = ("manifest_sha256", "engine_version", "last_result")
+
+
+def _read_env_state_file(data_dir):
+    """The whole per-origin stamp document, or ``None`` when absent/unusable."""
     raw = global_stamp(data_dir, ENV_STATE_STAMP).read()
     if not raw:
         return None
     try:
-        state = json.loads(raw)
+        doc = json.loads(raw)
     except json.JSONDecodeError:
         return None
-    if not isinstance(state, dict):
+    if (not isinstance(doc, dict) or doc.get("version") != ENV_STATE_VERSION
+            or not isinstance(doc.get("projects"), dict)):
         return None
-    return state
+    return doc
+
+
+def _env_state_record(data_dir, project_key):
+    doc = _read_env_state_file(data_dir)
+    if doc is None:
+        return None
+    record = doc["projects"].get(project_key)
+    return record if isinstance(record, dict) else None
+
+
+def read_env_state(data_dir, project_key=GLOBAL_ENV_KEY):
+    """Read one origin's env stamp: its gate fields, or ``None`` when absent.
+
+    An unreadable/corrupt stamp, a stamp in the pre-per-origin shape, or a
+    key with no record is treated as absent: the stamp is engine-owned
+    state, and "absent" simply reopens the gate (the reset semantics),
+    converging back to a valid record on that origin's next pass.
+    """
+    record = _env_state_record(data_dir, project_key)
+    if record is None:
+        return None
+    return {k: record[k] for k in _GATE_FIELDS if k in record}
 
 
 def env_gate_reason(state, manifest_hash, engine_version, stamp_age=None):
@@ -376,20 +422,35 @@ def env_gate_reason(state, manifest_hash, engine_version, stamp_age=None):
     return None
 
 
-def env_state_age(data_dir):
-    """Seconds since the env stamp was last written, or ``None`` when the
-    stamp is missing/unreadable (those states already reopen the gate)."""
-    mtime = global_stamp(data_dir, ENV_STATE_STAMP).mtime()
-    if mtime is None:
+def env_state_age(data_dir, project_key=GLOBAL_ENV_KEY):
+    """Seconds since this origin's record was written, or ``None`` when the
+    record is missing/unreadable (those states already reopen the gate).
+
+    Read from the record's own ``written_at``, not the file mtime: the file
+    is shared by every origin, so its mtime says when ANY origin last passed.
+    """
+    record = _env_state_record(data_dir, project_key)
+    written_at = record.get("written_at") if record else None
+    if isinstance(written_at, bool) or not isinstance(written_at, (int, float)):
         return None
-    return max(0.0, time.time() - mtime)
+    return max(0.0, time.time() - written_at)
 
 
-def write_env_state(data_dir, manifest_hash, engine_version, result):
-    """Stamp the pass outcome. ``result`` is ``"clean"`` or ``"failed"``."""
-    state = {
+def write_env_state(data_dir, manifest_hash, engine_version, result,
+                    project_key=GLOBAL_ENV_KEY):
+    """Stamp one origin's pass outcome. ``result`` is ``"clean"`` or ``"failed"``.
+
+    Read-modify-write of the shared file is safe because every writer is a
+    full engine pass, and full passes are serialized by the engine-wide
+    single-instance lock (proc_lock.engine_lock). Other origins' records are
+    preserved; a file in any other shape is replaced.
+    """
+    doc = _read_env_state_file(data_dir) or {
+        "version": ENV_STATE_VERSION, "projects": {}}
+    doc["projects"][project_key] = {
         "manifest_sha256": manifest_hash,
         "engine_version": engine_version,
         "last_result": result,
+        "written_at": time.time(),
     }
-    global_stamp(data_dir, ENV_STATE_STAMP).write(json.dumps(state, sort_keys=True))
+    global_stamp(data_dir, ENV_STATE_STAMP).write(json.dumps(doc, sort_keys=True))

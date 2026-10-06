@@ -573,12 +573,17 @@ class TestSpawnRecheckPass:
 
         args = _args(tmp_path, fix_all=True, console=True)
         args.project_dir = "/proj"
+        args.project_key = "_global_"
         engine._spawn_recheck_pass(args, "/plugin/root")
 
         assert len(calls) == 1
         cmd = calls[0]
         assert "--fix-all" not in cmd
         assert "--console" in cmd
+        # The console child still rewrites the queue and stamps its origin,
+        # under the parent's own origin key.
+        assert "--recheck" in cmd
+        assert cmd[cmd.index("--project-key") + 1] == "_global_"
         assert "--background" not in cmd
         assert cmd[cmd.index("--project-dir") + 1] == "/proj"
         assert cmd[cmd.index("--data-dir") + 1] == str(tmp_path)
@@ -588,6 +593,51 @@ class TestSpawnRecheckPass:
 # --------------------------------------------------------------------------- #
 # Next-session re-check pickup: stale script removed once the queue empties
 # --------------------------------------------------------------------------- #
+
+class TestRecheckRewrite:
+    """The console re-check pass rewrites the queue -- and only that."""
+
+    def test_rewrite_only_writes_the_queue_without_item_or_launch(
+            self, tmp_path, monkeypatch):
+        monkeypatch.setattr(elev, "resolve_bash", lambda: FAKE_BASH)
+        monkeypatch.setattr(
+            elev, "launch_fix_runner",
+            lambda *a, **k: (_ for _ in ()).throw(AssertionError("launched")))
+        args = _args(tmp_path, console=True)
+        args.recheck = True
+        failures = [_win_failure()]
+
+        stopped = engine._elevation_step(
+            failures, "windows", str(tmp_path), args, "/plugin/root",
+            rewrite_only=True)
+
+        assert stopped is False
+        assert os.path.exists(elev.queue_path(str(tmp_path)))
+        assert all(f["type"] != "elevation_script" for f in failures)
+
+    def test_a_pruned_record_is_reported(self, tmp_path, monkeypatch, capsys):
+        """Anti-pattern: silent bootstrap operations. Dropping another
+        origin's queued fix is an action, so it is printed (console) or
+        logged."""
+        home = tmp_path / "home"
+        (home / ".claude").mkdir(parents=True)
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        qpath = elev.queue_path(str(tmp_path))
+        os.makedirs(os.path.dirname(qpath))
+        with open(qpath, "w", encoding="utf-8") as fh:
+            json.dump({"version": 1, "os": "windows", "tasks": [{
+                "id": "env_check:gone", "kind": "command", "label": "gone",
+                "origin": "/other", "command": "x"}]}, fh)
+
+        engine._elevation_step([], "windows", str(tmp_path),
+                               _args(tmp_path, console=True, fix_all=True),
+                               "/plugin/root")
+
+        assert not os.path.exists(qpath)
+        out = capsys.readouterr().out
+        assert "dropped stale fix env_check:gone [/other]" in out
+
 
 class TestNextSessionPickup:
     def test_satisfied_op_clears_the_script(self, tmp_path):
