@@ -425,6 +425,55 @@ class TestWriteOrClearQueue:
         shim = open(fq.shim_path(str(tmp_path), "ubuntu")).read()
         assert fq.queue_path(str(tmp_path)) in shim
 
+    def test_record_without_origin_key_is_dropped(self, tmp_path):
+        """A pre-origin engine wrote records with no origin key; no pass owns
+        them, so keeping them would re-offer a dead fix forever."""
+        qpath = fq.queue_path(str(tmp_path))
+        os.makedirs(os.path.dirname(qpath), exist_ok=True)
+        with open(qpath, "w", encoding="utf-8") as fh:
+            json.dump({"version": 1, "os": "ubuntu", "tasks": [
+                {"id": "legacy", "kind": "command", "label": "Legacy",
+                 "command": "old"}]}, fh)
+        fq.write_or_clear_queue(
+            [FixTask(id="b", kind="command", label="B", command="b")],
+            str(tmp_path), "ubuntu", origin="/project-b")
+        body = json.load(open(qpath))
+        assert [task["label"] for task in body["tasks"]] == ["B"]
+
+    def test_machine_scoped_finding_is_owned_by_every_pass(self, tmp_path):
+        """path_prune is a machine-wide verdict: a pass that found PATH clean
+        must clear another origin's stale prune record."""
+        fq.write_or_clear_queue(
+            [FixTask(id="path_prune", kind="path_prune", label="Prune",
+                     entries=["C:\\gone"]),
+             FixTask(id="a", kind="command", label="A", command="a")],
+            str(tmp_path), "windows", origin="/project-a")
+        fq.write_or_clear_queue([], str(tmp_path), "windows",
+                                origin="/project-b")
+        body = json.load(open(fq.queue_path(str(tmp_path))))
+        assert [task["label"] for task in body["tasks"]] == ["A"]
+
+    def test_identical_task_from_two_origins_is_queued_once(self, tmp_path):
+        task = FixTask(id="env_check:x", kind="command", label="X",
+                       command="fix-x", elevated=True)
+        fq.write_or_clear_queue([task], str(tmp_path), "ubuntu",
+                                origin="/project-a")
+        fq.write_or_clear_queue([task], str(tmp_path), "ubuntu",
+                                origin="/project-b")
+        body = json.load(open(fq.queue_path(str(tmp_path))))
+        assert [(t["label"], t["origin"]) for t in body["tasks"]] == [
+            ("X", "/project-b")]
+
+    def test_same_id_with_different_command_keeps_both(self, tmp_path):
+        fq.write_or_clear_queue(
+            [FixTask(id="env_check:x", kind="command", label="X", command="a")],
+            str(tmp_path), "ubuntu", origin="/project-a")
+        fq.write_or_clear_queue(
+            [FixTask(id="env_check:x", kind="command", label="X", command="b")],
+            str(tmp_path), "ubuntu", origin="/project-b")
+        body = json.load(open(fq.queue_path(str(tmp_path))))
+        assert {t["command"] for t in body["tasks"]} == {"a", "b"}
+
     def test_cleanup_failure_is_reported(self, tmp_path, monkeypatch):
         def fail_remove(path):
             raise PermissionError("locked")

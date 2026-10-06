@@ -546,6 +546,36 @@ def load_queue_tasks(path: str) -> List[FixTask]:
     return tasks
 
 
+# Task ids whose finding is machine-wide rather than per-project. Every pass
+# computes them (the dead-PATH scan runs in self-setup each session), so the
+# current pass's verdict supersedes whatever origin first recorded one.
+MACHINE_SCOPED_TASK_IDS = frozenset({"path_prune"})
+
+
+def _task_identity(record: dict) -> tuple:
+    """What makes two queued records the same operation, origin aside."""
+    return (record.get("id"), record.get("kind"), record.get("command"),
+            tuple(record.get("packages") or ()),
+            tuple(record.get("entries") or ()), record.get("target"))
+
+
+def _kept_from_other_origins(existing: List[dict], origin: str,
+                             current: List[dict]) -> List[dict]:
+    """The on-disk records this pass does not own and must preserve.
+
+    Dropped besides this origin's own records: a record with no ``origin`` key
+    (written before origins existed, so no pass would ever replace it), a
+    machine-scoped finding (this pass re-derived it), and a duplicate of an
+    operation this pass queued (the runner would run it twice).
+    """
+    current_identities = {_task_identity(record) for record in current}
+    return [record for record in existing
+            if "origin" in record
+            and record["origin"] != origin
+            and record.get("id") not in MACHINE_SCOPED_TASK_IDS
+            and _task_identity(record) not in current_identities]
+
+
 def write_or_clear_queue(tasks: List[FixTask], data_dir: str,
                          current_os: str, origin: str = "") -> Optional[str]:
     """Write queue + shim, or remove both when nothing is deferred.
@@ -556,8 +586,8 @@ def write_or_clear_queue(tasks: List[FixTask], data_dir: str,
     qpath = queue_path(data_dir)
     spath = shim_path(data_dir, current_os)
     existing, existing_bash = _read_existing_queue(qpath)
-    kept = [record for record in existing if record.get("origin", "") != origin]
     current = [replace(task, origin=origin).to_json() for task in tasks]
+    kept = _kept_from_other_origins(existing, origin, current)
     merged = kept + current
     if not merged:
         errors = []
