@@ -757,6 +757,8 @@ fi
 # --- Persist PATH entries to Windows User PATH (registry) ---
 # On Windows, write ~/.local/bin and the standalone Python dir to the registry
 # so that future Claude Code sessions inherit them regardless of parent shell.
+# BOOTSTRAP_SKIP_REGISTRY suppresses this global write for tests and isolated
+# runs whose temporary HOME must not affect the real user's registry.
 if [[ "$OS" == MINGW* ]] || [[ "$OS" == MSYS* ]]; then
     # Anchor powershell.exe to an absolute path. SessionStart hooks can
     # inherit a stripped PATH (no System32\WindowsPowerShell\v1.0) and a
@@ -765,7 +767,12 @@ if [[ "$OS" == MINGW* ]] || [[ "$OS" == MSYS* ]]; then
     _SYSROOT_U=$(cygpath -u "${SYSTEMROOT:-C:\\Windows}" 2>/dev/null || echo "/c/Windows")
     PWSH_EXE="$_SYSROOT_U/System32/WindowsPowerShell/v1.0/powershell.exe"
     [ -x "$PWSH_EXE" ] || PWSH_EXE="powershell.exe"
-    for _path_entry in "$LOCAL_BIN" "$STANDALONE_PYTHON_BIN"; do
+    if [ -n "${BOOTSTRAP_SKIP_REGISTRY:-}" ]; then
+        if [ "$LOG_SUCCESS_SHELL" = "true" ]; then
+            log_entry "PATH: skipped Windows User PATH write (BOOTSTRAP_SKIP_REGISTRY set)"
+        fi
+    else
+      for _path_entry in "$LOCAL_BIN" "$STANDALONE_PYTHON_BIN"; do
         _win_path=$(cygpath -w "$_path_entry" 2>/dev/null || echo "$_path_entry" | sed 's|/|\\|g')
         _ps_result=$("$PWSH_EXE" -NoProfile -NonInteractive -Command "
             \$entry = '$_win_path'
@@ -788,7 +795,8 @@ if [[ "$OS" == MINGW* ]] || [[ "$OS" == MSYS* ]]; then
         elif [ "$LOG_SUCCESS_SHELL" = "true" ] && [ "$_ps_result" = "already_present" ]; then
             log_entry "PATH: $_win_path already in Windows User PATH"
         fi
-    done
+      done
+    fi
 fi
 
 # --- Extract hook input fields for logging ---
