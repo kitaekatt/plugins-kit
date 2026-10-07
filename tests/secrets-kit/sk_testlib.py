@@ -19,14 +19,11 @@ process with its own `tmp_path_factory` basetemp, so N workers build N private
 templates at N distinct paths; no path and no write is shared.
 """
 
-import os
 import shutil
 import stat
 import subprocess
 import sys
 from pathlib import Path
-
-import pytest
 
 # Files inside .git that can embed an absolute path to the tree's own location
 # (a clone's origin URL, most importantly). Relocating a copy means rewriting
@@ -152,17 +149,7 @@ def grant_everyone(path: Path, rights: str) -> None:
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
-# Seed and rotation write the identity cache in text mode (authoring
-# `_finalize_cache`, `text=True`), so the cache they leave uses os.linesep.
-AUTHORED_NEW_IDENTITY_CACHE = ("dummy new identity" + os.linesep).encode()
-
-# unlock publishes age's stdout bytes unchanged (LF), so on Windows its cache
-# differs from the CRLF digest seed/rotation recorded and reconciliation refuses
-# it. Strict: this goes red once the two writers agree.
-UNLOCK_CACHE_NEWLINE_GAP = pytest.mark.xfail(
-    sys.platform.startswith("win"),
-    strict=True,
-    reason="Windows gap: seed/rotation record a CRLF text-mode identity-cache digest, "
-    "unlock writes age's LF bytes, so reconciliation after unlock refuses the cache "
-    "as not compatible -- owner decision pending",
-)
+# Seed, rotation and unlock all leave the identity cache as the UTF-8 bytes the
+# identity was wrapped from -- what `age -d` returns on unlock -- with no newline
+# translation, so the cache is byte-identical on every platform.
+AUTHORED_NEW_IDENTITY_CACHE = b"dummy new identity\n"

@@ -606,3 +606,69 @@ def test_observed_guard_substitution_refuses_without_repair(adding, monkeypatch,
     assert code == 1 and calls == [] and before == after and len(replacement) == 1
     assert path.stat().st_ino == replacement[0] and saved.stat().st_ino == original.st_ino
     assert path.read_bytes() == saved.read_bytes() == b''
+
+
+def _icacls_listing(path):
+    done = subprocess.run(['icacls', str(path)], capture_output=True, text=True, timeout=20)
+    assert done.returncode == 0, done.stdout + done.stderr
+    return done.stdout
+
+
+def _system_inheriting_parent(root):
+    """A parent whose DACL hands SYSTEM an inheritable grant, as a profile does."""
+    parent = root / 'shared parent'
+    parent.mkdir()
+    done = subprocess.run(['icacls', str(parent), '/grant', '*S-1-5-18:(OI)(CI)F'], capture_output=True, text=True, timeout=20)
+    assert done.returncode == 0, done.stdout + done.stderr
+    return parent
+
+
+@pytest.mark.skipif(not IS_WINDOWS, reason='Windows DACL inheritance')
+def test_windows_data_dir_inheriting_a_foreign_grant_is_tightened_before_the_lock(tmp_path):
+    module = _lock_module()
+    data = _system_inheriting_parent(tmp_path) / 'inherited data'
+    data.mkdir()
+    with pytest.raises(module.OperationLockSetupError):
+        module._windows_private(data, directory=True)
+    with module.operation_lock(data) as canonical:
+        assert canonical == data.resolve()
+    module._windows_private(data, directory=True)
+    module._windows_private(data / 'operation.lock', directory=False)
+
+
+@pytest.mark.skipif(not IS_WINDOWS, reason='Windows explicit grants from mkdir(mode=0o700)')
+def test_windows_data_dir_with_mkdir_explicit_grants_is_accepted(tmp_path):
+    module = _lock_module()
+    data = tmp_path / 'explicit data'
+    data.mkdir(mode=0o700)
+    if sys.version_info >= (3, 12, 4):
+        with pytest.raises(module.OperationLockSetupError):
+            module._windows_private(data, directory=True)
+    with module.operation_lock(data) as canonical:
+        assert canonical == data.resolve()
+    module._windows_private(data, directory=True)
+
+
+@pytest.mark.skipif(not IS_WINDOWS, reason='Windows DACL inheritance')
+def test_windows_missing_data_dir_under_non_private_parent_is_created_and_accepted(tmp_path):
+    module = _lock_module()
+    parent = _system_inheriting_parent(tmp_path)
+    with pytest.raises(module.OperationLockSetupError):
+        module._windows_private(parent, directory=True)
+    data = parent / 'created data'
+    with module.operation_lock(data) as canonical:
+        assert canonical == data.resolve()
+    module._windows_private(data, directory=True)
+
+
+@pytest.mark.skipif(not IS_WINDOWS, reason='Windows DACL inheritance')
+def test_windows_recovery_inspection_refuses_non_private_dir_without_changing_its_acl(tmp_path):
+    module = _lock_module()
+    data = _system_inheriting_parent(tmp_path) / 'inspected data'
+    data.mkdir()
+    before = _icacls_listing(data)
+    with pytest.raises(module.OperationLockSetupError):
+        with module._recovery_operation_lock(data):
+            pytest.fail('inspection must not enter a non-private directory')
+    assert _icacls_listing(data) == before
+    assert not (data / 'operation.lock').exists()

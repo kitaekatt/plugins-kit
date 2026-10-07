@@ -76,11 +76,13 @@ def _repair_mode_drift(path: Path, mode: int) -> bool:
     return True
 
 
-def _icacls(path: Path, rights: str) -> None:
+def _icacls(path: Path, rights: str, extra: tuple[str, ...] = ()) -> None:
     """Strip inherited ACEs from ``path`` and grant the current user ``rights``.
 
     ``rights`` is an icacls permission spec. For a DIRECTORY it must carry the
     inheritance flags -- see tighten_dir, where omitting them is not cosmetic.
+    ``extra`` is appended to the argv verbatim (tighten_dir's explicit-grant
+    removal); the file path passes none.
     """
     principal = _current_windows_principal()
     argv = [
@@ -89,6 +91,7 @@ def _icacls(path: Path, rights: str) -> None:
         "/inheritance:r",
         "/grant:r",
         f"{principal}:{rights}",
+        *extra,
     ]
     try:
         proc = subprocess.run(
@@ -127,6 +130,13 @@ def tighten_dir(path: Path) -> None:
     Observed 2026-08-03: without the flags, secrets-kit's own data dir left
     bootstrap.log with an empty DACL, and the PermissionError from appending to
     it aborted the entire bootstrap engine on every SessionStart.
+
+    ``/inheritance:r`` strips only INHERITED entries. A directory made with
+    ``mkdir(mode=0o700)`` on CPython 3.12.4+ Windows instead carries EXPLICIT
+    SYSTEM (S-1-5-18), Administrators (S-1-5-32-544) and OWNER RIGHTS
+    (S-1-3-4) grants, which would survive and leave the directory non-private.
+    ``/remove:g`` drops those three by SID; any other explicit grant is left
+    for the operation lock to refuse.
     """
     path.mkdir(parents=True, exist_ok=True)
     if not IS_WINDOWS:
@@ -135,7 +145,32 @@ def tighten_dir(path: Path) -> None:
         except OSError as e:
             raise SecretsError(f"chmod 0700 failed on {path}: {e}")
         return
-    _icacls(path, "(OI)(CI)F")
+    _icacls(path, "(OI)(CI)F", ("/remove:g", "*S-1-5-18", "*S-1-5-32-544", "*S-1-3-4"))
+
+
+def _remove_windows_directory_link(dest: Path) -> None:
+    """Remove a directory link at ``dest`` without touching its referent."""
+    if not IS_WINDOWS:
+        return
+    try:
+        info = os.lstat(dest)
+    except FileNotFoundError:
+        return
+    reparse_point = bool(
+        getattr(info, "st_file_attributes", 0)
+        & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    )
+    if not (stat.S_ISLNK(info.st_mode) or reparse_point):
+        return
+    try:
+        referent = dest.resolve(strict=True)
+    except FileNotFoundError:
+        return
+    if not referent.is_dir():
+        return
+    os.rmdir(dest)
+    if not referent.is_dir():
+        raise OSError(f"directory-link referent disappeared while replacing {dest}")
 
 
 def _private_output(
@@ -174,6 +209,10 @@ def _private_output(
         finally:
             stream.close()
         if success:
+            # Removing a directory link creates a brief empty-slot window; the link
+            # was being replaced anyway, and the referent is verified untouched.
+            if IS_WINDOWS:
+                _remove_windows_directory_link(dest)
             os.replace(temporary, dest)
             owned = False
         return success

@@ -97,7 +97,7 @@ def _observe_private_bytes(monkeypatch, targets, *, windows=False):
     return events
 
 
-def _assert_protected_before_bytes(events, target, *, text=False, windows=False):
+def _assert_protected_before_bytes(events, target, *, text=False, binary=False, windows=False):
     target = Path(target)
     writes = [event for event in events if event[0] == 'write' and event[1].parent == target.parent
               and (event[1].name == target.name or event[1].name.startswith(target.name + '.'))]
@@ -108,6 +108,9 @@ def _assert_protected_before_bytes(events, target, *, text=False, windows=False)
     assert all(event[1] != target for event in writes), events
     if text:
         assert all(event[4] == 'utf-8' for event in writes)
+    if binary:
+        # A binary stream carries no encoding: no newline translation can occur.
+        assert all(event[4] is None for event in writes), events
     if not windows:
         # The simulated POSIX path chmods; only a POSIX host can observe 0600.
         if os.name != 'nt':
@@ -152,7 +155,7 @@ def test_actual_converge_protects_destination_and_state_then_skips_crypto(fleet,
 
 @pytest.mark.parametrize('operation', ['init', 'rotate-identity'])
 @pytest.mark.parametrize('windows', [False, True])
-def test_real_authoring_cache_protects_before_text_and_retains_order(seeding, monkeypatch, operation, windows):
+def test_real_authoring_cache_protects_before_bytes_and_retains_order(seeding, monkeypatch, operation, windows):
     """Both identity-writing verbs publish first and cache the identity after.
 
     Rotation is held to the same order as seeding: the cache names the key
@@ -175,8 +178,11 @@ def test_real_authoring_cache_protects_before_text_and_retains_order(seeding, mo
 
     monkeypatch.setattr(seeding.cli.repo_mod, '_publish_owned', publish)
     assert seeding.cli.main([operation]) == 0
-    _assert_protected_before_bytes(events, seeding.identity, text=True, windows=windows)
-    assert seeding.identity.read_text() == ('AGE-SECRET-KEY-NEW' if operation == 'init' else 'AGE-SECRET-KEY-ROTATED')
+    _assert_protected_before_bytes(events, seeding.identity, binary=True, windows=windows)
+    # The cache holds the identity's UTF-8 bytes exactly, the format unlock's
+    # `age -d` output takes, so both writers agree on every platform.
+    identity = 'AGE-SECRET-KEY-NEW' if operation == 'init' else 'AGE-SECRET-KEY-ROTATED'
+    assert seeding.identity.read_bytes() == identity.encode('utf-8')
     assert ordering == [('publish', None if operation == 'init' else b'old dummy identity')]
 
 

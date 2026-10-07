@@ -175,3 +175,37 @@ def test_private_output_creates_protected_content(tmp_path):
     assert target.read_bytes() == b"dummy private bytes\n"
     if not IS_WINDOWS:
         assert (target.stat().st_mode & 0o777) == 0o600
+
+
+def _fake_windows_icacls(monkeypatch):
+    monkeypatch.setattr(perms, "IS_WINDOWS", True)
+    monkeypatch.setenv("USERNAME", "dummy-owner")
+    monkeypatch.setenv("USERDOMAIN", "DUMMY")
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0, stdout=b"")
+
+    monkeypatch.setattr(perms.subprocess, "run", fake_run)
+    return calls
+
+
+def test_tighten_dir_windows_argv_removes_explicit_system_admin_owner_rights(tmp_path, monkeypatch):
+    """mkdir(mode=0o700) leaves explicit grants that /inheritance:r keeps."""
+    calls = _fake_windows_icacls(monkeypatch)
+    data_dir = tmp_path / "data"
+    perms.tighten_dir(data_dir)
+    assert calls == [[
+        "icacls", str(data_dir), "/inheritance:r",
+        "/grant:r", "DUMMY\\dummy-owner:(OI)(CI)F",
+        "/remove:g", "*S-1-5-18", "*S-1-5-32-544", "*S-1-3-4",
+    ]]
+
+
+def test_tighten_file_windows_argv_has_no_remove_clause(tmp_path, monkeypatch):
+    calls = _fake_windows_icacls(monkeypatch)
+    target = tmp_path / "secret.txt"
+    target.write_text("x")
+    perms.tighten(target, 0o600)
+    assert calls == [["icacls", str(target), "/inheritance:r", "/grant:r", "DUMMY\\dummy-owner:F"]]

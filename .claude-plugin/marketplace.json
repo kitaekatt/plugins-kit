@@ -124,7 +124,7 @@
     {
       "name": "hue-kit",
       "description": "Manage Philips Hue scenes as editable YAML -- bridge sync and dry-run apply.",
-      "version": "0.16.1",
+      "version": "0.16.2",
       "author": {
         "name": "Christina"
       },

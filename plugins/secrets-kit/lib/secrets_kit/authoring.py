@@ -390,7 +390,10 @@ class AuthoringOperation:
         self.record["outputs"] = {name: dict(_file_state(self.directory / stored), stored=stored)
                                    for name, stored in outputs.items()}
         tree = self._prepare_tree()
-        cache_bytes = identity.replace("\n", os.linesep).encode("utf-8")
+        # cache_digest is the digest of the wrapped plaintext bytes exactly as
+        # `age -d` returns them on unlock, so seed/rotation and unlock produce
+        # one identity-cache byte format on every platform.
+        cache_bytes = identity.encode("utf-8")
         self.mark("prepared", expected_tree=tree, cache_digest=_digest(cache_bytes))
         return identity, recipient, 0
 
@@ -470,7 +473,10 @@ class AuthoringOperation:
                 "rotation refused: the replacement epoch is identical to the published one",
                 "A fresh identity always changes the manifest recipient, so this "
                 "means the generated keypair is not fresh. Nothing was published.")
-        cache_bytes = identity.replace("\n", os.linesep).encode("utf-8")
+        # cache_digest is the digest of the wrapped plaintext bytes exactly as
+        # `age -d` returns them on unlock, so seed/rotation and unlock produce
+        # one identity-cache byte format on every platform.
+        cache_bytes = identity.encode("utf-8")
         self.mark("prepared", expected_tree=tree, authored_paths=authored,
                   cache_digest=_digest(cache_bytes))
         return 0
@@ -593,9 +599,9 @@ class AuthoringOperation:
 
     def _finalize_cache(self, identity: str) -> None:
         def produce(stream: Any) -> bool:
-            stream.write(identity)
+            stream.write(identity.encode("utf-8"))
             return True
-        if not _private_output(self.data_dir / "identity.txt", 0o600, produce, text=True):
+        if not _private_output(self.data_dir / "identity.txt", 0o600, produce):
             raise _recovery_error("publication confirmed; identity cache finalization incomplete")
         _directory_sync(self.data_dir)
         if _digest((self.data_dir / "identity.txt").read_bytes()) != self.record["cache_digest"]:

@@ -214,6 +214,7 @@ class TestHueKitCliWiring:
         # run succeeds and warns, and the two concerns never share a message.
         dest = tmp_path / "app-key.txt"
         monkeypatch.setattr(hue_cli, "PAIRED_KEY_FILE", dest)
+        monkeypatch.setattr(hue_cli, "_is_windows", lambda: False)  # POSIX branch
         monkeypatch.setattr(hue_cli.Path, "chmod",
                             lambda self, mode: (_ for _ in ()).throw(OSError("boom")))
 

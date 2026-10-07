@@ -24,7 +24,6 @@ from test_secrets_bootstrap import FakeCtx
 pytestmark = pytest.mark.skipif(shutil.which('git') is None, reason='real Git required')
 WINDOWS = sys.platform.startswith('win')
 LEXICAL_PARENT_DOT = "Windows collapses '..' lexically before following a link, so '<link>/..' names the link's own parent, not the physical sibling this spelling exercises"
-DIRECTORY_LINK_SLOT = 'Windows os.replace cannot replace a directory-link slot (WinError 5); converge reports a secrets_entry failure and keeps the link -- known Windows gap, not yet decided'
 
 
 @pytest.fixture(autouse=True)
@@ -223,7 +222,7 @@ def test_actual_matching_leaf_replaces_slot_without_referent_hash_or_chmod(fleet
 
 
 @pytest.mark.parametrize('policy', ['outside', 'ignored', 'waived', 'outside_to_exposed'])
-@pytest.mark.parametrize('referent_kind', ['file', 'dangling', pytest.param('directory', marks=pytest.mark.xfail(WINDOWS, reason=DIRECTORY_LINK_SLOT, strict=True))])
+@pytest.mark.parametrize('referent_kind', ['file', 'dangling', 'directory'])
 def test_actual_cold_permitted_leaf_publication_preserves_referent(fleet, git_template, monkeypatch, policy, referent_kind):
     target = fleet.dest_root / 'ha-token.txt'
     fleet.unlock()

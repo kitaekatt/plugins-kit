@@ -261,6 +261,34 @@ def _read_windows_user_path():
         return None
 
 
+def _describe_path_change(before, after):
+    """Describe the ordered entry and metadata changes in a registry PATH."""
+    before_value = before[0] if before is not None else None
+    after_value = after[0] if after is not None else None
+    before_entries = [entry for entry in (before_value or "").split(";") if entry]
+    after_entries = [entry for entry in (after_value or "").split(";") if entry]
+    added = [entry for entry in after_entries if entry not in before_entries]
+    removed = [entry for entry in before_entries if entry not in after_entries]
+
+    lines = []
+    if before is None and after is not None:
+        lines.append("Path value was created.")
+    elif before is not None and after is None:
+        lines.append("Path value was deleted.")
+    elif before is not None and after is not None and before[1] != after[1]:
+        lines.append(f"Path value type changed from {before[1]} to {after[1]}.")
+
+    lines.append("ADDED:")
+    lines.extend(f"  {entry}" for entry in added)
+    if not added:
+        lines.append("  (none)")
+    lines.append("REMOVED:")
+    lines.extend(f"  {entry}" for entry in removed)
+    if not removed:
+        lines.append("  (none)")
+    return "\n".join(lines)
+
+
 @pytest.fixture(autouse=True)
 def _guard_real_user_path():
     """Regression guard: no test may mutate the real Windows User PATH.
@@ -320,12 +348,19 @@ def _guard_real_user_path():
         else:
             value, value_type = before
             _real_winreg.SetValueEx(key, "Path", 0, value_type, value)
+    worker = os.environ.get("PYTEST_XDIST_WORKER") or "main"
     pytest.fail(
         "test mutated the real Windows User PATH (HKCU\\Environment) -- the "
         "registry ignores HOME isolation, so this leaks a permanent, "
         "never-deduplicated entry into the developer's PATH (restored). Set "
         "BOOTSTRAP_SKIP_REGISTRY for any engine invocation in this test, or "
-        "mock winreg if the test is exercising the write path itself."
+        "mock winreg if the test is exercising the write path itself.\n"
+        f"Worker: {worker}\n"
+        f"{_describe_path_change(before, after)}\n"
+        "Note: under -n, this guard runs only in gw0, so the writer may be a "
+        "test running concurrently in another worker; an added entry containing "
+        "a pytest tmp path (for example, ...popen-gwN\\test_name0...) names the "
+        "writer."
     )
 
 
