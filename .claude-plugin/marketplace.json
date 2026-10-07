@@ -9,7 +9,7 @@
     {
       "name": "unreal-kit",
       "description": "Unreal Engine automation: Python API for asset inspection and data extraction; MCP server for live Editor authoring (actors, Blueprints, materials, PIE)",
-      "version": "0.17.4",
+      "version": "0.17.5",
       "author": {
         "name": "Christina"
       },
@@ -45,7 +45,7 @@
     {
       "name": "p4-kit",
       "description": "Multi-agent code review for pending Perforce changelists (/p4-code-review) -- auto-shelves, reviews, cleans up.",
-      "version": "0.65.1",
+      "version": "0.65.2",
       "author": {
         "name": "Christina"
       },
@@ -58,7 +58,7 @@
     {
       "name": "git-kit",
       "description": "Multi-agent pre-push code review for git (/git-code-review) with per-finding validation and declined-findings memory.",
-      "version": "0.47.1",
+      "version": "0.47.2",
       "author": {
         "name": "Christina"
       },
@@ -71,7 +71,7 @@
     {
       "name": "skills-kit",
       "description": "Author and audit every md file a project loads or ships -- CLAUDE.md, SKILL.md, project docs, and their cross-references -- for placement, cohesion, and drift.",
-      "version": "0.89.2",
+      "version": "0.89.3",
       "author": {
         "name": "Christina"
       },
@@ -97,7 +97,7 @@
     {
       "name": "awesome-kit",
       "description": "Provides plugin-ecosystem, task, orchestrate, recap, debug-context, and verbose-updates skills for plugin browsing, task tracking, delegated work, response distillation, answering why-did-you questions from context, and progress communication.",
-      "version": "0.68.1",
+      "version": "0.68.2",
       "author": {
         "name": "Christina"
       },
@@ -150,7 +150,7 @@
     {
       "name": "content-pipeline-kit",
       "description": "Library + skills for LLM-in-the-loop batch content pipelines.",
-      "version": "0.34.4",
+      "version": "0.34.5",
       "author": {
         "name": "Christina"
       },
@@ -176,7 +176,7 @@
     {
       "name": "workflow-kit",
       "description": "Incremental, native-preserving improvements on the native Workflow tool: a declarative .workflow.yaml compiler plus node strategies (deterministic script + OpenRouter model calls) that run as cheap, context-light nodes via a file-passing contract. Experimental.",
-      "version": "0.10.1",
+      "version": "0.10.2",
       "author": {
         "name": "Christina"
       },
@@ -189,7 +189,7 @@
     {
       "name": "pdf-kit",
       "description": "Convert HTML files to PDFs with CSS and JavaScript fidelity via headless Chromium.",
-      "version": "0.2.2",
+      "version": "0.2.3",
       "author": {
         "name": "Christina"
       },
