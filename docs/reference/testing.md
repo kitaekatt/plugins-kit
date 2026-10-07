@@ -23,7 +23,7 @@ More workers are not always better. The suite is process-spawn-bound because
 tests run real `git`, `uv`, and Git Bash subprocesses. Past a point, extra
 workers contend for the same process spawns.
 
-Full-suite wall time on the 24-core box:
+Full-suite wall time on a 24-core non-Windows box:
 
 | Worker setting | Wall time |
 | --- | --- |
@@ -34,6 +34,16 @@ Full-suite wall time on the 24-core box:
 
 Roughly half the core count is the sweet spot. `-n auto` is portable but not
 optimal on a many-core machine.
+
+### Windows
+
+On Windows 11 with Git Bash, representative full-suite runs on 2026-10-07
+took 27:53 and 35:32 with `-n 12`. The worker-count sweep was not repeated on
+Windows. The slow tests were mostly the `tests/secrets-kit` seed, entry,
+rotation-recovery, `operation_lock`, and `dest_guard` tests, plus
+`tests/repo-scripts/test_publish.py::TestMasterOnlyGuardAgainstAModel` cases.
+These tests drive real git, age stand-ins, and `icacls` subprocesses; process
+spawning is the cost on Windows.
 
 ## Consequences of parallelism
 

@@ -672,3 +672,16 @@ def test_windows_recovery_inspection_refuses_non_private_dir_without_changing_it
             pytest.fail('inspection must not enter a non-private directory')
     assert _icacls_listing(data) == before
     assert not (data / 'operation.lock').exists()
+
+
+@pytest.mark.skipif(not IS_WINDOWS, reason='Windows pre-lock tightening')
+def test_windows_already_private_data_dir_takes_no_pre_lock_tighten(tmp_path, monkeypatch):
+    module = _lock_module()
+    data = tmp_path / 'private data'
+    data.mkdir()
+    module._windows_private(data, directory=True)
+    tightened = []
+    monkeypatch.setattr(module.perms, 'tighten_dir', lambda path: tightened.append(path))
+    with module.operation_lock(data) as canonical:
+        assert canonical == data.resolve()
+    assert tightened == []

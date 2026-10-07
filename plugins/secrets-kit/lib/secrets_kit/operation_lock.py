@@ -314,11 +314,13 @@ def _own_data(data_dir: Path, *, check_recovery: bool) -> Iterator[Path]:
 
 
 def _tighten_before_lock(data_dir: Path) -> None:
-    """Make a missing or real Windows data directory owner-only before trust.
+    """Make a missing or non-private Windows data directory owner-only.
 
     Bootstrap creates the directory with the profile's inherited DACL, which
-    _windows_private refuses. Anything other than a missing path or a
-    non-reparse directory is left untouched for _own_data to refuse.
+    _windows_private refuses. A directory that already passes that in-process
+    check is left alone, so the steady state spawns no icacls here. Anything
+    other than a missing path or a non-reparse directory is left untouched
+    for _own_data to refuse.
     """
     try:
         path = data_dir.expanduser()
@@ -333,6 +335,11 @@ def _tighten_before_lock(data_dir: Path) -> None:
     else:
         if not stat.S_ISDIR(observed.st_mode) or getattr(observed, "st_file_attributes", 0) & 0x400:
             return
+        try:
+            _windows_private(path, directory=True)
+            return  # already owner-only
+        except OperationLockSetupError:
+            pass
     try:
         perms.tighten_dir(path)
     except (SecretsError, OSError) as error:
