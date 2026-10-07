@@ -20,10 +20,15 @@ from llm_scripting_kit.swapper_acceptance import run_swapper_acceptance
 
 class FakeSwapper:
     def __init__(self, mode="faithful", models=("alpha", "beta"), delay=0.2,
-                 busy_delay=1.2, wrong_answers=False, running_route=True):
+                 busy_delay=1.2, wrong_answers=False, running_route=True,
+                 load_s=0.15):
         self.mode, self.models, self.delay = mode, list(models), delay
         self.busy_delay, self.wrong_answers = busy_delay, wrong_answers
         self.running_route = running_route
+        # Model load time after the drain. It must dwarf the scheduling delay
+        # of the acceptance client thread that sees the busy response, or a
+        # loaded host reads the drain-then-load as an eviction.
+        self.load_s = load_s
         self.cond = threading.Condition()
         self.resident = []
         self.inflight = {}
@@ -62,7 +67,7 @@ class FakeSwapper:
                             waited = True
                             owner.cond.wait(0.05)
                         if waited:
-                            time.sleep(0.15)  # model load time after the drain
+                            time.sleep(owner.load_s)
                     owner.resident = [model]
                     owner.inflight[model] = owner.inflight.get(model, 0) + 1
                 time.sleep(owner.busy_delay if busy else owner.delay)
@@ -106,7 +111,7 @@ def fake_swapper():
         fake.close()
 
 
-FAST = dict(settle_s=0.05, poll_s=0.02, busy_setup_s=5.0, request_timeout=20.0)
+FAST = dict(settle_s=0.3, poll_s=0.02, busy_setup_s=5.0, request_timeout=20.0)
 
 
 def _failed(report):

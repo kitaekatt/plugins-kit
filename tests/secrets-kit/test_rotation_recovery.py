@@ -28,6 +28,7 @@ from sk_publish import fixture_commit_and_push
 
 from secrets_kit import DecryptError, SecretsError, agefile, authoring
 from secrets_kit import repo as repository
+from sk_testlib import UNLOCK_CACHE_NEWLINE_GAP
 from test_dest_guard import _armored, _templates, adding  # noqa: F401
 from test_init import _seeding_template, seeding  # noqa: F401
 from test_sync_view import _author_snapshot, _dummy_crypto, _git, _seed_author
@@ -152,6 +153,7 @@ def test_actual_rotation_rejection_pushes_once_and_restores_owned_state(
     assert not (adding.data_dir / 'authoring-recovery').exists()
 
 
+@UNLOCK_CACHE_NEWLINE_GAP
 def test_actual_rotation_lost_push_report_leaves_recovery_pending(
     adding: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture,
 ) -> None:

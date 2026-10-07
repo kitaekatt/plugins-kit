@@ -252,13 +252,13 @@ def run_swapper_acceptance(
             (f"saw {_resident_text(wrong[0])} resident while requesting {model}" if wrong
              else f"{len(samples)} sample(s), only {model} or draining"),
         )
-    _run_overlap(report, root, model_a, model_b, poll_s, busy_setup_s, request_timeout)
+    _run_overlap(report, root, model_a, model_b, poll_s, busy_setup_s, request_timeout, settle_s)
     return report
 
 
 def _run_overlap(
     report: AcceptanceReport, root: str, busy: str, cold: str,
-    poll_s: float, busy_setup_s: float, request_timeout: float,
+    poll_s: float, busy_setup_s: float, request_timeout: float, settle_s: float,
 ) -> None:
     """Constructed never-evict overlap: demand ``cold`` while ``busy`` is mid-request."""
     url = root + "/v1/chat/completions"
@@ -273,6 +273,13 @@ def _run_overlap(
         if running_models(root) == [busy]:
             busy_resident = True
             break
+        time.sleep(poll_s)
+    # The warm request already made ``busy`` resident, so residency alone does
+    # not show that the long request reached the swapper. Give it settle_s to
+    # arrive before demanding ``cold``; a swapper that has not yet seen the
+    # request can only admit ``cold`` at once, which is not an eviction.
+    settle_until = time.monotonic() + settle_s
+    while busy_thread.is_alive() and time.monotonic() < settle_until:
         time.sleep(poll_s)
     in_flight_at_demand = busy_thread.is_alive()
     x, y = 61, 47

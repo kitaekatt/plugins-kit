@@ -12,6 +12,7 @@ process itself).
 
 import json
 import re
+import shlex
 import sys
 import time
 from types import ModuleType, SimpleNamespace
@@ -924,7 +925,7 @@ class TestShippedOpencodeBackend:
         assert "### OpenCode CLI (`opencode`)" in rendered
         command = _opencode_command(rendered)
         assert command == (
-            f"opencode run --pure --dir {og._placeholder_path('root')} "
+            f"opencode run --pure --dir {shlex.quote(og._placeholder_path('root'))} "
             "-m example/model --agent build --auto"
         )
         assert re.search(
@@ -981,8 +982,8 @@ class TestCommandTextProvider:
         command = _codex_command(rendered)
 
         assert command == (
-            f"adapter-generated {og._placeholder_path('root')} "
-            f"{og._placeholder_path('result')}"
+            f"adapter-generated {shlex.quote(og._placeholder_path('root'))} "
+            f"{shlex.quote(og._placeholder_path('result'))}"
         )
         assert calls[0]["model"] == "gpt-5.6-sol"
         assert calls[0]["effort"] == "high"

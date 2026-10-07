@@ -284,6 +284,8 @@ class TestReexecUnderPluginVenv:
             raise SystemExit(0)
 
         monkeypatch.setattr(mod.os, "execv", fake_execv)
+        # This test pins the POSIX exec branch; Windows spawns and waits.
+        monkeypatch.setattr(mod, "_is_windows", lambda: False)
         with pytest.raises(SystemExit):
             mod.reexec_under_plugin_venv("hue-kit")
         assert captured["path"] == str(venv_py), (
@@ -307,6 +309,8 @@ class TestReexecUnderPluginVenv:
             raise SystemExit(0)
 
         monkeypatch.setattr(mod.os, "execv", fake_execv)
+        # This test pins the POSIX exec branch; Windows spawns and waits.
+        monkeypatch.setattr(mod, "_is_windows", lambda: False)
         with pytest.raises(SystemExit):
             mod.reexec_under_plugin_venv("p4-kit")
         assert captured["path"] == str(py)

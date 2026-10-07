@@ -19,6 +19,7 @@ from secrets_kit import SecretsError, agefile, guard
 from secrets_kit import converge as convergence
 from secrets_kit import repo as repository
 from secrets_kit.manifest import Manifest
+from sk_testlib import AUTHORED_NEW_IDENTITY_CACHE, UNLOCK_CACHE_NEWLINE_GAP, grant_everyone
 from test_dest_guard import _armored, _templates, adding
 from test_init import _load_cli, _seeding_template, seeding
 from test_repo_binding import _strict_crypto
@@ -255,7 +256,7 @@ def test_actual_successful_push_with_lost_report_uses_fresh_proof(seed_subject, 
     print('SEED_LOST_PUSH_TRACE ' + json.dumps({'force': subject.force, 'code': outcome['code'], 'pushes': pushes, 'remoteChanged': before['remoteHead'] != after['remoteHead'], 'peerValues': {k: v.decode() for k, v in peer['values'].items()}}))
     assert pushes and all(p['actualCode'] == 0 for p in pushes) and len(pushes) == 1
     assert outcome['code'] == 0 and before['remoteHead'] != after['remoteHead']
-    assert (subject.data_dir / 'identity.txt').read_bytes() == b'dummy new identity\n'
+    assert (subject.data_dir / 'identity.txt').read_bytes() == AUTHORED_NEW_IDENTITY_CACHE
     assert peer['failures'] == 0 and peer['values']['seed-proof.txt'] == b'dummy seed materialization proof\n'
     assert 'Nothing was published' not in diagnostic.err
 
@@ -382,6 +383,7 @@ def _lose_push_report(subject, controlled, *, proof_failure=False, descendant=Fa
     return observations
 
 
+@UNLOCK_CACHE_NEWLINE_GAP
 def test_actual_published_unknown_retains_cipher_and_refuses_every_caller(pending_subject, monkeypatch, capsys):
     from secrets_kit import authoring
     subject = pending_subject
@@ -432,7 +434,7 @@ def test_actual_lost_report_accepts_fresh_descendant(seed_subject, monkeypatch):
     assert outcome['code'] == 0 and observations['pushes'] == [0] and len(observations['proofs']) == 1
     assert observations['descendant']['failures'] == 0
     assert observations['descendant']['values']['seed-proof.txt'] == b'dummy seed materialization proof\n'
-    assert (subject.data_dir / 'identity.txt').read_bytes() == b'dummy new identity\n'
+    assert (subject.data_dir / 'identity.txt').read_bytes() == AUTHORED_NEW_IDENTITY_CACHE
 
 
 def test_actual_confirmed_publication_cache_failure_retains_recovery(pending_subject, monkeypatch, capsys):
@@ -666,7 +668,9 @@ def test_private_reconciliation_refuses_incomplete_or_substituted_evidence(pendi
     if change == 'missing-cipher':(recovery / 'proposed-identity').unlink()
     elif change == 'changed-cipher':(recovery / 'proposed-identity').write_bytes(b'dummy foreign ciphertext')
     elif change == 'foreign-file':(recovery / 'unowned.txt').write_bytes(b'dummy foreign material')
-    elif change == 'directory-mode':recovery.chmod(0o755)
+    elif change == 'directory-mode':
+        recovery.chmod(0o755)
+        if sys.platform.startswith('win'):grant_everyone(recovery, '(OI)(CI)RX')
     elif change == 'foreign-hook':
         hook = subject.clone / '.git/hooks/prepare-commit-msg';hook.write_bytes(b'#!/bin/sh\nexit 0\n');hook.chmod(0o700)
     else:
@@ -716,7 +720,7 @@ def test_actual_durable_and_cleanup_faults_leave_recovery_refused(pending_subjec
     assert observed and convergence.converge(subject.config_path, subject.data_dir).failures[0].key == 'secrets_authoring_recovery'
 
 
-@pytest.mark.parametrize('fault', ['cleanup-artifact', 'proof-cleanup'])
+@pytest.mark.parametrize('fault', ['cleanup-artifact', pytest.param('proof-cleanup', marks=UNLOCK_CACHE_NEWLINE_GAP)])
 def test_actual_published_cleanup_can_resume_only_with_compatible_cache(pending_subject, monkeypatch, fault):
     from secrets_kit import authoring
     subject = pending_subject;real_unlink = Path.unlink;observations = []
@@ -741,7 +745,7 @@ def test_actual_published_cleanup_can_resume_only_with_compatible_cache(pending_
         cache.write_bytes(b'dummy new identity\n')
     result = authoring._reconcile_recovery(subject.data_dir)
     assert observations and outcome['code'] != 0 and result == {'outcome': 'confirmed', 'recovery': 'cleared'}
-    assert cache.read_bytes() == b'dummy new identity\n' and not (subject.data_dir / 'authoring-recovery').exists()
+    assert cache.read_bytes() == (b'dummy new identity\n' if fault == 'proof-cleanup' else AUTHORED_NEW_IDENTITY_CACHE) and not (subject.data_dir / 'authoring-recovery').exists()
     assert peer['failures'] == 0 and peer['values']['seed-proof.txt'] == b'dummy seed materialization proof\n'
 
 
@@ -846,6 +850,7 @@ def test_foreign_staged_content_at_owned_path_is_not_discarded(pending_subject, 
     assert (subject.data_dir / 'authoring-recovery/marker.json').exists() and peer['failures'] == 0 and len(peer['values']) == 2
 
 
+@UNLOCK_CACHE_NEWLINE_GAP
 def test_recovery_binding_does_not_copy_repository_userinfo(pending_subject, monkeypatch):
     from secrets_kit import authoring
     subject = pending_subject

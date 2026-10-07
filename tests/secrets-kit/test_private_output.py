@@ -109,7 +109,9 @@ def _assert_protected_before_bytes(events, target, *, text=False, windows=False)
     if text:
         assert all(event[4] == 'utf-8' for event in writes)
     if not windows:
-        assert all(event[3] == 0o600 for event in writes)
+        # The simulated POSIX path chmods; only a POSIX host can observe 0600.
+        if os.name != 'nt':
+            assert all(event[3] == 0o600 for event in writes)
     else:
         acls = [event for event in events if event[0] == 'acl' and event[1] == protections[0][1]]
         assert len(acls) == 1 and acls[0][2] == 0, events
@@ -127,7 +129,7 @@ def test_real_state_save_protects_before_serialized_bytes(private_root, monkeypa
     assert json.loads(path.read_text())['entries'] == state.rows
 
 
-@pytest.mark.parametrize('windows', [False, True])
+@pytest.mark.parametrize('windows', [pytest.param(False, marks=pytest.mark.skipif(os.name == 'nt', reason='simulated POSIX modes are not observable on a Windows host: chmod sets only the read-only flag, so mode drift never settles')), True])
 def test_actual_converge_protects_destination_and_state_then_skips_crypto(fleet, monkeypatch, windows):
     fleet.unlock()
     target = fleet.dest_root / 'ha-token.txt'

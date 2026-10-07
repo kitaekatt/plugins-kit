@@ -12,6 +12,7 @@ a bare tmp_path file, matching the rest of this package.
 import json
 import os
 import stat
+import sys
 from argparse import Namespace
 from pathlib import Path
 
@@ -95,6 +96,10 @@ class TestWriteTextAtomicSuccess:
         assert not tmp_marker.exists()
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX permission bits are not representable on Windows",
+)
 class TestWriteTextAtomicMode:
     """The key-file test: mode governs the temp file AT CREATION, checked
     with a patched os.replace that stats the source before delegating to

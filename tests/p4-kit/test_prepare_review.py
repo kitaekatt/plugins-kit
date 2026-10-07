@@ -2825,7 +2825,8 @@ class TestBuildBundleShelfState:
         incomplete = bundle["hygiene_incomplete"][0]
         assert incomplete["scan"] == "shelf_drift"
         assert incomplete["reason"].startswith("could not hash //depot/a.cpp:")
-        assert str(missing) in incomplete["reason"]
+        # OSError renders the filename with repr(), which doubles backslashes.
+        assert repr(str(missing)) in incomplete["reason"]
 
     def test_empty_local_path_is_incomplete_not_clean(self):
         drift, incomplete = pr._shelf_content_drift(

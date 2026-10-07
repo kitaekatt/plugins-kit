@@ -3,6 +3,7 @@
 import json
 import os
 import shlex
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -58,8 +59,11 @@ def test_registered_command_expands_environment_root_as_one_argument(tmp_path, c
     relative = command.split("${CLAUDE_PLUGIN_ROOT}", 1)[1].split()[0].strip('"').lstrip("/")
     _write_sentinel(plugin_root, relative, record)
 
+    shell = shutil.which("sh")
+    if shell is None:
+        pytest.skip("no POSIX sh on PATH to evaluate the registered hook command")
     subprocess.run(
-        ["/bin/sh", "-c", command],
+        [shell, "-c", command],
         check=True,
         capture_output=True,
         text=True,

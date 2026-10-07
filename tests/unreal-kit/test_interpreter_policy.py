@@ -22,9 +22,12 @@ import json
 import ast
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 _PLUGIN_DIR = Path(__file__).resolve().parent.parent.parent / "plugins" / "unreal-kit"
 _LIB_DIR = _PLUGIN_DIR / "lib"
@@ -149,6 +152,9 @@ class TestReexecPolicy:
 
     def test_bootstrap_host_command_preserves_sentinel_argv(self, tmp_path):
         """A documented host command reaches its target with spaces intact."""
+        shell = shutil.which("sh")
+        if shell is None:
+            pytest.skip("no POSIX sh on PATH to evaluate the documented host command")
         sentinel = tmp_path / "sentinel-interpreter"
         args_file = tmp_path / "args.txt"
         sentinel.write_text(
@@ -168,11 +174,12 @@ class TestReexecPolicy:
             "CLAUDE_PLUGIN_ROOT": str(_PLUGIN_DIR),
             "SENTINEL_ARGS": str(args_file),
         })
-        run = subprocess.run(command, shell=True, executable="/bin/sh", env=env,
+        run = subprocess.run([shell, "-c", command], env=env,
                              capture_output=True, text=True)
         assert run.returncode == 0, run.stderr
         assert args_file.read_text(encoding="ascii").splitlines() == [
-            str(_PLUGIN_DIR / "skills/ue-python-api/scripts/ue_runner.py"),
+            # The shell joins the root variable and the literal tail verbatim.
+            f"{_PLUGIN_DIR}/skills/ue-python-api/scripts/ue_runner.py",
             "script with spaces.py",
             "--copy-output",
             "output dir with spaces",
@@ -180,7 +187,7 @@ class TestReexecPolicy:
 
         env.pop("BOOTSTRAP_PROJECT_PYTHON")
         env.pop("BOOTSTRAP_PYTHON")
-        missing = subprocess.run(command, shell=True, executable="/bin/sh", env=env,
+        missing = subprocess.run([shell, "-c", command], env=env,
                                  capture_output=True, text=True)
         assert missing.returncode != 0
         assert "requires bootstrap >= 0.120.0" in missing.stderr

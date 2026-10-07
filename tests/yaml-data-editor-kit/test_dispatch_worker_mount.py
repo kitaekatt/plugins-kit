@@ -1,5 +1,6 @@
 """Contract tests for the plan-authenticated worker mount."""
 
+import re
 from pathlib import Path
 
 import pytest
@@ -39,10 +40,11 @@ def test_worker_invocations_have_no_claim_and_use_text_file_equals(tmp_path: Pat
     invocations = enumerate_worker_invocations(command, "run-1", "unit-1", "worker-1")
 
     assert len(invocations) == 6
-    assert " protocol @" in invocations[0]
-    assert " protocol @" in invocations[1]
+    # shlex.join quotes a token holding a backslash, so a Windows path
+    # puts a quote between "protocol " and "@".
+    for index in range(3):
+        assert re.search(r" protocol '?@", invocations[index])
     assert "--text-file=" in invocations[1]
-    assert " protocol @" in invocations[2]
     assert all(" claim " not in invocation for invocation in invocations[:3])
     assert invocations[3].startswith("Write tool -> ")
     assert invocations[4].startswith("Write tool -> ")

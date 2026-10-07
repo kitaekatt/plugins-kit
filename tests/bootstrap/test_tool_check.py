@@ -5,15 +5,37 @@ import stat
 import sys
 from unittest.mock import patch
 
+import pytest
+
 import bootstrap_lib.tool_check as tool_check
 from bootstrap_lib.tool_check import check_tool, run_install
 
 
+@pytest.fixture
+def path_tool(tmp_path, monkeypatch):
+    """Put a real executable named ``fake_path_tool`` on PATH and return its name.
+
+    A system interpreter name such as python3 is not on every host's PATH
+    (Windows ships only a Store stub), so tests of PATH resolution supply
+    their own tool.
+    """
+    bin_dir = tmp_path / "pathbin"
+    bin_dir.mkdir()
+    if sys.platform == "win32":
+        (bin_dir / "fake_path_tool.cmd").write_text("@echo off\r\n", encoding="ascii")
+    else:
+        tool = bin_dir / "fake_path_tool"
+        tool.write_text("#!/bin/sh\nexit 0\n", encoding="ascii")
+        tool.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + os.environ.get("PATH", ""))
+    return "fake_path_tool"
+
+
 class TestCheckTool:
-    def test_installed_tool_passes(self):
-        result = check_tool("python3")
+    def test_installed_tool_passes(self, path_tool):
+        result = check_tool(path_tool)
         assert result.passed is True
-        assert result.subject == "python3"
+        assert result.subject == path_tool
         assert "found at" in result.message
 
     def test_missing_tool_fails(self):
@@ -87,9 +109,9 @@ class TestInstallPath:
         result = check_tool(tool_name, install_path="~")
         assert result.passed is True
 
-    def test_which_fallback_when_install_path_misses(self):
+    def test_which_fallback_when_install_path_misses(self, path_tool):
         """Even with install_path set, falls back to which for system tools."""
-        result = check_tool("python3", install_path="/nonexistent/path")
+        result = check_tool(path_tool, install_path="/nonexistent/path")
         assert result.passed is True
         assert "found at" in result.message
 
@@ -162,8 +184,8 @@ class TestCheckCommand:
 class TestOnPath:
     """on_path reports whether the resolved tool is reachable by bare name."""
 
-    def test_which_resolution_is_on_path(self):
-        result = check_tool("python3")
+    def test_which_resolution_is_on_path(self, path_tool):
+        result = check_tool(path_tool)
         assert result.passed is True
         assert result.on_path is True
 

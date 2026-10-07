@@ -28,11 +28,13 @@ POSIX_HOOK_COMMAND = (
     'elif [ -x "$HOME/.local/bin/bootstrap" ]; then exec "$HOME/.local/bin/bootstrap" '
     "codex-hook; fi; exit 0"
 )
+# No embedded double quotes: Windows PowerShell 5.1 re-parses the string and
+# mangles them, so the profile launcher directory is appended to PATH (set takes
+# the rest of the line, spaces included) and found by the same PATH lookup.
 WINDOWS_HOOK_COMMAND = (
-    'cmd.exe /d /c "where bootstrap.cmd >nul 2>&1 & '
-    'if errorlevel 1 (if exist """%USERPROFILE%\\.local\\bin\\bootstrap.cmd""" '
-    '(call """%USERPROFILE%\\.local\\bin\\bootstrap.cmd""" codex-hook) '
-    'else exit /b 0) else call bootstrap.cmd codex-hook"'
+    'cmd.exe /d /c "set PATH=%PATH%;%USERPROFILE%\\.local\\bin& '
+    'where bootstrap.cmd >nul 2>&1 & '
+    'if errorlevel 1 (exit /b 0) else call bootstrap.cmd codex-hook"'
 )
 _TIMEOUT_SECONDS = 15.0
 

@@ -12,6 +12,8 @@ import textwrap
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from llm_scripting_kit.completion import BackendSelection, Capabilities, LLMResponse
 
 from job_kit.model import Acceptance, Attempt, Contract, Job, JobState, Prompt, WorkspaceSpec
@@ -273,6 +275,10 @@ def test_losses_do_not_count_as_unreachable_attempts(tmp_path: Path) -> None:
         ).fetchone() == ("process_lost", "t1", "t1")
 
 
+@pytest.mark.skipif(
+    not hasattr(signal, "SIGKILL"),
+    reason="SIGKILL is POSIX-only; the crash script kills itself with it",
+)
 def test_sigkill_at_each_boundary(tmp_path: Path) -> None:
     """SIGKILL after each durable boundary leaves a resumable ledger."""
     repository = _git_repository(tmp_path / "repository")

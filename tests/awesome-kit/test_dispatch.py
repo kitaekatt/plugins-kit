@@ -186,15 +186,17 @@ def test_print_only_emits_exact_codex_argv_without_launch(tmp_path, monkeypatch,
     assert "-c sandbox_workspace_write.network_access=true" in output[1]
     assert "-m gpt-5.6-sol" in output[1]
     assert "-c model_reasoning_effort=high" in output[1]
-    assert f"-C {tmp_path}" in output[1]
-    assert f"--add-dir {tmp_path}" in output[1]
+    assert f"-C {shlex.quote(str(tmp_path))}" in output[1]
+    assert f"--add-dir {shlex.quote(str(tmp_path))}" in output[1]
     assert output[1].endswith("--skip-git-repo-check --color never -")
     assert not Path(entry).exists()
 
 
 def test_print_only_adds_windows_sandbox_config(tmp_path, monkeypatch):
     monkeypatch.setattr(dispatch.codex_lib, "resolve_cli", lambda name: ("codex",))
-    monkeypatch.setattr(dispatch.codex_lib.os, "name", "nt")
+    monkeypatch.setattr(
+        dispatch.codex_lib, "os", SimpleNamespace(name="nt", path=os.path)
+    )
     argv_line = shlex.join(
         dispatch._argv(
             model="gpt-5.6-sol",
@@ -212,7 +214,11 @@ def test_print_only_omits_windows_sandbox_config_on_posix(tmp_path, monkeypatch,
     brief = _brief(tmp_path)
     cache = tmp_path / "cache"
     monkeypatch.setattr(dispatch.codex_lib, "resolve_cli", lambda name: ("codex",))
-    monkeypatch.setattr(dispatch.codex_lib.os, "name", "posix")
+    # Rebind the module's os, not os.name itself: pathlib reads the real
+    # os.name and cannot build a Path once it says "posix" on Windows.
+    monkeypatch.setattr(
+        dispatch.codex_lib, "os", SimpleNamespace(name="posix", path=os.path)
+    )
     assert dispatch.main(_run_args(tmp_path, brief, cache, "--print-only")) == 0
     argv_line = capsys.readouterr().out.splitlines()[1]
     assert "windows.sandbox" not in argv_line

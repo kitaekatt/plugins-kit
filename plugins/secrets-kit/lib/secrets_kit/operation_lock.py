@@ -187,7 +187,13 @@ def _canonical_directory(data_dir: Path) -> Path:
         for component in reversed(missing):
             if IS_WINDOWS:_directory_trust(canonical)
             candidate = canonical / component
-            try:candidate.mkdir(mode=0o700)
+            # Windows inherits from the parent verified private just above.
+            # mode=0o700 there (CPython 3.12.4 and later) writes an explicit
+            # SYSTEM / Administrators / OWNER RIGHTS DACL instead, which the
+            # trust check below then refuses for the directory just created.
+            try:
+                if IS_WINDOWS:candidate.mkdir()
+                else:candidate.mkdir(mode=0o700)
             except FileExistsError:pass
             canonical = _resolve(candidate)
             _directory_trust(canonical)
@@ -251,7 +257,13 @@ def _own_data(data_dir: Path, *, check_recovery: bool) -> Iterator[Path]:
             path = canonical / "operation.lock"
             flags = os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
             expected_leaf = None
-            try:fd = os.open(path, flags | os.O_CREAT | os.O_EXCL, 0o600)
+            try:
+                # Without O_NOFOLLOW (Windows), O_CREAT|O_EXCL follows a
+                # dangling link and creates its target outside this directory.
+                # Any existing leaf, link or not, takes the inspected path.
+                if not hasattr(os, "O_NOFOLLOW") and os.path.lexists(path):
+                    raise FileExistsError(errno.EEXIST, "guard leaf exists", str(path))
+                fd = os.open(path, flags | os.O_CREAT | os.O_EXCL, 0o600)
             except FileExistsError:
                 leaf = path.lstat()
                 if not stat.S_ISREG(leaf.st_mode) or leaf.st_nlink != 1 or getattr(leaf, "st_file_attributes", 0) & 0x400:

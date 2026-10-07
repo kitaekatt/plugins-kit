@@ -25,9 +25,49 @@ if str(_LIB) not in sys.path:
     sys.path.insert(0, str(_LIB))
 
 
+# The machine-wide git config is host state, not part of any test: Git for
+# Windows ships core.autocrlf=true there, which rewrites the armored dummy
+# ciphertext a fixture commits into CRLF on checkout, so byte-exact stand-in
+# crypto stops matching. Applied to template builds and to every test.
+_GIT_HOST_ISOLATION = {"GIT_CONFIG_NOSYSTEM": "1"}
+
+
+def _owner_only_windows_root(path):
+    """Give ``path`` a DACL granting only the current user, inheritable.
+
+    The operation lock refuses a data directory whose DACL grants any other
+    principal. pytest creates tmp_path with mkdir(mode=0o700), which on
+    Windows (CPython 3.12.4 and later) writes EXPLICIT SYSTEM, Administrators
+    and OWNER RIGHTS grants. `perms.tighten_dir` strips only INHERITED entries,
+    so those three survive it; they are removed here by SID. Everything a test
+    creates below then inherits the single owner ACE, the state a tightened
+    plugin data directory is in.
+    """
+    import subprocess
+
+    from secrets_kit import perms
+
+    argv = [
+        "icacls", str(path), "/inheritance:r",
+        "/grant:r", f"{perms._current_windows_principal()}:(OI)(CI)F",
+        "/remove:g", "*S-1-5-18", "*S-1-5-32-544", "*S-1-3-4",
+    ]
+    proc = subprocess.run(argv, capture_output=True, text=True, timeout=20)
+    if proc.returncode != 0:
+        raise RuntimeError(f"icacls could not make {path} owner-only: {proc.stdout}{proc.stderr}")
+
+
 @pytest.fixture(autouse=True)
 def isolated_user_home(tmp_path, monkeypatch):
-    """Keep every real hook caller inside this test's temporary user home."""
+    """Keep every real hook caller inside this test's temporary user home.
+
+    On Windows the test root is first made owner-only, as a POSIX tmp_path
+    already is (0700). See `_owner_only_windows_root`.
+    """
+    if sys.platform.startswith("win"):
+        _owner_only_windows_root(tmp_path)
+    for name, value in _GIT_HOST_ISOLATION.items():
+        monkeypatch.setenv(name, value)
     home = tmp_path / "user home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
@@ -51,7 +91,10 @@ def git_template(tmp_path_factory):
         if key not in built:
             target = root / key
             target.mkdir(parents=True)
-            build(target)
+            with pytest.MonkeyPatch.context() as patch:
+                for name, value in _GIT_HOST_ISOLATION.items():
+                    patch.setenv(name, value)
+                build(target)
             built[key] = target
         return built[key]
 

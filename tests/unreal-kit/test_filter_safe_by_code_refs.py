@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import runpy
+import shutil
 import sys
 import types
 from pathlib import Path
@@ -159,7 +160,9 @@ def test_fresh_cache_with_changed_mount_content_root_is_regenerated(tmp_path, mo
     code_refs.save(str(refs), {"/Shared/Other"}, str(root), 1, 1, (".cpp",), mounts=mounts)
 
     # Keep the mount name while changing its on-disk content root.
-    (plugin / "Content" / "Other.uasset").unlink()
+    # Remove the whole old plugin: two plugins of one name would make the
+    # mount a function of directory enumeration order.
+    shutil.rmtree(plugin)
     replacement = root / "Plugins" / "Moved" / "Content"
     replacement.mkdir(parents=True)
     (replacement / "Other.uasset").write_bytes(b"other")

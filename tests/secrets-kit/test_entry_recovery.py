@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 from typing import Any
 
@@ -11,6 +12,7 @@ from secrets_kit import agefile, authoring
 from secrets_kit.manifest import Manifest
 from test_dest_guard import _templates, adding
 from test_init import _seeding_template, seeding
+from sk_testlib import is_owner_only_file
 from test_seed_recovery import _consumer, _snapshot, pending_subject
 
 
@@ -505,6 +507,7 @@ def test_actual_identical_entry_update_has_no_replacement_commit_or_push(
     assert not (subject.data_dir / 'authoring-recovery').exists()
 
 
+@pytest.mark.skipif(sys.platform.startswith('win'), reason="'*' is not a valid Windows filename character")
 @pytest.mark.parametrize('inherited', ['GIT_GLOB_PATHSPECS', 'GIT_NOGLOB_PATHSPECS', 'GIT_ICASE_PATHSPECS'])
 def test_entry_literal_blob_filename_is_preserved_under_inherited_pathspec_options(
     entry_subject: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, inherited: str,
@@ -902,7 +905,7 @@ def test_entry_encryption_exception_identity_and_owned_output_cleanup(
     real_encrypt = agefile.encrypt_to_recipient
     with monkeypatch.context() as controlled:
         def encrypt(recipient: str, plaintext: bytes, output: Path) -> None:
-            observed.append({'isCheckoutTarget': output == _selected_blob(subject, operation), 'protectedBeforeBytes': output.exists() and output.stat().st_mode & 0o777 == 0o600})
+            observed.append({'isCheckoutTarget': output == _selected_blob(subject, operation), 'protectedBeforeBytes': output.exists() and is_owner_only_file(output)})
             if fault == 'completed-cancellation':real_encrypt(recipient, plaintext, output)
             raise primary
         controlled.setattr(agefile, 'encrypt_to_recipient', encrypt)

@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import json
 import os
-import stat
+import sys
 import subprocess
 import time
 from dataclasses import dataclass
@@ -70,37 +70,47 @@ USAGE_LIMIT_TEXT = (
     f"to purchase more credits or try again at Jan 20th, {_RESET_YEAR} 3:34 PM."
 )
 
-FAKE_CODEX = r"""#!/bin/sh
-# Simulated codex CLI for the risk drill. Modes (DRILL_CODEX_MODE):
+FAKE_CODEX = r"""
+# Simulated codex CLI for the risk drill (a Python script, so argv parsing is
+# identical on every OS). Modes (DRILL_CODEX_MODE):
 #   quota  -- optionally write into the cwd, append an exhausted rollout,
 #             print the usage-limit error, exit 1
 #   wrong  -- write a WRONG answer to the -o file, exit 0
 #   right  -- write the expected answer to the -o file, exit 0
 #   broken -- print an ordinary error, exit 1 (no quota evidence)
-out=""
-prev=""
-for a in "$@"; do
-  if [ "$prev" = "-o" ]; then out="$a"; fi
-  prev="$a"
-done
-cat > /dev/null
-case "$DRILL_CODEX_MODE" in
-  quota)
-    if [ "$DRILL_CODEX_WRITE" = "1" ]; then
-      printf 'partial edit by codex\n' > kept.txt
-      printf 'half-finished\n' > codex-scratch.txt
-    fi
-    d="$DRILL_CODEX_SESSIONS/2026/09/23"
-    mkdir -p "$d"
-    printf '%s\n' "$DRILL_ROLLOUT_LINE1" "$DRILL_ROLLOUT_LINE2" > "$d/rollout-drill-exhausted.jsonl"
-    echo "ERROR: $DRILL_USAGE_TEXT" >&2
-    exit 1 ;;
-  wrong)  printf '%s' "$DRILL_WRONG" > "$out"; exit 0 ;;
-  right)  printf '%s' "$DRILL_EXPECTED" > "$out"; exit 0 ;;
-  broken) echo "ERROR: unit crashed: KeyError 'x'" >&2; exit 1 ;;
-esac
-echo "fake codex: unknown mode" >&2
-exit 2
+import os
+import sys
+
+args = sys.argv[1:]
+out = args[args.index("-o") + 1] if "-o" in args else ""
+sys.stdin.read()
+mode = os.environ.get("DRILL_CODEX_MODE")
+env = os.environ
+if mode == "quota":
+    if env.get("DRILL_CODEX_WRITE") == "1":
+        with open("kept.txt", "w") as f:
+            f.write("partial edit by codex\n")
+        with open("codex-scratch.txt", "w") as f:
+            f.write("half-finished\n")
+    d = os.path.join(env["DRILL_CODEX_SESSIONS"], "2026", "09", "23")
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "rollout-drill-exhausted.jsonl"), "w") as f:
+        f.write(env["DRILL_ROLLOUT_LINE1"] + "\n" + env["DRILL_ROLLOUT_LINE2"] + "\n")
+    print("ERROR: " + env["DRILL_USAGE_TEXT"], file=sys.stderr)
+    sys.exit(1)
+elif mode == "wrong":
+    with open(out, "w") as f:
+        f.write(env["DRILL_WRONG"])
+    sys.exit(0)
+elif mode == "right":
+    with open(out, "w") as f:
+        f.write(env["DRILL_EXPECTED"])
+    sys.exit(0)
+elif mode == "broken":
+    print("ERROR: unit crashed: KeyError 'x'", file=sys.stderr)
+    sys.exit(1)
+print("fake codex: unknown mode", file=sys.stderr)
+sys.exit(2)
 """
 
 
@@ -267,9 +277,8 @@ def drill(tmp_path, monkeypatch) -> Drill:
     root = tmp_path / "drill"
     bin_dir = root / "bin"
     bin_dir.mkdir(parents=True)
-    fake = bin_dir / "codex"
-    fake.write_text(FAKE_CODEX)
-    fake.chmod(fake.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    fake = bin_dir / "codex.py"
+    fake.write_text(FAKE_CODEX, encoding="ascii")
 
     sessions = root / "codex-sessions"
     sessions.mkdir()
@@ -290,7 +299,8 @@ def drill(tmp_path, monkeypatch) -> Drill:
     monkeypatch.setenv("DRILL_WRONG", WRONG)
     monkeypatch.delenv("DRILL_CODEX_WRITE", raising=False)
 
-    codex = CodexCliBackend(argv_prefix=(str(fake),), sessions_dir=sessions)
+    argv_prefix = (sys.executable, str(fake))
+    codex = CodexCliBackend(argv_prefix=argv_prefix, sessions_dir=sessions)
     return Drill(root=root, sessions=sessions, verdicts=verdicts, codex=codex)
 
 
@@ -423,7 +433,7 @@ def check_assertion_1_in_session(drill: Drill, monkeypatch) -> dict[str, Any]:
     # The agent drives codex itself (a session caller); run() never sees it.
     env = dict(os.environ, DRILL_CODEX_MODE="quota")
     halted = subprocess.run(
-        [drill.codex.argv_prefix[0], "exec", "-"], input="", env=env,
+        [*drill.codex.argv_prefix, "exec", "-"], input="", env=env,
         capture_output=True, text=True, cwd=drill.root,
     )
     assert halted.returncode == 1 and "usage limit" in halted.stderr
@@ -479,13 +489,17 @@ def check_sibling_run(drill: Drill, monkeypatch) -> dict[str, Any]:
     entries = _sibling_entries()
     names = ["codex", "codex-mini", "opus"]
     before = drill.menu(names, entries)
-    first = before.default.id if before.default is not None else None
-    assert first in ("codex", "codex-mini"), before.render()
-    sibling = "codex-mini" if first == "codex" else "codex"
+    assert before.default is not None and before.default.id in ("codex", "codex-mini"), before.render()
 
     monkeypatch.setenv("DRILL_CODEX_MODE", "quota")
     claude = _ScriptedClaude()
     result, attempts = drill.dispatch(names, claude, entries=entries)
+    # The two siblings share one pool and so tie on pace; the pace is read
+    # against the clock, so which of them leads at dispatch time is not
+    # fixed by the earlier menu. Either may lead; the other is the sibling.
+    first = attempts[0].entry
+    assert first in ("codex", "codex-mini"), [a.to_json() for a in attempts]
+    sibling = "codex-mini" if first == "codex" else "codex"
     assert [(a.entry, a.outcome) for a in attempts] == [
         (first, "halted"), ("opus", "completed"),
     ], [a.to_json() for a in attempts]
@@ -530,6 +544,13 @@ class TestRiskDrill:
         print(json.dumps(evidence, indent=2))
 
 
+# Both codex siblings were attempted before opus: the second one was not skipped.
+# Matched on the attempts the check reports itself, not on pytest's diff text,
+# which carries color codes under xdist.
+_SIBLING_RERUN = ("(?s)'entry': 'codex(-mini)?'.*'entry': 'codex(-mini)?'"
+                  ".*'entry': 'opus'")
+
+
 class TestDrillGoesRed:
     """Each drill check fails when the behaviour it guards is broken."""
 
@@ -568,7 +589,7 @@ class TestDrillGoesRed:
 
     def test_1_sibling_run_red_when_one_entry_is_written(self, drill, monkeypatch):
         self._write_one_entry_only(monkeypatch)
-        with pytest.raises(AssertionError, match=r"At index 1 diff: \('codex(-mini)?', 'halted'\)"):
+        with pytest.raises(AssertionError, match=_SIBLING_RERUN):
             check_sibling_run(drill, monkeypatch)
 
     def test_2_red_when_a_completed_run_is_re_routed(self, drill, monkeypatch):

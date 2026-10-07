@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -46,6 +47,16 @@ def _find_bash() -> str | None:
 
 BASH = _find_bash()
 needs_bash = pytest.mark.skipif(BASH is None, reason="bash not available on this platform")
+
+
+def _bash_pwd_of(path: Path) -> str:
+    """The directory spelled the way bash's $PWD reports it (what the hook hashes)."""
+    resolved = subprocess.run(
+        [BASH, "-c", f'cd "{path}" && printf %s "$PWD"'],
+        capture_output=True, text=True,
+    )
+    assert resolved.stdout, f"failed to resolve bash PWD: {resolved.stderr}"
+    return resolved.stdout
 
 
 def _hash_project_dir(value: str, path_override: str | None = None) -> str:
@@ -226,7 +237,9 @@ class TestResetScript:
         fake_home.mkdir()
         proj = tmp_path / "explicit"
         proj.mkdir()
-        cooldown_file = self._seed_cooldown(fake_home, "plugins-kit", str(proj))
+        # The script hashes bash's $PWD form of the directory (a /c/... path
+        # under Git Bash), which is what the hook stamps with.
+        cooldown_file = self._seed_cooldown(fake_home, "plugins-kit", _bash_pwd_of(proj))
 
         result = self._run("--project", str(proj), env_overrides={"HOME": str(fake_home)})
         assert result.returncode == 0, result.stderr
@@ -295,7 +308,7 @@ class TestResetScript:
         fake_home.mkdir()
         proj = tmp_path / "trailing"
         proj.mkdir()
-        cooldown_file = self._seed_cooldown(fake_home, "plugins-kit", str(proj))
+        cooldown_file = self._seed_cooldown(fake_home, "plugins-kit", _bash_pwd_of(proj))
 
         result = self._run("--project", str(proj) + "/", env_overrides={"HOME": str(fake_home)})
         assert result.returncode == 0, result.stderr
@@ -433,7 +446,8 @@ class TestCooldownGateBehavior:
     def _plant_stub_python(self, fake_home: Path, argv_log: Path) -> Path:
         """Plant a stub at the interpreter the hook actually resolves.
 
-        The hook resolves $HOME/.local/bin/python3 and never consults PATH.
+        The hook resolves $HOME/.local/bin/python3 (Windows: the standalone
+        python.exe under $HOME/.local/share) and never consults PATH.
         Without a stub there, a test that no longer exits at the gate falls
         through to _provision, which downloads a ~30MB standalone CPython (and
         on MSYS writes the real, NOT HOME-scoped, Windows User PATH registry).
@@ -441,9 +455,14 @@ class TestCooldownGateBehavior:
         engine would have received. It must satisfy the hook's own `-c`
         version probe.
         """
-        bin_dir = fake_home / ".local" / "bin"
+        if sys.platform == "win32":
+            # Windows hooks use the standalone executable directly.
+            bin_dir = fake_home / ".local" / "share" / "python-standalone" / "python"
+            stub = bin_dir / "python.exe"
+        else:
+            bin_dir = fake_home / ".local" / "bin"
+            stub = bin_dir / "python3"
         bin_dir.mkdir(parents=True, exist_ok=True)
-        stub = bin_dir / "python3"
         stub.write_text(
             "#!/bin/sh\n"
             'case "$1" in -c) exit 0 ;; esac\n'

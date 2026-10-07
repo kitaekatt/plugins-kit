@@ -35,7 +35,7 @@
     {
       "name": "bootstrap",
       "description": "Installs each plugin's tools, Python venvs, and config automatically at session start.",
-      "version": "0.145.0",
+      "version": "0.145.1",
       "author": {
         "name": "Christina"
       },
@@ -111,7 +111,7 @@
     {
       "name": "llm-scripting-kit",
       "description": "LLM access for scripts and pipelines: credentials, endpoint/model resolution, local Qwen server profiles, and one completion seam over HTTP, Claude, Codex, and OpenCode.",
-      "version": "0.60.0",
+      "version": "0.60.1",
       "author": {
         "name": "Christina"
       },
@@ -163,7 +163,7 @@
     {
       "name": "secrets-kit",
       "description": "Fleet secrets provisioning: materialize age-encrypted credentials from a private repo onto each machine, declaratively. One passphrase-protected identity per fleet, unlocked once per machine; blobs encrypt to the public key so adding or rotating a secret never needs the passphrase. Session-start convergence + CLI.",
-      "version": "0.8.37",
+      "version": "0.8.38",
       "author": {
         "name": "Christina"
       },
@@ -202,7 +202,7 @@
     {
       "name": "job-kit",
       "description": "Durable execution for heterogeneous agent jobs through a bounded worker pool, with advertisement-based endpoint selection and command-shaped acceptance.",
-      "version": "0.11.1",
+      "version": "0.11.2",
       "author": {
         "name": "Christina"
       },

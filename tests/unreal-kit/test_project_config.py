@@ -1,6 +1,7 @@
 """Tests for per-project config: find, write, and load from
 .local-data/plugins-kit/unreal-kit/config.yaml (PROJECT_CONFIG_NAME)."""
 
+import re
 import json
 import sys
 from pathlib import Path
@@ -220,12 +221,12 @@ class TestLoadConfig:
     def test_invalid_explicit_layer_names_file_and_refuses(self, tmp_path, contents):
         explicit = tmp_path / "bad.yaml"
         explicit.write_text(contents, encoding="utf-8")
-        with pytest.raises(ConfigError, match=str(explicit)):
+        with pytest.raises(ConfigError, match=re.escape(str(explicit))):
             load_config(config_path=explicit)
 
     def test_missing_explicit_layer_is_an_error(self, tmp_path):
         explicit = tmp_path / "missing.yaml"
-        with pytest.raises(ConfigError, match=str(explicit)):
+        with pytest.raises(ConfigError, match=re.escape(str(explicit))):
             load_config(config_path=explicit)
 
     @pytest.mark.parametrize(
@@ -243,7 +244,7 @@ class TestLoadConfig:
             explicit.write_text(f"{field}: {value}\n", encoding="utf-8")
         else:
             explicit.write_text(f'{field}: {value}\n', encoding="utf-8")
-        with pytest.raises(ConfigError, match=str(explicit)):
+        with pytest.raises(ConfigError, match=re.escape(str(explicit))):
             load_config(config_path=explicit)
 
     @pytest.mark.parametrize("port", [0, 65536, "quoted"])
