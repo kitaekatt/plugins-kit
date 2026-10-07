@@ -17,6 +17,7 @@ import pytest
 from secrets_kit import agefile
 from secrets_kit import converge as convergence
 from secrets_kit import repo as repository
+from sk_testlib import grant_everyone
 from test_dest_guard import _templates, adding
 from test_repo_binding import _adapter, _snapshot, _strict_crypto
 from test_sync_view import _git, _seed_author, actual_subject_origins
@@ -298,9 +299,8 @@ def test_exec_child_does_not_keep_released_operation_owned(adding, monkeypatch):
     Path(a[0]['release']).touch();first = _finish(owner, a[0])
     child = first['exec_child']
     try:
-        os.kill(child, 0)
+        child_still_alive = _alive(child)
         retry = _finish(_start(*b), b[0])
-        child_still_alive = True
     finally:os.kill(child, signal.SIGTERM)
     assert second['code'] == 1 and first['code'] == retry['code'] == 0 and child_still_alive
 
@@ -325,6 +325,28 @@ def test_terminal_parent_handoff_precedes_any_data_work(adding, monkeypatch, ver
     assert adding.cli.main([verb, '--new-terminal']) == 0 and not target.exists()
 
 
+IS_WINDOWS = sys.platform.startswith('win')
+OPEN_GUARD_RENAME_REFUSED = 'Windows refuses to rename a guard held open without FILE_SHARE_DELETE, so it cannot be substituted while owned'
+
+
+def _alive(pid):
+    """Whether a process still runs; os.kill(pid, 0) is not a probe on Windows."""
+    if not IS_WINDOWS:
+        try:os.kill(pid, 0)
+        except ProcessLookupError:return False
+        return True
+    import ctypes
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.OpenProcess.restype = ctypes.c_void_p
+    handle = kernel.OpenProcess(0x1000, False, pid)
+    assert handle, 'OpenProcess failed with %d' % ctypes.get_last_error()
+    try:
+        code = ctypes.c_ulong()
+        assert kernel.GetExitCodeProcess(ctypes.c_void_p(handle), ctypes.byref(code))
+        return code.value == 259
+    finally:kernel.CloseHandle(ctypes.c_void_p(handle))
+
+
 def _lock_module():
     spec = importlib.util.find_spec('secrets_kit.operation_lock')
     assert spec is not None, 'new package-local guard contract is absent'
@@ -345,7 +367,9 @@ def test_actual_guard_leaf_fault_refuses_and_preserves_protected_data(adding, mo
     if hazard == 'dangling':path.symlink_to(target.parent / 'absent guard target')
     if hazard == 'hardlink':os.link(target, path)
     if hazard == 'nonempty':path.write_bytes(b'dummy prior nonempty guard');path.chmod(0o600)
-    if hazard == 'loose':path.touch();path.chmod(0o644)
+    if hazard == 'loose':
+        path.touch();path.chmod(0o644)
+        if IS_WINDOWS:grant_everyone(path, '(R)')
     if hazard == 'directory':path.mkdir()
     remote = Path(_git(adding.clone, 'config', '--local', '--get', 'remote.origin.url'))
     before = _snapshot(adding, [remote]);identity = path.lstat()
@@ -360,7 +384,9 @@ def test_actual_data_identity_fault_refuses_before_repo_work(adding, monkeypatch
     _seed_author(adding);calls = _strict_crypto(adding, monkeypatch);calls.clear()
     data = adding.data_dir
     absent = data.parent / 'absent physical target'
-    if hazard == 'writable-data':data.chmod(0o777)
+    if hazard == 'writable-data':
+        data.chmod(0o777)
+        if IS_WINDOWS:grant_everyone(data, '(OI)(CI)M')
     if hazard == 'dangling-data':
         data = data.parent / 'dangling data alias';data.symlink_to(absent, target_is_directory=True)
     if hazard == 'loop-data':
@@ -374,6 +400,7 @@ def test_actual_data_identity_fault_refuses_before_repo_work(adding, monkeypatch
     assert (identity.st_dev, identity.st_ino, identity.st_mode) == (final.st_dev, final.st_ino, final.st_mode)
 
 
+@pytest.mark.skipif(IS_WINDOWS, reason='fcntl.flock fault injection is POSIX; test_windows_kernel_categories_are_scoped_to_acquisition covers msvcrt')
 @pytest.mark.parametrize('number,busy', [(errno.EACCES, True), (errno.EAGAIN, True), (errno.ENOLCK, False), (errno.ENOSYS, False), (errno.EOPNOTSUPP, False), (errno.EIO, False), (errno.EINTR, False), (errno.EBADF, False)])
 def test_scoped_kernel_fault_category_through_actual_command(adding, monkeypatch, capsys, number, busy):
     _seed_author(adding);_lock_module()
@@ -450,8 +477,14 @@ def test_guard_inode_is_stable_across_nested_refusal_and_reacquisition(tmp_path)
         held = path.stat()
     with module.operation_lock(data):after = path.stat()
     assert (before.st_dev, before.st_ino) == (held.st_dev, held.st_ino) == (after.st_dev, after.st_ino)
-    assert path.read_bytes() == b'' and before.st_mode & 0o777 == 0o600
-    assert data.stat().st_mode & 0o777 == data.parent.stat().st_mode & 0o777 == 0o700
+    assert path.read_bytes() == b''
+    if IS_WINDOWS:
+        # Owner-only on Windows is the DACL, which the guard's own check reads.
+        module._windows_private(path, directory=False)
+        module._windows_private(data, directory=True);module._windows_private(data.parent, directory=True)
+    else:
+        assert before.st_mode & 0o777 == 0o600
+        assert data.stat().st_mode & 0o777 == data.parent.stat().st_mode & 0o777 == 0o700
 
 
 @pytest.mark.parametrize('verb', ['init', 'unlock', 'rotate-identity'])
@@ -544,7 +577,7 @@ def test_home_expansion_inability_is_visible_setup_refusal(adding, monkeypatch):
     assert code == 1 and calls == [] and before == after
 
 
-@pytest.mark.parametrize('when', ['before-open', 'after-acquire'])
+@pytest.mark.parametrize('when', ['before-open', pytest.param('after-acquire', marks=pytest.mark.skipif(IS_WINDOWS, reason=OPEN_GUARD_RENAME_REFUSED))])
 def test_observed_guard_substitution_refuses_without_repair(adding, monkeypatch, when):
     _seed_author(adding);module = _lock_module()
     calls = _strict_crypto(adding, monkeypatch);calls.clear()
@@ -573,3 +606,82 @@ def test_observed_guard_substitution_refuses_without_repair(adding, monkeypatch,
     assert code == 1 and calls == [] and before == after and len(replacement) == 1
     assert path.stat().st_ino == replacement[0] and saved.stat().st_ino == original.st_ino
     assert path.read_bytes() == saved.read_bytes() == b''
+
+
+def _icacls_listing(path):
+    done = subprocess.run(['icacls', str(path)], capture_output=True, text=True, timeout=20)
+    assert done.returncode == 0, done.stdout + done.stderr
+    return done.stdout
+
+
+def _system_inheriting_parent(root):
+    """A parent whose DACL hands SYSTEM an inheritable grant, as a profile does."""
+    parent = root / 'shared parent'
+    parent.mkdir()
+    done = subprocess.run(['icacls', str(parent), '/grant', '*S-1-5-18:(OI)(CI)F'], capture_output=True, text=True, timeout=20)
+    assert done.returncode == 0, done.stdout + done.stderr
+    return parent
+
+
+@pytest.mark.skipif(not IS_WINDOWS, reason='Windows DACL inheritance')
+def test_windows_data_dir_inheriting_a_foreign_grant_is_tightened_before_the_lock(tmp_path):
+    module = _lock_module()
+    data = _system_inheriting_parent(tmp_path) / 'inherited data'
+    data.mkdir()
+    with pytest.raises(module.OperationLockSetupError):
+        module._windows_private(data, directory=True)
+    with module.operation_lock(data) as canonical:
+        assert canonical == data.resolve()
+    module._windows_private(data, directory=True)
+    module._windows_private(data / 'operation.lock', directory=False)
+
+
+@pytest.mark.skipif(not IS_WINDOWS, reason='Windows explicit grants from mkdir(mode=0o700)')
+def test_windows_data_dir_with_mkdir_explicit_grants_is_accepted(tmp_path):
+    module = _lock_module()
+    data = tmp_path / 'explicit data'
+    data.mkdir(mode=0o700)
+    if sys.version_info >= (3, 12, 4):
+        with pytest.raises(module.OperationLockSetupError):
+            module._windows_private(data, directory=True)
+    with module.operation_lock(data) as canonical:
+        assert canonical == data.resolve()
+    module._windows_private(data, directory=True)
+
+
+@pytest.mark.skipif(not IS_WINDOWS, reason='Windows DACL inheritance')
+def test_windows_missing_data_dir_under_non_private_parent_is_created_and_accepted(tmp_path):
+    module = _lock_module()
+    parent = _system_inheriting_parent(tmp_path)
+    with pytest.raises(module.OperationLockSetupError):
+        module._windows_private(parent, directory=True)
+    data = parent / 'created data'
+    with module.operation_lock(data) as canonical:
+        assert canonical == data.resolve()
+    module._windows_private(data, directory=True)
+
+
+@pytest.mark.skipif(not IS_WINDOWS, reason='Windows DACL inheritance')
+def test_windows_recovery_inspection_refuses_non_private_dir_without_changing_its_acl(tmp_path):
+    module = _lock_module()
+    data = _system_inheriting_parent(tmp_path) / 'inspected data'
+    data.mkdir()
+    before = _icacls_listing(data)
+    with pytest.raises(module.OperationLockSetupError):
+        with module._recovery_operation_lock(data):
+            pytest.fail('inspection must not enter a non-private directory')
+    assert _icacls_listing(data) == before
+    assert not (data / 'operation.lock').exists()
+
+
+@pytest.mark.skipif(not IS_WINDOWS, reason='Windows pre-lock tightening')
+def test_windows_already_private_data_dir_takes_no_pre_lock_tighten(tmp_path, monkeypatch):
+    module = _lock_module()
+    data = tmp_path / 'private data'
+    data.mkdir()
+    module._windows_private(data, directory=True)
+    tightened = []
+    monkeypatch.setattr(module.perms, 'tighten_dir', lambda path: tightened.append(path))
+    with module.operation_lock(data) as canonical:
+        assert canonical == data.resolve()
+    assert tightened == []

@@ -39,14 +39,14 @@ def _git(
     result = subprocess.run(
         ["git", "-C", str(repository), *arguments],
         capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        input=input_text,
+        # Bytes in and out: text mode translates "\n" to "\r\n" on Windows and
+        # corrupts the entry names handed to `git mktree`.
+        input=None if input_text is None else input_text.encode("utf-8"),
         check=False,
     )
-    assert result.returncode == 0, result.stderr
-    return result.stdout.strip()
+    stderr = result.stderr.decode("utf-8", errors="replace")
+    assert result.returncode == 0, stderr
+    return result.stdout.decode("utf-8", errors="replace").strip()
 
 
 def _git_repository(path: Path) -> tuple[Path, str]:
@@ -768,7 +768,7 @@ def test_gc_prunes_a_registration_after_directory_removal_interruption(
     shutil.rmtree(attempt.workspace)
 
     listing = _git(repository, "worktree", "list", "--porcelain")
-    assert str(attempt.workspace) in listing
+    assert attempt.workspace.as_posix() in listing
     assert "prunable" in listing
 
     report = gc_workspaces(db_path, "prunable-gc-run")
@@ -780,7 +780,7 @@ def test_gc_prunes_a_registration_after_directory_removal_interruption(
     assert stored.workspace_status == "removed"
     assert stored.workspace_removal_forced is False
     assert not attempt.workspace.exists()
-    assert str(attempt.workspace) not in _git(
+    assert attempt.workspace.as_posix() not in _git(
         repository, "worktree", "list", "--porcelain"
     )
 

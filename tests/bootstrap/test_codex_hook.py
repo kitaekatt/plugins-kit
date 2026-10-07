@@ -52,13 +52,17 @@ class TestCodexHookInstall:
         assert "\n" not in command
         assert "\r" not in command
         assert command.startswith("cmd.exe /d /c ")
-        assert "%USERPROFILE%\\.local\\bin\\bootstrap.cmd" in command
+        assert "%USERPROFILE%\\.local\\bin" in command
+        # PowerShell 5.1 mangles embedded double quotes, so only the two that
+        # wrap the cmd.exe argument may appear.
+        assert command.count('"') == 2
         assert str(home) not in command
         assert "&&" not in command
         assert "||" not in command
         assert re.search(r"else call bootstrap\.cmd codex-hook\"$", command)
         assert re.search(
-            r"else exit /b 0\) else call bootstrap\.cmd codex-hook\"$", command
+            r"if errorlevel 1 \(exit /b 0\) else call bootstrap\.cmd codex-hook\"$",
+            command,
         )
 
     @pytest.mark.skipif(os.name != "nt", reason="Windows shell execution contract")
@@ -78,6 +82,14 @@ class TestCodexHookInstall:
             "@echo off\necho hook-argument:%1\nexit /b 0\n", encoding="ascii",
         )
         monkeypatch.setenv("HOME", str(home))
+        # The command resolves the launcher from PATH first and from
+        # %USERPROFILE% second, so isolate both: a real bootstrap.cmd on the
+        # machine's PATH would otherwise run instead of the fake one.
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.setenv("PATH", os.pathsep.join(
+            entry for entry in os.environ.get("PATH", "").split(os.pathsep)
+            if entry and not (Path(entry) / "bootstrap.cmd").exists()
+        ))
         command = codex_hook._hook_entry()["commandWindows"]
         arguments = (
             [executable, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command]

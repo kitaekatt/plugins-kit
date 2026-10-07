@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- index-pages: {"generated_by":"md-domain","source_sha":"fbc34cb104a77cad71b071e4a792a7f2ca11d6f0","directory":"plugins/content-pipeline-kit/lib","kind":"page"} -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>The library for LLM-in-the-loop batch content pipelines, providing an attributed store, freshness engine, durable execution plane with run tracking and worker protocol, delivery modes, VCS seam, and audit.</title>
+<link rel="stylesheet" href="../../../.databench/index-pages.css">
+</head>
+<body>
+<main>
+<h1>The library for LLM-in-the-loop batch content pipelines, providing an attributed store, freshness engine, durable execution plane with run tracking and worker protocol, delivery modes, VCS seam, and audit.</h1>
+<p class="hh-orientation">This is the content_pipeline package: the generic machinery the content-pipeline-kit plugin ships for LLM-in-the-loop batch content work, with no project-specific knowledge baked in. Every capability is its own subpackage, and the root re-exports nothing but the version, so importing one piece never pulls in the others and the import graph stays a strict DAG. It reads as a stack: a data substrate that tracks what still needs generating, plus a validator contract at the bottom; an LLM binding and pass orchestration in the middle; durable run tracking, delivery modes, and auditing on top. Because it is project-free, a consumer wires its own row shapes, policy, and storage behind injected callables rather than the library reaching into its code.</p><section><h2>Where to start</h2><p>Open <a href="content_pipeline/__init__.py">plugins/content-pipeline-kit/lib/content_pipeline/__init__.py</a> first: its docstring states the full scope and the strict-DAG import rule, so it is the fastest way to see which subpackage answers your question. If you are wiring the package into a project rather than reading it, <a href="content_pipeline/default_config.yaml">plugins/content-pipeline-kit/lib/content_pipeline/default_config.yaml</a> is the only file here that is not a code module.</p></section><section><h2>Routes</h2><ul><li><strong>Run a tracked batch</strong><ol><li><code>prepare_run</code> -- gate sequence plus freshness check; returns the claimable wave</li><li><code>run_wave</code> (inline driver) -- executes the wave through the store, one unit at a time</li><li><code>finalize_run</code> -- re-parses and applies every accepted unit, serially in ordinal order</li><li><code>unfinished_units</code> -- recovers the not-yet-terminal set after a halt so a resume knows what is left</li></ol></li><li><strong>One worker through the protocol</strong><ol><li><code>claim</code> -- take a unit with its fencing token and lease</li><li><code>read</code> -- fetch the prepared request (system and user text)</li><li><code>submit</code> -- deliver the answer text; it is parsed, validated, then accepted or rejected</li><li><code>finalize</code> -- the orchestrator applies the accepted payload</li></ol></li><li><strong>Freshness scopes the work</strong><ol><li><code>needs_generation</code> (freshness classifier) -- which units are stale or missing</li><li><code>prepare_run</code> -- records a terminal skip for every up-to-date unit</li><li>generate only the remaining wave, so a fresh unit is never re-paid</li></ol></li><li><strong>Deliver the output</strong><ol><li><code>apply_inplace</code> -- rebuild machine-owned rows purely from the store, leaving human rows untouched</li><li><code>deliver_changeset</code> -- drive the injected VCS seam around the write (placeholder changeset, moves, description)</li></ol></li></ul></section><section><h2>The package and its import rules</h2><ul><li><a href="content_pipeline/__init__.py">plugins/content-pipeline-kit/lib/content_pipeline/__init__.py</a> -- the full scope plus the strict-DAG rule in one docstring; it re-exports nothing but the version.</li><li><a href="content_pipeline/default_config.yaml">plugins/content-pipeline-kit/lib/content_pipeline/default_config.yaml</a> -- machine-global defaults (cache directory, model overrides); per-project values live in project config.</li></ul></section><section><h2>Data, freshness, and validation</h2><ul><li><a href="content_pipeline/store/__init__.py">plugins/content-pipeline-kit/lib/content_pipeline/store/__init__.py</a> -- the attributed canonical store and its projection; the source of truth delivery rebuilds from.</li><li><a href="content_pipeline/freshness/__init__.py">plugins/content-pipeline-kit/lib/content_pipeline/freshness/__init__.py</a> -- the two-tier content-hash engine that decides what still needs generating.</li><li><a href="content_pipeline/providers/__init__.py">plugins/content-pipeline-kit/lib/content_pipeline/providers/__init__.py</a> -- the tiered context-provider registry: the layered context a generation call is built from.</li><li><a href="content_pipeline/validate/__init__.py">plugins/content-pipeline-kit/lib/content_pipeline/validate/__init__.py</a> -- the one-rule-many-call-sites validator contract, with the floor guard and riders.</li></ul></section><section><h2>The LLM binding</h2><ul><li><a href="content_pipeline/llm/__init__.py">plugins/content-pipeline-kit/lib/content_pipeline/llm/__init__.py</a> -- transport, cache, cost, and budget over an OpenAI-compatible endpoint; reuses llm-scripting-kit for key and client.</li></ul></section><section><h2>Pass orchestration</h2><ul><li><a href="content_pipeline/pipeline/__init__.py">plugins/content-pipeline-kit/lib/content_pipeline/pipeline/__init__.py</a> -- the single-pass and convergence-loop shapes, plus gates and the work-unit strategies a run walks.</li></ul></section><section><h2>The durable run plane</h2><ul><li><a href="content_pipeline/execution/__init__.py">plugins/content-pipeline-kit/lib/content_pipeline/execution/__init__.py</a> -- the SQLite run store, atomic claims with fencing tokens, and the bounded status digest; the largest subpackage.</li><li><a href="content_pipeline/execution/protocol.py">plugins/content-pipeline-kit/lib/content_pipeline/execution/protocol.py</a> -- the versioned JSON worker protocol (claim, read, submit, fail, renew, status, pause, resume, finalize) as mountable handlers; no console script.</li><li><a href="content_pipeline/execution/controller.py">plugins/content-pipeline-kit/lib/content_pipeline/execution/controller.py</a> -- prepare_run and finalize_run bracket a run; also the shared halt response and terminal-skip bookkeeping.</li></ul></section><section><h2>Delivery and the VCS seam</h2><ul><li><a href="content_pipeline/deliver/__init__.py">plugins/content-pipeline-kit/lib/content_pipeline/deliver/__init__.py</a> -- the two modes: in-place mutation with a do-no-harm marker and revert, and append-only projection with a .bak rollback.</li><li><a href="content_pipeline/vcs/__init__.py">plugins/content-pipeline-kit/lib/content_pipeline/vcs/__init__.py</a> -- the backend-agnostic changeset seam: a git default and a null backend; Perforce ships in p4-kit, not here.</li></ul></section><section><h2>Audit, provenance, and human-in-the-loop</h2><ul><li><a href="content_pipeline/audit/__init__.py">plugins/content-pipeline-kit/lib/content_pipeline/audit/__init__.py</a> -- the audit framework that reuses the runtime&#x27;s own classifiers, so a finding is the runtime&#x27;s verdict, not a second rule set.</li><li><a href="content_pipeline/audit/auditor.py">plugins/content-pipeline-kit/lib/content_pipeline/audit/auditor.py</a> -- the six finding kinds and the injected AuditSpec that carries the runtime callables.</li><li><a href="content_pipeline/provenance/__init__.py">plugins/content-pipeline-kit/lib/content_pipeline/provenance/__init__.py</a> -- the provenance surface: call audit, records, replay, and snapshots.</li><li><a href="content_pipeline/roundtrip/__init__.py">plugins/content-pipeline-kit/lib/content_pipeline/roundtrip/__init__.py</a> -- the human-in-the-loop abstraction: typed questions to a person and their returns, mid-run.</li></ul></section><section><h2>The CLI scaffold</h2><ul><li><a href="content_pipeline/cli/__init__.py">plugins/content-pipeline-kit/lib/content_pipeline/cli/__init__.py</a> -- the reusable scaffold: arg dispatch, scope filtering, did-you-mean, uniform YAML output, and stable exit codes.</li><li><a href="content_pipeline/cli/run.py">plugins/content-pipeline-kit/lib/content_pipeline/cli/run.py</a> -- command adapters over execution (argv only, no logic); the protocol command reads a JSON envelope, preferably on stdin.</li></ul></section>
+</main>
+<nav data-index-pages-chrome="nav"><ul><li><a href="../index.html"><span class="hh-nav-label">content-pipeline-kit</span> <span class="hh-nav-identity">Content-pipeline-kit plugin packaging: bootstrap configuration, public API surface contract, one-unit worker agent, consumer contract checker, and parallel wave workflow.</span></a></li><li><a href="../README.md"><span class="hh-nav-label">README.md</span> <span class="hh-nav-identity">The plugin from the consumer side: what it packages, how to install it, and the commands it exposes.</span></a></li></ul></nav>
+<script>
+if (window.parent !== window) {
+  window.parent.postMessage({
+    type: "index-pages:announce",
+    version: 1,
+    directory: "plugins/content-pipeline-kit/lib",
+    file: "index.html",
+    kind: "page",
+    source_sha: "fbc34cb104a77cad71b071e4a792a7f2ca11d6f0"
+  }, "*");
+  document.addEventListener("click", function (event) {
+    if (event.defaultPrevented || event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    var el = event.target;
+    while (el && el.nodeName !== "A") el = el.parentNode;
+    if (!el) return;
+    var href = el.getAttribute("href");
+    if (!href) return;
+    if (href.charAt(0) === "#" || href.charAt(0) === "/") return;
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
+    var target = href.split("#")[0].split("?")[0];
+    if (!target) return;
+    if (/(^|\/)index-page(\.[^/]+)?\.html$/.test(target)) return;
+    var parts = "plugins/content-pipeline-kit/lib".split("/");
+    if (parts.length === 1 && parts[0] === ".") parts = [];
+    var segs = target.split("/");
+    for (var i = 0; i < segs.length; i++) {
+      if (segs[i] === "" || segs[i] === ".") continue;
+      if (segs[i] === "..") { parts.pop(); continue; }
+      parts.push(segs[i]);
+    }
+    event.preventDefault();
+    window.parent.postMessage({
+      type: "index-pages:navigate",
+      version: 1,
+      path: parts.join("/")
+    }, "*");
+  });
+}
+</script>
+</body>
+</html>

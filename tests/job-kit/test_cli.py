@@ -72,6 +72,7 @@ def test_package_reports_missing_bootstrap_before_cli_import(tmp_path: Path) -> 
     environment.update(
         {
             "HOME": str(tmp_path / "home"),
+            "USERPROFILE": str(tmp_path / "home"),
             "PYTHONNOUSERSITE": "1",
             "PYTHONPATH": str(repo_root / "plugins" / "job-kit" / "lib"),
             "_BOOTSTRAP_GUARD_VENV_REEXEC": "1",

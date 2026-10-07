@@ -4,6 +4,10 @@ The persistent empty file is never deleted or replaced. No lease or payload
 is stored. Native filesystem acceptance is separate from acquiring a lock;
 external editors, raw fork transfer and hostile path replacement are outside
 this operation boundary.
+
+On Windows, ordinary operations first make the data directory owner-only
+(creating it when missing), then verify it; the verification still refuses
+anything left over. Private inspection never changes a directory.
 """
 
 from contextlib import contextmanager
@@ -14,7 +18,7 @@ import stat
 import sys
 from typing import Iterator
 
-from . import SecretsError
+from . import SecretsError, perms
 
 IS_WINDOWS = sys.platform.startswith("win")
 
@@ -187,7 +191,13 @@ def _canonical_directory(data_dir: Path) -> Path:
         for component in reversed(missing):
             if IS_WINDOWS:_directory_trust(canonical)
             candidate = canonical / component
-            try:candidate.mkdir(mode=0o700)
+            # Windows inherits from the parent verified private just above.
+            # mode=0o700 there (CPython 3.12.4 and later) writes an explicit
+            # SYSTEM / Administrators / OWNER RIGHTS DACL instead, which the
+            # trust check below then refuses for the directory just created.
+            try:
+                if IS_WINDOWS:candidate.mkdir()
+                else:candidate.mkdir(mode=0o700)
             except FileExistsError:pass
             canonical = _resolve(candidate)
             _directory_trust(canonical)
@@ -251,7 +261,13 @@ def _own_data(data_dir: Path, *, check_recovery: bool) -> Iterator[Path]:
             path = canonical / "operation.lock"
             flags = os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
             expected_leaf = None
-            try:fd = os.open(path, flags | os.O_CREAT | os.O_EXCL, 0o600)
+            try:
+                # Without O_NOFOLLOW (Windows), O_CREAT|O_EXCL follows a
+                # dangling link and creates its target outside this directory.
+                # Any existing leaf, link or not, takes the inspected path.
+                if not hasattr(os, "O_NOFOLLOW") and os.path.lexists(path):
+                    raise FileExistsError(errno.EEXIST, "guard leaf exists", str(path))
+                fd = os.open(path, flags | os.O_CREAT | os.O_EXCL, 0o600)
             except FileExistsError:
                 leaf = path.lstat()
                 if not stat.S_ISREG(leaf.st_mode) or leaf.st_nlink != 1 or getattr(leaf, "st_file_attributes", 0) & 0x400:
@@ -297,15 +313,59 @@ def _own_data(data_dir: Path, *, check_recovery: bool) -> Iterator[Path]:
             else:raise release_error
 
 
+def _tighten_before_lock(data_dir: Path) -> None:
+    """Make a missing or non-private Windows data directory owner-only.
+
+    Bootstrap creates the directory with the profile's inherited DACL, which
+    _windows_private refuses. A directory that already passes that in-process
+    check is left alone, so the steady state spawns no icacls here. Anything
+    other than a missing path or a non-reparse directory is left untouched
+    for _own_data to refuse.
+    """
+    try:
+        path = data_dir.expanduser()
+    except RuntimeError:
+        return  # _own_data reports the unresolvable home
+    try:
+        observed = path.lstat()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return  # _own_data reports the uninspectable path
+    else:
+        if not stat.S_ISDIR(observed.st_mode) or getattr(observed, "st_file_attributes", 0) & 0x400:
+            return
+        try:
+            _windows_private(path, directory=True)
+            return  # already owner-only
+        except OperationLockSetupError:
+            pass
+    try:
+        perms.tighten_dir(path)
+    except (SecretsError, OSError) as error:
+        raise _setup_error(data_dir, f"cannot make the data directory owner-only: {error}") from error
+
+
 @contextmanager
 def operation_lock(data_dir: Path) -> Iterator[Path]:
-    """Acquire ownership and refuse pending recovery before protected work."""
+    """Acquire ownership and refuse pending recovery before protected work.
+
+    On Windows the data directory is first made owner-only (see
+    _tighten_before_lock); the trust check afterwards still refuses a foreign
+    owner, any remaining foreign grant or a non-NTFS volume. POSIX is not
+    tightened here: its trust check already accepts the default directory.
+    """
+    if IS_WINDOWS:
+        _tighten_before_lock(data_dir)
     with _own_data(data_dir, check_recovery=True) as canonical:
         yield canonical
 
 
 @contextmanager
 def _recovery_operation_lock(data_dir: Path) -> Iterator[Path]:
-    """Private inspection uses the same owner without entering ordinary work."""
+    """Private inspection uses the same owner without entering ordinary work.
+
+    Unlike operation_lock it never tightens: a non-private directory refuses.
+    """
     with _own_data(data_dir, check_recovery=False) as canonical:
         yield canonical

@@ -570,9 +570,21 @@ class TestProgressUpdates:
         with pytest.raises(McpTimeoutError, match="stalled at 42%"):
             client.send_request("stuck_action", {}, timeout_s=1)
 
-    def test_max_extensions_raises(self, client_with_ws):
+    def test_max_extensions_raises(self, client_with_ws, monkeypatch):
         client, ws = client_with_ws
 
+        # An extension is counted only when the deadline actually moves, so the
+        # clock must advance between updates; the real clock's tick size is
+        # host-dependent (coarse on Windows).
+        clock = FakeClock()
+        monkeypatch.setattr("ue_mcp_client.client.time.monotonic", clock)
+        original_recv = ws.recv
+
+        def advancing_recv():
+            clock.advance(1.0)
+            return original_recv()
+
+        ws.recv = advancing_recv
         original_send = ws.send
 
         def capturing_send(data):

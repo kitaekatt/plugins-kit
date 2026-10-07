@@ -14,6 +14,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -573,7 +574,14 @@ class TestReset:
         project.mkdir()
         cooldowns = tmp_path / "data" / "mkt-a" / "bootstrap" / "cooldowns"
         cooldowns.mkdir(parents=True)
-        key = hashlib.sha1(str(project).encode()).hexdigest()
+        # The hook hashes the shell's logical $PWD, which under Git Bash on
+        # Windows is the POSIX spelling of the directory, not str(project).
+        from bootstrap_lib.tool_check import resolve_bash
+        shell_pwd = subprocess.run(
+            [resolve_bash(), "-c", 'cd "$1" && pwd', "_", str(project)],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        key = hashlib.sha1(shell_pwd.encode()).hexdigest()
         stamp = cooldowns / ("last_run_epoch.%s" % key)
         stamp.write_text("123\n")
 

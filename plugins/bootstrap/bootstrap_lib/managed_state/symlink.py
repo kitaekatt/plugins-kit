@@ -50,9 +50,15 @@ def _remove_if_present(path: Path | None) -> None:
 
 def _link_spelling(path: Path) -> str | None:
     try:
-        return os.readlink(path) if _is_link(path) else None
+        spelling = os.readlink(path) if _is_link(path) else None
     except OSError:
         return None
+    # Windows reports an absolute link target in extended-length form
+    # (\\?\C:\...), which never equals the plain spelling it was created from.
+    if spelling and _is_windows() and spelling.startswith("\\\\?\\") and \
+            not spelling[4:].upper().startswith("UNC\\"):
+        spelling = spelling[4:]
+    return spelling
 
 
 @dataclass(frozen=True)

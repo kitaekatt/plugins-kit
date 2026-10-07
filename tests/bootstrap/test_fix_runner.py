@@ -814,6 +814,10 @@ class TestScriptInvocation:
         proc = subprocess.run(
             [sys.executable, fr.__file__, str(queue), "--engine"],
             capture_output=True, text=True, timeout=60,
+            # The runner holds its window for a keypress after an outcome; a
+            # closed stdin ends that hold at once instead of inheriting the
+            # test runner's stdin and waiting on it.
+            stdin=subprocess.DEVNULL,
         )
         # An empty queue is a validation error (EXIT_BAD_QUEUE), NOT an import
         # crash -- reaching validation at all proves the module loaded standalone.

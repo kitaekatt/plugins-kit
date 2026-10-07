@@ -1,78 +1,28 @@
 <!doctype html>
 <html lang="en">
 <head>
-<!-- human-html: {"generated_by":"md-domain","source_sha":"d6aa073df75b1c14c4d9c8682f853b26f460efcc","directory":"plugins/skills-kit/skills/md-domain/references","kind":"page"} -->
+<!-- index-pages: {"generated_by":"md-domain","source_sha":"1a8f73cb6d1e15c846dd9a49f9e3df920965b82c","directory":"plugins/skills-kit/skills/md-domain/references","kind":"page"} -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>The md-domain skill reference documentation for audit framework, standards, lane procedures, authoring patterns, and provenance records</title>
-<link rel="stylesheet" href="../../../../../.databench/human-html.css">
+<title>Reference documentation for the md-domain skill: audit framework, per-artifact standards, lane procedures, authoring patterns, provenance records, and cross-cutting guidance on cohesion, capability boundaries, and standards configuration.</title>
+<link rel="stylesheet" href="../../../../../.databench/index-pages.css">
 </head>
 <body>
-<nav data-human-html-chrome="nav" aria-label="Orientation pages">
-  <ul>
-    <li><a href="../../index.html"><span class="hh-nav-label">skills</span> <span class="hh-nav-identity">The skills-kit skills that audit and produce markdown, encode insights, teach the materialized-output pattern, and review sessions for documentation updates</span></a></li>
-<li><a href="skill-domain/index.html"><span class="hh-nav-label">skill-domain</span> <span class="hh-nav-identity">Skill-domain reference documentation for skill-authoring contracts, vocabulary, and audit tools.</span></a></li>
-  </ul>
-</nav>
 <main>
-  <h1>The md-domain skill reference documentation for audit framework, standards, lane procedures, authoring patterns, and provenance records</h1>
-  <p>These files are the reference layer for the md-domain skill, which audits and authors markdown artifacts. They separate the shared audit vocabulary from the lane procedures, configurable standards, document-shape patterns, and decision histories. The material is written for agents and for human review of audit output; most files are read on demand rather than top to bottom. A returning reader can use the grouping below to recover the right file for a placement, audit, configuration, or provenance question.</p>
-  <h2>Where to start</h2>
-  <p>Open <a href="audit-framework.md"><code>audit-framework.md</code></a> first: it defines the vocabulary every audit lane uses and points to the machine-readable registry.</p>
-  <h2>Routes</h2>
-  <ul>
-    <li>Read a finding: <a href="references-finding-taxonomy.md"><code>references-finding-taxonomy.md</code></a> -> <a href="audit-framework.md"><code>audit-framework.md</code></a> -> <a href="standards/references-standards.md"><code>standards/references-standards.md</code></a></li>
-    <li>Place a fact: <a href="cohesion-principles.md"><code>cohesion-principles.md</code></a> -> <a href="authoring-patterns/content-authoring.md"><code>authoring-patterns/content-authoring.md</code></a> -> <a href="authoring-patterns/three-surfaces.md"><code>authoring-patterns/three-surfaces.md</code></a></li>
-    <li>Configure or extend standards: <a href="configuring-standards.md"><code>configuring-standards.md</code></a> -> <a href="authoring-standards.md"><code>authoring-standards.md</code></a> -> <a href="standards/skill-standards.md"><code>standards/skill-standards.md</code></a></li>
-  </ul>
-  <h2>Audit vocabulary and registry</h2>
-  <ul>
-    <li><a href="audit-framework.md"><code>audit-framework.md</code></a> -- glossary for audit lanes; read when a term like subject, audit-kind, or taxonomy is unclear.</li>
-    <li><a href="audit-framework.yaml"><code>audit-framework.yaml</code></a> -- machine-readable registry of primitives, compositions, and audit-kind bindings; authoritative on divergence.</li>
-  </ul>
-  <h2>Finding and disposition guidance</h2>
-  <ul>
-    <li><a href="references-finding-taxonomy.md"><code>references-finding-taxonomy.md</code></a> -- applies the four-disposition contract to references-audit findings; open when interpreting a scanner report.</li>
-    <li><a href="coverage-gap.md"><code>coverage-gap.md</code></a> -- explains what a clean audit does not check; open before treating COMPLIANT as coverage.</li>
-    <li><a href="capability-boundaries.md"><code>capability-boundaries.md</code></a> -- states where md-domain stops and code review or future code audit starts; open for defect observations.</li>
-  </ul>
-  <h2>Placement and authoring patterns</h2>
-  <ul>
-    <li><a href="cohesion-principles.md"><code>cohesion-principles.md</code></a> -- load graph and CRP, CCP, and ADP placement rules; open for where a fact should live.</li>
-    <li><a href="authoring-patterns/content-authoring.md"><code>authoring-patterns/content-authoring.md</code></a> -- shapes facts as YAML header, markdown, or embedded YAML; open for how to encode content.</li>
-    <li><a href="authoring-patterns/three-surfaces.md"><code>authoring-patterns/three-surfaces.md</code></a> -- deeper treatment of the three surfaces and common authoring mistakes.</li>
-    <li><a href="authoring-patterns/actions-pattern.md"><code>authoring-patterns/actions-pattern.md</code></a> -- ordered action recipes with tool steps and capture; open when a workflow must be repeatable.</li>
-    <li><a href="authoring-patterns/area-ownership.md"><code>authoring-patterns/area-ownership.md</code></a> -- identity, scope, sub-area registry, and routing; open when a document claims an area.</li>
-    <li><a href="authoring-patterns/area-config.md"><code>authoring-patterns/area-config.md</code></a> -- six-field runtime contract for an area; open after ownership is expressed.</li>
-    <li><a href="authoring-patterns/query-tool-pattern.md"><code>authoring-patterns/query-tool-pattern.md</code></a> -- lookup facade with YAML output and did-you-mean; open for catalogs.</li>
-  </ul>
-  <h2>Standards and configuration</h2>
-  <ul>
-    <li><a href="configuring-standards.md"><code>configuring-standards.md</code></a> -- user guide to layering, rule ids, thresholds, and adapters; open to tune audits.</li>
-    <li><a href="authoring-standards.md"><code>authoring-standards.md</code></a> -- schema for additive standards files; open when adding a project standard.</li>
-    <li><a href="standards/"><code>standards/</code></a> -- five per-artifact standard docs; open for the criteria a lane applies.</li>
-  </ul>
-  <h2>Lane procedures</h2>
-  <ul>
-    <li><a href="lanes/audit-lane.md"><code>lanes/audit-lane.md</code></a> -- one audit pipeline parameterized by artifact; open to run or debug an audit.</li>
-    <li><a href="lanes/coverage-lane.md"><code>lanes/coverage-lane.md</code></a> -- report-only analysis over a directory's direct code; open before generating coverage.</li>
-    <li><a href="lanes/generation-lane.md"><code>lanes/generation-lane.md</code></a> -- consumes coverage to write documents; open when generation output is wrong.</li>
-  </ul>
-  <h2>Provenance records</h2>
-  <ul>
-    <li><a href="provenance/"><code>provenance/</code></a> -- decision histories for cohesion, skill-authoring, and standards; open when a rule feels arbitrary.</li>
-  </ul>
+<h1>Reference documentation for the md-domain skill: audit framework, per-artifact standards, lane procedures, authoring patterns, provenance records, and cross-cutting guidance on cohesion, capability boundaries, and standards configuration.</h1>
+<p class="hh-orientation">This page indexes the md-domain reference library. It is organized by role. The nearby skill-domain directory carries type contracts and audit tooling material.</p><section><h2>Where to start</h2><p>Start with the audit glossary. It names the vocabulary used by audit lanes. Then open the registry beside it when you need the checked rules. <a href="audit-framework.md">plugins/skills-kit/skills/md-domain/references/audit-framework.md</a> <a href="audit-framework.yaml">plugins/skills-kit/skills/md-domain/references/audit-framework.yaml</a></p></section><section><h2>Routes</h2><ul><li><strong>Audit an artifact</strong><ol><li>Read the shared lane procedure. <a href="lanes/audit-lane.md">plugins/skills-kit/skills/md-domain/references/lanes/audit-lane.md</a></li><li>Pick the artifact standards file it dispatches to. <a href="standards/skill-standards.md">plugins/skills-kit/skills/md-domain/references/standards/skill-standards.md</a></li><li>Run detect, then dispatch fixes.</li></ol></li><li><strong>Read what an audit means</strong><ol><li>Read the glossary for shared vocabulary. <a href="audit-framework.md">plugins/skills-kit/skills/md-domain/references/audit-framework.md</a></li><li>Cross terms against the registry. <a href="audit-framework.yaml">plugins/skills-kit/skills/md-domain/references/audit-framework.yaml</a></li></ol></li><li><strong>Tune the audit rules</strong><ol><li>Read the tuning guide. <a href="configuring-standards.md">plugins/skills-kit/skills/md-domain/references/configuring-standards.md</a></li><li>Read the authoring guide for additive standards files. <a href="authoring-standards.md">plugins/skills-kit/skills/md-domain/references/authoring-standards.md</a></li></ol></li><li><strong>Generate from code</strong><ol><li>Read the placement spine. <a href="cohesion-principles.md">plugins/skills-kit/skills/md-domain/references/cohesion-principles.md</a></li><li>Read the analysis lane and its boundaries. <a href="lanes/coverage-lane.md">plugins/skills-kit/skills/md-domain/references/lanes/coverage-lane.md</a></li><li>Read the generation lane for the written output and file-line evidence. <a href="lanes/generation-lane.md">plugins/skills-kit/skills/md-domain/references/lanes/generation-lane.md</a></li></ol></li></ul></section><section><h2>The audit spine</h2><ul><li><a href="audit-framework.md">plugins/skills-kit/skills/md-domain/references/audit-framework.md</a> Canonical glossary for audit lanes.</li><li><a href="audit-framework.yaml">plugins/skills-kit/skills/md-domain/references/audit-framework.yaml</a> Registry of primitives, compositions, and rule bindings; authoritative on divergence.</li></ul></section><section><h2>Per-artifact criteria</h2><ul><li><a href="standards/skill-standards.md">plugins/skills-kit/skills/md-domain/references/standards/skill-standards.md</a> Audit criteria for skill shape, hygiene, and reference reachability.</li><li><a href="standards/claude-md-standards.md">plugins/skills-kit/skills/md-domain/references/standards/claude-md-standards.md</a> Criteria for project context file cohesion, change cadence, and density.</li><li><a href="standards/project-doc-standards.md">plugins/skills-kit/skills/md-domain/references/standards/project-doc-standards.md</a> Criteria for standalone project documentation placement and depth.</li><li><a href="standards/references-standards.md">plugins/skills-kit/skills/md-domain/references/standards/references-standards.md</a> Rule bindings for cross-reference and orphan scans.</li><li><a href="standards/coverage-standards.md">plugins/skills-kit/skills/md-domain/references/standards/coverage-standards.md</a> Admission criteria for reading code as a content source.</li><li><a href="references-finding-taxonomy.md">plugins/skills-kit/skills/md-domain/references/references-finding-taxonomy.md</a> A-to-K remediation catalog for references-audit findings.</li></ul></section><section><h2>Lane procedures</h2><ul><li><a href="lanes/audit-lane.md">plugins/skills-kit/skills/md-domain/references/lanes/audit-lane.md</a> One audit procedure parameterized by artifact, shared by four audits.</li><li><a href="lanes/coverage-lane.md">plugins/skills-kit/skills/md-domain/references/lanes/coverage-lane.md</a> Report-only lane that names what a project context file misses.</li><li><a href="lanes/generation-lane.md">plugins/skills-kit/skills/md-domain/references/lanes/generation-lane.md</a> Writes project context files from coverage output with file-line evidence.</li><li><a href="lanes/render-lane.md">plugins/skills-kit/skills/md-domain/references/lanes/render-lane.md</a> Shortest procedure of the four; the human output path.</li></ul></section><section><h2>Authoring patterns</h2><ul><li><a href="authoring-patterns/content-authoring.md">plugins/skills-kit/skills/md-domain/references/authoring-patterns/content-authoring.md</a> How a fact is shaped across header, markdown, and embedded YAML.</li><li><a href="authoring-patterns/three-surfaces.md">plugins/skills-kit/skills/md-domain/references/authoring-patterns/three-surfaces.md</a> Deep treatment of surface choice and common mistakes.</li><li><a href="authoring-patterns/actions-pattern.md">plugins/skills-kit/skills/md-domain/references/authoring-patterns/actions-pattern.md</a> Deterministic multi-step recipes as ordered YAML steps.</li><li><a href="authoring-patterns/area-ownership.md">plugins/skills-kit/skills/md-domain/references/authoring-patterns/area-ownership.md</a> What canonical source means for a named area.</li><li><a href="authoring-patterns/area-config.md">plugins/skills-kit/skills/md-domain/references/authoring-patterns/area-config.md</a> Six-field runtime contract per area.</li><li><a href="authoring-patterns/query-tool-pattern.md">plugins/skills-kit/skills/md-domain/references/authoring-patterns/query-tool-pattern.md</a> Lookup-tool convention: single facade, YAML paths, did-you-mean misses.</li></ul></section><section><h2>Top-level references</h2><ul><li><a href="cohesion-principles.md">plugins/skills-kit/skills/md-domain/references/cohesion-principles.md</a> Shared placement spine and load graph.</li><li><a href="capability-boundaries.md">plugins/skills-kit/skills/md-domain/references/capability-boundaries.md</a> What md-domain leaves to code review and code audit.</li><li><a href="coverage-gap.md">plugins/skills-kit/skills/md-domain/references/coverage-gap.md</a> What clean audits miss and the validation discipline.</li><li><a href="deferred-defects.md">plugins/skills-kit/skills/md-domain/references/deferred-defects.md</a> Contract for the deferred-defects sidecar.</li><li><a href="authoring-standards.md">plugins/skills-kit/skills/md-domain/references/authoring-standards.md</a> How to author an additive standards file.</li><li><a href="provenance/cohesion-principles-decisions.md">plugins/skills-kit/skills/md-domain/references/provenance/cohesion-principles-decisions.md</a> Decision history behind the placement spine.</li><li><a href="provenance/skill-authoring-decisions.md">plugins/skills-kit/skills/md-domain/references/provenance/skill-authoring-decisions.md</a> Decision trail behind the skill-authoring schema.</li><li><a href="provenance/standards-decisions.md">plugins/skills-kit/skills/md-domain/references/provenance/standards-decisions.md</a> Standards decision trail, including sidecar schema changes.</li></ul></section>
 </main>
+<nav data-index-pages-chrome="nav"><ul><li><a href="../../../../index.html"><span class="hh-nav-label">plugins</span> <span class="hh-nav-identity">The Claude Code plugin marketplace: independently installable plugins sharing the bootstrap provisioning engine and llm-scripting-kit access layer, covering code review, durable job execution, LLM endpoint dispatch, Hue scene synchronization, PDF rendering, fleet secrets provisioning, prompt statusline, cache forensics, markdown auditing, and Unreal Engine automation.</span></a></li><li><a href="skill-domain/index.html"><span class="hh-nav-label">skill-domain</span> <span class="hh-nav-identity">Reference material for the skill-domain: type contracts, canonical vocabulary, structural patterns, schema fixtures, and audit tooling documentation.</span></a></li></ul></nav>
 <script>
 if (window.parent !== window) {
   window.parent.postMessage({
-    type: "human-html:announce",
+    type: "index-pages:announce",
     version: 1,
     directory: "plugins/skills-kit/skills/md-domain/references",
     file: "index.html",
     kind: "page",
-    source_sha: "d6aa073df75b1c14c4d9c8682f853b26f460efcc"
+    source_sha: "1a8f73cb6d1e15c846dd9a49f9e3df920965b82c"
   }, "*");
   document.addEventListener("click", function (event) {
     if (event.defaultPrevented || event.button !== 0) return;
@@ -86,7 +36,7 @@ if (window.parent !== window) {
     if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
     var target = href.split("#")[0].split("?")[0];
     if (!target) return;
-    if (/(^|\/)human(\.[^/]+)?\.html$/.test(target)) return;
+    if (/(^|\/)index-page(\.[^/]+)?\.html$/.test(target)) return;
     var parts = "plugins/skills-kit/skills/md-domain/references".split("/");
     if (parts.length === 1 && parts[0] === ".") parts = [];
     var segs = target.split("/");
@@ -97,7 +47,7 @@ if (window.parent !== window) {
     }
     event.preventDefault();
     window.parent.postMessage({
-      type: "human-html:navigate",
+      type: "index-pages:navigate",
       version: 1,
       path: parts.join("/")
     }, "*");

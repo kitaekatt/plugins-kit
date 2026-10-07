@@ -11,6 +11,9 @@ is covered by test_tool_path_linkage.py::TestProcessToolEntry; this file
 focuses on the *dispatch* seam (ordering + short-circuit semantics).
 """
 
+
+import sys
+
 import bootstrap_lib.engine as engine
 import bootstrap_lib.tool_check as tool_check
 import bootstrap_lib.path_check as path_check
@@ -189,7 +192,8 @@ class TestPrecedence:
             # The download must actually land the tool: the re-check after a
             # fix is authoritative, so a download that produced nothing is a
             # failure, not a short-circuit.
-            landed = tmp_path / "tool"
+            # Windows resolves a bare name only through PATHEXT.
+            landed = tmp_path / ("tool.exe" if sys.platform == "win32" else "tool")
             landed.write_text("#!/bin/sh\n")
             landed.chmod(0o755)
             return downloader.DownloadResult(True, str(landed), "downloaded")

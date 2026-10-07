@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 
-def test_running_the_script_as_main_delegates_to_the_package_cli(capsys, plugin_root):
+def test_running_the_script_as_main_delegates_to_the_package_cli(capsys, plugin_root, tmp_path, monkeypatch):
     """``python scripts/llm_scripting_kit_cli.py status`` == ``llm_scripting_kit.cli.main(["status"])``.
 
     No key is configured in the isolated-HOME sandbox, so both paths take the
@@ -30,6 +30,11 @@ def test_running_the_script_as_main_delegates_to_the_package_cli(capsys, plugin_
     )
 
     from llm_scripting_kit.cli import main as package_main
+
+    # USER_ENV_FILE is resolved from Path.home() at import time, so an earlier
+    # test that imported the package pins it to the real profile; point the
+    # in-process lookup at the same empty sandbox the subprocess sees.
+    monkeypatch.setattr("llm_scripting_kit.api_key.USER_ENV_FILE", tmp_path / "nothing" / ".env")
 
     direct_exit = package_main(["status"])
     direct = capsys.readouterr()

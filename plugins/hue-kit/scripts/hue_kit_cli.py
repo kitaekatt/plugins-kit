@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
 import shutil
 import sys
 from pathlib import Path
@@ -72,7 +73,7 @@ EXAMPLE_FILES = ("scene-groups.yaml", "scene-designs.yaml")
 # Philips' bridge discovery service: returns LAN bridges keyed to the caller's
 # public IP. Fallback when HUE_BRIDGE_IP is unset. Needs internet.
 DISCOVERY_URL = "https://discovery.meethue.com/"
-# Where `hue-kit pair` stores the minted application key (user-scoped, 0600).
+# Where `hue-kit pair` stores the minted application key (user-scoped; 0600 on POSIX, owner-only ACL on Windows).
 PAIRED_KEY_FILE = data_dir("hue-kit") / "app-key.txt"
 # Cached discovered bridge IP, so we do not re-hit the rate-limited discovery
 # service on every verb (env var still wins; delete the file to re-discover).
@@ -88,6 +89,21 @@ DEFAULT_WORKDIR = data_dir("hue-kit")
 # exit-code table in skills/hue-domain/references/scene-layers.md is the
 # single documented copy of this value.
 DISCREPANCY_EXIT_CODE = 4
+
+
+def _restrict_to_owner_windows(path: Path) -> None:
+    """Make ``path`` owner-only via icacls (strip inherited ACEs, grant the
+    current user full control). Raises on any failure."""
+    user = os.environ.get("USERNAME", "")
+    if not user:
+        raise RuntimeError("USERNAME is unset")
+    domain = os.environ.get("USERDOMAIN", "")
+    principal = f"{domain}\\{user}" if domain else user
+    proc = subprocess.run(
+        ["icacls", str(path), "/inheritance:r", "/grant:r", f"{principal}:F"],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30)
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stdout.decode("utf-8", "replace").strip())
 
 
 def _discover_via_cloud(timeout: int = 10) -> list[dict]:
@@ -470,11 +486,20 @@ def _cmd_pair(args) -> int:
                     f"link button again.")
             # Separate concern, separate message: the key IS saved. Whether
             # its mode took (an odd umask masks the create mode) is cosmetic.
-            try:
-                PAIRED_KEY_FILE.chmod(0o600)
-                perms = "(0600)"
-            except OSError:
-                perms = "(warning: could not set 0600 perms)"
+            if _is_windows():
+                # POSIX modes do nothing on Windows; restrict the ACL instead.
+                try:
+                    _restrict_to_owner_windows(PAIRED_KEY_FILE)
+                    perms = "(owner-only ACL)"
+                except (OSError, subprocess.SubprocessError, RuntimeError):
+                    perms = ("(warning: icacls could not restrict the key "
+                             "file to its owner)")
+            else:
+                try:
+                    PAIRED_KEY_FILE.chmod(0o600)
+                    perms = "(0600)"
+                except OSError:
+                    perms = "(warning: could not set 0600 perms)"
             msg = f"hue-kit: paired. Application key saved to {PAIRED_KEY_FILE} {perms}."
             if os.environ.get("HUE_APP_KEY") or os.environ.get("HUE_KEY_FILE"):
                 msg += (" NOTE: HUE_APP_KEY/HUE_KEY_FILE is set and OVERRIDES this "

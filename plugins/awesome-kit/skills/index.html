@@ -1,53 +1,28 @@
 <!doctype html>
 <html lang="en">
 <head>
-<!-- human-html: {"generated_by":"md-domain","source_sha":"1d479f028f5f2bf653a1e46db69554aae181ef72","directory":"plugins/awesome-kit/skills","kind":"page"} -->
+<!-- index-pages: {"generated_by":"md-domain","source_sha":"fbc34cb104a77cad71b071e4a792a7f2ca11d6f0","directory":"plugins/awesome-kit/skills","kind":"page"} -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>awesome-kit skills: the debug-context, recap, and verbose-updates interaction skills plus the plugin-ecosystem poster generator</title>
-<link rel="stylesheet" href="../../../.databench/human-html.css">
+<title>awesome-kit skills: session-interaction skills (debug-context, recap, verbose-updates), the task-folder system with its 14-verb CLI and design diagrams, and the plugin-ecosystem poster generator</title>
+<link rel="stylesheet" href="../../../.databench/index-pages.css">
 </head>
 <body>
-<nav data-human-html-chrome="nav" aria-label="Orientation pages">
-<ul>
-<li><a href="../../index.html"><span class="hh-nav-label">plugins</span> <span class="hh-nav-identity">The Claude Code plugin collection: installable plugins including git and Perforce review, secrets provisioning, statusline display, cache reporting, markdown auditing, stuck-bootstrap remediation, and prototype skills.</span></a></li>
-<li><a href="orchestrate/index.html"><span class="hh-nav-label">orchestrate</span> <span class="hh-nav-identity">Orchestrate skill: delegation through background agents, shipped default policy, and scripts that render the resolved policy and launch work units</span></a></li>
-<li><a href="task/index.html"><span class="hh-nav-label">task</span> <span class="hh-nav-identity">The awesome-kit task skill dispatch surface: the task.py CLI, file-backed task folder model, verb contracts, design specs, and task-system diagrams</span></a></li>
-</ul>
-</nav>
 <main>
-<h1>awesome-kit skills: the debug-context, recap, and verbose-updates interaction skills plus the plugin-ecosystem poster generator</h1>
-<p>This is the skills half of the awesome-kit plugin: three conversation protocols and one poster generator. The three protocols answer the questions a user asks mid-session: why the agent did something while present, what a long turn just accomplished, and where a context-switched user stands at each turn's end. Each protocol is one markdown file the agent loads on demand, so the whole behavior reads top to bottom. The generator is different in kind: it is a skill with a script that renders the installed marketplaces and plugins into a 16:9 poster you open in a browser.</p>
-<h2>Where to start</h2>
-<p>For the poster, open <a href="plugin-ecosystem/SKILL.md"><code>plugin-ecosystem/SKILL.md</code></a> first: it holds the data model and the flags that keep a published page from describing the machine that built it. For the conversation protocols, open <a href="recap/SKILL.md"><code>recap/SKILL.md</code></a>: the shortest of the three, and its distill-then-interview shape shows how the other two are built.</p>
-<h2>Routes</h2>
-<ul>
-<li>Refresh the personal poster: <a href="plugin-ecosystem/SKILL.md"><code>plugin-ecosystem/SKILL.md</code></a> -> <a href="plugin-ecosystem/scripts/generate.py"><code>plugin-ecosystem/scripts/generate.py</code></a>. The script overwrites the poster file and opens it in a browser.</li>
-<li>Build a marketplace landing page: the flag block in <a href="plugin-ecosystem/SKILL.md"><code>plugin-ecosystem/SKILL.md</code></a> -> <a href="plugin-ecosystem/scripts/generate.py"><code>plugin-ecosystem/scripts/generate.py</code></a> with <code>--marketplace</code> and the redirecting flags, so the page describes the repo, not the build machine.</li>
-<li>Track a wrong badge: the five-step state precedence in <a href="plugin-ecosystem/SKILL.md"><code>plugin-ecosystem/SKILL.md</code></a> -> <code>compute_state</code> in <a href="plugin-ecosystem/scripts/generate.py"><code>plugin-ecosystem/scripts/generate.py</code></a>; the function's docstring restates the same order.</li>
-</ul>
-<h2>Conversation protocols</h2>
-<ul>
-<li><a href="debug-context/SKILL.md"><code>debug-context/SKILL.md</code></a> -- answer-first procedure for the present user: no tool call before the answer, each load-bearing claim marked established or hypothesis, then background gatherers reconcile against the answer already given. Open it when why-did-you questions stall in foreground hunting.</li>
-<li><a href="recap/SKILL.md"><code>recap/SKILL.md</code></a> -- the /recap handler: what got done plus the genuinely blocking decisions, terse text only, and a batched interview only after a contentless reply. Open it when recaps run long, interview too early, or re-ask settled questions.</li>
-<li><a href="verbose-updates/SKILL.md"><code>verbose-updates/SKILL.md</code></a> -- the three-part end-of-turn template (What changed, Where it sits, Required user action) for a user who reads only turn-end messages, with argument-based modes such as strategy. The longest of the three; its shared glossary is defined one level down, so use the task card to reach the definitions.</li>
-</ul>
-<h2>Poster generator</h2>
-<ul>
-<li><a href="plugin-ecosystem/SKILL.md"><code>plugin-ecosystem/SKILL.md</code></a> -- the poster data model: the marketplace opt-in gate, who owns each field on the poster, and the five-step badge precedence. Open it before editing poster copy, adding a marketplace, or changing the title or tagline.</li>
-<li><a href="plugin-ecosystem/scripts/generate.py"><code>plugin-ecosystem/scripts/generate.py</code></a> -- the stdlib-only generator: reads the registry, manifests, and settings, drops phantom installs and hidden plugins, and emits one self-contained HTML file. Open it when a badge, filter, or column renders wrong.</li>
-</ul>
+<h1>awesome-kit skills: session-interaction skills (debug-context, recap, verbose-updates), the task-folder system with its 14-verb CLI and design diagrams, and the plugin-ecosystem poster generator</h1>
+<p class="hh-orientation">This is the skills directory of the awesome-kit plugin, and each capability lives in its own folder. Most are a single SKILL.md: the procedure the agent follows, with no code beside it. Three shape how the agent talks with you: answering questions about its own behavior on the spot, distilling a too-long turn into what got done, and reporting progress while you are away from the conversation. A fourth renders your installed plugin ecosystem as a 16:9 poster page. The rest of the weight is a file-backed work-tracking system: a 14-verb command line over task folders, with its design documents and diagrams beside it.</p><section><h2>Where to start</h2><p>Start with <a href="task/SKILL.md">plugins/awesome-kit/skills/task/SKILL.md</a>. It routes a natural-language work request to the CLI&#x27;s 14 verbs and states what the agent, rather than the script, must do with each output; everything else here is either a self-contained procedure or support for that system.</p></section><section><h2>Routes</h2><ul><li><strong>Work a task</strong><ol><li><a href="task/SKILL.md">plugins/awesome-kit/skills/task/SKILL.md</a></li><li><a href="task/scripts/task.py">plugins/awesome-kit/skills/task/scripts/task.py</a></li><li><code>work &lt;ref&gt;</code></li><li>invoke each emitted Skill line, then hand implementation to the orchestrate skill</li></ol></li><li><strong>Gate work on findings</strong><ol><li><a href="task/scripts/task.py">plugins/awesome-kit/skills/task/scripts/task.py</a></li><li><code>validate &lt;ref&gt;</code></li><li>errors and warnings both block; fix forward, then re-validate</li></ol></li><li><strong>Refresh the plugin poster</strong><ol><li><a href="plugin-ecosystem/SKILL.md">plugins/awesome-kit/skills/plugin-ecosystem/SKILL.md</a></li><li><a href="plugin-ecosystem/scripts/generate.py">plugins/awesome-kit/skills/plugin-ecosystem/scripts/generate.py</a></li><li>renders one self-contained 16:9 page of the installed ecosystem and opens it</li></ol></li><li><strong>Read the task design</strong><ol><li><a href="task/design/task-system-design.md">plugins/awesome-kit/skills/task/design/task-system-design.md</a></li><li><a href="task/design/diagrams">plugins/awesome-kit/skills/task/design/diagrams</a></li><li>the five pictures beside the spec: lifecycle, entities, work sequence, discovery, move</li></ol></li></ul></section><section><h2>Conversation discipline</h2><ul><li><a href="debug-context/SKILL.md">plugins/awesome-kit/skills/debug-context/SKILL.md</a> - answer a question about the agent&#x27;s own behavior from context, marking each load-bearing claim established or hypothesis, then verify in the background.</li><li><a href="recap/SKILL.md">plugins/awesome-kit/skills/recap/SKILL.md</a> - the recap procedure: what got done plus the genuinely blocking decisions, in as few lines as the content allows; one batched interview only on a contentless reply.</li><li><a href="verbose-updates/SKILL.md">plugins/awesome-kit/skills/verbose-updates/SKILL.md</a> - the three-part end-of-turn update for a context-switched user: what changed, where it sits, and the one required action.</li></ul></section><section><h2>The plugin-ecosystem poster</h2><ul><li><a href="plugin-ecosystem/SKILL.md">plugins/awesome-kit/skills/plugin-ecosystem/SKILL.md</a> - when to generate the poster, how user phrasings map to flags, and the four-party data model behind each plugin badge.</li><li><a href="plugin-ecosystem/scripts/generate.py">plugins/awesome-kit/skills/plugin-ecosystem/scripts/generate.py</a> - the stdlib-only generator: one self-contained 16:9 page, reading machine state unless its flags redirect the inputs to a source tree.</li></ul></section><section><h2>The task system</h2><ul><li><a href="task/SKILL.md">plugins/awesome-kit/skills/task/SKILL.md</a> - dispatch surface: routes a natural-language request to a CLI verb and states what the agent must do with each output.</li><li><a href="task/scripts/task.py">plugins/awesome-kit/skills/task/scripts/task.py</a> - the CLI: 14 verbs over task folders, with its output conventions and the venv re-exec before any import.</li><li><a href="task/scripts/bootstrap_guard.py">plugins/awesome-kit/skills/task/scripts/bootstrap_guard.py</a> - the vendored, stdlib-only guard that detects an unprovisioned plugin venv and re-execs under it.</li><li><a href="task/scripts/task_system">plugins/awesome-kit/skills/task/scripts/task_system</a> - the 14 modules behind the verbs: discovery, validation, listing, state and location ops, item parsing, and the review-page renderer.</li><li>The hand-off template, communication framework, and triage documents are on the references page; work dispatches implementation to the orchestrate skill, which has its own page.</li></ul></section><section><h2>Task design</h2><ul><li><a href="task/design/task-system-design.md">plugins/awesome-kit/skills/task/design/task-system-design.md</a> - the v1 spec: entities, states, per-verb contracts, and the closure policy. Where it and the code disagree, the code wins.</li><li><a href="task/design/task-items-design.md">plugins/awesome-kit/skills/task/design/task-items-design.md</a> - the ratified design for the open-item block: why it lives in the plan document, and what it deliberately does not add.</li><li><a href="task/design/diagrams">plugins/awesome-kit/skills/task/design/diagrams</a> - five static diagrams for lifecycle, entities, work sequence, discovery, and move, with two JSON sources; open them in a browser.</li><li>The observed evidence behind the item design is kept in the repository&#x27;s planning documents, not shipped with the plugin.</li></ul></section>
 </main>
+<nav data-index-pages-chrome="nav"><ul><li><a href="../../index.html"><span class="hh-nav-label">plugins</span> <span class="hh-nav-identity">The Claude Code plugin marketplace: independently installable plugins sharing the bootstrap provisioning engine and llm-scripting-kit access layer, covering code review, durable job execution, LLM endpoint dispatch, Hue scene synchronization, PDF rendering, fleet secrets provisioning, prompt statusline, cache forensics, markdown auditing, and Unreal Engine automation.</span></a></li><li><a href="orchestrate/index.html"><span class="hh-nav-label">orchestrate</span> <span class="hh-nav-identity">The orchestrate skill that delegates implementation units to background agents: its procedure, shipped routing policy, the per-machine policy renderer, and the dispatch and configuration references</span></a></li><li><a href="task/references/index.html"><span class="hh-nav-label">references</span> <span class="hh-nav-identity">Task skill reference documents for communication, hand-off authoring, and triage</span></a></li><li><a href=".."><span class="hh-nav-label">awesome-kit</span> <span class="hh-nav-identity">The awesome-kit plugin root: plugin manifest and marketplace metadata, one level above the skills directory.</span></a></li></ul></nav>
 <script>
 if (window.parent !== window) {
   window.parent.postMessage({
-    type: "human-html:announce",
+    type: "index-pages:announce",
     version: 1,
     directory: "plugins/awesome-kit/skills",
     file: "index.html",
     kind: "page",
-    source_sha: "1d479f028f5f2bf653a1e46db69554aae181ef72"
+    source_sha: "fbc34cb104a77cad71b071e4a792a7f2ca11d6f0"
   }, "*");
   document.addEventListener("click", function (event) {
     if (event.defaultPrevented || event.button !== 0) return;
@@ -61,7 +36,7 @@ if (window.parent !== window) {
     if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
     var target = href.split("#")[0].split("?")[0];
     if (!target) return;
-    if (/(^|\/)human(\.[^/]+)?\.html$/.test(target)) return;
+    if (/(^|\/)index-page(\.[^/]+)?\.html$/.test(target)) return;
     var parts = "plugins/awesome-kit/skills".split("/");
     if (parts.length === 1 && parts[0] === ".") parts = [];
     var segs = target.split("/");
@@ -72,7 +47,7 @@ if (window.parent !== window) {
     }
     event.preventDefault();
     window.parent.postMessage({
-      type: "human-html:navigate",
+      type: "index-pages:navigate",
       version: 1,
       path: parts.join("/")
     }, "*");

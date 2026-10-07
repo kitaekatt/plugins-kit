@@ -192,6 +192,15 @@ def _windows_acl_boundary(monkeypatch, target, *, fault=None):
     return calls
 
 
+def _assert_data_dir_tightened_once(fleet, calls):
+    """Only converge's post-lock tighten touches the already-private data dir;
+    operation_lock's pre-lock tighten is skipped because it passes the trust check."""
+    directory_argv = ['/inheritance:r', '/grant:r', 'DUMMY\\dummy-owner:(OI)(CI)F',
+                      '/remove:g', '*S-1-5-18', '*S-1-5-32-544', '*S-1-3-4']
+    assert [(call[0], call[1][2:]) for call in calls if call[0] == fleet.data_dir] == [(fleet.data_dir, directory_argv)]
+    assert calls[0][0] == fleet.data_dir
+
+
 @pytest.mark.parametrize('mode', [0o600, 0o644])
 @pytest.mark.parametrize('legacy', [False, True])
 def test_actual_windows_hit_reapplies_private_acl_once_without_false_record(fleet, monkeypatch, mode, legacy):
@@ -208,6 +217,7 @@ def test_actual_windows_hit_reapplies_private_acl_once_without_false_record(flee
     assert len(target_calls) == (1 if mode == 0o600 else 0)
     if target_calls:
         assert target_calls[0][1][2:] == ['/inheritance:r', '/grant:r', 'DUMMY\\dummy-owner:F']
+    _assert_data_dir_tightened_once(fleet, calls)
     assert len(calls) == (3 if mode == 0o600 else 2)
     assert result.ok == 1 and result.written == 0 and result.failures == []
     assert State.load(state_path).rows['ha-token'] == old
@@ -225,6 +235,7 @@ def test_actual_windows_private_hit_contains_real_acl_boundary_failure(fleet, mo
     assert failure.ask_reason is None and 'ha-token' in failure.user_msg and str(target) in failure.agent_msg and 'icacls' in failure.agent_msg
     assert result.ok == 1 and result.written == 0
     assert State.load(state_path).rows['ha-token'] == old and target.read_bytes() == b'token-value\n'
+    _assert_data_dir_tightened_once(fleet, calls)
     assert len(calls) == 4
 
 
@@ -242,6 +253,7 @@ def test_actual_windows_entry_paths_do_not_duplicate_acl_operation(fleet, monkey
     result = convergence.converge(fleet.config_path, fleet.data_dir)
     assert result.failures == [] and result.written == 1 and result.ok == 0
     selected = [call for call in calls if call[0].parent == target.parent and (call[0] == target or call[0].name.startswith(target.name + '.'))]
+    _assert_data_dir_tightened_once(fleet, calls)
     assert len(selected) == 1 and len(calls) == 3
 
 

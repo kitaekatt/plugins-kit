@@ -546,7 +546,21 @@ def _reclaim_workspace(
     removal_args: tuple[str, ...] = ("worktree", "remove")
     if force:
         removal_args += ("--force",)
-    removed = _git_result((*removal_args, str(workspace)), cwd=repo_root)
+    # Remove from outside the worktree: a process whose current directory is
+    # the directory being deleted keeps it open on Windows ("Permission
+    # denied"), so address the owning repository by its common Git directory
+    # and run from the worktree's parent.
+    common = _git_result(
+        ("rev-parse", "--path-format=absolute", "--git-common-dir"),
+        cwd=workspace,
+        timeout_s=GIT_PROBE_TIMEOUT_S,
+    )
+    if common is None or common.returncode != 0 or not common.stdout.strip():
+        return f"could not locate the owning Git directory: {_git_detail(common)}"
+    removed = _git_result(
+        ("--git-dir", common.stdout.strip(), *removal_args, str(workspace)),
+        cwd=workspace.parent,
+    )
     if removed is None or removed.returncode != 0:
         return f"git worktree removal failed: {_git_detail(removed)}"
     return None

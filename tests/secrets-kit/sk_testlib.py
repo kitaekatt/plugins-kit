@@ -20,6 +20,9 @@ templates at N distinct paths; no path and no write is shared.
 """
 
 import shutil
+import stat
+import subprocess
+import sys
 from pathlib import Path
 
 # Files inside .git that can embed an absolute path to the tree's own location
@@ -29,7 +32,7 @@ _PATH_BEARING = ("config", "FETCH_HEAD", "ORIG_HEAD")
 
 
 def _forms(path: Path):
-    """Every spelling of `path` that can appear in a git metadata file.
+    """Every spelling of `path` that can appear in a git metadata file, by kind.
 
     `.git/config` C-escapes its backslashes, so a Windows clone URL is written
     `C:\\\\Users\\\\...` -- matching only the unescaped form leaves the copy
@@ -37,7 +40,11 @@ def _forms(path: Path):
     exists to avoid.
     """
     raw = str(path)
-    return {raw, raw.replace("\\", "/"), raw.replace("\\", "\\\\"), path.as_posix()}
+    return {
+        "raw": raw,
+        "forward": raw.replace("\\", "/"),
+        "escaped": raw.replace("\\", "\\\\"),
+    }
 
 
 def _rewrite_paths(path: Path, old: Path, new: Path) -> None:
@@ -46,11 +53,14 @@ def _rewrite_paths(path: Path, old: Path, new: Path) -> None:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return
-    # Forward slashes are accepted everywhere and need no escaping.
-    replacement = str(new).replace("\\", "/")
+    # Each spelling is replaced by the SAME spelling of the copy destination.
+    # secrets-kit binds a clone to its exact recorded origin string, so a copy
+    # whose origin was respelled (backslashes to forward slashes) no longer
+    # matches the `str(remote)` a fixture declares in secrets.json.
+    old_forms, new_forms = _forms(old), _forms(new)
     updated = text
-    for form in sorted(_forms(old), key=len, reverse=True):
-        updated = updated.replace(form, replacement)
+    for kind in sorted(old_forms, key=lambda k: len(old_forms[k]), reverse=True):
+        updated = updated.replace(old_forms[kind], new_forms[kind])
     if updated != text:
         path.write_text(updated, encoding="utf-8")
 
@@ -97,9 +107,49 @@ def _assert_detached(template: Path, dest: Path) -> None:
             text = candidate.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        for form in forms:
+        for form in forms.values():
             if form in text:
                 raise AssertionError(
                     f"{candidate} still points at the template ({form!r}); "
                     "copies would share state. Teach _rewrite_paths this form."
                 )
+
+
+def is_owner_only_file(path: Path) -> bool:
+    """Whether a file is private: mode 0600 on POSIX, an owner-only DACL on Windows.
+
+    Windows modes are decorative (a writable file always reads 0o666), so the
+    platform's real control is checked there, with the operation guard's own
+    DACL reader.
+    """
+    if sys.platform.startswith("win"):
+        from secrets_kit.operation_lock import OperationLockSetupError, _windows_private
+
+        try:
+            _windows_private(path, directory=False)
+        except OperationLockSetupError:
+            return False
+        return True
+    return stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def assert_owner_only_file(path: Path) -> None:
+    """Fail unless `path` is private by `is_owner_only_file`."""
+    assert is_owner_only_file(path), f"{path} is not owner-only"
+
+
+def grant_everyone(path: Path, rights: str) -> None:
+    """Windows analog of a group/world permission bit: a foreign DACL grant.
+
+    ``rights`` is an icacls permission spec, e.g. ``(R)`` for a file or
+    ``(OI)(CI)M`` for a directory.
+    """
+    proc = subprocess.run(["icacls", str(path), "/grant", "*S-1-1-0:" + rights],
+                          capture_output=True, text=True, timeout=20)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+# Seed, rotation and unlock all leave the identity cache as the UTF-8 bytes the
+# identity was wrapped from -- what `age -d` returns on unlock -- with no newline
+# translation, so the cache is byte-identical on every platform.
+AUTHORED_NEW_IDENTITY_CACHE = b"dummy new identity\n"

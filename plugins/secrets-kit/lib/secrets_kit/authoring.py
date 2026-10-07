@@ -82,6 +82,26 @@ def _file_state(path: Path) -> Optional[dict]:
     return {"digest": _digest(path.read_bytes()), "mode": stat.S_IMODE(info.st_mode)}
 
 
+def _checkout_mode(mode: int) -> int:
+    """Permission bits `_file_state` observes for a checkout of Git mode ``mode``.
+
+    Windows reports no group, other or executable bits: a writable regular file
+    reads 0o666 there whatever mode Git tracks, so comparing an observation with
+    the tracked mode itself could never match.
+    """
+    return 0o666 if os.name == "nt" else mode
+
+
+def _file_sync(path: Path) -> None:
+    """Flush one existing file's bytes to stable storage without changing them.
+
+    Opened read-write because Windows flushes (FlushFileBuffers) only through
+    a handle with write access; a read-only descriptor fails with EBADF there.
+    """
+    with path.open("r+b") as stream:
+        os.fsync(stream.fileno())
+
+
 def _directory_sync(path: Path) -> None:
     if os.name == "nt":
         return
@@ -359,8 +379,7 @@ class AuthoringOperation:
             return identity, recipient, code
         if not wrapped.read_bytes():
             raise SecretsError("age produced no encrypted identity")
-        with wrapped.open("rb") as stream:
-            os.fsync(stream.fileno())
+        _file_sync(wrapped)
         _directory_sync(self.directory)
         manifest = Manifest(self.clone / "manifest.json", {"version": 1, "recipient": recipient, "profiles": {}, "entries": {}})
         _write(self.directory / "proposed-manifest", manifest.dump().encode("utf-8"))
@@ -371,7 +390,10 @@ class AuthoringOperation:
         self.record["outputs"] = {name: dict(_file_state(self.directory / stored), stored=stored)
                                    for name, stored in outputs.items()}
         tree = self._prepare_tree()
-        cache_bytes = identity.replace("\n", os.linesep).encode("utf-8")
+        # cache_digest is the digest of the wrapped plaintext bytes exactly as
+        # `age -d` returns them on unlock, so seed/rotation and unlock produce
+        # one identity-cache byte format on every platform.
+        cache_bytes = identity.encode("utf-8")
         self.mark("prepared", expected_tree=tree, cache_digest=_digest(cache_bytes))
         return identity, recipient, 0
 
@@ -395,7 +417,7 @@ class AuthoringOperation:
             raise _recovery_error("a proposed encrypted slot changed under its producer")
         if require_content and not actual.st_size:
             raise SecretsError("age produced no encrypted output")
-        with path.open("rb") as stream:os.fsync(stream.fileno())
+        _file_sync(path)
         _directory_sync(self.directory)
         self._remember_artifact(stored)
         return dict(_file_state(path), stored=stored)
@@ -451,7 +473,10 @@ class AuthoringOperation:
                 "rotation refused: the replacement epoch is identical to the published one",
                 "A fresh identity always changes the manifest recipient, so this "
                 "means the generated keypair is not fresh. Nothing was published.")
-        cache_bytes = identity.replace("\n", os.linesep).encode("utf-8")
+        # cache_digest is the digest of the wrapped plaintext bytes exactly as
+        # `age -d` returns them on unlock, so seed/rotation and unlock produce
+        # one identity-cache byte format on every platform.
+        cache_bytes = identity.encode("utf-8")
         self.mark("prepared", expected_tree=tree, authored_paths=authored,
                   cache_digest=_digest(cache_bytes))
         return 0
@@ -478,7 +503,7 @@ class AuthoringOperation:
                 raise SecretsError("prepared encrypted Git object could not be established")
             repo._owned_query(self.clone, ["update-index", "--add", "--cacheinfo", f"100644,{oid},{name}"], index=private_index)
         tree = repo._owned_query(self.clone, ["write-tree"], index=private_index).decode("ascii").rstrip("\n")
-        with private_index.open("rb") as stream:os.fsync(stream.fileno())
+        _file_sync(private_index)
         _directory_sync(self.directory)
         if self._exact_receipts:
             self._remember_artifact("prepared-index")
@@ -516,7 +541,7 @@ class AuthoringOperation:
                     actual = _private(path)
                     if (actual.st_dev, actual.st_ino) != (receiving.st_dev, receiving.st_ino):
                         raise _recovery_error("failed encryption changed its owned receiving slot")
-                    with path.open("rb") as stream:os.fsync(stream.fileno())
+                    _file_sync(path)
                     _directory_sync(self.directory)
                     self._remember_artifact("proposed-blob")
                 except BaseException as recovery:
@@ -528,7 +553,7 @@ class AuthoringOperation:
                 raise _recovery_error("proposed encrypted blob slot changed")
             if not path.read_bytes():
                 raise SecretsError("age produced no encrypted entry")
-            with path.open("rb") as stream:os.fsync(stream.fileno())
+            _file_sync(path)
             _directory_sync(self.directory)
             self._remember_artifact("proposed-blob")
             output = dict(_file_state(path), stored="proposed-blob")
@@ -574,9 +599,9 @@ class AuthoringOperation:
 
     def _finalize_cache(self, identity: str) -> None:
         def produce(stream: Any) -> bool:
-            stream.write(identity)
+            stream.write(identity.encode("utf-8"))
             return True
-        if not _private_output(self.data_dir / "identity.txt", 0o600, produce, text=True):
+        if not _private_output(self.data_dir / "identity.txt", 0o600, produce):
             raise _recovery_error("publication confirmed; identity cache finalization incomplete")
         _directory_sync(self.data_dir)
         if _digest((self.data_dir / "identity.txt").read_bytes()) != self.record["cache_digest"]:
@@ -683,7 +708,7 @@ class AuthoringOperation:
             # Applied encrypted files have repository mode, not journal mode.
             if name in self.record.get("outputs", {}):
                 output = self.record["outputs"][name]
-                possibilities.append(None if output is None else {"digest": output["digest"], "mode": 0o644})
+                possibilities.append(None if output is None else {"digest": output["digest"], "mode": _checkout_mode(0o644)})
             if actual not in possibilities:
                 raise _recovery_error("an authoring path contains foreign edits")
         staged = repo._owned_query(self.clone, ["diff", "--cached", "--name-only", "-z", current_head] if current_head else ["diff", "--cached", "--name-only", "-z"])
@@ -895,7 +920,11 @@ def _prepare_operation(data_dir: Path, clone_dir: Path, declared_repo: str, *, f
     if entry_name is not None or rotate:
         entry_cache = _file_state(data_dir / "identity.txt")
     directory = data_dir / RECOVERY_DIRECTORY
-    directory.mkdir(mode=0o700)
+    # On Windows mode=0o700 (CPython 3.12.4 and later) writes explicit SYSTEM /
+    # Administrators / OWNER RIGHTS grants that tighten_dir, which strips only
+    # inherited entries, leaves in place; the private check below refuses them.
+    if os.name == "nt":directory.mkdir()
+    else:directory.mkdir(mode=0o700)
     try:
         tighten_dir(directory)
         info = _ordinary(directory, directory=True)
@@ -961,7 +990,7 @@ def _prepare_operation(data_dir: Path, clone_dir: Path, declared_repo: str, *, f
                     if len(fields) != 3 or fields[0] not in (b"100644", b"100755") or fields[1] != b"blob":
                         raise SecretsError("seed fast-forward requires unsupported file slots")
                     payload = repo._owned_query(clone_dir, ["cat-file", "blob", fields[2].decode("ascii")])
-                    incoming[name] = {"digest": _digest(payload), "mode": 0o644 if fields[0] == b"100644" else 0o755}
+                    incoming[name] = {"digest": _digest(payload), "mode": _checkout_mode(0o644 if fields[0] == b"100644" else 0o755)}
                 operation.mark("syncing", synced_head=target, synced_files=incoming)
                 code, _ = repo._git(["merge", "--ff-only", "--quiet", target], cwd=clone_dir, timeout=repo.FETCH_TIMEOUT)
                 if code != 0:raise SecretsError(f"seed fast-forward failed (status {code})")
@@ -1107,7 +1136,7 @@ def _load_entry_operation(data_dir: Path, info: os.stat_result, marker: os.stat_
         if not repo._object_id(commit) or record["proof_ref"] != repo._publication_ref(commit) or _head(clone) != commit or repo._owned_oid(clone, "HEAD^{tree}") != record["expected_tree"]:raise ValueError
         _admit(clone, declared_repo)
         for name, state in record["outputs"].items():
-            if _file_state(clone / name) != (None if state is None else {"digest": state["digest"], "mode": 0o644}):raise ValueError
+            if _file_state(clone / name) != (None if state is None else {"digest": state["digest"], "mode": _checkout_mode(0o644)}):raise ValueError
     if record["phase"] == "unchanged" or record["phase"] == "cleaning" and record["cleanup_outcome"] == "unchanged":
         if _head(clone) != record["synced_head"] or _file_state(clone / ".git/index") != record["synced_index"]:raise ValueError
         _admit(clone, declared_repo)
@@ -1210,7 +1239,7 @@ def _load_rotation_operation(data_dir: Path, info: os.stat_result, marker: os.st
         if not repo._object_id(commit) or record["proof_ref"] != repo._publication_ref(commit) or _head(clone) != commit or repo._owned_oid(clone, "HEAD^{tree}") != record["expected_tree"]:raise ValueError
         _admit(clone, declared_repo)
         for name, state in record["outputs"].items():
-            if _file_state(clone / name) != {"digest": state["digest"], "mode": 0o644}:raise ValueError
+            if _file_state(clone / name) != {"digest": state["digest"], "mode": _checkout_mode(0o644)}:raise ValueError
     repo.require_repo_binding(clone, declared_repo)
     return AuthoringOperation(data_dir, clone, declared_repo, record, (info.st_dev, info.st_ino), (marker.st_dev, marker.st_ino))
 
@@ -1269,7 +1298,7 @@ def _load_operation(data_dir: Path) -> AuthoringOperation:
             if repo._owned_oid(clone, "HEAD^{tree}") != record["expected_tree"]:raise ValueError
             _admit(clone, declared_repo)
             for name, output in record["outputs"].items():
-                if _file_state(clone / name) != {"digest": output["digest"], "mode": 0o644}:raise ValueError
+                if _file_state(clone / name) != {"digest": output["digest"], "mode": _checkout_mode(0o644)}:raise ValueError
         if _branch(clone) != record["branch"]:raise ValueError
     except AuthoringRecoveryError:
         raise

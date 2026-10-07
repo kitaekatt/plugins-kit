@@ -1,69 +1,28 @@
 <!doctype html>
 <html lang="en">
 <head>
-<!-- human-html: {"generated_by":"md-domain","source_sha":"4ad89c1c0cc5eddc26b1f5334302f4e7e379544b","directory":"plugins/content-pipeline-kit/skills","kind":"page"} -->
+<!-- index-pages: {"generated_by":"md-domain","source_sha":"e85f0a6a015a65dfdfc6299f1343c2ce548f76fa","directory":"plugins/content-pipeline-kit/skills","kind":"page"} -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>The content-pipeline skills for the pipeline domain, background-session orchestration, workflow-lane orchestration, and one-unit worker execution.</title>
-<link rel="stylesheet" href="../../../.databench/human-html.css">
+<title>Content-pipeline skills: the domain architecture and vocabulary, background-lane and workflow-lane orchestration, and one-unit worker execution.</title>
+<link rel="stylesheet" href="../../../.databench/index-pages.css">
 </head>
 <body>
-<nav data-human-html-chrome="nav" aria-label="Orientation pages">
-  <ul>
-    <li><a href="../index.html"><span class="hh-nav-label">content-pipeline-kit</span> <span class="hh-nav-identity">The content-pipeline-kit plugin package for LLM-in-the-loop batch content pipelines, with plugin and bootstrap metadata, a one-unit worker agent, and a parallel wave workflow.</span></a></li>
-  </ul>
-</nav>
 <main>
-<h1>The content-pipeline skills for the pipeline domain, background-session orchestration, workflow-lane orchestration, and one-unit worker execution.</h1>
-<p>These four skills are the prose layer of the content-pipeline-kit plugin: each is a procedure for Claude rather than code, and each covers one role in an LLM-in-the-loop batch content pipeline. The domain skill carries the architecture vocabulary and the abstraction map, plus step-by-step references for building a new pipeline, porting an existing one, and choosing which opt-in guardrails to adopt. The other three split the run machinery by who is acting: one drives a whole run through a background-session dispatcher, one drives it through the native Workflow tool, and one is the procedure a single worker session follows to complete exactly one work unit. The split is deliberate -- orchestrator and worker are separate sessions with different context and different failure modes, so every one of them keeps unit content out of the supervising context.</p>
-
-<h2>Where to start</h2>
-<p>Start with <a href="content-pipeline-domain/SKILL.md"><code>content-pipeline-domain/SKILL.md</code></a> if you are designing, building, or porting a pipeline: it carries the vocabulary the other three skills assume and indexes the references below. If you are driving a run right now, go straight to the orchestration skill for your lane -- <a href="background-pipeline/SKILL.md"><code>background-pipeline/SKILL.md</code></a> for a background-session dispatcher, <a href="workflow-pipeline/SKILL.md"><code>workflow-pipeline/SKILL.md</code></a> for the Workflow tool.</p>
-
-<h2>Routes</h2>
-<ul>
-<li>Drive a run through background sessions: <a href="background-pipeline/SKILL.md"><code>background-pipeline/SKILL.md</code></a> -- prepare the wave, run <code>dispatch_wave</code>, read the batch-boundary status digest, then <code>finalize_run</code>.</li>
-<li>Run a wave through the Workflow tool: <a href="workflow-pipeline/SKILL.md"><code>workflow-pipeline/SKILL.md</code></a> -- verify the four preconditions, build the wave with <code>build_wave_args</code>, invoke the Workflow tool, reconcile against the store, then finalize.</li>
-<li>Complete one unit as a worker: <a href="execute-work-unit/SKILL.md"><code>execute-work-unit/SKILL.md</code></a> -- read, write the fenced answer, author the submit envelope, submit, and report failure on exhaustion.</li>
-<li>Wire a consumer onto worker sessions: <a href="content-pipeline-domain/references/session-recipients.md"><code>content-pipeline-domain/references/session-recipients.md</code></a> for the protocol mount and the allowlist, then <a href="content-pipeline-domain/references/workflow-lane.md"><code>content-pipeline-domain/references/workflow-lane.md</code></a> for how the workflow lane differs.</li>
-<li>Stand up a new pipeline: <a href="content-pipeline-domain/SKILL.md"><code>content-pipeline-domain/SKILL.md</code></a> for the vocabulary, then <a href="content-pipeline-domain/references/building-a-pipeline.md"><code>content-pipeline-domain/references/building-a-pipeline.md</code></a> for the eleven steps.</li>
-</ul>
-
-<h2>Designing and porting pipelines</h2>
-<ul>
-<li><a href="content-pipeline-domain/SKILL.md"><code>content-pipeline-domain/SKILL.md</code></a> -- the domain skill: the architecture vocabulary and abstraction map for batch pipelines, and the index to the references below. Open it when deciding which shape a new pipeline takes.</li>
-<li><a href="content-pipeline-domain/references/building-a-pipeline.md"><code>content-pipeline-domain/references/building-a-pipeline.md</code></a> -- the eleven-step procedure for a new pipeline: pick shape and unit strategy, wire two-tier freshness, register providers, choose a delivery mode and VCS backend. Open it when standing one up from scratch.</li>
-<li><a href="content-pipeline-domain/references/porting-a-pipeline.md"><code>content-pipeline-domain/references/porting-a-pipeline.md</code></a> -- the subsystem-first method for collapsing an existing monolithic LLM-batch tool onto the shared library: inventory against the subpackages, port freshness first, pin the tool's own tests as the equivalence baseline at each step.</li>
-<li><a href="content-pipeline-domain/references/design-discipline.md"><code>content-pipeline-domain/references/design-discipline.md</code></a> -- the opt-in design principles behind the library -- human-always-wins attribution, write-only-on-diff, one-predicate freshness -- and the component that embodies each. Read it when deciding which guardrails to adopt, since none are mandatory.</li>
-</ul>
-
-<h2>Wiring worker sessions onto your mount</h2>
-<ul>
-<li><a href="content-pipeline-domain/references/session-recipients.md"><code>content-pipeline-domain/references/session-recipients.md</code></a> -- what a session recipient is and how to wire your run onto it: the JSON protocol mount, the adapter fields, the pre-authorized allowlist, the answer fence line, and the reconciliation hook a resumed run needs. Open it when your workers should be Claude sessions.</li>
-<li><a href="content-pipeline-domain/references/workflow-lane.md"><code>content-pipeline-domain/references/workflow-lane.md</code></a> -- how the Workflow-tool lane changes that wiring: the agent claims its own unit and gets its fencing token from the claim reply, there is no renewer, and leases are sized once for the whole runtime. The self-claim residual is stated honestly at the end.</li>
-</ul>
-
-<h2>Orchestrating a run</h2>
-<ul>
-<li><a href="background-pipeline/SKILL.md"><code>background-pipeline/SKILL.md</code></a> -- the four-stage procedure for a background-session dispatcher: prepare, dispatch, batch-boundary status, finalize. Includes the two throughput settings, the report vocabulary, and the rule against ingesting unit content into the supervising session.</li>
-<li><a href="workflow-pipeline/SKILL.md"><code>workflow-pipeline/SKILL.md</code></a> -- the counterpart procedure for the native Workflow tool, where the top-level session orchestrates every wave. Its four preconditions catch allowlist gaps before any agent is paid for, and re-entry after any interruption is always a fresh invocation.</li>
-</ul>
-
-<h2>Executing a single work unit</h2>
-<ul>
-<li><a href="execute-work-unit/SKILL.md"><code>execute-work-unit/SKILL.md</code></a> -- the procedure for one worker session: the six enumerated invocations, the fence line that proves an answer belongs to its claim, the revision loop on rejected submissions, and why exhaustion means reporting failure rather than fabricating an answer.</li>
-</ul>
+<h1>Content-pipeline skills: the domain architecture and vocabulary, background-lane and workflow-lane orchestration, and one-unit worker execution.</h1>
+<p class="hh-orientation">These four skills are how the content-pipeline plugin is meant to be used, and they are split by the role you play in a run. One is a domain skill: the architecture vocabulary and abstraction map for an LLM-in-the-loop batch content pipeline, plus deeper documents on building, porting, and wiring it. Two are orchestration skills, one per execution lane, because the background-session lane and the Workflow-tool lane are not interchangeable procedures. The fourth is the worker&#x27;s own procedure for completing a single work unit. Open the skill that matches your seat, and reach for its deeper documents only when you need the mechanism.</p><section><h2>Where to start</h2><p>Open <a href="content-pipeline-domain/SKILL.md">plugins/content-pipeline-kit/skills/content-pipeline-domain/SKILL.md</a> first if you are new to the architecture: it defines the store, freshness, validation, and delivery vocabulary the other three skills assume. If you already know the model, go straight to the skill for your lane, or to the one-unit worker procedure when your session must complete a unit.</p></section><section><h2>Routes</h2><ul><li><strong>Drive a run on background sessions</strong><ol><li>Open <a href="background-pipeline/SKILL.md">plugins/content-pipeline-kit/skills/background-pipeline/SKILL.md</a>: prepare the wave through the consumer&#x27;s protocol mount.</li><li>Dispatch one bounded wave with <code>dispatch_wave</code> and read status digests at batch boundaries, never unit content.</li><li>Apply every accepted unit with <code>finalize_run</code>; a halted run parks until <code>resume_run</code> clears it.</li></ol></li><li><strong>Drive a run on the Workflow tool</strong><ol><li>Open <a href="workflow-pipeline/SKILL.md">plugins/content-pipeline-kit/skills/workflow-pipeline/SKILL.md</a>; verify the four preconditions, then assemble the wave with <code>build_wave_args</code>.</li><li>Invoke <code>run-ready-wave</code> from the top-level session and reconcile the advisory aggregate against the store.</li><li>Finalize accepted units with <code>finalize_run</code>; re-entry after any halt is a fresh wave, not a resume.</li></ol></li><li><strong>Complete one work unit as a worker</strong><ol><li>Open <a href="execute-work-unit/SKILL.md">plugins/content-pipeline-kit/skills/execute-work-unit/SKILL.md</a>; run the <code>read</code> invocation, the only step that returns unit content.</li><li>Write the fenced answer and author the submit envelope, substituting only the fencing token.</li><li>Submit; revise the answer on rejection, and on exhaustion run the fail envelope and stop.</li></ol></li></ul></section><section><h2>Understand the architecture</h2><ul><li><a href="content-pipeline-domain/SKILL.md">plugins/content-pipeline-kit/skills/content-pipeline-domain/SKILL.md</a> is the architecture vocabulary and abstraction map: the attributed store, two-tier freshness, one-validator-many-sites validation, and the two delivery modes. Open it to learn the terms the other skills assume.</li><li><a href="content-pipeline-domain/references/design-discipline.md">plugins/content-pipeline-kit/skills/content-pipeline-domain/references/design-discipline.md</a> is the design philosophy behind the library: each opt-in guardrail, such as human-always-wins, do-no-harm markers, and one-predicate freshness, and the component that embodies it.</li></ul></section><section><h2>Build or port a pipeline</h2><ul><li><a href="content-pipeline-domain/references/building-a-pipeline.md">plugins/content-pipeline-kit/skills/content-pipeline-domain/references/building-a-pipeline.md</a> is the stepped procedure for a new pipeline: pick the shape and work-unit strategy, wire the store and freshness, register providers, and choose a backend and delivery mode.</li><li><a href="content-pipeline-domain/references/porting-a-pipeline.md">plugins/content-pipeline-kit/skills/content-pipeline-domain/references/porting-a-pipeline.md</a> is the subsystem-first method for collapsing an existing monolithic LLM-batch tool onto the library in dependency order, pinning its own tests as the equivalence baseline.</li></ul></section><section><h2>Orchestrate a run</h2><ul><li><a href="background-pipeline/SKILL.md">plugins/content-pipeline-kit/skills/background-pipeline/SKILL.md</a> is the procedure for driving a run through Claude background sessions: prepare, dispatch, read status digests, finalize. The orchestrating session never ingests unit content.</li><li><a href="workflow-pipeline/SKILL.md">plugins/content-pipeline-kit/skills/workflow-pipeline/SKILL.md</a> is the same job through the native Workflow tool: the four preconditions, build_wave_args, the registered run-ready-wave, and reconcile-then-finalize.</li><li><a href="content-pipeline-domain/references/session-recipients.md">plugins/content-pipeline-kit/skills/content-pipeline-domain/references/session-recipients.md</a> is the mount owner&#x27;s guide to the session transport: the protocol to mount, the RunAdapter fields to declare, and the allowlist a worker needs.</li><li><a href="content-pipeline-domain/references/workflow-lane.md">plugins/content-pipeline-kit/skills/content-pipeline-domain/references/workflow-lane.md</a> is how the workflow lane differs from the background lane: the agent claims its own unit, there is no renewer, and re-entry is a fresh invocation.</li></ul></section><section><h2>Act as a worker</h2><ul><li><a href="execute-work-unit/SKILL.md">plugins/content-pipeline-kit/skills/execute-work-unit/SKILL.md</a> is the one-unit procedure a background worker follows: read, write the fenced answer, author the submit envelope, submit, and fail on exhaustion. Run every invocation exactly as written.</li></ul></section>
 </main>
+<nav data-index-pages-chrome="nav"><ul><li><a href="../index.html"><span class="hh-nav-label">content-pipeline-kit</span> <span class="hh-nav-identity">Content-pipeline-kit plugin packaging: bootstrap configuration, public API surface contract, one-unit worker agent, consumer contract checker, and parallel wave workflow.</span></a></li><li><a href="../README.md"><span class="hh-nav-label">README.md</span> <span class="hh-nav-identity">The plugin&#x27;s human-facing README: the higher-level overview to open before choosing a skill.</span></a></li></ul></nav>
 <script>
 if (window.parent !== window) {
   window.parent.postMessage({
-    type: "human-html:announce",
+    type: "index-pages:announce",
     version: 1,
     directory: "plugins/content-pipeline-kit/skills",
     file: "index.html",
     kind: "page",
-    source_sha: "4ad89c1c0cc5eddc26b1f5334302f4e7e379544b"
+    source_sha: "e85f0a6a015a65dfdfc6299f1343c2ce548f76fa"
   }, "*");
   document.addEventListener("click", function (event) {
     if (event.defaultPrevented || event.button !== 0) return;
@@ -77,7 +36,7 @@ if (window.parent !== window) {
     if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
     var target = href.split("#")[0].split("?")[0];
     if (!target) return;
-    if (/(^|\/)human(\.[^/]+)?\.html$/.test(target)) return;
+    if (/(^|\/)index-page(\.[^/]+)?\.html$/.test(target)) return;
     var parts = "plugins/content-pipeline-kit/skills".split("/");
     if (parts.length === 1 && parts[0] === ".") parts = [];
     var segs = target.split("/");
@@ -88,7 +47,7 @@ if (window.parent !== window) {
     }
     event.preventDefault();
     window.parent.postMessage({
-      type: "human-html:navigate",
+      type: "index-pages:navigate",
       version: 1,
       path: parts.join("/")
     }, "*");

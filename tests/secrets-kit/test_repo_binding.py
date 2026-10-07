@@ -159,7 +159,13 @@ def _snapshot(adding, remotes):
     for root in roots:
         for file in sorted(root.rglob('*')):
             if file.is_file() and '.git' not in file.relative_to(root).parts:
-                files[str(file)] = file.read_bytes()
+                # The guard is empty by contract, so its size is its whole
+                # content; reading it would fail on Windows while a contender
+                # holds its mandatory byte-range lock.
+                if file.name == 'operation.lock':
+                    files[str(file)] = ('guard size', file.stat().st_size)
+                else:
+                    files[str(file)] = file.read_bytes()
     def observed(*args):
         proc = subprocess.run(['git', *args], cwd=adding.clone, capture_output=True, text=True)
         return {'status': proc.returncode, 'stdout': proc.stdout, 'stderr': proc.stderr}

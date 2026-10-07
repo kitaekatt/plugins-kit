@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- index-pages: {"generated_by":"md-domain","source_sha":"b313de791cba8718bfa1bc98947602803869192e","directory":"plugins/git-kit/skills/git-code-review","kind":"page"} -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Multi-agent code review for local git changes: partitions a diff into chunks, fans out parallel reviewer and validator subagents, and renders confirmed findings as markdown.</title>
+<link rel="stylesheet" href="../../../../.databench/index-pages.css">
+</head>
+<body>
+<main>
+<h1>Multi-agent code review for local git changes: partitions a diff into chunks, fans out parallel reviewer and validator subagents, and renders confirmed findings as markdown.</h1>
+<p class="hh-orientation">A multi-agent code review of local git changes: the review infers a diff range from workspace state, splits the diff into on-disk chunks of at most 1 MB, and runs one reviewer subagent per role and per chunk, all in parallel across the branch. Each flagged issue is validated by an independent subagent before it can surface, and the confirmed findings render as a markdown report; the diff chunks and bundle stay as transient scratch, while declined findings persist in a small durable ledger. The skill is one long generated contract beside four reference documents, each carrying the operational detail of one named mechanism: reviewer profile configuration, the ledger, the Markdown subject-lens pass, and submit-gate authoring. Every file here is machine-generated from a single upstream generator: to change the review behavior, edit the generator and rerun it rather than the file. The review covers the local working copy and refs only; Perforce CLs and remote PRs by URL are out of scope.</p><section><h2>Where to start</h2><p><a href="SKILL.md">plugins/git-kit/skills/git-code-review/SKILL.md</a> is the file to open first: its numbered steps, 0 through 9, name every mechanism the review runs, and each step points at the reference document that carries that mechanism&#x27;s operational detail.</p><p>If a review stops at profile resolution, or you want to change a reviewer roster or an effort level, open <a href="references/configuration.md">plugins/git-kit/skills/git-code-review/references/configuration.md</a> instead.</p></section><section><h2>Routes</h2><ul><li><strong>Run a pre-push review</strong><ol><li>Profile resolution resolves the merged profile table; a configuration finding here stops the review before the diff is prepared.</li><li>Diff preparation fetches the diff, splits it into chunks on disk, and reports the range, the changed files, the submit gates, and any untracked or unstaged files you can fold in before the reviewers spawn.</li><li>Reviewer subagents run once per role and chunk in parallel (inline, or through the Workflow tool when the lane count tops six), and an independent validator re-checks each finding before it surfaces.</li><li>Confirmed findings render as markdown; the findings the author declines are written back to the declined ledger so a re-run against the same change renders them collapsed.</li></ol></li><li><strong>Fix a profile configuration error</strong><ol><li>Run the configuration check; it lists every incomplete entry (layer, file, offending record) and exits without starting a review.</li><li>Repair the named layer: the shipped defaults, the per-user file, or the per-project file, following the merge rules in <a href="references/configuration.md">plugins/git-kit/skills/git-code-review/references/configuration.md</a>.</li><li>Rerun the check until it is clean, then start the review again.</li></ol></li><li><strong>Trace a Markdown finding</strong><ol><li>When skills-kit&#x27;s md-domain skill is available in the session, the diff preparation step claims every changed Markdown file out of the generic reviewer fan-out.</li><li>md-domain&#x27;s detect lanes then audit the claimed files (one lane for agent-guidance docs, one for skill contracts and their references, one for project docs); the routing, the triviality gate, and the version-skew fallbacks are in <a href="references/md-domain-review.md">plugins/git-kit/skills/git-code-review/references/md-domain-review.md</a>.</li><li>A typo-sized change is skipped by the mechanical triviality gate and reported as checked without an audit, so a small edit does not burn a full pass.</li></ol></li><li><strong>Author a submit gate</strong><ol><li>Add a gate block to an agent-guidance file in a directory you want gated, using the format and the scope-path semantics in <a href="references/submit-gates.md">plugins/git-kit/skills/git-code-review/references/submit-gates.md</a>.</li><li>The next review whose range touches the scope surfaces the gate verbatim and records one verdict per gate: met, not applicable, not met, or needs the user.</li><li>A not-met verdict is a finding, so the report does not present the change as clean until it is discharged.</li></ol></li></ul></section><section><h2>The review contract</h2><ul><li><a href="SKILL.md">plugins/git-kit/skills/git-code-review/SKILL.md</a>: the numbered step flow from profile resolution to the rendered report, with every stop condition, question, and rerun rule. Open it to see how a review runs and where it pauses.</li></ul></section><section><h2>Reviewer profiles and dispatch</h2><ul><li><a href="references/configuration.md">plugins/git-kit/skills/git-code-review/references/configuration.md</a>: the three configuration layers, the merge rules, and how each model entry dispatches to an agent subagent or a lane runner. Open it when a review stops at step 0, or to change a roster or an effort.</li></ul></section><section><h2>Specialist passes and memory</h2><ul><li><a href="references/md-domain-review.md">plugins/git-kit/skills/git-code-review/references/md-domain-review.md</a>: how changed Markdown files are claimed out of the generic fan-out and audited by the md-domain detect lanes, including the triviality gate and the fallbacks for an older install.</li><li><a href="references/declined-ledger.md">plugins/git-kit/skills/git-code-review/references/declined-ledger.md</a>: the durable memory of declined findings (how a finding is keyed, when a re-run collapses it, and why the ledger is advisory rather than a gate). Open it when a re-run re-surfaces, or fails to re-surface, a finding you declined.</li></ul></section><section><h2>Gate authoring</h2><ul><li><a href="references/submit-gates.md">plugins/git-kit/skills/git-code-review/references/submit-gates.md</a>: the block format for path-scoped pre-push reminders in an agent-guidance file, and the prefix-versus-glob semantics of the scope lines. Open it before writing a gate.</li></ul></section>
+</main>
+<nav data-index-pages-chrome="nav"><ul><li><a href="../../../index.html"><span class="hh-nav-label">plugins</span> <span class="hh-nav-identity">The Claude Code plugin marketplace: independently installable plugins sharing the bootstrap provisioning engine and llm-scripting-kit access layer, covering code review, durable job execution, LLM endpoint dispatch, Hue scene synchronization, PDF rendering, fleet secrets provisioning, prompt statusline, cache forensics, markdown auditing, and Unreal Engine automation.</span></a></li><li><a href="../.."><span class="hh-nav-label">git-kit</span> <span class="hh-nav-identity">The plugin directory behind this skill: the prepare and lane scripts it invokes and the review-lane agent definitions it dispatches to.</span></a></li><li><a href="../../README.md"><span class="hh-nav-label">git-kit README</span> <span class="hh-nav-identity">The git-kit plugin&#x27;s own front page, for kit-level context a step above this skill.</span></a></li></ul></nav>
+<script>
+if (window.parent !== window) {
+  window.parent.postMessage({
+    type: "index-pages:announce",
+    version: 1,
+    directory: "plugins/git-kit/skills/git-code-review",
+    file: "index.html",
+    kind: "page",
+    source_sha: "b313de791cba8718bfa1bc98947602803869192e"
+  }, "*");
+  document.addEventListener("click", function (event) {
+    if (event.defaultPrevented || event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    var el = event.target;
+    while (el && el.nodeName !== "A") el = el.parentNode;
+    if (!el) return;
+    var href = el.getAttribute("href");
+    if (!href) return;
+    if (href.charAt(0) === "#" || href.charAt(0) === "/") return;
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
+    var target = href.split("#")[0].split("?")[0];
+    if (!target) return;
+    if (/(^|\/)index-page(\.[^/]+)?\.html$/.test(target)) return;
+    var parts = "plugins/git-kit/skills/git-code-review".split("/");
+    if (parts.length === 1 && parts[0] === ".") parts = [];
+    var segs = target.split("/");
+    for (var i = 0; i < segs.length; i++) {
+      if (segs[i] === "" || segs[i] === ".") continue;
+      if (segs[i] === "..") { parts.pop(); continue; }
+      parts.push(segs[i]);
+    }
+    event.preventDefault();
+    window.parent.postMessage({
+      type: "index-pages:navigate",
+      version: 1,
+      path: parts.join("/")
+    }, "*");
+  });
+}
+</script>
+</body>
+</html>

@@ -875,6 +875,10 @@ class TestFindUntrackedOrUnstaged:
         assert Path(items[0]["local"]) == (src / fname).resolve()
         assert Path(items[0]["local"]).exists()
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="'>' is not a legal character in a Windows file name",
+    )
     def test_untracked_file_name_containing_arrow_returns_real_path(self, git_repo):
         """A legal untracked filename containing the literal substring
         ' -> ' must not be mistaken for rename syntax and split."""

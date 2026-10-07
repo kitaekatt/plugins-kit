@@ -436,12 +436,32 @@ def _accepted(ch):
     return ch in (" ", "\r", "\n")
 
 
+def _stdin_is_console():
+    """True only when stdin is an interactive console that raw mode can read.
+
+    On Windows isatty() is also True for the NUL device (any character
+    device), and msvcrt then waits on a console that is not there. Ask the
+    console API directly so a NUL or pipe stdin takes the line-reading path.
+    """
+    if not sys.stdin.isatty():
+        return False
+    if os.name != "nt":
+        return True
+    import ctypes
+    from ctypes import wintypes
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetStdHandle.restype = wintypes.HANDLE
+    mode = wintypes.DWORD()
+    handle = kernel32.GetStdHandle(-10)  # STD_INPUT_HANDLE
+    return bool(kernel32.GetConsoleMode(handle, ctypes.byref(mode)))
+
+
 def _read_one_key():
     # The TTY check comes FIRST, before any platform branch: msvcrt reads the
     # console directly rather than stdin, so on Windows it would happily block
     # forever in a context that has no console at all (a test runner, a piped
     # invocation) -- a hang, not a fallback. No TTY means no raw mode anywhere.
-    if not sys.stdin.isatty():
+    if not _stdin_is_console():
         input()
         return
     if os.name == "nt":

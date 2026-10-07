@@ -15,6 +15,8 @@ from secrets_kit import repo as repository
 from secrets_kit.state import State, sha256_bytes
 from test_orphan_retry import _consumer
 
+LEXICAL_PARENT_DOT = "Windows collapses '..' lexically before following a link, so '<link>/..' names the link's own parent, not the physical sibling this spelling exercises"
+
 
 @pytest.fixture(autouse=True)
 def actual_subject_origins():
@@ -69,7 +71,7 @@ def _link(path, target):
 
 
 @pytest.mark.parametrize('reverse', [False, True])
-@pytest.mark.parametrize('spelling', ['same', 'relative', 'tilde', 'parent-link', 'parent-dot'])
+@pytest.mark.parametrize('spelling', ['same', 'relative', 'tilde', 'parent-link', pytest.param('parent-dot', marks=pytest.mark.skipif(sys.platform.startswith('win'), reason=LEXICAL_PARENT_DOT))])
 def test_actual_collisions_refuse_both_execution_orders_and_preserve_survivor(fleet, monkeypatch, reverse, spelling):
     fleet.unlock()
     target = fleet.dest_root / 'collision.txt'
@@ -81,6 +83,7 @@ def test_actual_collisions_refuse_both_execution_orders_and_preserve_survivor(fl
         alternate = Path('bank/secrets/collision.txt')
     elif spelling == 'tilde':
         monkeypatch.setenv('HOME', str(fleet.tmp))
+        monkeypatch.setenv('USERPROFILE', str(fleet.tmp))  # what '~' expands from on Windows
         alternate = Path('~/bank/secrets/collision.txt')
     if spelling == 'parent-dot':
         holder = fleet.tmp / 'nested' / 'aliases'
@@ -341,6 +344,8 @@ def test_actual_collision_precedes_cached_permission_repair(fleet, monkeypatch, 
     target, state_path = _seed(fleet)
     old = State.load(state_path).get('ha-token')
     target.chmod(0o644)
+    # Windows chmod toggles only the read-only flag; the observed mode is the baseline there.
+    loose = 0o644 if os.name != 'nt' else target.stat().st_mode & 0o777
     def edit(raw):
         raw['entries']['rolfing']['dest'] = str(target)
         raw['profiles']['home-admin'].append('rolfing')
@@ -357,5 +362,5 @@ def test_actual_collision_precedes_cached_permission_repair(fleet, monkeypatch, 
     result = convergence.converge(fleet.config_path, fleet.data_dir)
     assert len(result.failures) == 2 and result.ok == result.written == result.removed == 0
     assert record['decrypt'] == record['write'] == calls == []
-    assert target.stat().st_mode & 0o777 == 0o644 and target.read_bytes() == b'token-value\n'
+    assert target.stat().st_mode & 0o777 == loose and target.read_bytes() == b'token-value\n'
     assert State.load(state_path).get('ha-token') == old

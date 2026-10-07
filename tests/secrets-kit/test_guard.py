@@ -389,7 +389,10 @@ def test_git_index_failures_refuse_even_when_partial_output_looks_safe(repo, tmp
 
 
 def test_a_private_key_scan_error_cannot_certify_safe_content(repo, tmp_path, monkeypatch):
-    scratch = _failing_hook_tool(tmp_path, monkeypatch, "grep", "exit 2\n")
+    # Drain stdin before failing: a stub that exits without reading makes the
+    # upstream `git show` race a closed pipe, which fails the index read
+    # instead of the scan (always on Windows, where the write sees EPIPE).
+    scratch = _failing_hook_tool(tmp_path, monkeypatch, "grep", "cat >/dev/null\nexit 2\n")
     (repo / "README.md").write_text("dummy metadata\n", encoding="utf-8")
     proc = _commit(repo, "README.md")
     assert proc.returncode != 0, proc.stdout
@@ -525,7 +528,11 @@ def test_status_channel_is_created_under_home_and_cleaned_without_using_tmpdir(r
     (repo / path).write_text("dummy metadata\n", encoding="utf-8")
     proc = _commit(repo, path)
     assert (proc.returncode == 0) is allowed, proc.stdout
-    created = Path(observed.read_text().strip())
+    created_text = observed.read_text().strip()
+    if sys.platform.startswith("win"):
+        # The hook shell reports an MSYS path (/tmp/..., /c/...); compare natively.
+        created_text = subprocess.run(["cygpath", "-w", created_text], capture_output=True, text=True, check=True).stdout.strip()
+    created = Path(created_text)
     assert created.parent == status_home.resolve()
     assert created.name.startswith(".guard-status.")
     assert status_home.is_dir()
@@ -534,7 +541,7 @@ def test_status_channel_is_created_under_home_and_cleaned_without_using_tmpdir(r
     assert not (repo / ".claude").exists()
 
 
-@pytest.mark.parametrize("value", [None, "", "relative-home", "C:relative-home", "\\relative-home", "\\\\?\\C:\\relative-home", "\\\\.\\C:\\relative-home"])
+@pytest.mark.parametrize("value", [*(pytest.param(v, marks=pytest.mark.skipif(sys.platform.startswith("win"), reason="Git for Windows sets HOME from USERPROFILE before it runs a hook, so an unset or empty HOME never reaches the hook")) for v in (None, "")), "relative-home", "C:relative-home", "\\relative-home", "\\\\?\\C:\\relative-home", "\\\\.\\C:\\relative-home"])
 def test_invalid_home_is_diagnosed_without_a_fallback(repo, tmp_path, monkeypatch, value):
     fallback = tmp_path / "fallback"
     fallback.mkdir()

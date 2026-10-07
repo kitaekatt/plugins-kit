@@ -278,6 +278,8 @@ def test_matching_hook_extracts_escaped_spaced_cwd_for_detector(tmp_path):
     bash = shutil.which("bash")
     if not bash:
         pytest.skip("bash is not installed")
+    if os.name == "nt":
+        pytest.skip("a backslash cannot appear in a Windows directory name")
     proj = tmp_path / "project \\with spaces"
     proj.mkdir()
     payload = json.dumps({"tool_name": "mcp__unreal-engine__save", "cwd": str(proj)})
@@ -303,7 +305,10 @@ def test_matching_hook_extracts_escaped_spaced_cwd_for_detector(tmp_path):
 
 def test_detached_wrapper_retains_detector_stderr(tmp_path):
     home = tmp_path / "home"
-    interpreter = home / ".local" / "share" / "python-standalone" / "python" / "bin" / "python3"
+    # The wrapper selects the standalone interpreter by OS: python.exe under
+    # MSYS/Git Bash, bin/python3 elsewhere.
+    standalone_rel = Path("python.exe") if os.name == "nt" else Path("bin") / "python3"
+    interpreter = home / ".local" / "share" / "python-standalone" / "python" / standalone_rel
     interpreter.parent.mkdir(parents=True)
     interpreter.write_text("#!/bin/sh\nprintf '%s\\n' sentinel-import-failure >&2\nexit 23\n", encoding="utf-8")
     interpreter.chmod(0o755)
@@ -331,10 +336,16 @@ def test_wrapper_logs_interpreter_resolution_failure(tmp_path):
         pytest.skip("bash is not installed")
     tool_bin = tmp_path / "bin"
     tool_bin.mkdir()
-    for name in ("cat", "tr", "grep", "sed", "uname", "dirname", "pwd", "mkdir"):
-        source = shutil.which(name)
-        if source:
-            (tool_bin / name).symlink_to(source)
+    tool_path = str(tool_bin)
+    if os.name == "nt":
+        # Symlinks made here are not resolvable by the MSYS shell; put the real
+        # tool directory after the sentinel python3 instead (it ships no python3).
+        tool_path = os.pathsep.join([tool_path, str(Path(shutil.which("cat")).parent)])
+    else:
+        for name in ("cat", "tr", "grep", "sed", "uname", "dirname", "pwd", "mkdir"):
+            source = shutil.which(name)
+            if source:
+                (tool_bin / name).symlink_to(source)
     bare_python = tool_bin / "python3"
     bare_python.write_text(
         f"#!/bin/sh\nprintf '%s\\n' bare-fallback-used > {tmp_path / 'bare-fallback'}\nexit 23\n",
@@ -351,7 +362,7 @@ def test_wrapper_logs_interpreter_resolution_failure(tmp_path):
         input=payload,
         text=True,
         capture_output=True,
-        env={**os.environ, "HOME": str(home), "PATH": str(tool_bin)},
+        env={**os.environ, "HOME": str(home), "PATH": tool_path},
         timeout=5,
     )
 

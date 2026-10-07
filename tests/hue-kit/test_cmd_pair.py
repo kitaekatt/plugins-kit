@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import stat
+import subprocess
 import sys
 from argparse import Namespace
 
@@ -101,8 +102,82 @@ class TestKeyFileSecrecy:
         assert secret not in captured.out
         assert secret not in captured.err
         assert key_file.read_text() == secret + "\n"
-        mode = stat.S_IMODE(os.stat(key_file).st_mode)
-        assert mode == 0o600
+
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="POSIX permission bits are not representable on Windows",
+    )
+    def test_key_file_mode_is_owner_only(self, hue_cli, tmp_path, monkeypatch):
+        def fake_post(url, json=None, verify=None, timeout=None):
+            return _fake_response([{"success": {"username": "k"}}])
+
+        monkeypatch.setattr(sys.modules["requests"], "post", fake_post, raising=False)
+        key_file = tmp_path / "app-key.txt"
+        monkeypatch.setattr(hue_cli, "PAIRED_KEY_FILE", key_file)
+
+        assert hue_cli._cmd_pair(Namespace(force=False, no_wait=True)) == 0
+
+        assert stat.S_IMODE(os.stat(key_file).st_mode) == 0o600
+
+
+class TestWindowsOwnerOnlyAcl:
+    """On Windows POSIX modes are inert, so pair must restrict the ACL."""
+
+    @staticmethod
+    def _pair(hue_cli, monkeypatch, key_file):
+        def fake_post(url, json=None, verify=None, timeout=None):
+            return _fake_response([{"success": {"username": "k"}}])
+
+        monkeypatch.setattr(sys.modules["requests"], "post", fake_post, raising=False)
+        monkeypatch.setattr(hue_cli, "PAIRED_KEY_FILE", key_file)
+        return hue_cli._cmd_pair(Namespace(force=False, no_wait=True))
+
+    def test_icacls_argv_and_suffix(self, hue_cli, tmp_path, monkeypatch, capfd):
+        calls = []
+
+        def fake_run(argv, **kw):
+            calls.append(argv)
+            return subprocess.CompletedProcess(argv, 0, stdout=b"")
+
+        monkeypatch.setattr(hue_cli, "_is_windows", lambda: True)
+        monkeypatch.setattr(hue_cli.subprocess, "run", fake_run)
+        monkeypatch.setenv("USERNAME", "alice")
+        monkeypatch.setenv("USERDOMAIN", "HOST")
+        key_file = tmp_path / "app-key.txt"
+
+        assert self._pair(hue_cli, monkeypatch, key_file) == 0
+
+        assert calls == [["icacls", str(key_file), "/inheritance:r",
+                          "/grant:r", "HOST\\alice:F"]]
+        assert "(owner-only ACL)" in capfd.readouterr().err
+
+    def test_icacls_failure_warns_and_names_icacls(
+            self, hue_cli, tmp_path, monkeypatch, capfd):
+        def fake_run(argv, **kw):
+            return subprocess.CompletedProcess(argv, 5, stdout=b"denied")
+
+        monkeypatch.setattr(hue_cli, "_is_windows", lambda: True)
+        monkeypatch.setattr(hue_cli.subprocess, "run", fake_run)
+        monkeypatch.setenv("USERNAME", "alice")
+        key_file = tmp_path / "app-key.txt"
+
+        assert self._pair(hue_cli, monkeypatch, key_file) == 0
+
+        err = capfd.readouterr().err
+        assert "icacls" in err and "warning" in err
+        assert "(owner-only ACL)" not in err
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows ACLs only")
+    def test_real_acl_lists_only_current_user(
+            self, hue_cli, tmp_path, monkeypatch, capfd):
+        key_file = tmp_path / "app-key.txt"
+        assert self._pair(hue_cli, monkeypatch, key_file) == 0
+        assert "(owner-only ACL)" in capfd.readouterr().err
+        out = subprocess.run(["icacls", str(key_file)], capture_output=True,
+                             text=True).stdout
+        aces = [ln for ln in out.splitlines() if ":(" in ln]
+        assert len(aces) == 1, out
+        assert os.environ["USERNAME"].lower() in aces[0].lower()
 
 
 class TestOtherPairingErrorsRaise:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import json
 import pytest
 import yaml
 
@@ -145,7 +146,7 @@ def test_map_native_candidate_must_match_classification_snapshot(tmp_path: Path)
     harness.safe_json.write_text(
         harness.safe_json.read_text(encoding="utf-8").replace(
             '"referencer_files": [',
-            f'"mutation_files": ["{harness.redirector_file}"], "referencer_files": ['
+            f'"mutation_files": [{json.dumps(str(harness.redirector_file))}], "referencer_files": ['
         ),
         encoding="utf-8",
     )

@@ -444,7 +444,7 @@ def test_findings_aggregate_across_all_three_layers(
     )
 
     home, _project_root, project_path = _layers(tmp_path)
-    assert [finding.split(":", 1)[0] for finding in findings] == [
+    assert [finding.split(": ", 1)[0] for finding in findings] == [
         f"shipped {defaults_path}",
         f"user {_user_path(tmp_path)}",
         f"project {project_path}",

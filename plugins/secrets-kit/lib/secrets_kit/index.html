@@ -1,68 +1,23 @@
 <!doctype html>
 <html lang="en">
 <head>
-<!-- human-html: {"generated_by":"md-domain","source_sha":"a863cb7a2407c95dccd23afc574c8070d880429e","directory":"plugins/secrets-kit/lib/secrets_kit","kind":"page"} -->
+<!-- index-pages: {"generated_by":"md-domain","source_sha":"a863cb7a2407c95dccd23afc574c8070d880429e","directory":"plugins/secrets-kit/lib/secrets_kit","kind":"page"} -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>The secrets-kit package that provisions fleet secrets from age-encrypted blobs into machine-local files and guards authoring operations.</title>
-<link rel="stylesheet" href="../../../../.databench/human-html.css">
+<link rel="stylesheet" href="../../../../.databench/index-pages.css">
 </head>
 <body>
-<nav data-human-html-chrome="nav">
-  <ul>
-    <li><a href="../../../index.html"><span class="hh-nav-label">plugins</span> <span class="hh-nav-identity">The Claude Code plugin collection: installable plugins including git and Perforce review, secrets provisioning, statusline display, cache reporting, markdown auditing, stuck-bootstrap remediation, and prototype skills.</span></a></li>
-  </ul>
-</nav>
 <main>
 <h1>The secrets-kit package that provisions fleet secrets from age-encrypted blobs into machine-local files and guards authoring operations.</h1>
-<p>This is the stdlib-only Python package behind the secrets-kit plugin. It reads the fleet's age-encrypted blobs from a private git repo and materializes them into machine-local files under strict permissions, and it refuses to author into the secrets repo unless its guards are in place. The package is split by which side of the session it runs on: an idempotent pass that every session start executes, and the write path that a person starts and the package hardens. Two constraints shape that split. Blobs are encrypted to a public key, so day-to-day operations need no passphrase at all; the master passphrase is typed once, on a real terminal, and never passes through Python. Every failure is an error that carries its own remedy, so the pass can tell an agent exactly what to do next.</p>
-
-<h2>Where to start</h2>
-<p>Open <a href="converge.py"><code>converge.py</code></a> first: it is the pass that runs on every session start, and every other module exists to make one of its steps safe. When a machine is not converging, the pass's stable failure keys name the step to read next.</p>
-
-<h2>Routes</h2>
-<ul>
-  <li>Session pass: <a href="converge.py"><code>converge.py</code></a> -&gt; <a href="manifest.py"><code>manifest.py</code></a> -&gt; <a href="repo.py"><code>repo.py</code></a> -&gt; <a href="agefile.py"><code>agefile.py</code></a> -&gt; <a href="state.py"><code>state.py</code></a>. The pass loads the declarations, refreshes the clone, decrypts each selected blob, and records the hashes that make the next run free.</li>
-  <li>Unlock, one time: <a href="terminal.py"><code>terminal.py</code></a> -&gt; <a href="agefile.py"><code>agefile.py</code></a>. The verb runs in a real terminal window so age can prompt, and the unlocked identity lands as the 0600 cache the pass then uses.</li>
-  <li>Seed or rotate: <a href="guard.py"><code>guard.py</code></a> -&gt; <a href="authoring.py"><code>authoring.py</code></a> -&gt; <a href="agefile.py"><code>agefile.py</code></a> -&gt; <a href="repo.py"><code>repo.py</code></a>. The guard is verified first, the operation runs under its recovery record, age produces the new identity and re-encrypted blobs, and the commit publishes them.</li>
-</ul>
-
-<h2>The convergence pass</h2>
-<ul>
-  <li><a href="converge.py"><code>converge.py</code></a> -- The idempotent pass: check by hash, fix by decrypt-and-write, with every outcome classified as machine-fixable or needs-a-person. Open when a machine is not converging.</li>
-  <li><a href="state.py"><code>state.py</code></a> -- The machine-local state ledger: which blob produced which plaintext, so the steady pass is free and a tampered or truncated file heals itself. Open when you need to reason about what this machine already materialized.</li>
-</ul>
-
-<h2>Declarations</h2>
-<ul>
-  <li><a href="manifest.py"><code>manifest.py</code></a> -- Loads and validates the two declarations (the machine-facing one and the repo-side manifest) and resolves destination paths with variable expansion. Open when an entry's destination, mode, or profile looks wrong.</li>
-</ul>
-
-<h2>Age and the passphrase</h2>
-<ul>
-  <li><a href="agefile.py"><code>agefile.py</code></a> -- The thin wrapper over the age binaries: the passphrase paths run on the user's terminal, and everything the unattended pass does needs no passphrase at all. Open when a decrypt fails or you need to know which age exit means what.</li>
-  <li><a href="terminal.py"><code>terminal.py</code></a> -- Opens the interactive verbs in a real terminal window on macOS, Linux, and Windows so the passphrase never reaches a transcript; falls back to naming the manual command. Open when unlock or init does not open a window.</li>
-</ul>
-
-<h2>Authoring and its guards</h2>
-<ul>
-  <li><a href="authoring.py"><code>authoring.py</code></a> -- The write side: seed, add, rotate, and remove, each run under a recovery record that blocks ordinary callers until an uncertain publication is reconciled privately. Open when authoring is stopped and the remedy names reconciliation.</li>
-  <li><a href="guard.py"><code>guard.py</code></a> -- Installs and verifies the fleet-secrets pre-commit guard in every clone, and refuses authoring on an unguarded clone. Open when a commit was, or was not, blocked by the guard.</li>
-  <li><a href="operation_lock.py"><code>operation_lock.py</code></a> -- Non-blocking single ownership of the plugin data directory, on POSIX and Windows. Open when two operations collide or a lock error appears.</li>
-  <li><a href="perms.py"><code>perms.py</code></a> -- Permission tightening: chmod on POSIX, icacls on Windows, plus atomic private-file writes so a secret never exists at a loose mode. Open when a file lands with the wrong permissions.</li>
-  <li><a href="repo.py"><code>repo.py</code></a> -- Clones and refreshes the private repo without ever blocking a session, scrubs inherited git variables before every invocation, and classifies each destination for exposure to someone else's git. Open when a fetch, a publish, or a destination check misbehaves.</li>
-</ul>
-
-<h2>Package surface</h2>
-<ul>
-  <li><a href="__init__.py"><code>__init__.py</code></a> -- The error taxonomy every other module raises (each error carries its remedy) and the one place that renders the CLI invocation, because the install shim is not on PATH. Open when a message hands out a command that needs fixing, or you need the exception hierarchy.</li>
-</ul>
+<p class="hh-orientation">This package is the Python side of the secrets-kit plugin: it materializes age-encrypted fleet secrets as machine-local files and guards the authoring operations that publish them. It is stdlib-only and deliberately engine-agnostic, so the session-start caller and the CLI can both drive it. The package separates unattended convergence from interactive passphrase work, because the passphrase is only needed when a machine is unlocked or identity is rotated.</p><section><h2>Where to start</h2><p><a href="__init__.py">plugins/secrets-kit/lib/secrets_kit/__init__.py</a> for the trust model and shared error taxonomy; open <a href="converge.py">plugins/secrets-kit/lib/secrets_kit/converge.py</a> when the question is what the session-start pass does.</p></section><section><h2>Routes</h2><ul><li><strong>Session-start convergence</strong><ol><li><a href="converge.py">plugins/secrets-kit/lib/secrets_kit/converge.py</a> loads declarations, classifies the host, and runs the pass under the operation lock.</li><li><a href="manifest.py">plugins/secrets-kit/lib/secrets_kit/manifest.py</a> validates the declarations and resolves each destination for this machine.</li><li><a href="repo.py">plugins/secrets-kit/lib/secrets_kit/repo.py</a> clones or refreshes the private repo without blocking a session on connectivity.</li><li><a href="agefile.py">plugins/secrets-kit/lib/secrets_kit/agefile.py</a> decrypts the selected blobs with the unlocked identity.</li><li><a href="state.py">plugins/secrets-kit/lib/secrets_kit/state.py</a> records blob and destination hashes so unchanged secrets cost nothing.</li></ol></li><li><strong>Author a protected secret</strong><ol><li><a href="guard.py">plugins/secrets-kit/lib/secrets_kit/guard.py</a> installs and verifies the pre-commit guard before any write.</li><li><a href="authoring.py">plugins/secrets-kit/lib/secrets_kit/authoring.py</a> stages encrypted proposed outputs under private recovery custody.</li><li><a href="repo.py">plugins/secrets-kit/lib/secrets_kit/repo.py</a> runs the guarded local writes and publication checks.</li><li><a href="agefile.py">plugins/secrets-kit/lib/secrets_kit/agefile.py</a> encrypts new blobs to the fleet public key.</li></ol></li></ul></section><section><h2>Declarations and destination resolution</h2><ul><li><a href="manifest.py">plugins/secrets-kit/lib/secrets_kit/manifest.py</a> validates the two declarations, expands variables to a fixpoint, and resolves each secret destination for this machine.</li></ul></section><section><h2>Convergence and machine state</h2><ul><li><a href="converge.py">plugins/secrets-kit/lib/secrets_kit/converge.py</a> runs the idempotent session pass: check, fix, and classify failures as actionable by the agent or reserved for the user.</li><li><a href="state.py">plugins/secrets-kit/lib/secrets_kit/state.py</a> keeps per-entry hashes and pending retirements, making steady-state passes skip decryption.</li><li><a href="repo.py">plugins/secrets-kit/lib/secrets_kit/repo.py</a> clones and refreshes the private repo, scrubs hostile git environment, and classifies destination exposure.</li></ul></section><section><h2>Authoring safety</h2><ul><li><a href="guard.py">plugins/secrets-kit/lib/secrets_kit/guard.py</a> installs the pre-commit guard and the deny-by-default ignore file into every clone.</li><li><a href="authoring.py">plugins/secrets-kit/lib/secrets_kit/authoring.py</a> protects seed, add, rotate, and remove operations with private recovery evidence and custody checks.</li><li><a href="operation_lock.py">plugins/secrets-kit/lib/secrets_kit/operation_lock.py</a> gives one process ownership of the physical data directory before protected work.</li></ul></section><section><h2>Shared plumbing and platform support</h2><ul><li><a href="agefile.py">plugins/secrets-kit/lib/secrets_kit/agefile.py</a> wraps age and age-keygen, keeps passphrase paths interactive, and decrypts blobs without a passphrase.</li><li><a href="terminal.py">plugins/secrets-kit/lib/secrets_kit/terminal.py</a> opens a terminal window for interactive verbs on Windows, macOS, and Linux.</li><li><a href="perms.py">plugins/secrets-kit/lib/secrets_kit/perms.py</a> tightens file and directory permissions honestly on POSIX and Windows.</li><li><a href="__init__.py">plugins/secrets-kit/lib/secrets_kit/__init__.py</a> defines shared errors with remedies and renders the correct CLI invocation for whichever version is printing.</li></ul></section>
 </main>
+<nav data-index-pages-chrome="nav"><ul><li><a href="../../../index.html"><span class="hh-nav-label">plugins</span> <span class="hh-nav-identity">The Claude Code plugin marketplace: independently installable plugins sharing the bootstrap provisioning engine and llm-scripting-kit access layer, covering code review, durable job execution, LLM endpoint dispatch, Hue scene synchronization, PDF rendering, fleet secrets provisioning, prompt statusline, cache forensics, markdown auditing, and Unreal Engine automation.</span></a></li><li><a href="../../README.md"><span class="hh-nav-label">README.md</span> <span class="hh-nav-identity">Plugin-level getting started and usage notes for secrets-kit.</span></a></li><li><a href="../../custom_bootstrap.py"><span class="hh-nav-label">custom_bootstrap.py</span> <span class="hh-nav-identity">The session-start caller that hands host context to the convergence pass.</span></a></li><li><a href="../../../../tests/secrets-kit"><span class="hh-nav-label">tests/secrets-kit</span> <span class="hh-nav-identity">Plugin tests for provisioning, authoring, guard, and repository behavior.</span></a></li></ul></nav>
 <script>
 if (window.parent !== window) {
   window.parent.postMessage({
-    type: "human-html:announce",
+    type: "index-pages:announce",
     version: 1,
     directory: "plugins/secrets-kit/lib/secrets_kit",
     file: "index.html",
@@ -81,7 +36,7 @@ if (window.parent !== window) {
     if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
     var target = href.split("#")[0].split("?")[0];
     if (!target) return;
-    if (/(^|\/)human(\.[^/]+)?\.html$/.test(target)) return;
+    if (/(^|\/)index-page(\.[^/]+)?\.html$/.test(target)) return;
     var parts = "plugins/secrets-kit/lib/secrets_kit".split("/");
     if (parts.length === 1 && parts[0] === ".") parts = [];
     var segs = target.split("/");
@@ -92,7 +47,7 @@ if (window.parent !== window) {
     }
     event.preventDefault();
     window.parent.postMessage({
-      type: "human-html:navigate",
+      type: "index-pages:navigate",
       version: 1,
       path: parts.join("/")
     }, "*");

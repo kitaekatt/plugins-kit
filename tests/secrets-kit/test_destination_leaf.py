@@ -17,11 +17,13 @@ from secrets_kit import converge as convergence
 from secrets_kit import repo as repository
 from secrets_kit import SecretsError, perms
 from secrets_kit.state import State
-from sk_testlib import copy_git_tree
+from sk_testlib import assert_owner_only_file, copy_git_tree
 from test_init import _load_cli
 from test_secrets_bootstrap import FakeCtx
 
 pytestmark = pytest.mark.skipif(shutil.which('git') is None, reason='real Git required')
+WINDOWS = sys.platform.startswith('win')
+LEXICAL_PARENT_DOT = "Windows collapses '..' lexically before following a link, so '<link>/..' names the link's own parent, not the physical sibling this spelling exercises"
 
 
 @pytest.fixture(autouse=True)
@@ -212,7 +214,7 @@ def test_actual_matching_leaf_replaces_slot_without_referent_hash_or_chmod(fleet
     assert Path(record['replace'][0][0]).parent == target.parent
     assert referent.read_bytes() == b'token-value\n' and stat.S_IMODE(referent.stat().st_mode) == before_mode
     assert State.load(state_path).rows['ha-token']['dest'] == str(target)
-    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert_owner_only_file(target)
     if policy == 'waived':
         assert record['queries'] == []
     second = convergence.converge(fleet.config_path, fleet.data_dir)
@@ -289,7 +291,7 @@ def test_actual_missing_ordinary_leaf_keeps_materialization(fleet, monkeypatch):
 
 
 @pytest.mark.parametrize('leaf', ['regular', 'link'])
-@pytest.mark.parametrize('spelling', ['absolute', 'relative', 'tilde', 'alias_parent_dot'])
+@pytest.mark.parametrize('spelling', ['absolute', 'relative', 'tilde', pytest.param('alias_parent_dot', marks=pytest.mark.skipif(WINDOWS, reason=LEXICAL_PARENT_DOT))])
 def test_actual_parent_alias_spelling_preserves_slot_and_real_git_remediation(fleet, git_template, monkeypatch, leaf, spelling):
     root = _consumer_tree(fleet, git_template)
     alias_holder = fleet.tmp / 'alias holder'
@@ -448,7 +450,8 @@ def test_actual_consumers_use_leaf_policy_failure_and_replacement(fleet, git_tem
             key, message = ctx.failures[0]
             assert key == (convergence.FAILURE_DEST if operation == 'exposed' else 'secrets_entry')
             assert ('ask_reason' in message) == (operation == 'exposed')
-            assert str(target) in message['agent_msg']
+            # The exposure message shows the destination with forward slashes (converge: dest.as_posix()).
+            assert (target.as_posix() if operation == 'exposed' else str(target)) in message['agent_msg']
         else:
             assert len(ctx.oks) == 1 and '1 written' in ctx.oks[0]
         if operation == 'lstat':
@@ -462,6 +465,7 @@ def test_actual_consumers_use_leaf_policy_failure_and_replacement(fleet, git_tem
         assert referent.read_bytes() == b'token-value\n'
 
 
+@pytest.mark.skipif(WINDOWS, reason=LEXICAL_PARENT_DOT)
 @pytest.mark.parametrize('leaf', ['regular', 'link'])
 def test_actual_alias_parent_dot_uses_physical_sibling_and_leaves_lexical_decoy(fleet, git_template, monkeypatch, leaf):
     root = _consumer_tree(fleet, git_template, ignored=True)
@@ -489,7 +493,7 @@ def test_actual_alias_parent_dot_uses_physical_sibling_and_leaves_lexical_decoy(
     assert record['allocations'] == [str(physical_parent)]
     assert len(record['replace']) == 1 and record['replace'][0][1] == str(target)
     assert not target.is_symlink() and target.read_bytes() == b'token-value\n'
-    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert_owner_only_file(target)
     assert sorted(p.name for p in physical_parent.iterdir()) == ['ha-token.txt']
     assert sorted(p.name for p in decoy.iterdir()) == ['sentinel'] and sentinel.read_bytes() == b'lexical decoy unchanged'
     assert alias.is_symlink() and referent.read_bytes() == b'outside dummy bytes\n'
