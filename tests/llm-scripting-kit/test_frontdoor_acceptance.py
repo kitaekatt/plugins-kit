@@ -29,6 +29,7 @@ class FakeFrontdoor:
         self.hold, self.reject, self.wrong = hold, reject_when_full, wrong_answers
         self.unreachable, self.omit = set(unreachable), set(omit)
         self.cond = threading.Condition()
+        self.last_arrival = time.monotonic()
         self.in_flight = {d[0]: 0 for g in self.groups.values() for d in g}
         self.calls = {d[0]: 0 for g in self.groups.values() for d in g}
         owner = self
@@ -65,6 +66,7 @@ class FakeFrontdoor:
                 text = body["messages"][0]["content"]
                 x, y = map(int, re.search(r"product of (\d+) and (\d+)", text).groups())
                 with owner.cond:
+                    owner.last_arrival = time.monotonic()
                     while True:
                         pick = next((t for t in tiers
                                      if t[2] is None or owner.in_flight[t[0]] < t[2]), None)
@@ -75,7 +77,12 @@ class FakeFrontdoor:
                         return self._send(503, {"error": "full"})
                     owner.in_flight[pick[0]] += 1
                     owner.calls[pick[0]] += 1
+                # Keep the slot until arrivals have been quiet for 3x `hold`: a fixed
+                # sleep lets a slow-to-connect request in a loaded run find an
+                # earlier one already released, changing which tier serves it.
                 time.sleep(owner.hold)
+                while time.monotonic() - owner.last_arrival < 3 * owner.hold:
+                    time.sleep(0.02)
                 answer = x * y + (1 if owner.wrong else 0)
                 content = " ".join(str(i) for i in range(1, 201)) + "\nANSWER=%d" % answer
                 with owner.cond:

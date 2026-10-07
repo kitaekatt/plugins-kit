@@ -101,8 +101,22 @@ class TestKeyFileSecrecy:
         assert secret not in captured.out
         assert secret not in captured.err
         assert key_file.read_text() == secret + "\n"
-        mode = stat.S_IMODE(os.stat(key_file).st_mode)
-        assert mode == 0o600
+
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="POSIX permission bits are not representable on Windows",
+    )
+    def test_key_file_mode_is_owner_only(self, hue_cli, tmp_path, monkeypatch):
+        def fake_post(url, json=None, verify=None, timeout=None):
+            return _fake_response([{"success": {"username": "k"}}])
+
+        monkeypatch.setattr(sys.modules["requests"], "post", fake_post, raising=False)
+        key_file = tmp_path / "app-key.txt"
+        monkeypatch.setattr(hue_cli, "PAIRED_KEY_FILE", key_file)
+
+        assert hue_cli._cmd_pair(Namespace(force=False, no_wait=True)) == 0
+
+        assert stat.S_IMODE(os.stat(key_file).st_mode) == 0o600
 
 
 class TestOtherPairingErrorsRaise:

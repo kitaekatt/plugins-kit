@@ -128,8 +128,12 @@ def check_project_agent_skills_link(project_dir, agent_skills_link_value):
     # dangling link is still somebody's link and is not ours to repair.
     try:
         os.lstat(link_path)
-    except FileNotFoundError:
-        pass
+    except FileNotFoundError as exc:
+        # POSIX reports a non-directory parent as ENOTDIR (an OSError below);
+        # Windows reports it as not-found, so look at the parent directly.
+        parent = os.path.dirname(link_path)
+        if os.path.lexists(parent) and not os.path.isdir(parent):
+            return SkillsLinkCheck("lstat_error", detail=str(exc))
     except OSError as exc:
         return SkillsLinkCheck("lstat_error", detail=str(exc))
     else:
