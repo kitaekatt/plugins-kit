@@ -31,6 +31,8 @@ from .completion import (
     utc_now_iso,
 )
 from .completion.halt import halt_payload
+from .completion.json_repair import STATUS_REPAIRED, repair_json_structure
+from .completion.json_schema import check_schema
 from .constants import USER_ENV_FILE
 from .effort import remap_effort
 from .env_file import read_env_file, write_env_file
@@ -340,6 +342,17 @@ def _parser() -> argparse.ArgumentParser:
     resolve.add_argument("--model")
     resolve.add_argument("--cheap", action="store_true")
 
+    repair_json = sub.add_parser(
+        "repair-json",
+        help="Repair one raw model answer structurally, without calling a model.",
+    )
+    repair_json.add_argument(
+        "--schema-file",
+        type=Path,
+        required=True,
+        help="Absolute path to a JSON schema in the supported subset.",
+    )
+
     complete = sub.add_parser(
         "complete",
         help=(
@@ -537,6 +550,25 @@ def _cmd_acceptance(args: argparse.Namespace) -> int:
     return report.exit_code
 
 
+def _cmd_repair_json(schema_file: Path) -> int:
+    """Repair the UTF-8 answer on stdin under one validated schema."""
+    if not schema_file.is_absolute():
+        raise ValueError("--schema-file must be an absolute path")
+    schema = json.loads(schema_file.read_text(encoding="utf-8"))
+    check_schema(schema)
+    raw = sys.stdin.buffer.read().decode("utf-8")
+    result = repair_json_structure(schema, raw)
+    repaired = result.status == STATUS_REPAIRED
+    _json({
+        "protocol": 1,
+        "status": result.status,
+        "text": result.text if repaired else raw,
+        "edits": [edit.to_json() for edit in result.edits] if repaired else [],
+        "reason": result.reason,
+    })
+    return EXIT_OK
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     raw = list(sys.argv[1:] if argv is None else argv)
     if raw and raw[0] == "frontdoor":
@@ -570,6 +602,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                 _declared_models(args), args.model, args.cheap, args.project_root,
                 _load_requirements(args.requirements),
             )
+        if args.cmd == "repair-json":
+            return _cmd_repair_json(args.schema_file)
         if args.cmd == "request-schema":
             _json(describe_request_schema())
             return EXIT_OK

@@ -418,6 +418,16 @@ unattended run. The adapter also passes `--pure` to disable external plugins.
 `--dir` selects the intended workspace. Shell work remains available, so this
 is a practical OpenCode guardrail rather than an OS sandbox guarantee.
 
+## `repair-json`: model-free JSON repair
+
+`repair-json` is the model-free CLI over
+`completion.json_repair.repair_json_structure`. It reads one absolute-path
+schema file, checks it with `completion.json_schema.check_schema`, reads UTF-8
+stdin to EOF, and prints one protocol-1 result object. It never resolves an
+endpoint, reads a registry, or calls a network. The CLI owns only argument,
+stream, exit-code, and serialization handling; repair decisions and schema
+support stay in `json_repair.py` and `json_schema.py`.
+
 ## The seam is uniform; the transports are not
 
 The useful mental model is that you write the prompt pair once and choose the
