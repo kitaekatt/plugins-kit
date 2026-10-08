@@ -63,7 +63,7 @@ class TestWrapperCopiesMatch:
         expected = {
             "git-kit": "0.144.0",
             "p4-kit": "0.144.0",
-            "llm-scripting-kit": "0.138.0",
+            "llm-scripting-kit": "0.146.0",
         }
         minimum = {"git-kit": "0.113.0", "p4-kit": "0.113.0",
                    "llm-scripting-kit": "0.107.0"}

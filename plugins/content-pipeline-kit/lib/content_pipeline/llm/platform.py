@@ -77,6 +77,7 @@ import sys
 import tempfile
 import time
 import types
+import warnings
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import (
@@ -379,6 +380,58 @@ _DISPOSITION_TEXT_ONLY = "text-only"
 _DELIVERY_UNREPORTED = "unreported"
 
 
+#: The first llm-scripting-kit release that ships ``classify_backpressure``.
+_BACKPRESSURE_FLOOR = "0.61.0"
+
+_MISSING_BACKPRESSURE_LIB_MSG = (
+    "the 'llm_scripting_kit' shared lib is absent, so an overload halt's "
+    "retry-after hint is not parsed from the error text and the adaptive gate "
+    "uses its own exponential backoff. Run "
+    "`claude plugin install llm-scripting-kit@plugins-kit`."
+)
+
+_STALE_BACKPRESSURE_LIB_MSG = (
+    "the linked llm_scripting_kit predates classify_backpressure, so an "
+    "overload halt's retry-after hint is not parsed from the error text and "
+    "the adaptive gate uses its own exponential backoff; this needs "
+    f"llm-scripting-kit >= {_BACKPRESSURE_FLOOR}. Run "
+    "`claude plugin update llm-scripting-kit@plugins-kit`."
+)
+
+_BACKPRESSURE_WARNED: set = set()
+
+
+def _backpressure_classifier() -> Optional[Callable[[BaseException], Any]]:
+    """Return ``llm_scripting_kit``'s ``classify_backpressure``, or ``None``.
+
+    DEGRADE, not REQUIRED or REFUSE: the classifier only recovers a
+    retry-after hint from an error's text. Without it the halt is still
+    raised with ``retry_after_s=None`` and the gate backs off exponentially,
+    so the result stays true; only the wait length is less informed. The
+    degrade is announced, never silent: a ``RuntimeWarning`` (once per state)
+    names the cause and the remedy. Absent (no ``llm_scripting_kit``) and too
+    old (present, newest symbol missing) get different messages.
+    """
+    try:
+        from llm_scripting_kit.completion import halt as _halt  # noqa: PLC0415
+    except ImportError:
+        try:
+            import llm_scripting_kit  # noqa: PLC0415, F401
+        except ImportError:
+            state, msg = "absent", _MISSING_BACKPRESSURE_LIB_MSG
+        else:
+            state, msg = "stale", _STALE_BACKPRESSURE_LIB_MSG
+    else:
+        fn = getattr(_halt, "classify_backpressure", None)
+        if fn is not None:
+            return fn
+        state, msg = "stale", _STALE_BACKPRESSURE_LIB_MSG
+    if state not in _BACKPRESSURE_WARNED:
+        _BACKPRESSURE_WARNED.add(state)
+        warnings.warn(msg, RuntimeWarning, stacklevel=3)
+    return None
+
+
 class StructuredContractSupportError(ImportError):
     """A declared output contract cannot be honored truthfully here.
 
@@ -562,6 +615,13 @@ same thing. Should a registry entry ever point at a managed always-on service,
 that entry -- not this constant -- is where the exception belongs.
 """
 
+HALT_BACKPRESSURE = "backpressure"
+"""Transient endpoint overload (admission refused: HTTP 429/503, queue full).
+Mirrors the llm-scripting-kit halt kind of the same value. Unlike every other
+halt it clears by itself: the right response is to wait, which
+:class:`content_pipeline.llm.gate.AdaptiveGate` does. It carries
+``retry_after_s`` (``None`` when the endpoint gave no hint)."""
+
 HALT_QUOTA = "quota"
 """Subscription pool spent (codex usage-limit exhaustion). Mirrors
 ``llm_scripting_kit.completion.halt.HALT_QUOTA`` (same string value, so a
@@ -599,9 +659,14 @@ class PipelineHaltError(Exception):
     shared-lib boundary").
     """
 
-    def __init__(self, kind: str, detail: str = "") -> None:
+    def __init__(
+        self, kind: str, detail: str = "", *, retry_after_s: Optional[float] = None
+    ) -> None:
         self.kind = kind
         self.detail = detail
+        #: Seconds the endpoint asked the caller to wait; set only for
+        #: :data:`HALT_BACKPRESSURE`.
+        self.retry_after_s = retry_after_s
         super().__init__(f"{kind}: {detail}" if detail else kind)
 
 
@@ -1841,8 +1906,24 @@ def call_llm(
                     halt = None
                 else:
                     halt = backend.classify_halt(exc)
+                    if halt is None and getattr(exc, "kind", None) == HALT_BACKPRESSURE:
+                        # llm-scripting-kit's HaltError carries `kind`, not
+                        # `halt_kind`; overload is a halt of this kind.
+                        halt = HALT_BACKPRESSURE
                 if halt is not None:
-                    halt_exc = PipelineHaltError(halt, str(exc))
+                    retry_after = None
+                    if halt in (HALT_BACKPRESSURE, HALT_RATE_LIMIT):
+                        retry_after = getattr(exc, "retry_after_s", None)
+                        if retry_after is None:
+                            classifier = _backpressure_classifier()
+                            if classifier is not None:
+                                signal = classifier(exc)
+                                retry_after = (
+                                    None if signal is None else signal.retry_after_s
+                                )
+                    halt_exc = PipelineHaltError(
+                        halt, str(exc), retry_after_s=retry_after
+                    )
                     halt_exc.__cause__ = exc
                     if on_attempt is not None:
                         _notify_failed(
@@ -2452,6 +2533,7 @@ __all__ = [
     "LLMBackend",
     "HALT_AUTH",
     "HALT_RATE_LIMIT",
+    "HALT_BACKPRESSURE",
     "HALT_INSUFFICIENT_CREDIT",
     "HALT_QUOTA",
     "PipelineHaltError",

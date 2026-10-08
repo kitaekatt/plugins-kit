@@ -109,6 +109,15 @@ permission denials of its own, and openrouter has no tool surface at all. So
 the honest answer differs per adapter, which is why there is no flat
 `tool_deny` enum -- one word would be false for at least two of them.
 
+claude-cli and codex-cli also have a `text-only-mode` control that removes
+every file-writing, shell and subagent tool instead of denying named ones. It
+is armed by the backend field `text_only` (advertised as the param
+`backend.text_only`), which `requirements.arm_call` sets when a `guarantees`
+requirement admitted the entry, so the requirement and the mode cannot come
+apart. In claude's mode the argv carries neither `--allowedTools` nor
+`--permission-mode bypassPermissions`, which is why `permission-bypass` is
+advertised with `source: request` and `when_value: "false"`.
+
 The deny control is the adapter's one CONDITIONAL control, and the asymmetry
 with `allowed-tools` beside it is deliberate. `--allowedTools` is emitted on
 every call, passing `""` when the caller named no tools, because an empty
@@ -185,6 +194,21 @@ schema_digest, schema_version)` and never carries the schema body.
   (`validated-result`: any delivery channel the adapter advertises), and
   `POLICY_TEXT_ONLY` (`text-only`: an explicit declaration that the answer is
   text; it takes no schema).
+- **Structural JSON repair.** Before a schema contract judges an answer that
+  is not JSON, `finalize_contract` repairs its structure once
+  (`completion/json_repair.py`): it strips a code fence or text outside the root
+  value, inserts or deletes one of `[ ] { } ,`, turns the comma written for a
+  property name's colon into the colon, and restores a property name's moved
+  closing quote. Strings, numbers and keys are never rewritten, and a text that
+  ends inside the document is never closed (cut-off is lost content). The repair
+  applies only when exactly one repaired document fits the schema (two fits are
+  `ambiguous` and declined), and the repaired text is still validated in full.
+  `response.text` stays the raw answer; the report's `repaired`, `repair_edits`
+  (`(op, token, offset)` into the raw text) and `repair_note` (`ambiguous` or
+  `unrecoverable` when a repair was tried and declined) say what happened.
+  `evaluate_output` stays strict; `repair_and_evaluate_output` is the standalone
+  form and `repair_json_structure(schema, text, max_edits=, max_walks=)` the bare
+  repair. Never loosen the one-fit rule: a guess that fits is still a guess.
 - **Validator.** `completion/json_schema.py` is a stdlib subset, not a
   dependency: `type`, `properties`, `required`, `additionalProperties`, `items`,
   `enum`, `const`, `minLength`, `maxLength`, `minimum`, `maximum`,

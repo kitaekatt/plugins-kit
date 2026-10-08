@@ -14,7 +14,9 @@ the wild: JSON-quoted (``"api_error_status":429``) and bare
 """
 from __future__ import annotations
 
-from typing import Optional
+import re
+from dataclasses import dataclass
+from typing import Any, Dict, Optional
 
 from .claude_runner import AgentTimeoutError
 
@@ -44,6 +46,14 @@ docs/planning/quota-resilient-dispatch/declaration-format-design.md,
 Decision 6."""
 
 
+HALT_BACKPRESSURE = "backpressure"
+"""Transient endpoint overload: HTTP 429 that is not a quota or credit
+exhaustion, or HTTP 503 with queue/overload/timeout wording. Unlike every other
+kind it clears on its own, so the right response is to retry after
+``retry_after_s`` (or a backoff of the caller's choosing), not to stop the run.
+See :func:`classify_backpressure`."""
+
+
 class HaltError(Exception):
     """A failure that persists across subsequent calls -- stop the bulk run.
 
@@ -52,9 +62,13 @@ class HaltError(Exception):
     can halt-and-resume without parsing the message text.
     """
 
-    def __init__(self, kind: str, detail: str = "") -> None:
+    def __init__(
+        self, kind: str, detail: str = "", retry_after_s: Optional[float] = None
+    ) -> None:
         self.kind = kind
         self.detail = detail
+        #: Seconds the endpoint asked the caller to wait; set for backpressure.
+        self.retry_after_s = retry_after_s
         super().__init__(f"{kind}: {detail}" if detail else kind)
 
 
@@ -143,6 +157,131 @@ _OPENCODE_AUTH_MARKERS = ("user not found",)
 _OPENCODE_CHANNEL_ATTRS = ("stderr",)
 
 
+# -- backpressure -------------------------------------------------------------
+#
+# Behavioural reference: Databench's hand-rolled ``is_backpressure``. The status
+# is read from the exception (``status_code`` / ``response.status_code``) or from
+# the OpenAI SDK's message prefix ``Error code: NNN``; the server's own error
+# code is read from the quoted ``'code': '...'`` field of the body.
+_QUOTA_MARKERS = (
+    "insufficient_quota",
+    "quota",
+    "billing",
+    "credit",
+    "usage limit",
+    "hit your limit",
+    "exceeded your current",
+)
+_BACKPRESSURE_SERVER_CODES = frozenset(
+    {
+        "request_queue_timeout",
+        "request_queue_full",
+        "queue_full",
+        "server_busy",
+        "server_overloaded",
+        "overloaded",
+        "overloaded_error",
+        "rate_limit_exceeded",
+        "too_many_requests",
+    }
+)
+#: Wording that marks a 503 as overload (a bare 503 is an outage, not a halt).
+_OVERLOAD_WORDS = ("queue", "overload", "busy", "capacity", "timeout", "timed out", "too many")
+_STATUS_RE = re.compile(r"(?:error code|status(?: code)?)[:\s]+(\d{3})\b", re.IGNORECASE)
+_SERVER_CODE_RE = re.compile(r"""['"]code['"]\s*:\s*['"]([A-Za-z0-9_.-]+)['"]""")
+_RETRY_AFTER_TEXT_RE = re.compile(
+    r"retry[-_ ]after['\"]?\s*[:=]?\s*['\"]?(\d+(?:\.\d+)?)"
+    r"|try again in (\d+(?:\.\d+)?)\s*(ms|s|sec|seconds?)?",
+    re.IGNORECASE,
+)
+
+
+@dataclass(frozen=True)
+class Backpressure:
+    """A transient overload signal: the status and the wait the endpoint asked for."""
+
+    status: int
+    retry_after_s: Optional[float] = None
+
+
+def _exception_status(exc: BaseException) -> Optional[int]:
+    for holder in (exc, getattr(exc, "response", None)):
+        status = getattr(holder, "status_code", None)
+        if isinstance(status, int) and not isinstance(status, bool):
+            return status
+    match = _STATUS_RE.search(str(exc))
+    return int(match.group(1)) if match else None
+
+
+def _retry_after(exc: BaseException) -> Optional[float]:
+    headers = getattr(getattr(exc, "response", None), "headers", None)
+    if headers is None:
+        headers = getattr(exc, "headers", None)
+    if headers is not None:
+        try:
+            raw = headers.get("retry-after") or headers.get("Retry-After")
+            if raw is not None:
+                return max(0.0, float(raw))
+        except (AttributeError, TypeError, ValueError):
+            pass  # an HTTP-date or unusable header: fall through to the body hint
+    match = _RETRY_AFTER_TEXT_RE.search(str(exc))
+    if match:
+        if match.group(1) is not None:
+            return float(match.group(1))
+        seconds = float(match.group(2))
+        return seconds / 1000.0 if (match.group(3) or "").lower() == "ms" else seconds
+    return None
+
+
+def classify_backpressure(exc: BaseException) -> Optional[Backpressure]:
+    """Report whether ``exc`` is transient endpoint overload, else None.
+
+    - HTTP 429 is backpressure when it carries a positive overload signal (a
+      Retry-After header or hint, or queue/overload/``rate_limit_exceeded``
+      wording) and no quota or credit wording. A bare 429 with no signal keeps
+      its existing :data:`HALT_RATE_LIMIT` classification.
+    - HTTP 503 is backpressure only with queue/overload/busy/timeout wording
+      (or a known server code such as ``request_queue_timeout``).
+
+    A quota or credit message is never backpressure.
+    """
+    status = _exception_status(exc)
+    if status not in (429, 503):
+        return None
+    text = str(exc).lower()
+    if any(marker in text for marker in _QUOTA_MARKERS):
+        return None
+    retry_after = _retry_after(exc)
+    codes = {code.lower() for code in _SERVER_CODE_RE.findall(str(exc))}
+    signalled = (
+        retry_after is not None
+        or bool(codes & _BACKPRESSURE_SERVER_CODES)
+        or any(word in text for word in _OVERLOAD_WORDS)
+    )
+    if not signalled:
+        return None
+    return Backpressure(status=status, retry_after_s=retry_after)
+
+
+def halt_payload(kind: str, exc: Optional[BaseException] = None) -> Dict[str, Any]:
+    """The ``{"kind": ..., ...}`` object a CLI envelope carries for a halt.
+
+    Backpressure adds ``retry_after_s`` (a float or None); other kinds carry
+    ``kind`` alone.
+    """
+    payload: Dict[str, Any] = {"kind": kind}
+    if kind == HALT_BACKPRESSURE:
+        own = getattr(exc, "retry_after_s", None)
+        if own is not None:
+            # A HaltError already carries the wait; it may have no HTTP status
+            # for classify_backpressure to read it from.
+            payload["retry_after_s"] = own
+        else:
+            signal = None if exc is None else classify_backpressure(exc)
+            payload["retry_after_s"] = None if signal is None else signal.retry_after_s
+    return payload
+
+
 def classify_halt_text(text: str) -> Optional[str]:
     """Map a provider text channel (error body / stderr) to a halt kind.
 
@@ -171,6 +310,10 @@ def classify_openai_exception(exc: BaseException) -> Optional[str]:
     text-marker fallback still catches the common shapes. Recurses on
     ``__cause__`` so a wrapped SDK exception is still classified.
     """
+    # Transient overload first: a 429 that names a queue or a Retry-After is not
+    # the quota exhaustion RateLimitError otherwise maps to.
+    if classify_backpressure(exc) is not None:
+        return HALT_BACKPRESSURE
     try:
         import openai  # noqa: PLC0415
     except ImportError:
@@ -362,6 +505,10 @@ __all__ = [
     "HALT_RATE_LIMIT",
     "HALT_INSUFFICIENT_CREDIT",
     "HALT_QUOTA",
+    "HALT_BACKPRESSURE",
+    "Backpressure",
+    "classify_backpressure",
+    "halt_payload",
     "HaltError",
     "classify_halt_text",
     "classify_openai_exception",

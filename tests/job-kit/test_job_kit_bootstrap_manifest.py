@@ -92,5 +92,9 @@ def test_llm_scripting_kit_min_version_is_the_subset_release() -> None:
     ]
     assert len(entries) == 1 and len(manifest["plugins"]) == 1
     assert entries[0].get("install") == "auto"
-    assert entries[0].get("min_version") == interrupts._JSON_SCHEMA_LSK_VERSION
-    assert entries[0].get("min_version") == "0.56.0"
+    # The floor also covers arm_call, HALT_BACKPRESSURE, HaltError.retry_after_s
+    # and classify_backpressure (llm-scripting-kit 0.61.0), above the subset release.
+    assert entries[0].get("min_version") == "0.61.0"
+    assert tuple(map(int, entries[0]["min_version"].split("."))) >= tuple(
+        map(int, interrupts._JSON_SCHEMA_LSK_VERSION.split("."))
+    )

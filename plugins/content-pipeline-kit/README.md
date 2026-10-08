@@ -56,6 +56,29 @@ sizing, the halt lifecycle, orphan reclaim and its overshoot bound, and the
 `skills/content-pipeline-domain/references/building-a-pipeline.md`, "The
 cross-process spend cap".
 
+## Routing a call (per pipeline)
+
+Pass `models=[...]` (ordered llm-scripting-kit ids) to `route`,
+`routed_model` and `declared_model_names` to route each pipeline on its own;
+`CONTENT_PIPELINE_LLM_MODELS` is only the default when `models` is `None`.
+Rules: `CLAUDE.md`, "Backend selection".
+
+## Waiting out endpoint overload (the adaptive gate)
+
+Wrap calls in `content_pipeline.llm.gate.AdaptiveGate` (or
+`call_llm_gated(gate, backend, ...)`), one gate per run. An overload halt is
+waited out, not failed. Rules, defaults and the give-up behavior: `CLAUDE.md`,
+"The adaptive gate".
+
+## Parallel dependency graphs, deadlines and the failure cache
+
+Three stdlib-only run-layer pieces in `content_pipeline.execution`, each
+adoptable on its own: `ParallelGraphStrategy` / `scheduler` (dependency graph
+with capacity), `deadlines` (per-unit budget, run-wide circuit, deadline notes)
+and `failure_cache` (negative cache of deterministic failures). The consumer
+supplies the paths of the notes and cache files. Rules: `CLAUDE.md`, "Parallel
+graph, deadlines and the failure cache".
+
 ## Durable waits
 
 A unit of a tracked run can ask a person a typed question and wait for the

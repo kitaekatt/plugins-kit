@@ -228,6 +228,53 @@ def plan_effort(
     return EffortPlan(body, applied, OUTCOME_TRANSLATED)
 
 
+#: The accepted effort values per delivering style, low to high. NInfer's menu
+#: is none|low|medium|xhigh and it rejects ``high`` with a 400; the other
+#: styles take the conventional low|medium|high.
+_MENUS: Dict[str, "tuple[str, ...]"] = {
+    NINFER: ("none", "low", "medium", "xhigh"),
+    TOP_LEVEL: ("low", "medium", "high"),
+    CHAT_TEMPLATE_KWARGS: ("low", "medium", "high"),
+}
+
+
+def style_effort_menu(style: Optional[str]) -> "tuple[str, ...]":
+    """The accepted efforts for ``style``, low to high; empty when it delivers none."""
+    return _MENUS.get(style or "", ())
+
+
+def _endpoint_style(endpoint: str) -> Optional[str]:
+    # Lazy: model_endpoints imports this module, so a top-level import cycles.
+    from .model_endpoints import resolve_effort_style, resolve_registry_entry  # noqa: PLC0415
+
+    return resolve_effort_style(resolve_registry_entry(endpoint)).style
+
+
+def effort_menu(endpoint: str) -> "tuple[str, ...]":
+    """The efforts the registry endpoint ``endpoint`` accepts, low to high.
+
+    Resolved from the endpoint's effort style (see :func:`style_effort_menu`).
+    An endpoint that delivers no effort, or a harness entry, has an empty menu.
+    Raises ``EndpointRegistryError`` for an unknown endpoint.
+    """
+    return style_effort_menu(_endpoint_style(endpoint))
+
+
+def lower_effort(endpoint: str, effort: str) -> Optional[str]:
+    """The next accepted effort below ``effort`` for ``endpoint``; None at the bottom.
+
+    A value the style would remap (``high`` on ninfer) is remapped first. A
+    value outside the menu, or an endpoint with an empty menu, gives None.
+    """
+    style = _endpoint_style(endpoint)
+    menu = style_effort_menu(style)
+    value = remap_effort(effort, style)
+    if value not in menu:
+        return None
+    index = menu.index(value)
+    return menu[index - 1] if index > 0 else None
+
+
 __all__ = [
     "EFFORT_KEY",
     "TEMPLATE_KEY",
@@ -252,4 +299,7 @@ __all__ = [
     "extract_effort",
     "place_effort",
     "plan_effort",
+    "style_effort_menu",
+    "effort_menu",
+    "lower_effort",
 ]

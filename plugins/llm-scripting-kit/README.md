@@ -45,6 +45,29 @@ usable entry of the pace-ordered list (see `describe` below), and `--model`
 overrides the model id of whichever entry is chosen. `resolve` and `complete`
 take no `--endpoint` flag; name one entry as `--models NAME`.
 
+`--requirements` (on `describe`, `resolve` and `complete`) takes the capability
+requirement mapping (see "Capability requirements") as a JSON file path or
+inline JSON starting with `{` or `[`; entries that fail it are skipped. It needs
+`--models`.
+
+`complete` with more than one `--models` entry, or with `--requirements`, runs
+through `declaration.run`: the first usable entry serves, and a classified halt
+(auth, credit, rate limit, launch failure) falls back to the next entry. A task
+error does not fall back. `--max-attempts N` caps executions (default: one per
+declared entry). The envelope is the usual one for the entry that served (or the
+last one tried) plus `entry`, `run_status` (`completed`, `failed`,
+`attempt-limit`, or `no-usable-entry` when every entry was spent first),
+`declaration`, and `attempts` (per execution: `entry`, `number`, `pace`, `halt`,
+`error`, `outcome`, `workspace_action`); `floor` is added for
+`no-usable-entry`. Each attempt also carries `halt_payload`, and a halted
+run carries top-level `halt`: `{"kind": ...}`, plus `retry_after_s` (seconds or
+null) for `backpressure`. A single-call `complete` halt adds the same `halt`
+object; `error.code` and exit `3` are unchanged, with no separate backpressure
+exit code. Exit: `0` served, `1` task error, `3` every try halted. A
+single `--models` entry without `--requirements`, and `--request-file`, keep the
+one-call behaviour and output unchanged; `--request-file` refuses
+`--requirements` and `--max-attempts`.
+
 `complete --max-retries N` sets the OpenAI SDK's automatic retries for that one
 call on OpenAI-compatible endpoints (default 2, the SDK default; `0` turns them
 off; a negative value is refused). Pass `0` when the caller runs its own backoff,
@@ -459,6 +482,13 @@ orchestrator can halt-and-resume identically regardless of provider. The seam
 types and the runner are stdlib-only; only `OpenRouterBackend` reaches for the
 `openai` SDK, and only lazily.
 
+#### Backpressure halts
+
+`HALT_BACKPRESSURE` (`"backpressure"`) marks transient endpoint overload that
+clears by itself: retry after a wait. `classify_backpressure(exc)`,
+`halt_payload(kind, exc)` and `retry_after_s` are specified, with the 503/429
+rules, in [CLAUDE.md](CLAUDE.md) ("Backpressure is a halt that clears itself").
+
 #### Reasoning effort on transport entries
 
 `OpenRouterBackend` sends `BackendOptions.effort` (and the registry's
@@ -520,6 +550,55 @@ Any other key is read as a dotted path over `Capabilities.to_json()` (e.g.
 capability table of its own -- it only knows how to walk the advertisement's
 JSON shape.
 
+`guarantees` (alias `denies`) names OUTCOMES the run must not have:
+`filesystem-write`, `shell-exec`, `subagent-spawn`. An adapter matches when it
+lacks the capability outright (a transport entry has no tools) or advertises a
+control that denies or confines the subject.
+
+#### Text-only mode
+
+A harness entry can run with no file-writing, shell or subagent tool. Ask for
+it with the requirement, not a flag: `describe()` and `declaration.run()` with
+`{"guarantees": ["filesystem-write", "shell-exec", "subagent-spawn"]}` (or any
+subset) admit `claude-cli` and `codex-cli` through their `text-only-mode`
+controls, and `run()` dispatches them in that mode. A caller that requires no
+guarantee gets the unchanged argv.
+
+| Adapter | Text-only argv | Guarantee declared |
+| --- | --- | --- |
+| `claude-cli` | `--tools "" --strict-mcp-config --mcp-config {"mcpServers":{}} --disable-slash-commands --permission-mode dontAsk`, in place of `--permission-mode bypassPermissions --allowedTools` | all three |
+| `codex-cli` | `exec --ignore-user-config -s read-only`, no network flag, `-c` pairs that turn off the shell, unified exec, multi-agent, apps, plugins, image, browser, computer-use, code-mode host, web search and MCP servers, and `-c model_catalog_json='<file>'` | all three |
+
+Codex needs the catalog file because the MODEL CATALOG, not the config, gives a
+model code mode (`exec`, `wait`), the multi-agent `collaboration.*` tools
+(`spawn_agent` among them), `apply_patch`, `tool_search` and the node REPL. In
+text-only mode the backend reads `codex debug models` (one extra runner call),
+copies the requested model's entry with those settings removed, and passes that
+one entry. A model the catalog does not list, or a catalog read that fails,
+stops the call. `--ignore-user-config` is needed because `-c mcp_servers={}`
+merges with, and does not remove, the user's MCP servers; it also drops the
+user's provider and plugin settings for that call.
+
+Both rows were checked live (2026-10-07). Claude Code 2.1.293: the model
+reported no callable tool. codex-cli 0.160.0 with gpt-6.1-sol: the model listed
+only `functions.request_user_input`, which asks the user a question, belongs to
+no guarantee subject, and is refused in `exec` mode. In text-only mode claude
+refuses a non-empty `allowed_tools`, and codex refuses `extras.sandbox` other
+than `read-only`, `extras.network: true`, and an empty model id, before anything
+runs.
+
+**Every admitted control is armed.** `run()` passes the selected backend and
+options through `completion.requirements.arm_call(backend, options,
+requirements, capabilities=None)`, which returns an `ArmedCall(backend,
+options, controls)`. It switches claude-cli and codex-cli to text-only mode,
+adds the subject's `DENY_TOOL_NAMES` to `disallowed_tools` for an adapter that
+denies through a deny list (opencode-cli), and raises `ValueError` before the
+call when a required subject has no control it can arm. After the call, `run()`
+raises `RuntimeError` when the response's `execution_controls_applied` lacks an
+armed control. A caller that dispatches a `describe()` result itself calls
+`arm_call` the same way; `arm_requirements(backend, requirements)` is its
+text-only half.
+
 ### Output contracts
 
 A caller that needs a structured answer declares an
@@ -547,6 +626,12 @@ schema is a stdlib JSON Schema subset; a keyword outside it (`pattern`,
   report; `evaluate_output(contract, text)` runs the same check standalone. The
   `complete` verb reports a violation as a failed envelope with the same
   response.
+- Before a schema contract judges an answer that is not JSON, `finalize_contract`
+  repairs its structure once (`completion/json_repair.py`), only when exactly one
+  repaired document fits; `response.text` stays raw and the report carries
+  `repaired`, `repair_edits` and `repair_note`. The rules are in
+  [references/completion-seam-contract.md](references/completion-seam-contract.md)
+  ("Structural JSON repair").
 - Sending `extras.output_schema` or `extras.response_format` beside a contract
   is refused.
 
@@ -654,6 +739,14 @@ case; the `complete` verb reports each as a protocol error, exit 4):
 A refused selection, skill or resource (bad frontmatter, a missing declared
 file, over budget) raises `SkillContextError` with the library's message; the
 `complete` verb reports it as a protocol error too.
+
+
+#### Effort menu
+
+`llm_scripting_kit.effort.effort_menu(endpoint)` returns the efforts an endpoint
+accepts, low to high, and `lower_effort(endpoint, effort)` the next one down, for
+retrying a length stop. The menus and the retry rule are in
+[CLAUDE.md](CLAUDE.md) ("`effort_menu` and `lower_effort`").
 
 ## Key handling
 

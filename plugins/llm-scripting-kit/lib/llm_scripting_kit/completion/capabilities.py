@@ -68,6 +68,17 @@ FILESYSTEM_WRITE = "filesystem-write"
 SHELL_EXEC = "shell-exec"
 SUBAGENT_SPAWN = "subagent-spawn"
 
+# -- text-only mode ----------------------------------------------------------
+#
+# A harness adapter that can run with NO tools at all advertises an execution
+# control with this id. Its ``parameter`` is TEXT_ONLY_PARAMETER: a field on the
+# BACKEND instance, not on BackendOptions, because the mode is selected by the
+# requirement that admitted the entry (``requirements.arm_requirements``), never
+# by a caller flag. The control's ``subjects`` carry a canonical guarantee only
+# where a live check showed the mode exposes no tool; see each record's note.
+TEXT_ONLY_MODE = "text-only-mode"
+TEXT_ONLY_PARAMETER = "backend.text_only"
+
 # A deny floor is expressed in BackendOptions' only tool-deny vocabulary, which
 # is claude-cli's tool NAMES. Requiring an outcome from it means knowing what
 # those names denote, so the mapping lives here beside the subjects rather than
@@ -80,6 +91,18 @@ _TOOL_SUBJECTS = {
     ),
     SHELL_EXEC: frozenset({"bash", "shell", "run", "execute"}),
     SUBAGENT_SPAWN: frozenset({"task", "agent", "subagent"}),
+}
+
+
+#: The deny-list names that ARM a subject through a ``disallowed_tools``
+#: control: the reverse of _TOOL_SUBJECTS, in claude-cli's spelling, which
+#: every deny-list consumer reads. ``requirements.arm_call`` adds them for a
+#: required subject; each maps back to its subject through
+#: :func:`subjects_for_disallowed_tools` (pinned by a test).
+DENY_TOOL_NAMES = {
+    FILESYSTEM_WRITE: ("Write", "Edit", "MultiEdit", "NotebookEdit"),
+    SHELL_EXEC: ("Bash",),
+    SUBAGENT_SPAWN: ("Task", "Agent"),
 }
 
 
@@ -451,6 +474,9 @@ __all__ = [
     "FILESYSTEM_WRITE",
     "SHELL_EXEC",
     "SUBAGENT_SPAWN",
+    "DENY_TOOL_NAMES",
+    "TEXT_ONLY_MODE",
+    "TEXT_ONLY_PARAMETER",
     "subjects_for_disallowed_tools",
     "FIXED",
     "REQUEST",

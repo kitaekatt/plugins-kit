@@ -57,6 +57,12 @@ from .contract_types import (
     canonical_schema_json,
     strict_schema_violations,
 )
+from .json_repair import (
+    STATUS_AMBIGUOUS,
+    STATUS_REPAIRED,
+    STATUS_UNRECOVERABLE,
+    repair_json_structure,
+)
 from .json_schema import validate
 from .types import ERROR, BackendOptions, LLMResponse, ResponseError
 
@@ -128,6 +134,9 @@ class ContractOutcome:
     disposition: str
     value: Any = None
     errors: Tuple[Tuple[str, str], ...] = ()
+    repaired: bool = False
+    repair_edits: Tuple[Tuple[str, str, int], ...] = ()
+    repair_note: str = ""
 
 
 class _Unparseable(ValueError):
@@ -175,6 +184,35 @@ def evaluate_output(contract: OutputContract, text: Any) -> ContractOutcome:
     if errors:
         return ContractOutcome(DISPOSITION_SCHEMA_MISMATCH, None, errors)
     return ContractOutcome(DISPOSITION_VALID, value, ())
+
+
+def repair_and_evaluate_output(contract: OutputContract, text: Any) -> ContractOutcome:
+    """:func:`evaluate_output`, then one structural repair of an unparseable answer.
+
+    The strict judgment comes first; only an ``unparseable`` answer is
+    repaired (code fences, text outside the root value, a dropped, swapped or
+    surplus bracket, a missing comma, a key/colon slip -- see
+    :mod:`.json_repair`). A repair is applied only when exactly one repaired
+    document fits the schema's shape, and the repaired text is then judged by
+    the same strict :func:`evaluate_output`, so validation stays mandatory.
+    The outcome records whether a repair was applied and which edits.
+    """
+    outcome = evaluate_output(contract, text)
+    if outcome.disposition != DISPOSITION_UNPARSEABLE or not isinstance(text, str):
+        return outcome
+    repair = repair_json_structure(contract.schema, text)
+    if repair.status == STATUS_REPAIRED:
+        again = evaluate_output(contract, repair.text)
+        if again.disposition != DISPOSITION_UNPARSEABLE:
+            return replace(
+                again,
+                repaired=True,
+                repair_edits=tuple((e.op, e.token, e.offset) for e in repair.edits),
+            )
+        return replace(outcome, repair_note="repair-unparseable")
+    if repair.status in (STATUS_AMBIGUOUS, STATUS_UNRECOVERABLE):
+        return replace(outcome, repair_note=repair.status)
+    return outcome
 
 
 def contract_requirements(contract: Optional[OutputContract]) -> Dict[str, Any]:
@@ -345,11 +383,19 @@ def _report(plan: DeliveryPlan, outcome: ContractOutcome) -> ContractReport:
         delivery=plan.delivery,
         disposition=outcome.disposition,
         errors=outcome.errors,
+        repaired=outcome.repaired,
+        repair_edits=outcome.repair_edits,
+        repair_note=outcome.repair_note,
     )
 
 
 def finalize_contract(plan: Optional[DeliveryPlan], response: LLMResponse) -> LLMResponse:
     """Judge a COMPLETED call's answer; return it enriched, or raise.
+
+    An unparseable answer gets one deterministic structural repair first
+    (:func:`repair_and_evaluate_output`); the repaired text is validated like
+    any answer. ``response.text`` stays the raw answer, and the report's
+    ``repaired`` / ``repair_edits`` say what changed.
 
     No plan: the response is returned unchanged. Text-only: the response plus
     a ``text-only`` report. Valid: ``structured`` is the validated object and
@@ -359,7 +405,7 @@ def finalize_contract(plan: Optional[DeliveryPlan], response: LLMResponse) -> LL
     """
     if plan is None:
         return response
-    outcome = evaluate_output(plan.contract, response.text)
+    outcome = repair_and_evaluate_output(plan.contract, response.text)
     report = _report(plan, outcome)
     if outcome.disposition == DISPOSITION_TEXT_ONLY:
         return replace(response, output_contract=report)
@@ -410,6 +456,7 @@ __all__ = [
     "render_schema_instruction",
     "ContractOutcome",
     "evaluate_output",
+    "repair_and_evaluate_output",
     "contract_requirements",
     "merge_requirements",
     "DeliveryPlan",

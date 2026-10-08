@@ -243,7 +243,9 @@ backend for its first usable entry: a `claude`, `codex` or `opencode` harness
 entry gets that CLI backend, the `openrouter` entry gets `OpenRouterBackend`,
 and any other transport entry gets `ModelEndpointBackend`. Unset, it returns
 `OpenRouterBackend`. A supplied `mock` always wins so tests never reach a live
-transport. `CONTENT_PIPELINE_LLM_MODELS` is the only routing setting. `CONTENT_PIPELINE_LLM_BACKEND`, `CONTENT_PIPELINE_LLM_MODEL` and `CONTENT_PIPELINE_LLM_ENDPOINT` select nothing; if one is set while `CONTENT_PIPELINE_LLM_MODELS` is not, routing raises `ConfigurationError` naming it, rather than falling back to OpenRouter. When `CONTENT_PIPELINE_LLM_MODELS` is set, any of those three is ignored.
+transport. `CONTENT_PIPELINE_LLM_MODELS` is the only routing environment setting (a per-pipeline `models` argument overrides it; see the next paragraph). `CONTENT_PIPELINE_LLM_BACKEND`, `CONTENT_PIPELINE_LLM_MODEL` and `CONTENT_PIPELINE_LLM_ENDPOINT` select nothing; if one is set while `CONTENT_PIPELINE_LLM_MODELS` is not, routing raises `ConfigurationError` naming it, rather than falling back to OpenRouter. When `CONTENT_PIPELINE_LLM_MODELS` is set, any of those three is ignored.
+
+Routing is per pipeline when you pass the declaration: `route(models=[...])`, `routed_model(requested, models=[...])` and `declared_model_names(models)` take an ordered list of ids that wins over the environment, so two pipelines in one process can route differently. The environment variable is only the process-wide default when `models` is `None`; an empty explicit list raises `ConfigurationError`.
 
 ### The model-endpoint backend
 

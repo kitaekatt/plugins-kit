@@ -66,7 +66,7 @@ from content_pipeline.execution.model import (
 )
 from content_pipeline.execution.protocol import PROTOCOL_VERSION
 from content_pipeline.execution.store import ExecutionStore
-from content_pipeline.execution.wave import is_graph_strategy, ready_wave
+from content_pipeline.execution.wave import is_dependency_ordered, ready_wave
 from content_pipeline.pipeline.workunit import WorkUnitStrategy
 
 # ---------------------------------------------------------------------------
@@ -814,7 +814,9 @@ def build_wave_args(
     # policy rather than letting every pending/reclaimable unit through
     # regardless of the run's strategy. See the docstring above.
     if strategy is not None:
-        if is_graph_strategy(strategy):
+        # A parallel graph (`execution.parallel_graph`) is narrowed the same
+        # way: `ready_wave` admits up to its capacity, dependencies settled.
+        if is_dependency_ordered(strategy):
             # Raises eagerly, same as `ready_wave` itself, before the
             # (already-committed) reap work above is second-guessed.
             # `reclaim_at=now`: a unit whose claim expired is re-offered

@@ -488,6 +488,52 @@ def test_import_raises_shared_lib_too_old_when_describe_is_missing() -> None:
 
     assert type(excinfo.value).__name__ == "SharedLibTooOldError"
     message = str(excinfo.value)
-    assert "llm-scripting-kit >= 0.46.0" in message
+    assert "llm-scripting-kit >= 0.61.0" in message
     assert "'describe'" in message
     assert "claude plugin update llm-scripting-kit@plugins-kit" in message
+
+
+def _reload_with(monkeypatch_modules: dict) -> ImportError:
+    real = {name: sys.modules[name] for name in monkeypatch_modules}
+    real_select = sys.modules["job_kit.select"]
+    sys.modules.update(monkeypatch_modules)
+    try:
+        with pytest.raises(ImportError) as excinfo:
+            importlib.reload(job_kit_select)
+    finally:
+        sys.modules.update(real)
+        sys.modules["job_kit.select"] = real_select
+        importlib.reload(job_kit_select)
+    assert type(excinfo.value).__name__ == "SharedLibTooOldError"
+    return excinfo.value
+
+
+def test_import_raises_shared_lib_too_old_when_arm_call_is_missing() -> None:
+    stub = types.ModuleType("llm_scripting_kit.completion.requirements")
+    # arm_call deliberately omitted.
+    message = str(_reload_with({"llm_scripting_kit.completion.requirements": stub}))
+    assert "llm-scripting-kit >= 0.61.0" in message
+    assert "'arm_call'" in message
+    assert "claude plugin update llm-scripting-kit@plugins-kit" in message
+
+
+def test_import_raises_shared_lib_too_old_when_haltError_lacks_retry_after() -> None:
+    class OldHaltError(Exception):
+        def __init__(self, kind: str, detail: str = "") -> None:
+            super().__init__(detail)
+
+    stub = types.ModuleType("llm_scripting_kit.completion")
+    stub.__dict__.update(llm_scripting_kit_completion.__dict__)
+    stub.HaltError = OldHaltError
+    message = str(_reload_with({"llm_scripting_kit.completion": stub}))
+    assert "llm-scripting-kit >= 0.61.0" in message
+    assert "retry_after_s" in message
+    assert "claude plugin update llm-scripting-kit@plugins-kit" in message
+
+
+def test_absent_package_message_differs_from_too_old() -> None:
+    init_source = (Path(job_kit_select.__file__).parent / "__init__.py").read_text()
+    assert "claude plugin install llm-scripting-kit@plugins-kit" in init_source
+    assert "claude plugin install" not in str(
+        job_kit_select.SharedLibTooOldError("x", "m")
+    )

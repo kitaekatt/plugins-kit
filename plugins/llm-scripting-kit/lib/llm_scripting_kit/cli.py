@@ -30,6 +30,7 @@ from .completion import (
     resolve_endpoint_profile,
     utc_now_iso,
 )
+from .completion.halt import halt_payload
 from .constants import USER_ENV_FILE
 from .effort import remap_effort
 from .env_file import read_env_file, write_env_file
@@ -42,7 +43,15 @@ from .reachability import (
     check_many,
 )
 from . import usage_budget
-from .declaration import DeclarationSupportError, NoUsableRoutingTarget, describe
+from .declaration import (
+    RUN_ATTEMPT_LIMIT,
+    RUN_COMPLETED,
+    DeclarationSupportError,
+    NoUsableRoutingTarget,
+    RunRequest,
+    describe,
+)
+from .declaration import run as declaration_run
 from .seats import discover_seats
 from .swapper import (
     LISTENER_GRACE_S,
@@ -129,6 +138,31 @@ def _add_models_arg(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_requirements_arg(parser: argparse.ArgumentParser) -> None:
+    """``--requirements``: the capability requirement mapping, as in ``describe``."""
+    parser.add_argument(
+        "--requirements",
+        default=None,
+        help=(
+            "Capability requirement mapping: a JSON file path, or inline JSON "
+            "(starting with { or [). Entries that fail it are skipped."
+        ),
+    )
+
+
+def _load_requirements(value: Optional[str]) -> Any:
+    """The parsed ``--requirements`` value (file path or inline JSON), else None."""
+    if value is None:
+        return None
+    text = value.strip()
+    if text[:1] in ("{", "["):
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"--requirements is not valid JSON: {exc}") from exc
+    return json.loads(Path(value).read_text(encoding="utf-8"))
+
+
 def _add_swapper_target_arg(parser: argparse.ArgumentParser) -> None:
     """``--endpoint`` or ``--url``, exactly one -- the swapper this verb targets."""
     target = parser.add_mutually_exclusive_group(required=True)
@@ -165,11 +199,7 @@ def _add_describe_args(parser: argparse.ArgumentParser) -> None:
             "entries in the menu, for a caller with its own transport runner."
         ),
     )
-    parser.add_argument(
-        "--requirements",
-        type=Path,
-        help="JSON file holding a capability requirement mapping.",
-    )
+    _add_requirements_arg(parser)
     parser.add_argument(
         "--exclude",
         action="append",
@@ -200,10 +230,11 @@ def _backend_factory(name: str, **kwargs: Any) -> Any:
     return create_backend(name, **kwargs)
 
 
-def _first_usable(ids: list[str], project_root: Optional[str]) -> str:
+def _first_usable(ids: list[str], project_root: Optional[str], requirements: Any = None) -> str:
     """The default entry of ``describe`` for a process caller; raises the floor."""
     ranking = describe(
-        ids, project_root=project_root, caller="process", backend_factory=_backend_factory
+        ids, project_root=project_root, caller="process", backend_factory=_backend_factory,
+        requirements=requirements,
     )
     assert ranking.default is not None  # describe() raises the floor otherwise
     return ranking.default.id
@@ -304,12 +335,30 @@ def _parser() -> argparse.ArgumentParser:
     _add_project_arg(models)
     resolve = sub.add_parser("resolve", help="Resolve an endpoint/model selection.")
     _add_models_arg(resolve)
+    _add_requirements_arg(resolve)
     _add_project_arg(resolve)
     resolve.add_argument("--model")
     resolve.add_argument("--cheap", action="store_true")
 
-    complete = sub.add_parser("complete", help="Run one configured completion.")
+    complete = sub.add_parser(
+        "complete",
+        help=(
+            "Run one configured completion. With several --models (or "
+            "--requirements) the first usable entry serves and a classified halt "
+            "falls back to the next."
+        ),
+    )
     _add_models_arg(complete)
+    _add_requirements_arg(complete)
+    complete.add_argument(
+        "--max-attempts",
+        type=_positive_int,
+        default=None,
+        help=(
+            "Executions allowed across the declaration (default: one per declared "
+            "entry; refused with exit 2 on a single-entry call without --requirements)."
+        ),
+    )
     _add_project_arg(complete)
     complete.add_argument("--model")
     # Every call-describing flag defaults to None so "unset" is distinguishable
@@ -517,7 +566,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         if args.cmd == "models":
             return _cmd_models(args.endpoint, args.project_root)
         if args.cmd == "resolve":
-            return _cmd_resolve(_declared_models(args), args.model, args.cheap, args.project_root)
+            return _cmd_resolve(
+                _declared_models(args), args.model, args.cheap, args.project_root,
+                _load_requirements(args.requirements),
+            )
         if args.cmd == "request-schema":
             _json(describe_request_schema())
             return EXIT_OK
@@ -730,9 +782,7 @@ def _cmd_describe(ids: list[str], args: argparse.Namespace) -> int:
     against the merged registry, because the agent drives the harness itself.
     Hidden entries are absent from the output; they surface only in the floor.
     """
-    requirements = None
-    if args.requirements is not None:
-        requirements = json.loads(args.requirements.read_text(encoding="utf-8"))
+    requirements = _load_requirements(args.requirements)
     ranking = describe(
         ids,
         project_root=args.project_root,
@@ -1023,7 +1073,8 @@ def _effort_report(selection: Any, project_root: Optional[str]) -> "tuple[Option
 
 
 def _cmd_resolve(
-    declared: Optional[list[str]], model: Optional[str], cheap: bool, project_root: Optional[str]
+    declared: Optional[list[str]], model: Optional[str], cheap: bool, project_root: Optional[str],
+    requirements: Any = None,
 ) -> int:
     """Resolve the first usable entry of ``--models`` (or the default endpoint).
 
@@ -1033,7 +1084,14 @@ def _cmd_resolve(
     ``declared_effort`` is the registry default, and ``effort_delivery`` says
     how the endpoint takes an effort.
     """
-    endpoint = _first_usable(declared, project_root) if declared else None
+    if requirements is not None and not declared:
+        raise ValueError("--requirements needs --models: it filters a declaration")
+    if not declared:
+        endpoint = None
+    elif requirements is None:
+        endpoint = _first_usable(declared, project_root)
+    else:
+        endpoint = _first_usable(declared, project_root, requirements)
     selection = create_backend(endpoint, model=model, cheap=cheap, project_root=project_root)
     delivered, delivery = _effort_report(selection, project_root)
     _json({"endpoint": selection.endpoint, "kind": selection.kind, "backend": selection.backend.name,
@@ -1058,6 +1116,8 @@ def _read_text(path: Optional[Path], inline: Optional[str], *, stdin_fallback: b
 #: rather than the request, so they compose with either surface.
 _COMPLETE_CALL_FLAGS = (
     "models",
+    "requirements",
+    "max_attempts",
     "endpoint",
     "model",
     "cheap",
@@ -1094,8 +1154,12 @@ def _request_from_flags(args: argparse.Namespace) -> "tuple[str, str, Any, Backe
     system = _read_text(args.system_file, flag("system"))
     user = _read_text(args.prompt_file, args.prompt, stdin_fallback=True)
     declared = _declared_models(args)
+    requirements = _load_requirements(args.requirements)
+    if requirements is not None and not declared:
+        raise ValueError("--requirements needs --models: it filters a declaration")
     selection = create_backend(
-        _first_usable(declared, args.project_root) if declared else None,
+        _first_usable(declared, args.project_root) if declared and requirements is None
+        else _first_usable(declared, args.project_root, requirements) if declared else None,
         model=args.model,
         cheap=flag("cheap"),
         project_root=args.project_root,
@@ -1154,6 +1218,16 @@ def _request_from_protocol(
     return request.system, request.prompt, selection, options
 
 
+def _positive_int(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid positive integer: {text!r}") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be >= 1, got {value}")
+    return value
+
+
 def _non_negative_int(text: str) -> int:
     try:
         value = int(text)
@@ -1164,7 +1238,160 @@ def _non_negative_int(text: str) -> int:
     return value
 
 
+def _routed(args: argparse.Namespace) -> bool:
+    """True when ``complete`` goes through ``declaration.run`` (selection + fallback).
+
+    A multi-entry ``--models`` or any ``--requirements``. A single entry with no
+    requirements keeps the original one-call path byte for byte.
+    """
+    if args.request_file:
+        return False
+    declared = _declared_models(args) or []
+    return len(declared) > 1 or args.requirements is not None
+
+
+def _failed_response(
+    entry: str, attempt: Any, selection: Any, options: BackendOptions
+) -> LLMResponse:
+    """The failed response a routed run reports when no response exists."""
+    halted = attempt is not None and attempt.outcome == "halted"
+    return LLMResponse(
+        text="",
+        model=getattr(selection, "model", "") or "",
+        status=ERROR,
+        error=ResponseError(
+            code=(attempt.halt if halted and attempt.halt else "execution"),
+            message=(attempt.error if attempt is not None and attempt.error else "no entry served"),
+        ),
+        dropped_params=_dropped_for(selection.backend, options) if selection else (),
+        forwarded_params=_forwarded_for(selection.backend, options) if selection else (),
+    )
+
+
+def _cmd_complete_routed(args: argparse.Namespace) -> int:
+    """``complete`` over a declaration: first usable entry serves, halts fall back.
+
+    The envelope is the single-call envelope for the entry that served (or the
+    last one tried) plus ``entry``, ``run_status``, ``declaration`` and
+    ``attempts`` (one object per execution, ``declaration.Attempt.to_json``).
+    """
+    declared = _declared_models(args) or []
+    requirements = _load_requirements(args.requirements)
+    if not declared:
+        raise ValueError("--requirements needs --models: it filters a declaration")
+    system = _read_text(args.system_file, _FLAG_DEFAULTS["system"] if args.system is None else args.system)
+    user = _read_text(args.prompt_file, args.prompt, stdin_fallback=True)
+    options = BackendOptions(
+        max_tokens=_FLAG_DEFAULTS["max_tokens"] if args.max_tokens is None else args.max_tokens,
+        temperature=args.temperature,
+        timeout_s=args.timeout,
+        max_retries=args.max_retries,
+        effort=args.effort,
+        cwd=args.cwd,
+    )
+    cheap = bool(args.cheap)
+    selections: dict[str, Any] = {}
+
+    def factory(name: str, **kwargs: Any) -> Any:
+        kwargs.setdefault("model", args.model)
+        kwargs.setdefault("cheap", cheap)
+        selection = _backend_factory(name, **kwargs)
+        selection = dataclasses.replace(selection, backend=_Recording(selection.backend)) \
+            if dataclasses.is_dataclass(selection) else selection
+        selections[name] = selection
+        return selection
+
+    attempts: list[Any] = []
+    attempt_halts: list[Any] = []
+    last_exc: list[Any] = [None]
+
+    class _Recording:
+        """Backend proxy remembering the exception behind each classified halt."""
+
+        def __init__(self, inner: Any) -> None:
+            self._inner = inner
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._inner, name)
+
+        def classify_halt(self, exc: BaseException) -> Any:
+            last_exc[0] = exc
+            return self._inner.classify_halt(exc)
+
+    def on_attempt(attempt: Any) -> None:
+        attempts.append(attempt)
+        attempt_halts.append(
+            halt_payload(attempt.halt, last_exc[0]) if attempt.halt else None
+        )
+        last_exc[0] = None
+
+    max_attempts = args.max_attempts or len(declared)
+    floor: Optional[NoUsableRoutingTarget] = None
+    result = None
+    try:
+        result = declaration_run(
+            declared,
+            RunRequest(system=system, prompt=user, options=options),
+            project_root=args.project_root,
+            requirements=requirements,
+            max_attempts=max_attempts,
+            on_attempt=on_attempt,
+            backend_factory=factory,
+        )
+    except NoUsableRoutingTarget as exc:
+        if not attempts:
+            raise  # nothing ran: the ordinary floor
+        floor = exc
+    last = attempts[-1] if attempts else None
+    entry = result.entry if result is not None else (last.entry if last else None)
+    selection = selections.get(entry) if entry else None
+    status = result.status if result is not None else "no-usable-entry"
+    extras = {
+        "entry": entry,
+        "run_status": status,
+        "declaration": declared,
+        "attempts": [
+            {**a.to_json(), "halt_payload": h} for a, h in zip(attempts, attempt_halts)
+        ],
+    }
+    if attempt_halts and attempt_halts[-1] is not None and (
+        result is None or result.status != RUN_COMPLETED
+    ):
+        extras["halt"] = attempt_halts[-1]
+    if floor is not None:
+        extras["floor"] = floor.to_json()
+    ran_contract = False
+    if result is not None and status == RUN_COMPLETED:
+        response = result.response
+    elif result is not None and result.response is not None:
+        response, ran_contract = result.response, True
+    else:
+        response = _failed_response(entry or "", last, selection, options)
+    if args.format == "text":
+        if status == RUN_COMPLETED:
+            print(_answer_text(response))
+        else:
+            print(f"{response.error.code}: {response.error.message}", file=sys.stderr)
+    else:
+        envelope = _complete_envelope(selection, response, call_ran=ran_contract)
+        envelope.update(extras)
+        _json(envelope)
+    if status == RUN_COMPLETED:
+        return EXIT_OK
+    halted = status == RUN_ATTEMPT_LIMIT or floor is not None
+    return EXIT_HALT if halted else EXIT_FAILURE
+
+
 def _cmd_complete(args: argparse.Namespace) -> int:
+    if _routed(args):
+        return _cmd_complete_routed(args)
+    if args.max_attempts is not None and not args.request_file:
+        # The single-call path makes exactly one execution; accepting the flag
+        # and ignoring it would hide a limit the caller believes is in force.
+        raise ValueError(
+            "--max-attempts needs a multi-entry --models or --requirements: "
+            "a single-entry call makes exactly one execution"
+        )
     try:
         if args.request_file:
             system, user, selection, options = _request_from_protocol(args)
@@ -1231,15 +1458,34 @@ def _cmd_complete(args: argparse.Namespace) -> int:
             # the only place a failure can be stated
             print(f"{failed.error.code}: {failed.error.message}", file=sys.stderr)
         else:
-            _json(_complete_envelope(selection, failed))
+            envelope = _complete_envelope(selection, failed)
+            if halt:
+                envelope["halt"] = halt_payload(halt, exc)
+            _json(envelope)
         # Exit codes are UNCHANGED: they stay the shell-level signal, and the
         # envelope is the machine-readable one. A caller may read either.
         return EXIT_HALT if halt else EXIT_FAILURE
     if args.format == "text":
-        print(response.text)
+        print(_answer_text(response))
     else:
         _json(_complete_envelope(selection, response))
     return EXIT_OK
+
+
+def _answer_text(response: LLMResponse) -> str:
+    """The text ``--format text`` prints as the answer.
+
+    A structurally repaired contract answer keeps the RAW model text in
+    ``response.text`` (provenance), which is not parseable JSON. Printing it as
+    the answer would turn a formerly failing call into exit 0 with broken JSON,
+    so the repaired value is printed, serialized as JSON. The JSON envelope
+    carries both: raw ``text`` and the validated ``structured`` value, with
+    ``output_contract.repair`` saying a repair was applied.
+    """
+    report = response.output_contract
+    if report is not None and report.repaired and response.structured is not None:
+        return json.dumps(response.structured, ensure_ascii=False)
+    return response.text
 
 
 def _params_report(backend: Any, options: BackendOptions) -> Optional[tuple]:

@@ -958,8 +958,15 @@ def _declaration_module() -> Any:
     return _declaration
 
 
-def declared_model_names() -> Optional[List[str]]:
-    """The parsed :data:`MODELS_ENV` declaration, or ``None`` when unset.
+def declared_model_names(
+    models: "Optional[Sequence[str]]" = None,
+) -> Optional[List[str]]:
+    """The model declaration in force, or ``None`` when there is none.
+
+    An explicit ``models`` list (ordered llm-scripting-kit ids, passed per
+    pipeline or per call) wins; an empty one is a ``ConfigurationError``.
+    With ``models=None`` the process-wide :data:`MODELS_ENV` is the
+    backward-compatible default: the parsed value, or ``None`` when unset.
 
     Splits on commas (the "repeated CLI flag or comma list" env carrier of
     the declaration format); each part is stripped and empty parts are
@@ -967,6 +974,14 @@ def declared_model_names() -> Optional[List[str]]:
     ``llm_scripting_kit.declaration.describe`` via
     ``bootstrap_lib.model_declaration``, not here.
     """
+    if models is not None:
+        names = [str(m).strip() for m in models if str(m).strip()]
+        if not names:
+            raise platform.ConfigurationError(
+                "an explicit models declaration must name at least one "
+                "llm-scripting-kit model id"
+            )
+        return names
     raw = os.environ.get(MODELS_ENV, "").strip()
     if not raw:
         return None
@@ -1034,7 +1049,10 @@ legitimate call after a mid-run re-selection that should re-probe)."""
 
 
 def _resolve_declared_entry(
-    *, project_root: Optional[str] = None, output_contract: Optional[Any] = None
+    *,
+    project_root: Optional[str] = None,
+    output_contract: Optional[Any] = None,
+    models: "Optional[Sequence[str]]" = None,
 ) -> Any:
     """The first usable entry for the ACTIVE :data:`MODELS_ENV` declaration, memoized.
 
@@ -1048,7 +1066,7 @@ def _resolve_declared_entry(
     stale shared lib refuses with its own diagnosis), and the memo is keyed
     on the contract's ``identity()``.
     """
-    names = declared_model_names()
+    names = declared_model_names(models)
     identity: Optional[tuple] = None
     requirements: Optional[Dict[str, Any]] = None
     if output_contract is not None:
@@ -1095,7 +1113,7 @@ entry -- a metered API when a subscription backend was meant -- and changes
 every response-cache key."""
 
 
-def _refuse_removed_routing_env() -> None:
+def _refuse_removed_routing_env(models: "Optional[Sequence[str]]" = None) -> None:
     """Raise :class:`~content_pipeline.llm.platform.ConfigurationError` when a
     removed routing env is set and :data:`MODELS_ENV` is not.
 
@@ -1105,7 +1123,7 @@ def _refuse_removed_routing_env() -> None:
     chosen the replacement, and a per-call warning would repeat on every
     routed call.
     """
-    if declared_model_names() is not None:
+    if declared_model_names(models) is not None:
         return
     stale = [n for n in REMOVED_ROUTING_ENVS if os.environ.get(n, "").strip()]
     if stale:
@@ -1123,8 +1141,14 @@ def route(
     openrouter: Optional[Any] = None,
     mock: Optional[Any] = None,
     output_contract: Optional[Any] = None,
+    models: "Optional[Sequence[str]]" = None,
 ) -> Any:
-    """Return the process-active backend instance.
+    """Return the backend for this call's declaration.
+
+    ``models`` is the explicit, ordered list of llm-scripting-kit ids for THIS
+    pipeline or call; it wins over :data:`MODELS_ENV`, which stays only as the
+    process-wide default when ``models`` is ``None``. Two pipelines in one
+    process may therefore route differently. The memo key includes the names.
 
     A supplied ``mock`` wins UNCONDITIONALLY -- checked before the
     declaration is even read. This is the seam that keeps tests off a live
@@ -1156,9 +1180,9 @@ def route(
     """
     if mock is not None:
         return mock
-    _refuse_removed_routing_env()
-    if declared_model_names() is not None:
-        entry = _resolve_declared_entry(output_contract=output_contract)
+    _refuse_removed_routing_env(models)
+    if declared_model_names(models) is not None:
+        entry = _resolve_declared_entry(output_contract=output_contract, models=models)
         if entry.id == "openrouter" and openrouter is not None:
             # The caller's instance IS the openrouter entry: it carries the
             # client, endpoint pin and budget wrapper a bare per-call
@@ -1185,6 +1209,7 @@ def routed_model(
     *,
     backend_name: Optional[str] = None,
     output_contract: Optional[Any] = None,
+    models: "Optional[Sequence[str]]" = None,
 ) -> str:
     """Resolve the model a routed call should run, truthfully.
 
@@ -1202,12 +1227,12 @@ def routed_model(
     returned id is what lands on ``LLMResponse.model`` and therefore on
     audit records.
 
-    Pass the same ``output_contract`` given to :func:`route`: a contract can
+    Pass the same ``models`` and ``output_contract`` given to :func:`route`: a contract can
     select a different entry, and the model must be that entry's.
     """
-    _refuse_removed_routing_env()
-    if declared_model_names() is not None:
-        entry = _resolve_declared_entry(output_contract=output_contract)
+    _refuse_removed_routing_env(models)
+    if declared_model_names(models) is not None:
+        entry = _resolve_declared_entry(output_contract=output_contract, models=models)
         if entry.id == "openrouter" and requested_model:
             return requested_model
         return entry.model or requested_model

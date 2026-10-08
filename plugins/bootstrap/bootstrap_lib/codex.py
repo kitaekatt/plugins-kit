@@ -262,13 +262,14 @@ def build_codex_exec_argv(
     json_events: bool = False,
     extra_config: Iterable[str] = (),
     argv_prefix: Optional[Sequence[str]] = None,
+    ignore_user_config: bool = False,
 ) -> list:
     """Build the ONE sanctioned ``codex exec`` invocation.
 
     Emitted shape (stdin ``-`` is ALWAYS last, so the prompt rides stdin and
     never argv)::
 
-        <prefix> exec -s <sandbox>
+        <prefix> exec [--ignore-user-config] -s <sandbox>
             -c windows.sandbox="unelevated"                 # Windows only
             -c sandbox_workspace_write.network_access=true  # when network
             [-m MODEL] [-c model_reasoning_effort=EFFORT] [-c EXTRA]...
@@ -291,6 +292,10 @@ def build_codex_exec_argv(
     ``extra_config`` is an iterable of raw ``key=value`` strings, each appended
     as a further ``-c`` pair after the ones this function derives.
 
+    ``ignore_user_config`` emits ``--ignore-user-config``: codex then loads no
+    ``$CODEX_HOME/config.toml`` (so no user MCP server, plugin or provider
+    entry), while auth still comes from ``CODEX_HOME``.
+
     ``argv_prefix=None`` resolves the launcher via ``resolve_cli`` and raises
     RuntimeError when Codex is not on PATH.
     """
@@ -309,7 +314,10 @@ def build_codex_exec_argv(
         dirs.append(_absolute(scratch_dir, "scratch_dir"))
 
     argv = [str(part) for part in argv_prefix]
-    argv += ["exec", "-s", str(sandbox)]
+    argv.append("exec")
+    if ignore_user_config:
+        argv.append("--ignore-user-config")
+    argv += ["-s", str(sandbox)]
     if os.name == "nt":
         argv += ["-c", 'windows.sandbox="unelevated"']
     if network:
