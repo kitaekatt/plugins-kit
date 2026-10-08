@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Callable, Collection, Mapping, Sequence
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from .model import Job
 
@@ -183,6 +184,13 @@ _ADVERTISED = {"params": []}
 PaceReading = Mapping[str, object]
 
 
+def _selection_requirements(
+    requirements: Mapping[str, object],
+) -> Mapping[str, object]:
+    """Require an advertisement record when no capability is otherwise needed."""
+    return dict(requirements) or _ADVERTISED
+
+
 def _memoized(
     factory: BackendFactory,
 ) -> tuple[BackendFactory, dict[str, BackendSelection]]:
@@ -197,6 +205,88 @@ def _memoized(
     return wrapper, resolved
 
 
+def _pace_readings(ranking: Any) -> tuple[PaceReading, ...]:
+    """Return the stable attempt-ledger projection of one ranking."""
+    return tuple(
+        {"id": entry.id, "pace": entry.pace, "usable": entry.usable}
+        for entry in ranking.rendered_entries
+    )
+
+
+def _select_with_model_sidecars(
+    job: Job,
+    *,
+    advertised: Mapping[str, Capabilities],
+    factory: BackendFactory,
+    resolved: dict[str, BackendSelection],
+    halted_endpoints: Collection[str],
+    project_root: Optional[str | Path],
+    reachability_cache: Optional[dict],
+) -> tuple[BackendSelection, tuple[PaceReading, ...]]:
+    """Rank once, then ask the kit to match each entry's requirements.
+
+    The first describe call has no requirements: it establishes pace order,
+    quota and reachability once for the whole declaration. Each rendered entry
+    is then described alone with its effective requirements. The same
+    reachability mapping is passed to every call, so those checks are never
+    repeated. Requirement matching remains inside llm-scripting-kit, including
+    its transport-entry capability specialization.
+    """
+    cache = reachability_cache if reachability_cache is not None else {}
+    excluded = frozenset(halted_endpoints)
+    try:
+        ranking = _describe(
+            list(job.models),
+            project_root=project_root,
+            caller=_CALLER_PROCESS,
+            requirements=None,
+            capabilities=advertised,
+            backend_factory=factory,
+            exclude=excluded,
+            reachability_cache=cache,
+        )
+    except NoUsableRoutingTarget as floor:
+        raise NoCompatibleEndpointError(job.id, floor) from None
+
+    readings = _pace_readings(ranking)
+    dispositions = {
+        disposition.declared_index: disposition
+        for disposition in ranking.dispositions
+    }
+    for entry in ranking.rendered_entries:
+        try:
+            checked = _describe(
+                [entry.id],
+                project_root=project_root,
+                caller=_CALLER_PROCESS,
+                requirements=_selection_requirements(
+                    job.effective_requirements(entry.id)
+                ),
+                capabilities=advertised,
+                backend_factory=factory,
+                exclude=excluded,
+                reachability_cache=cache,
+            )
+        except NoUsableRoutingTarget as floor:
+            dispositions[entry.declared_index] = dataclasses.replace(
+                floor.dispositions[0], declared_index=entry.declared_index
+            )
+            continue
+        chosen = checked.default
+        if chosen is None:  # pragma: no cover - describe raises the floor
+            raise SelectionError(
+                f"job {job.id!r}: describe returned no default entry"
+            )
+        return resolved[chosen.id], readings
+
+    floor = NoUsableRoutingTarget(
+        job.models,
+        tuple(dispositions[index] for index in range(len(job.models))),
+        _CALLER_PROCESS,
+    )
+    raise NoCompatibleEndpointError(job.id, floor)
+
+
 def select_endpoint_with_readings(
     job: Job,
     *,
@@ -209,16 +299,19 @@ def select_endpoint_with_readings(
 ) -> tuple[BackendSelection, tuple[PaceReading, ...]]:
     """Select the first usable entry of the job's pace-ordered declaration.
 
-    Selection is llm-scripting-kit's ``describe(caller="process")`` over
-    ``job.models``: every declared id is classified (unresolved, requirements
-    mismatch, excluded, out of quota, unreachable, usable), the rendered
-    entries are ordered by pace, and the first usable one is taken. Skipping
-    is silent. ``halted_endpoints`` is passed as ``exclude``;
-    ``job.requirements`` (with a run's deny floor already applied by the
-    caller) is matched against ``capabilities`` keyed by the RESOLVED backend
-    name, the same record execution reads. ``reachability_cache`` is read
-    first and receives every probe, so a run-scoped mapping probes each entry
-    once per run.
+    A job without per-model sidecars uses llm-scripting-kit's single
+    ``describe(caller="process")`` call over ``job.models``: every declared id
+    is classified (unresolved, requirements mismatch, excluded, out of quota,
+    unreachable, usable), the rendered entries are ordered by pace, and the
+    first usable one is taken. A job with either sidecar ranks once without
+    requirements, then describes each rendered id with its effective
+    requirements in that pace order. Skipping is silent.
+
+    ``halted_endpoints`` is passed as ``exclude``; effective requirements
+    (with a run's deny floor already applied by the caller) are matched against
+    ``capabilities`` keyed by the RESOLVED backend name, the same record
+    execution reads. ``reachability_cache`` is read first and receives every
+    probe, so a run-scoped mapping probes each entry once per run.
 
     Returns the selection and the pace readings of the rendered entries it was
     chosen from (``{"id", "pace", "usable"}`` each, in pace order), which the
@@ -231,7 +324,17 @@ def select_endpoint_with_readings(
         else (capabilities_provider or adapter_capabilities)()
     )
     factory, resolved = _memoized(backend_factory or create_backend)
-    requirements = dict(job.requirements) or _ADVERTISED
+    if job.uses_model_sidecars:
+        return _select_with_model_sidecars(
+            job,
+            advertised=advertised,
+            factory=factory,
+            resolved=resolved,
+            halted_endpoints=halted_endpoints,
+            project_root=project_root,
+            reachability_cache=reachability_cache,
+        )
+    requirements = _selection_requirements(job.requirements)
     try:
         ranking = _describe(
             list(job.models),
@@ -248,11 +351,7 @@ def select_endpoint_with_readings(
     chosen = ranking.default
     if chosen is None:  # pragma: no cover - describe() raises the floor instead
         raise SelectionError(f"job {job.id!r}: describe returned no default entry")
-    readings = tuple(
-        {"id": entry.id, "pace": entry.pace, "usable": entry.usable}
-        for entry in ranking.rendered_entries
-    )
-    return resolved[chosen.id], readings
+    return resolved[chosen.id], _pace_readings(ranking)
 
 
 def select_endpoint(

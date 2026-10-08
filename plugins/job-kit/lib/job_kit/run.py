@@ -578,8 +578,29 @@ def _string_option(
     return value
 
 
+def _requirements_with_subjects(
+    requirements: Mapping[str, object], subjects: Collection[str]
+) -> dict[str, object]:
+    """Add required deny effects to one requirements mapping."""
+    result = dict(requirements)
+    existing = result.get("guarantees")
+    if isinstance(existing, Mapping):
+        merged = dict(existing)
+        merged.update({subject: True for subject in sorted(subjects)})
+        result["guarantees"] = merged
+    elif isinstance(existing, str):
+        result["guarantees"] = tuple(sorted({existing, *subjects}))
+    elif isinstance(existing, Sequence) and not isinstance(
+        existing, (str, bytes, bytearray)
+    ):
+        result["guarantees"] = tuple(sorted({*existing, *subjects}))
+    else:
+        result["guarantees"] = tuple(sorted(subjects))
+    return result
+
+
 def _require_floor_subjects(job: Job, run_floor: str) -> Job:
-    """Require the endpoint to guarantee the EFFECTS the deny floor names.
+    """Require every entry to guarantee the EFFECTS the deny floor names.
 
     A deny floor states outcomes -- no filesystem write, no shell, no subagent
     -- and every adapter family reaches them differently: claude-cli through
@@ -599,21 +620,24 @@ def _require_floor_subjects(job: Job, run_floor: str) -> Job:
     subjects = subjects_for_disallowed_tools(run_floor)
     if not subjects:
         return job
-    requirements = dict(job.requirements)
-    existing = requirements.get("guarantees")
-    if isinstance(existing, Mapping):
-        merged = dict(existing)
-        merged.update({subject: True for subject in sorted(subjects)})
-        requirements["guarantees"] = merged
-    elif isinstance(existing, str):
-        requirements["guarantees"] = tuple(sorted({existing, *subjects}))
-    elif isinstance(existing, Sequence) and not isinstance(
-        existing, (str, bytes, bytearray)
-    ):
-        requirements["guarantees"] = tuple(sorted({*existing, *subjects}))
-    else:
-        requirements["guarantees"] = tuple(sorted(subjects))
-    return replace(job, requirements=requirements)
+    if job.uses_model_sidecars:
+        model_requirements = {
+            model_id: _requirements_with_subjects(
+                job.effective_requirements(model_id), subjects
+            )
+            for model_id in job.models
+        }
+        # The effective maps now contain the job-level keys. Clear their
+        # former source so Job's collision guard remains true after replace().
+        return replace(
+            job,
+            requirements={},
+            model_requirements=model_requirements,
+        )
+    return replace(
+        job,
+        requirements=_requirements_with_subjects(job.requirements, subjects),
+    )
 
 
 def _entry_effort(
@@ -621,30 +645,36 @@ def _entry_effort(
     selection: BackendSelection,
     advertised: Mapping[str, Capabilities],
 ) -> Optional[str]:
-    """The effort the job states for the selected entry, checked deliverable.
+    """The per-entry effort the job states, checked deliverable.
 
-    ``None`` when the job has no ``model_efforts``. Otherwise the selected
-    entry's effort, after confirming its adapter advertises a delivered
-    ``effort`` param -- the record specialized to this endpoint when the
-    factory supplied one (a transport delivers effort only through its effort
-    style), else the family advertisement. Raises
+    ``None`` when neither sidecar states an effort for this entry. Otherwise
+    the selected entry's ``model_efforts`` or ``model_options.effort`` value,
+    after confirming its adapter advertises a delivered ``effort`` param --
+    the record specialized to this endpoint when the factory supplied one (a
+    transport delivers effort only through its effort style), else the family
+    advertisement. Raises
     :class:`~.select.EffortUndeliverableError` rather than dispatching at an
     effort nobody stated.
     """
-    if not job.model_efforts:
-        return None
-    effort = job.model_efforts.get(selection.endpoint)
-    if effort is None:
-        raise EffortUndeliverableError(
-            f"job {job.id!r}: selected entry {selection.endpoint!r} has no "
-            f"model_efforts entry (stated: {dict(job.model_efforts)})"
-        )
+    if job.model_efforts:
+        effort = job.model_efforts.get(selection.endpoint)
+        if effort is None:
+            raise EffortUndeliverableError(
+                f"job {job.id!r}: selected entry {selection.endpoint!r} has no "
+                f"model_efforts entry (stated: {dict(job.model_efforts)})"
+            )
+    else:
+        per_model = job.model_options.get(selection.endpoint, {})
+        effort_value = per_model.get("effort")
+        if effort_value is None:
+            return None
+        effort = str(effort_value)
     capabilities = selection.capabilities or _capabilities_for(selection, advertised)
     if capabilities is None or "effort" not in capabilities.params:
         raise EffortUndeliverableError(
             f"job {job.id!r}: entry {selection.endpoint!r} "
             f"({getattr(selection.backend, 'name', 'unknown')}) advertises no "
-            f"delivered effort, so model_efforts {effort!r} would be dropped; "
+            f"delivered effort, so per-model effort {effort!r} would be dropped; "
             "give a transport entry an effort_style, or declare an entry that "
             "carries effort"
         )
@@ -660,13 +690,14 @@ def _backend_options(
     run_floor: Optional[str],
     entry_effort: Optional[str] = None,
 ) -> BackendOptions:
-    """Build seam options from one job and its run-level deny floor."""
-    allowed_tools = _string_option(job.options, "allowed_tools", None)
-    job_disallowed = _string_option(job.options, "disallowed_tools", None)
+    """Build seam options for one selected entry, then apply the run floor."""
+    effective = job.effective_options(selection.endpoint)
+    allowed_tools = _string_option(effective, "allowed_tools", None)
+    job_disallowed = _string_option(effective, "disallowed_tools", None)
     system_prompt_mode = _string_option(
-        job.options, "system_prompt_mode", "replace"
+        effective, "system_prompt_mode", "replace"
     )
-    extras_value = job.options.get("extras", {})
+    extras_value = effective.get("extras", {})
     if extras_value is None:
         extras_value = {}
     if not isinstance(extras_value, Mapping):
@@ -675,9 +706,9 @@ def _backend_options(
     # property of the ENDPOINT rather than of the work. A job that needs more
     # deliberation than its endpoint's default says so here; unset keeps the
     # registry value, so an existing job file emits the same argv.
-    effort = _string_option(job.options, "effort", None)
-    max_tokens_value = job.options.get("max_tokens", 4096)
-    temperature_value = job.options.get("temperature")
+    effort = _string_option(effective, "effort", None)
+    max_tokens_value = effective.get("max_tokens", 4096)
+    temperature_value = effective.get("temperature")
     extras = dict(extras_value)
 
     return BackendOptions(
@@ -1020,7 +1051,7 @@ def _run_job_attempt(
         armed_call = arm_call(
             selection.backend,
             options,
-            selection_job.requirements,
+            selection_job.effective_requirements(selection.endpoint),
             advertised.get(getattr(selection.backend, "name", None)),
         )
         options = armed_call.options

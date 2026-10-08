@@ -7,6 +7,7 @@ from the job's declaration through llm-scripting-kit, and accepts a result only
 when a command says so.
 
 ```bash
+job-kit --version
 job-kit run jobs.yaml [--store PATH] [--timeout SECONDS] [--run-id ID] [--max-parallel N]
 job-kit status <run-id> [--store PATH]
 job-kit resume <run-id> [--store PATH] [--timeout SECONDS] [--max-parallel N]
@@ -78,6 +79,12 @@ jobs:
   them, `describe` and `subjects_for_disallowed_tools` for the deny floor); job_kit.select fails at
   import time with a named remediation if an older llm-scripting-kit is
   linked in.
+  A job carrying `model_requirements` or `model_options` first ranks the whole
+  declaration with no requirements to establish pace order and reachability,
+  then asks `describe([id], requirements=...)` about each entry in that order
+  using that entry's effective requirements and the same reachability cache.
+  The kit therefore still owns transport capability specialization. The floor
+  names every declared entry and its disposition when none matches.
 - **Command-shaped acceptance.** A `contract` command must exit zero for the
   attempt to be accepted. Model output that does not satisfy it is a failure,
   not a result, so nothing downstream has to trust the text.
@@ -142,6 +149,35 @@ When present it must name every declared id and nothing else, and it excludes
 whose adapter delivers no effort is refused before dispatch (the job ends
 `unroutable`, naming the entry), and an attempt whose seam reports the effort
 dropped fails with `effort_dropped` instead of reaching the contract.
+
+A job may also carry exhaustive `model_requirements` and `model_options`
+sidecars beside `models`:
+
+```yaml
+models: [harness, transport]
+model_requirements:
+  harness: {}
+  transport: {params: [max_tokens, temperature]}
+model_options:
+  harness: {}
+  transport: {max_tokens: 4096, temperature: 0.2}
+```
+
+Each non-empty sidecar must name every declared id exactly once and no other
+id. An absent or empty sidecar is unused. An entry's effective mapping is the
+job-level mapping merged with that entry's sidecar mapping. The two sources
+must be disjoint: setting the same key in both is rejected with an instruction
+to state it in one place. `model_options` accepts only `max_tokens`,
+`temperature`, `effort` and `extras`; `allowed_tools`, `disallowed_tools` and
+`system_prompt_mode` remain job-level. `model_efforts` and any per-model
+`effort` are mutually exclusive, and a per-model effort receives the same
+pre-dispatch deliverability check as `model_efforts`.
+
+Selection, arming and dispatch use only the chosen entry's effective mappings.
+The run-level `disallowed_tools` floor is added to every entry's effective
+requirements and unioned into its dispatch options after those options are
+chosen. Jobs without these sidecars keep the legacy single-`describe` path and
+their durable definition mapping is unchanged.
 
 `workspace` accepts `directory`, `base_ref` and `isolate`; `isolate` defaults
 to `false`.

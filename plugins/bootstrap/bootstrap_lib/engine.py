@@ -1225,6 +1225,11 @@ def _main_pass():
         save_config(data_dir, config)
 
     enabled_plugins.sort(key=_plugin_sort_key)
+    enabled_plugins = _order_plugins_by_shared_lib_dependencies(
+        enabled_plugins,
+        default_marketplace=marketplace_name,
+        bootstrap_ref=(marketplace_name, boot_plugin_name),
+    )
     deferred_plugin_logs = []
     processed_plugin_keys = set()
 
@@ -1247,8 +1252,13 @@ def _main_pass():
         from .config import save_config
         save_config(data_dir, config)
 
+    phase2_plugins.sort(key=_plugin_sort_key)
+    phase2_plugins = _order_plugins_by_shared_lib_dependencies(
+        phase2_plugins,
+        default_marketplace=marketplace_name,
+        bootstrap_ref=(marketplace_name, boot_plugin_name),
+    )
     new_plugins = _phase2_new_plugins(phase2_plugins, processed_plugin_keys)
-    new_plugins.sort(key=_plugin_sort_key)
     for plugin_info in new_plugins:
         _bootstrap_single_plugin_isolated(
             plugin_info, current_os, data_dir, all_failures,
@@ -1853,6 +1863,117 @@ def _plugin_processed_key(plugin_info):
     return (ref, plugin_info.version, plugin_info.install_path)
 
 
+def _order_plugins_by_shared_lib_dependencies(
+    plugins, default_marketplace="", bootstrap_ref=None,
+):
+    """Return a stable owner-before-consumer order for plugin provisioning.
+
+    ``plugins`` arrives in the established bootstrap-first, marketplace, name
+    order. A depth-first stable topological sort moves each shared-library
+    owner immediately ahead of the first consumer that needs it while keeping
+    that established order everywhere dependencies do not constrain it.
+
+    Manifest parse and shape errors remain the per-plugin pass's responsibility;
+    only valid ``shared_libs`` / ``shared_lib_imports`` declarations contribute
+    dependency edges here. A cycle is a pass-level ordering defect and raises
+    instead of provisioning either side against stale shared-library state.
+    """
+    plugins = list(plugins)
+    if len(plugins) < 2:
+        return plugins
+
+    manifests = []
+    owners = {}
+    marketplaces = []
+    for index, plugin_info in enumerate(plugins):
+        marketplace = plugin_info.marketplace or default_marketplace
+        marketplaces.append(marketplace)
+        manifest_path = os.path.join(plugin_info.install_path, "bootstrap.json")
+        try:
+            with open(manifest_path, "r") as f:
+                manifest = json.load(f)
+        except (OSError, ValueError):
+            manifest = None
+        manifests.append(manifest)
+        if not isinstance(manifest, dict):
+            continue
+        definitions = manifest.get("shared_libs", [])
+        if not isinstance(definitions, list):
+            continue
+        for definition in definitions:
+            if not isinstance(definition, dict):
+                continue
+            name = definition.get("name")
+            if isinstance(name, str) and name:
+                owners.setdefault((marketplace, name), []).append(index)
+
+    prerequisites = [[] for _plugin in plugins]
+    dependency_names = {}
+    for consumer, manifest in enumerate(manifests):
+        if not isinstance(manifest, dict):
+            continue
+        imports = manifest.get("shared_lib_imports", [])
+        if not isinstance(imports, list):
+            continue
+        seen = set()
+        for name in imports:
+            if not isinstance(name, str) or not name:
+                continue
+            for owner in owners.get((marketplaces[consumer], name), []):
+                if owner == consumer or owner in seen:
+                    continue
+                seen.add(owner)
+                prerequisites[consumer].append(owner)
+                dependency_names.setdefault((consumer, owner), []).append(name)
+
+    def _label(index):
+        plugin_info = plugins[index]
+        marketplace = marketplaces[index]
+        return f"{marketplace}:{plugin_info.name}" if marketplace else plugin_info.name
+
+    state = [0] * len(plugins)
+    stack = []
+    result = []
+
+    def _visit(index):
+        if state[index] == 2:
+            return
+        if state[index] == 1:
+            cycle_start = stack.index(index)
+            cycle = stack[cycle_start:] + [index]
+            raise RuntimeError(
+                "shared-library dependency cycle (consumer -> owner): "
+                + " -> ".join(_label(item) for item in cycle)
+            )
+        state[index] = 1
+        stack.append(index)
+        for owner in prerequisites[index]:
+            _visit(owner)
+        stack.pop()
+        state[index] = 2
+        result.append(index)
+
+    for index in range(len(plugins)):
+        _visit(index)
+
+    if bootstrap_ref is not None:
+        bootstrap_indexes = [
+            index for index, plugin_info in enumerate(plugins)
+            if (marketplaces[index], plugin_info.name) == bootstrap_ref
+        ]
+        if bootstrap_indexes and result[0] != bootstrap_indexes[0]:
+            bootstrap_index = bootstrap_indexes[0]
+            owner_index = prerequisites[bootstrap_index][0]
+            names = ", ".join(dependency_names[(bootstrap_index, owner_index)])
+            raise RuntimeError(
+                "shared-library dependency order cannot preserve bootstrap-first: "
+                f"{_label(bootstrap_index)} imports {names} owned by "
+                f"{_label(owner_index)}"
+            )
+
+    return [plugins[index] for index in result]
+
+
 def _phase2_new_plugins(phase2_plugins, processed_keys):
     """Phase-2 rescan results not already processed in Phase 1, keyed by
     ``_plugin_processed_key`` -- see that function's docstring for why version
@@ -2263,10 +2384,10 @@ def _shared_lib_convergence_sweep(plugins, data_dir, link_log=None, engine_versi
     """Re-link every consumer's ``shared_lib_imports`` after all owners published.
 
     Consumer links (writing ``<lib>.pth`` into a plugin's own venv) happen inline
-    during that plugin's manifest processing. If a consumer is processed BEFORE
-    the owner publishes the lib (plugins run in sort order, so this is purely an
-    ordering accident), the inline link soft-skips with "not yet published; will
-    retry next session" -- a gratuitous extra session/restart.
+    during that plugin's manifest processing. The Step 4 / 4b dependency order
+    normally places enabled owners first. An owner can still enter the registry
+    after its consumer was processed, making the inline link soft-skip with "not
+    yet published; will retry next session".
 
     By the time the full plugin loop (Step 4 + the 4b re-scan) has finished, every
     owner has published, so one idempotent re-link sweep converges the pass: a

@@ -1,5 +1,7 @@
 """job-kit: a durable runner for heterogeneous agent jobs."""
 
+__version__ = "0.13.0"
+
 _TOP_LEVEL_SHARED_LIBS = frozenset({"llm_scripting_kit"})
 
 try:
@@ -125,6 +127,7 @@ from .workspace import (
 )
 
 __all__ = [
+    "__version__",
     "Acceptance",
     "Attempt",
     "AttemptError",

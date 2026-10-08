@@ -37,6 +37,13 @@ the selected entry's effort as that attempt's effort, and refuses an entry
 whose adapter delivers no effort, or an attempt whose seam reports the effort
 dropped, rather than running it at some other effort.
 
+The optional ``model_requirements`` and ``model_options`` mappings are also
+exhaustive sidecars keyed by ``models``. Each entry's effective requirements
+and options are its sidecar mapping merged with the disjoint job-level mapping.
+``model_options`` accepts only completion controls: ``max_tokens``,
+``temperature``, ``effort`` and ``extras``. Tool controls and system-prompt
+mode remain job-level because they are run policy, not model-specific knobs.
+
 The job's directory is the declared working directory. Git repositories use
 that directory as the starting point for per-attempt isolation. A contract
 accepts only when its command exits with code zero.
@@ -87,6 +94,11 @@ _JOB_OPTION_KEYS = frozenset(
         "temperature",
     }
 )
+
+_MODEL_OPTION_KEYS = frozenset(
+    {"max_tokens", "temperature", "effort", "extras"}
+)
+_JOB_LEVEL_ONLY_OPTION_KEYS = _JOB_OPTION_KEYS - _MODEL_OPTION_KEYS
 
 
 def _split_command(value: str) -> tuple[str, ...]:
@@ -145,6 +157,113 @@ def _normalize_job_options(value: object) -> dict[str, object]:
     if extras is not None:
         options["extras"] = dict(extras)
     return options
+
+
+def _sidecar_entries(
+    value: object,
+    models: tuple[str, ...],
+    job_id: str,
+    sidecar: str,
+) -> dict[str, Mapping[object, object]]:
+    """Validate one exhaustive per-model mapping and preserve model order."""
+    where = f"job {job_id!r} {sidecar}"
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError(
+            f"{where} must be a mapping of declared model id -> mapping, got "
+            f"{type(value).__name__}"
+        )
+    if not value:
+        return {}
+    entries: dict[str, Mapping[object, object]] = {}
+    for key, entry in value.items():
+        if not isinstance(key, str) or not key.strip():
+            raise ValueError(f"{where} has a blank or non-string id {key!r}")
+        name = key.strip()
+        if name in entries:
+            raise ValueError(f"{where} names {name!r} twice")
+        if name not in models:
+            raise ValueError(
+                f"{where} names {name!r}, which models does not declare "
+                f"(declared: {list(models)})"
+            )
+        if not isinstance(entry, Mapping):
+            raise ValueError(
+                f"{where}: {name!r} must have a mapping, got "
+                f"{type(entry).__name__}"
+            )
+        entries[name] = entry
+    missing = [name for name in models if name not in entries]
+    if missing:
+        raise ValueError(
+            f"{where} states no entry for declared model(s) {missing}; state "
+            "one mapping per declared entry"
+        )
+    return {name: entries[name] for name in models}
+
+
+def _normalize_model_requirements(
+    value: object,
+    models: tuple[str, ...],
+    requirements: Mapping[str, object],
+    job_id: str,
+) -> dict[str, dict[object, object]]:
+    """Validate the exhaustive per-entry requirements sidecar."""
+    entries = _sidecar_entries(value, models, job_id, "model_requirements")
+    normalized: dict[str, dict[object, object]] = {}
+    for name, entry in entries.items():
+        collision = [key for key in entry if key in requirements]
+        if collision:
+            raise ValueError(
+                f"job {job_id!r} sets requirement key(s) {collision!r} in both "
+                f"requirements and model_requirements[{name!r}]; state it in "
+                "one place"
+            )
+        normalized[name] = dict(entry)
+    return normalized
+
+
+def _normalize_model_options(
+    value: object,
+    models: tuple[str, ...],
+    options: Mapping[str, object],
+    model_efforts: Mapping[str, str],
+    job_id: str,
+) -> dict[str, dict[str, object]]:
+    """Validate completion-only per-entry options and source exclusivity."""
+    entries = _sidecar_entries(value, models, job_id, "model_options")
+    normalized: dict[str, dict[str, object]] = {}
+    for name, entry in entries.items():
+        job_level_only = [key for key in entry if key in _JOB_LEVEL_ONLY_OPTION_KEYS]
+        if job_level_only:
+            raise ValueError(
+                f"job {job_id!r} model_options[{name!r}] contains job-level only "
+                f"key(s): {job_level_only!r}"
+            )
+        unknown = [
+            key
+            for key in entry
+            if not isinstance(key, str) or key not in _MODEL_OPTION_KEYS
+        ]
+        if unknown:
+            raise ValueError(
+                f"job {job_id!r} model_options[{name!r}] contains unknown "
+                f"keys: {unknown!r}"
+            )
+        collision = [key for key in entry if key in options]
+        if collision:
+            raise ValueError(
+                f"job {job_id!r} sets option key(s) {collision!r} in both "
+                f"options and model_options[{name!r}]; state it in one place"
+            )
+        normalized[name] = _normalize_job_options(entry)
+    if model_efforts and any("effort" in entry for entry in normalized.values()):
+        raise ValueError(
+            f"job {job_id!r} sets both model_efforts and model_options.effort; "
+            "state it in one place"
+        )
+    return normalized
 
 
 class JobState(str, Enum):
@@ -469,6 +588,10 @@ class Job:
     max_attempts: int = 1
     options: Mapping[str, object] = field(default_factory=dict)
     model_efforts: Mapping[str, str] = field(default_factory=dict)
+    model_requirements: Mapping[str, Mapping[str, object]] = field(
+        default_factory=dict
+    )
+    model_options: Mapping[str, Mapping[str, object]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         job_id = str(self.id).strip()
@@ -509,6 +632,27 @@ class Job:
             "model_efforts",
             _normalize_model_efforts(self.model_efforts, models, self.options, job_id),
         )
+        object.__setattr__(
+            self,
+            "model_requirements",
+            _normalize_model_requirements(
+                self.model_requirements,
+                models,
+                self.requirements,
+                job_id,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "model_options",
+            _normalize_model_options(
+                self.model_options,
+                models,
+                self.options,
+                self.model_efforts,
+                job_id,
+            ),
+        )
 
         if self.directory is not None:
             object.__setattr__(self, "directory", Path(self.directory).expanduser().resolve())
@@ -543,6 +687,31 @@ class Job:
     def user(self) -> str:
         """The user prompt text."""
         return self.prompt.user
+
+    @property
+    def uses_model_sidecars(self) -> bool:
+        """Whether selection needs per-entry requirements or options."""
+        return bool(self.model_requirements or self.model_options)
+
+    def effective_requirements(self, model_id: str) -> dict[str, object]:
+        """Return the disjoint job and per-entry requirements for ``model_id``."""
+        if model_id not in self.models:
+            raise ValueError(
+                f"job {self.id!r} does not declare model {model_id!r}"
+            )
+        result = dict(self.requirements)
+        result.update(self.model_requirements.get(model_id, {}))
+        return result
+
+    def effective_options(self, model_id: str) -> dict[str, object]:
+        """Return the disjoint job and per-entry options for ``model_id``."""
+        if model_id not in self.models:
+            raise ValueError(
+                f"job {self.id!r} does not declare model {model_id!r}"
+            )
+        result = dict(self.options)
+        result.update(self.model_options.get(model_id, {}))
+        return result
 
     @property
     def declared_directory(self) -> Path:
@@ -616,6 +785,8 @@ class Job:
             max_attempts=max_attempts,
             options=options if options is not None else {},
             model_efforts=value.get("model_efforts"),
+            model_requirements=value.get("model_requirements"),
+            model_options=value.get("model_options"),
         )
 
     def to_mapping(self) -> dict[str, object]:
@@ -633,6 +804,15 @@ class Job:
         # exact definition JSON it always had in the ledger.
         if self.model_efforts:
             result["model_efforts"] = dict(self.model_efforts)
+        if self.model_requirements:
+            result["model_requirements"] = {
+                name: dict(requirements)
+                for name, requirements in self.model_requirements.items()
+            }
+        if self.model_options:
+            result["model_options"] = {
+                name: dict(options) for name, options in self.model_options.items()
+            }
         if self.directory is not None:
             result["directory"] = str(self.directory)
         if self.workspace is not None:

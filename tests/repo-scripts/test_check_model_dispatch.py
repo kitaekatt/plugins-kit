@@ -202,3 +202,27 @@ def test_the_shipped_policy_needs_no_harness_lookup_for_claude_rows(tmp_path):
     assert [(probe.kind, probe.value) for probe in probes if probe.is_routing] == [
         ("claude-model", "opus"),
     ]
+
+
+def test_model_context_window_uses_integer_probe_value():
+    value = _CHECKER.CONFIG_PROBE_VALUES["model_context_window"]
+    assert int(value) > 0
+
+
+def test_backend_model_placeholder_is_not_collected(tmp_path, monkeypatch):
+    monkeypatch.setattr(_CHECKER, "collect_config_keys", lambda _path: {})
+    policy = {
+        "routing": [{"shape": [], "models": ["fable"]}],
+        "backends": [
+            {"id": "alpha", "command": "alpha run -m <MODEL> -"},
+            {"id": "beta", "command": "beta run -m <MODEL> -m pinned-id -"},
+        ],
+    }
+    probes = _CHECKER.collect_probes(
+        policy,
+        tmp_path / "orchestration.yaml",
+        model_entries={},
+    )
+
+    backend_models = [probe for probe in probes if not probe.is_routing]
+    assert [probe.value for probe in backend_models] == ["pinned-id"]

@@ -160,7 +160,9 @@ contract: manifest-reference.md, `project_git_pull`.
 
 `engine._marketplace_barrier` settles every `marketplaces[]` entry of the
 pass before the first plugins phase runs: the layered manifest's entries,
-then each enabled plugin manifest's, in Step 4 order. Bootstrap's own
+then each enabled plugin manifest's, in bootstrap-first, marketplace,
+alphabetical order (`_plugin_sort_key`). The Step 4 shared-library dependency
+reordering does not apply here. Bootstrap's own
 `alwaysUpdate` entry for its marketplace is one of them. It runs after
 self-setup, registry repair and Step 3c-pull, and before Step 3c processes
 the layered manifest.
@@ -174,9 +176,10 @@ updates the plugin.
 
 Rules the barrier keeps:
 
-- **Same order, same pin precedence.** The manifests are processed in the
-  order the in-order phases would process them, so a layered `pin` still
-  wins over a plugin manifest's `alwaysUpdate`
+- **Same order, same pin precedence.** The manifests use the bootstrap-first,
+  marketplace, alphabetical order (`_plugin_sort_key`) that the in-order
+  phases use before shared-library dependency reordering, so a layered `pin`
+  still wins over a plugin manifest's `alwaysUpdate`
   (`_pinned_marketplaces_this_run`).
 - **Tools before marketplaces.** Without a resolvable `claude` CLI the
   barrier does nothing. On a fresh extension-only machine the CLI arrives
@@ -542,14 +545,28 @@ bootstrap anywhere, and remediation would have to move to `bootstrap-stuck-fix`.
 
 ### Step 4 Processing Order
 
-Plugins are processed in a deterministic order:
+Plugins are processed in a deterministic, dependency-aware order:
 1. **Bootstrap plugin** (`plugins-kit:bootstrap`)
-2. **Same-marketplace plugins** (other plugins from plugins-kit) — alphabetically
-3. **Other marketplace plugins** — alphabetically
+2. **Shared-library owners before consumers** within each marketplace, derived
+   from enabled manifests (`shared_libs` -> `shared_lib_imports`)
+3. **Stable sort order otherwise** (`_plugin_sort_key`): same-marketplace
+   plugins alphabetically, then other marketplace plugins alphabetically
+
+The owner-before-consumer constraint applies to both the initial Step 4 pass
+and the Step 4b re-scan. It is load-bearing because a consumer's `venv`
+`check_imports` runs before that consumer's `shared_lib_imports` phase. When an
+owner's library floor rises in the same pass, the owner must publish the fresh
+source before the consumer import check sees the previously linked copy. A
+dependency cycle raises a pass-level `shared-library dependency cycle` error;
+the engine never chooses one side to provision against stale state. Bootstrap
+remains first, and a declaration that would require an owner before bootstrap
+also raises rather than weakening that invariant.
 
 Marketplace refreshes do not depend on this order: Step 3c-mkt settles every
 declared marketplace before any plugins phase. The Step 3c-mkt barrier uses
-the same order, so pin precedence between manifests is unchanged.
+the bootstrap-first, marketplace, alphabetical order (`_plugin_sort_key`)
+without shared-library reordering, so pin precedence between manifests is
+unchanged.
 
 ### Step 4b: Phase 2 Re-scan
 
@@ -557,7 +574,9 @@ After Step 4 completes, the engine re-scans for newly installed plugins. This ha
 
 1. Calls `list_enabled_plugins()` again (reads `installed_plugins.json` fresh from disk)
 2. Filters out already-processed plugins using a `processed_plugin_refs` set
-3. Processes only new plugins using the same `_bootstrap_single_plugin()` helper
+3. Derives the same shared-library owner-before-consumer order over the full
+   refreshed plugin set (which also detects cycles spanning the two passes)
+4. Processes only new plugins using the same `_bootstrap_single_plugin()` helper
 
 This is a **single pass** — no recursive re-scanning. Plugins installed by Phase 2 plugins bootstrap on the next session start. This eliminates one of the two restarts previously needed: install + bootstrap now happen in the same session.
 
@@ -613,7 +632,11 @@ No entry carries a path.
 
 ### Step 4c: Shared-lib convergence sweep
 
-Shared-library *consumer* links (writing `<lib>.pth` into a plugin's own venv, declared via `shared_lib_imports`) happen inline while that plugin's manifest is processed. If a consumer is processed **before** the owner publishes the lib (plugins run in sort order, so this is purely an ordering accident), the inline `link_shared_lib` soft-skips with *"not yet published; will retry next session"* — an avoidable extra session/restart.
+Shared-library *consumer* links (writing `<lib>.pth` into a plugin's own venv,
+declared via `shared_lib_imports`) happen inline while that plugin's manifest is
+processed. Step 4's dependency order normally ensures the owner has already
+published. The sweep remains necessary for consumers whose owner entered the
+registry later in the same pass, and for links that could not converge inline.
 
 After the full plugin loop (Step 4 + the 4b re-scan), **every owner has published**, so the engine runs one idempotent re-link sweep (`_shared_lib_convergence_sweep`) over all processed plugins: a consumer-before-owner link that skipped inline now succeeds in the **same** session. `link_shared_lib` returns `cached` when the `.pth` is already correct, so consumers that linked fine inline are cheap no-ops (their `cached`/`skipped` results go to `ok_entries`, which are verbose-only). In steady state the sweep is fully silent; it only surfaces a section when it genuinely converged or failed a link.
 

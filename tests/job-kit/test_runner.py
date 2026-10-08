@@ -2389,6 +2389,183 @@ def test_an_entry_that_cannot_deliver_effort_is_unroutable_not_run(
     assert snapshot.attempts == ()
 
 
+def test_per_model_option_effort_uses_the_model_efforts_delivery_check(
+    tmp_path: Path,
+) -> None:
+    """Per-model effort is refused before dispatch on an adapter that cannot
+    deliver it, exactly like the older model_efforts sidecar."""
+    first = SequenceBackend([None])
+    job = replace(
+        _job(tmp_path),
+        models=("first",),
+        model_options={"first": {"effort": "high"}},
+    )
+
+    snapshot = run_jobs(
+        [job],
+        tmp_path / "model-option-effort-undeliverable.sqlite3",
+        capabilities_provider=_advertisement,
+        backend_factory=_effort_factory({"first": first}, {"first": False}),
+    )
+
+    assert snapshot.jobs[0].state is JobState.UNROUTABLE
+    assert "advertises no delivered effort" in (snapshot.jobs[0].error or "")
+    assert first.calls == []
+    assert snapshot.attempts == ()
+
+
+def test_sidecar_with_empty_requirements_requires_an_advertisement(
+    tmp_path: Path,
+) -> None:
+    """An empty sidecar requirement still requires an advertised backend."""
+    backend = FakeBackend()
+    job = replace(
+        _job(tmp_path),
+        models=("synthetic-unadvertised",),
+        model_options={"synthetic-unadvertised": {"max_tokens": 123}},
+    )
+
+    snapshot = run_jobs(
+        [job],
+        tmp_path / "sidecar-missing-advertisement.sqlite3",
+        capabilities_provider=lambda: {},
+        backend_factory=_factory_for(backend),
+    )
+
+    assert snapshot.jobs[0].state is JobState.UNROUTABLE
+    assert backend.calls == []
+    assert snapshot.attempts == ()
+
+
+def _mixed_capabilities() -> dict[str, Capabilities]:
+    """Capabilities for one structural text-only transport and one harness."""
+    subjects = ("filesystem-write", "shell-exec", "subagent-spawn")
+    return {
+        "transport": Capabilities(
+            adapter="transport",
+            params={
+                "max_tokens": ParamCapability(type="integer"),
+                "temperature": ParamCapability(type="number"),
+            },
+            guarantees=subjects,
+        ),
+        "harness": Capabilities(
+            adapter="harness",
+            execution_controls=(
+                ExecutionControl(
+                    id="disallowed-tools",
+                    emits="fake deny control",
+                    effect="deny",
+                    subjects=subjects,
+                    source="request",
+                    parameter="disallowed_tools",
+                ),
+            ),
+        ),
+    }
+
+
+def _mixed_job(tmp_path: Path, models: tuple[str, str]) -> Job:
+    return replace(
+        _job(tmp_path),
+        models=models,
+        max_attempts=2,
+        model_requirements={
+            "harness": {},
+            "transport": {"params": ["max_tokens", "temperature"]},
+        },
+        model_options={
+            "harness": {},
+            "transport": {"max_tokens": 2048, "temperature": 0.2},
+        },
+    )
+
+
+def _mixed_factory(
+    backends: dict[str, FakeBackend],
+) -> Callable[..., BackendSelection]:
+    def factory(endpoint: str, **_: object) -> BackendSelection:
+        backend = backends[endpoint]
+        backend.name = endpoint
+        return BackendSelection(endpoint, "fake", backend, "fake-model")
+
+    return factory
+
+
+@pytest.mark.parametrize(
+    ("models", "first_id", "second_id"),
+    [
+        (("transport", "harness"), "transport", "harness"),
+        (("harness", "transport"), "harness", "transport"),
+    ],
+)
+def test_mixed_sidecars_fail_over_without_leaking_transport_options(
+    tmp_path: Path,
+    models: tuple[str, str],
+    first_id: str,
+    second_id: str,
+) -> None:
+    """Transport and harness entries select with their own requirements and
+    dispatch only their own options; the run deny floor reaches both."""
+    first = SequenceBackend([HaltError(HALT_RATE_LIMIT, "move on")])
+    second = SequenceBackend([None])
+    if second_id == "harness":
+        second.response = replace(
+            second.response, execution_controls_applied=("disallowed-tools",)
+        )
+    backends = {first_id: first, second_id: second}
+
+    snapshot = run_jobs(
+        [_mixed_job(tmp_path, models)],
+        tmp_path / f"mixed-{first_id}-to-{second_id}.sqlite3",
+        disallowed_tools="Bash",
+        capabilities_provider=_mixed_capabilities,
+        backend_factory=_mixed_factory(backends),
+    )
+
+    assert snapshot.jobs[0].state is JobState.ACCEPTED
+    transport = backends["transport"].calls[0][3]
+    harness = backends["harness"].calls[0][3]
+    assert (transport.max_tokens, transport.temperature) == (2048, 0.2)
+    assert (harness.max_tokens, harness.temperature, harness.extras) == (
+        4096,
+        None,
+        {},
+    )
+    assert transport.disallowed_tools == "Bash"
+    assert harness.disallowed_tools == "Bash"
+
+
+def test_mixed_sidecar_floor_lists_every_entries_requirements_mismatch(
+    tmp_path: Path,
+) -> None:
+    """The sidecar floor retains one mismatch disposition per declared id."""
+    backends = {"harness": FakeBackend(), "transport": FakeBackend()}
+    job = replace(
+        _job(tmp_path),
+        models=("harness", "transport"),
+        model_requirements={
+            "harness": {"params": ["harness-only"]},
+            "transport": {"params": ["transport-only"]},
+        },
+    )
+
+    snapshot = run_jobs(
+        [job],
+        tmp_path / "mixed-mismatch.sqlite3",
+        capabilities_provider=_mixed_capabilities,
+        backend_factory=_mixed_factory(backends),
+    )
+
+    error = snapshot.jobs[0].error or ""
+    assert snapshot.jobs[0].state is JobState.UNROUTABLE
+    assert "harness: requirements-mismatch (adapter 'harness')" in error
+    assert "transport: requirements-mismatch (adapter 'transport')" in error
+    assert backends["harness"].calls == []
+    assert backends["transport"].calls == []
+    assert snapshot.attempts == ()
+
+
 def test_an_attempt_reporting_its_effort_dropped_fails(tmp_path: Path) -> None:
     """A delivering adapter that reports effort dropped on THIS call does not
     reach the contract: the attempt fails with effort_dropped."""
