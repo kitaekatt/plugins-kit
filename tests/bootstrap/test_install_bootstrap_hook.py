@@ -195,7 +195,28 @@ case "$*" in
   "plugin marketplace update "*)
     if [ "@ROLE@" = path ] && [ -f "$FAKE_DIR/crash_marketplace_update" ]; then
       echo "panic: index out of bounds: index 0, len 0"; exit 3
+    fi
+    if [ -f "$FAKE_DIR/fail_marketplace_update" ]; then echo "network down"; exit 1; fi
+    # Like the real CLI: a marketplace with an empty installLocation cannot be updated.
+    if grep -q '"installLocation": ""' "$FAKE_DIR/marketplaces.json"; then
+      echo "Marketplace 'plugins-kit' has a corrupted installLocation ()"; exit 1
     fi ;;
+  "plugin marketplace remove "*)
+    # Removing a marketplace uninstalls its plugins.
+    echo '[]' > "$FAKE_DIR/marketplaces.json"
+    # Like the real CLI: drops the project's enabledPlugins entries, but skips a
+    # read-only settings.json without an error.
+    for f in settings.json settings.local.json; do
+      if [ -f "$CLAUDE_PROJECT_DIR/.claude/$f" ] && [ -w "$CLAUDE_PROJECT_DIR/.claude/$f" ]; then
+        echo '{"enabledPlugins": {}}' > "$CLAUDE_PROJECT_DIR/.claude/$f"
+      fi
+    done
+    if [ -f "$FAKE_DIR/plugins_after_remove.json" ]; then
+      cp "$FAKE_DIR/plugins_after_remove.json" "$FAKE_DIR/plugins.json"
+    fi ;;
+  "plugin marketplace add "*)
+    if [ -f "$FAKE_DIR/fail_marketplace_add" ]; then echo "add refused"; exit 1; fi
+    cp "$FAKE_DIR/marketplaces_healthy.json" "$FAKE_DIR/marketplaces.json" ;;
   "plugin install "*|"plugin update "*)
     [ -f "$FAKE_DIR/fail_plugin_step" ] && { echo "boom"; exit 1; }
     cp "$FAKE_DIR/plugins_after.json" "$FAKE_DIR/plugins.json" ;;
@@ -284,9 +305,17 @@ class HookHarness:
         (self.fake / "plugins_after.json").write_text(
             json.dumps(after if after is not None else records, indent=2), encoding="utf-8")
 
-    def set_marketplaces(self, present):
-        items = [{"name": "plugins-kit", "source": "git"}] if present else []
+    def set_marketplaces(self, present, location=None, others=()):
+        """``location`` is plugins-kit's installLocation; None leaves the key out."""
+        entry = {"name": "plugins-kit", "source": "git"}
+        if location is not None:
+            entry["installLocation"] = location
+        items = list(others) + ([entry] if present else [])
         (self.fake / "marketplaces.json").write_text(json.dumps(items, indent=2), encoding="utf-8")
+        # What `marketplace add` leaves behind.
+        healthy = list(others) + [dict(entry, installLocation="C:\\x\\marketplaces\\plugins-kit")]
+        (self.fake / "marketplaces_healthy.json").write_text(
+            json.dumps(healthy, indent=2), encoding="utf-8")
 
     def run(self):
         env = dict(os.environ)
@@ -463,3 +492,131 @@ class TestGeneratedHook:
         h.set_plugins([_record("0.116.0", "user")])
         _, calls = h.run()
         assert calls == ["plugin list --json"]
+
+    # ----------------------------------------------------------------------
+    # Marketplace repair: an empty installLocation in known_marketplaces.json
+    # ----------------------------------------------------------------------
+
+    def test_empty_install_location_is_removed_readded_and_bootstrap_reinstalled(self, tmp_path):
+        # The observed wedge: `marketplace update` refuses a plugins-kit entry
+        # whose installLocation is "", and removing the marketplace also
+        # uninstalls the project-scope bootstrap record.
+        h = HookHarness(tmp_path)
+        h.set_marketplaces(present=True, location="",
+                           others=[{"name": "other", "installLocation": "C:\\o"}])
+        h.set_plugins([_record("0.10.11", "project", str(h.project))],
+                      after=[_record("1.2.0", "user")])
+        (h.fake / "plugins_after_remove.json").write_text("[]", encoding="utf-8")
+        proc, calls = h.run()
+        assert proc.returncode == 2
+        assert calls == [
+            "plugin list --json",
+            "plugin marketplace list --json",
+            "plugin marketplace update plugins-kit",
+            "plugin marketplace list --json",
+            "plugin marketplace remove plugins-kit",
+            "plugin marketplace add https://github.com/kitaekatt/plugins-kit.git",
+            "plugin marketplace update plugins-kit",
+            "plugin list --json",
+            "plugin install bootstrap@plugins-kit --scope user",
+            "plugin list --json",
+        ]
+        assert "installed bootstrap@plugins-kit 1.2.0" in proc.stderr
+        assert "Repaired the plugins-kit marketplace entry" in proc.stderr
+
+    def test_record_that_survives_the_removal_is_updated_not_reinstalled(self, tmp_path):
+        h = HookHarness(tmp_path)
+        h.set_marketplaces(present=True, location="")
+        h.set_plugins([_record("0.10.11", "project", str(h.project))],
+                      after=[_record("1.2.0", "project", str(h.project))])
+        proc, calls = h.run()
+        assert proc.returncode == 2
+        assert "plugin marketplace remove plugins-kit" in calls
+        assert calls[-2:] == ["plugin update bootstrap@plugins-kit --scope project",
+                              "plugin list --json"]
+        assert "plugin install bootstrap@plugins-kit --scope user" not in calls
+        assert "updated bootstrap@plugins-kit 1.2.0" in proc.stderr
+        assert "Repaired the plugins-kit marketplace entry" in proc.stderr
+
+    def test_healthy_marketplace_is_never_removed(self, tmp_path):
+        h = HookHarness(tmp_path)
+        h.set_marketplaces(present=True, location="C:\\x\\marketplaces\\plugins-kit")
+        h.set_plugins([_record("0.1.0", "user")], after=[_record("1.2.0", "user")])
+        proc, calls = h.run()
+        assert proc.returncode == 2
+        assert not any("marketplace remove" in c for c in calls)
+        assert "Repaired" not in proc.stderr
+
+    def test_update_failing_for_another_reason_does_not_remove_the_marketplace(self, tmp_path):
+        h = HookHarness(tmp_path)
+        h.set_marketplaces(present=True, location="C:\\x\\marketplaces\\plugins-kit")
+        h.flag("fail_marketplace_update")
+        h.set_plugins([_record("0.1.0", "user")])
+        proc, calls = h.run()
+        assert proc.returncode == 2
+        assert not any("marketplace remove" in c or "marketplace add" in c for c in calls)
+        assert "network down" in proc.stderr
+        assert "could not bring bootstrap@plugins-kit to 1.2.0" in proc.stderr
+        assert "Repaired" not in proc.stderr
+
+    def test_another_marketplace_with_an_empty_location_is_left_alone(self, tmp_path):
+        h = HookHarness(tmp_path)
+        h.set_marketplaces(present=True, location="C:\\x\\marketplaces\\plugins-kit",
+                           others=[{"name": "other", "installLocation": ""}])
+        h.flag("fail_marketplace_update")
+        h.set_plugins([_record("0.1.0", "user")])
+        proc, calls = h.run()
+        assert not any("marketplace remove" in c for c in calls)
+        assert "network down" in proc.stderr
+
+    # The removal rewrites the project's settings files; the repair puts them back.
+
+    def _corrupt_state(self, h):
+        h.set_marketplaces(present=True, location="")
+        h.set_plugins([_record("0.10.11", "project", str(h.project))],
+                      after=[_record("1.2.0", "user")])
+        (h.fake / "plugins_after_remove.json").write_text("[]", encoding="utf-8")
+        claude_dir = h.project / ".claude"
+        # CRLF and a missing final newline: only a byte-for-byte restore matches.
+        settings = (b'{\r\n  "enabledPlugins": {\r\n    "bootstrap@plugins-kit": true,\r\n'
+                    b'    "x@other": true\r\n  }\r\n}')
+        local = b'{"enabledPlugins":{"p4-kit@plugins-kit":true}}\n'
+        (claude_dir / "settings.json").write_bytes(settings)
+        (claude_dir / "settings.local.json").write_bytes(local)
+        return claude_dir, settings, local
+
+    def test_repair_restores_the_projects_settings_files_byte_for_byte(self, tmp_path):
+        h = HookHarness(tmp_path)
+        claude_dir, settings, local = self._corrupt_state(h)
+        proc, calls = h.run()
+        assert proc.returncode == 2
+        assert "plugin marketplace remove plugins-kit" in calls
+        assert (claude_dir / "settings.json").read_bytes() == settings
+        assert (claude_dir / "settings.local.json").read_bytes() == local
+        assert os.access(claude_dir / "settings.json", os.W_OK)
+        assert "bootstrap reinstalls this project's plugins after the restart" in proc.stderr
+        assert "reinstall the other" not in proc.stderr
+
+    def test_repair_keeps_a_read_only_settings_file_read_only_and_unchanged(self, tmp_path):
+        h = HookHarness(tmp_path)
+        claude_dir, settings, local = self._corrupt_state(h)
+        os.chmod(claude_dir / "settings.json", stat.S_IREAD)
+        try:
+            proc, calls = h.run()
+            assert proc.returncode == 2
+            assert "plugin marketplace remove plugins-kit" in calls
+            assert (claude_dir / "settings.json").read_bytes() == settings
+            assert not os.access(claude_dir / "settings.json", os.W_OK)
+            assert (claude_dir / "settings.local.json").read_bytes() == local
+        finally:
+            os.chmod(claude_dir / "settings.json", stat.S_IREAD | stat.S_IWRITE)
+
+    def test_settings_files_are_restored_when_a_repair_step_fails(self, tmp_path):
+        h = HookHarness(tmp_path)
+        claude_dir, settings, local = self._corrupt_state(h)
+        h.flag("fail_marketplace_add")
+        proc, calls = h.run()
+        assert proc.returncode == 2
+        assert "add refused" in proc.stderr
+        assert (claude_dir / "settings.json").read_bytes() == settings
+        assert (claude_dir / "settings.local.json").read_bytes() == local

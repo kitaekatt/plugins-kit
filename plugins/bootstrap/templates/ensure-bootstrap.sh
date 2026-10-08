@@ -22,6 +22,15 @@
 #      retry once. Only a missing CLI or the native install in ~/.local/bin is
 #      replaced. A CLI version this hook already reinstalled is not
 #      reinstalled again, so a failure with another cause costs nothing more.
+#   5. Repair the marketplace, only on failure: when `marketplace update` fails
+#      and the plugins-kit entry has an empty installLocation (a corrupted
+#      known_marketplaces.json entry), remove and re-add the marketplace and
+#      update it once more. Removing a marketplace also uninstalls its plugins,
+#      so bootstrap is then installed again at user scope. The project's
+#      .claude/settings.json and settings.local.json, which the removal
+#      rewrites, are restored byte for byte with their read-only state. No
+#      other marketplace state is repaired, and any other update failure is
+#      reported unchanged.
 #
 # The settings entry runs this with "async" and "asyncRewake", so it never
 # delays a session. The healthy path exits 0 with no output. Every outcome the
@@ -183,6 +192,7 @@ EOF
 }
 
 LOG=""
+MARKETPLACE_NOTE=""
 run_step() {
     local out
     if out="$("$@" </dev/null 2>&1)"; then
@@ -190,6 +200,70 @@ run_step() {
     fi
     LOG="'$*' failed: $(printf '%s' "$out" | tail -n 5)"
     return 1
+}
+
+# Success when `marketplace list --json` (pretty-printed, one flat object per
+# marketplace) shows the plugins-kit entry with an empty installLocation.
+marketplace_location_empty() {
+    local line name="" empty=0
+    while IFS= read -r line; do
+        line="${line%$'\r'}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        case "$line" in
+            '{'*) name=""; empty=0 ;;
+            '"name": "'*) name="${line#\"name\": \"}"; name="${name%%\"*}" ;;
+            '"installLocation": ""'*) empty=1 ;;
+            '}'*) [ "$name" = "$MARKETPLACE" ] && [ "$empty" -eq 1 ] && return 0 ;;
+        esac
+    done <<EOF
+$1
+EOF
+    return 1
+}
+
+# Called after `marketplace update` failed. When the plugins-kit entry's
+# installLocation is empty, remove and re-add the marketplace and update it
+# again. Returns 1 with LOG set when the entry is not in that state (LOG keeps
+# the update failure) or a repair step fails. Removing the marketplace
+# uninstalls its plugins, so the caller re-resolves what is installed.
+#
+# `marketplace remove` also strips the marketplace's plugins from the project's
+# enabledPlugins in .claude/settings.json and .claude/settings.local.json, which
+# are tracked or read-only in some projects. Both files are saved first and put
+# back, content and read-only state, on every path out of the repair. (A
+# read-only settings.json is skipped by the CLI, so it only needs the check.)
+repair_marketplace() {
+    local update_log="$LOG" saved f rc
+    if ! marketplace_location_empty "$(claude plugin marketplace list --json </dev/null 2>/dev/null)"; then
+        LOG="$update_log"
+        return 1
+    fi
+    saved="$(mktemp -d)" || { LOG="could not create a temporary directory."; return 1; }
+    for f in settings.json settings.local.json; do
+        [ -f ".claude/$f" ] || continue
+        cp ".claude/$f" "$saved/$f"
+        [ -w ".claude/$f" ] || : > "$saved/$f.readonly"
+    done
+    run_marketplace_repair
+    rc=$?
+    for f in settings.json settings.local.json; do
+        [ -f "$saved/$f" ] || continue
+        if ! cmp -s "$saved/$f" ".claude/$f"; then
+            chmod u+w ".claude/$f"
+            cat "$saved/$f" > ".claude/$f"
+        fi
+        [ -f "$saved/$f.readonly" ] && chmod a-w ".claude/$f"
+    done
+    rm -rf "$saved"
+    return $rc
+}
+
+run_marketplace_repair() {
+    run_step claude plugin marketplace remove "$MARKETPLACE" || return 1
+    run_step claude plugin marketplace add "$MARKETPLACE_SOURCE" || return 1
+    run_step claude plugin marketplace update "$MARKETPLACE" || return 1
+    MARKETPLACE_NOTE="Repaired the $MARKETPLACE marketplace entry (empty installLocation) by removing and re-adding it, which uninstalled its plugins; bootstrap reinstalls this project's plugins after the restart."
+    return 0
 }
 
 # Bring bootstrap to MIN_VERSION. Returns 0 when it is there, with ACTION set
@@ -214,7 +288,13 @@ ensure_bootstrap() {
     if ! printf '%s' "$listing" | grep -q "\"name\": \"$MARKETPLACE\""; then
         run_step claude plugin marketplace add "$MARKETPLACE_SOURCE" || return 1
     fi
-    run_step claude plugin marketplace update "$MARKETPLACE" || return 1
+    if ! run_step claude plugin marketplace update "$MARKETPLACE"; then
+        repair_marketplace || return 1
+        if ! resolve_effective; then
+            LOG="'claude plugin list --json' failed after the marketplace repair."
+            return 1
+        fi
+    fi
 
     if [ -z "$EFFECTIVE_VERSION" ]; then
         ACTION="installed"
@@ -281,12 +361,12 @@ REPAIR_NOTE=""
 if ! ensure_bootstrap; then
     FIRST_LOG="$LOG"
     if ! repair_cli; then
-        report "could not bring $PLUGIN_REF to $MIN_VERSION or later. $FIRST_LOG $REPAIR_NOTE Tell the user this, so bootstrap and the project's plugins can be installed."
+        report "could not bring $PLUGIN_REF to $MIN_VERSION or later. $FIRST_LOG $REPAIR_NOTE${MARKETPLACE_NOTE:+ $MARKETPLACE_NOTE} Tell the user this, so bootstrap and the project's plugins can be installed."
     fi
     if ! ensure_bootstrap; then
-        report "could not bring $PLUGIN_REF to $MIN_VERSION or later. $FIRST_LOG $REPAIR_NOTE It still failed afterwards: $LOG Tell the user this, so bootstrap and the project's plugins can be installed."
+        report "could not bring $PLUGIN_REF to $MIN_VERSION or later. $FIRST_LOG $REPAIR_NOTE${MARKETPLACE_NOTE:+ $MARKETPLACE_NOTE} It still failed afterwards: $LOG Tell the user this, so bootstrap and the project's plugins can be installed."
     fi
 fi
 
 [ -n "$ACTION" ] || exit 0
-report "$ACTION $PLUGIN_REF $EFFECTIVE_VERSION (minimum $MIN_VERSION). ${REPAIR_NOTE:+$REPAIR_NOTE }Tell the user to restart Claude Code to load it; bootstrap then provisions this project's other plugins."
+report "$ACTION $PLUGIN_REF $EFFECTIVE_VERSION (minimum $MIN_VERSION). ${REPAIR_NOTE:+$REPAIR_NOTE }${MARKETPLACE_NOTE:+$MARKETPLACE_NOTE }Tell the user to restart Claude Code to load it; bootstrap then provisions this project's other plugins."

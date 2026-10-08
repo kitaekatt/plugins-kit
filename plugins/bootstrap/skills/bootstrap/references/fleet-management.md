@@ -78,6 +78,29 @@ At every session start the hook does this:
    - The hook puts `~/.local/bin` first on its own PATH, so the copy it
      installed is the one it runs.
 
+5. **Repair the marketplace, only on failure.** If `claude plugin marketplace
+   update plugins-kit` fails and `claude plugin marketplace list --json` shows
+   the `plugins-kit` entry with an empty `installLocation` (a corrupted entry in
+   `~/.claude/plugins/known_marketplaces.json`), the hook runs
+   `claude plugin marketplace remove plugins-kit`, adds the marketplace again
+   from the source above, and updates it once more.
+   - Removing a marketplace also uninstalls every plugin installed from it, at
+     every scope. The hook therefore reads the install state again and
+     installs bootstrap with `--scope user` when its record is gone. The
+     report says the marketplace entry was repaired and its plugins
+     uninstalled; bootstrap reinstalls the project's plugins after the
+     restart, so the developer reinstalls nothing by hand.
+   - The removal also rewrites the project's `.claude/settings.json` and
+     `.claude/settings.local.json` (it drops the marketplace's
+     `enabledPlugins` entries), and a CLI skips a read-only
+     `settings.json`. The hook saves both files before the removal and puts
+     back their exact content and read-only state afterwards, on every path
+     out of the repair, so a tracked file is never left modified. The user
+     settings file is left as the CLI writes it.
+   - The hook detects the state, not the error wording. It does not remove the
+     marketplace when the update fails for any other reason, and it does not
+     repair a different marketplace.
+
 Step 4 exists because an outdated CLI can crash on
 `claude plugin marketplace update` (observed with 2.1.56:
 `panic: index out of bounds`). A broken CLI blocks every repair that goes
