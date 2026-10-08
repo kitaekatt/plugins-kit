@@ -34,6 +34,7 @@ llm-scripting-kit models --endpoint openrouter
 llm-scripting-kit describe fable sol opus --self opus
 llm-scripting-kit record-halt sol
 llm-scripting-kit resolve --models sol,opus
+llm-scripting-kit repair-json --schema-file "${PWD}/schema.json" < answer.txt
 printf 'Review this design' | llm-scripting-kit complete --models sol,opus
 llm-scripting-kit complete --models openrouter --model qwen \
   --system-file system.txt --prompt-file prompt.txt
@@ -84,6 +85,26 @@ so nothing ran), and `5` for an indeterminate reachability check (`probe`
 attempted a check that could not run to a verdict). The existing
 `status`, `set-key`, and `which` account commands retain their human-readable
 output.
+
+### `repair-json` -- model-free structural JSON repair
+
+`repair-json` applies the completion seam's deterministic structural repair to
+one raw model answer without resolving an endpoint, reading the registry, or
+making a network call:
+
+```bash
+llm-scripting-kit repair-json --schema-file "${PWD}/schema.json" < answer.txt
+```
+
+The schema file must be an absolute path and must pass the kit's supported
+JSON Schema subset check. Stdin is read as UTF-8 through EOF. Success prints
+exactly one protocol-1 JSON object on one line with `status` (`valid`,
+`repaired`, `ambiguous`, or `unrecoverable`), `text`, ordered `edits`, and
+`reason`. `text` is changed and `edits` is non-empty only for `repaired`.
+
+A missing, unreadable, non-JSON, or unsupported schema, and non-UTF-8 stdin,
+exit `2`, print one error line on stderr, and print nothing on stdout. The
+command calls `repair_json_structure` with its default edit and search bounds.
 
 ### `endpoints --verify` / `probe` -- configured vs. usable right now
 
