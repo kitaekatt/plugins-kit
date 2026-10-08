@@ -38,6 +38,7 @@ HOOK_COMMAND = (
 )
 
 # Installing a plugin and updating a marketplace clone are network operations.
+# An async hook is not held to this; it bounds a client that runs it in line.
 HOOK_TIMEOUT_SECONDS = 300
 
 
@@ -95,11 +96,15 @@ def merge_settings(settings: dict) -> dict:
                 continue
             group = dict(group, hooks=remaining)
         kept.append(group)
+    # async: the session never waits on the hook. asyncRewake: an exit 2 from
+    # it delivers its stderr to Claude, which is how it reports an outcome.
     kept.append({
         "hooks": [{
             "type": "command",
             "command": HOOK_COMMAND,
             "timeout": HOOK_TIMEOUT_SECONDS,
+            "async": True,
+            "asyncRewake": True,
         }]
     })
     hooks["SessionStart"] = kept

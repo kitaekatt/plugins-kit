@@ -16,12 +16,20 @@
 #   2. Detect: bootstrap@plugins-kit installed for this project at or above
 #      MIN_VERSION -> exit silently.
 #   3. Remediate: add the plugins-kit marketplace if missing, update it, then
-#      install bootstrap (missing) or update it (too old). Report the outcome
-#      to the user as a systemMessage.
+#      install bootstrap (missing) or update it (too old).
+#   4. Repair on failure only: when the claude CLI is missing or one of its
+#      steps fails, reinstall the CLI with Anthropic's native installer and
+#      retry once. Only a missing CLI or the native install in ~/.local/bin is
+#      replaced. A CLI version this hook already reinstalled is not
+#      reinstalled again, so a failure with another cause costs nothing more.
+#
+# The settings entry runs this with "async" and "asyncRewake", so it never
+# delays a session. The healthy path exits 0 with no output. Every outcome the
+# user must hear about -- installed, updated, or failed -- goes to stderr with
+# exit 2, which wakes Claude with the message.
 #
 # Stdlib-free by design: this runs on a machine bootstrap has not provisioned,
 # so it may rely only on bash and the `claude` CLI -- no python, jq, or node.
-# It always exits 0 so a remediation failure never blocks a session.
 
 set -u
 
@@ -30,27 +38,27 @@ PLUGIN_NAME="bootstrap"
 MARKETPLACE="plugins-kit"
 MARKETPLACE_SOURCE="https://github.com/kitaekatt/plugins-kit.git"
 PLUGIN_REF="${PLUGIN_NAME}@${MARKETPLACE}"
+# The native installer puts the CLI here on every platform.
+CLI_DIR="$HOME/.local/bin"
+# Holds the CLI version this hook last reinstalled. User-scoped data, in
+# bootstrap's own data directory.
+CLI_REPAIR_STAMP="$HOME/.claude/plugins/data/$MARKETPLACE/$PLUGIN_NAME/ensure-bootstrap-cli-repair"
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 
 [ -f "$PROJECT_DIR/.claude/bootstrap.json" ] || exit 0
 
-# Emit one systemMessage for the user. JSON-escapes backslash, quote, tab, CR,
-# and newline -- the only characters the messages below can contain.
-emit() {
-    local msg="$1"
-    msg="${msg//\\/\\\\}"
-    msg="${msg//\"/\\\"}"
-    msg="${msg//$'\t'/ }"
-    msg="${msg//$'\r'/}"
-    msg="${msg//$'\n'/\\n}"
-    printf '{"systemMessage": "%s"}\n' "$msg"
+# Tell the user one thing, through Claude: asyncRewake delivers stderr to
+# Claude when the hook exits 2.
+report() {
+    printf 'ensure-bootstrap: %s\n' "$1" >&2
+    exit 2
 }
 
-if ! command -v claude >/dev/null 2>&1; then
-    emit "ensure-bootstrap: the claude CLI is not on PATH, so $PLUGIN_REF could not be checked or installed."
-    exit 0
-fi
+# Prefer the native install, the copy repair_cli writes, over any other claude
+# on PATH. Otherwise an older copy earlier on PATH would hide the repaired one
+# and every session would reinstall it.
+[ -d "$CLI_DIR" ] && PATH="$CLI_DIR:$PATH"
 
 # A nested claude refuses to run while CLAUDECODE is set by the parent session.
 unset CLAUDECODE
@@ -174,16 +182,6 @@ EOF
     return 0
 }
 
-if ! resolve_effective; then
-    emit "ensure-bootstrap: 'claude plugin list --json' failed, so $PLUGIN_REF could not be checked."
-    exit 0
-fi
-
-if [ -n "$EFFECTIVE_VERSION" ] && version_ge "$EFFECTIVE_VERSION" "$MIN_VERSION"; then
-    exit 0
-fi
-
-# --- Remediation ---
 LOG=""
 run_step() {
     local out
@@ -194,30 +192,101 @@ run_step() {
     return 1
 }
 
-fail() {
-    emit "ensure-bootstrap: could not bring $PLUGIN_REF to $MIN_VERSION or later. $LOG"
-    exit 0
+# Bring bootstrap to MIN_VERSION. Returns 0 when it is there, with ACTION set
+# to "installed" or "updated" when this call did the work, or 1 with LOG set
+# to the step that failed.
+ensure_bootstrap() {
+    local listing
+    ACTION=""
+    if ! command -v claude >/dev/null 2>&1; then
+        LOG="the claude CLI is not on PATH."
+        return 1
+    fi
+    if ! resolve_effective; then
+        LOG="'claude plugin list --json' failed."
+        return 1
+    fi
+    if [ -n "$EFFECTIVE_VERSION" ] && version_ge "$EFFECTIVE_VERSION" "$MIN_VERSION"; then
+        return 0
+    fi
+
+    listing="$(claude plugin marketplace list --json </dev/null 2>/dev/null)"
+    if ! printf '%s' "$listing" | grep -q "\"name\": \"$MARKETPLACE\""; then
+        run_step claude plugin marketplace add "$MARKETPLACE_SOURCE" || return 1
+    fi
+    run_step claude plugin marketplace update "$MARKETPLACE" || return 1
+
+    if [ -z "$EFFECTIVE_VERSION" ]; then
+        ACTION="installed"
+        run_step claude plugin install "$PLUGIN_REF" --scope user || return 1
+    else
+        ACTION="updated"
+        run_step claude plugin update "$PLUGIN_REF" --scope "$EFFECTIVE_SCOPE" || return 1
+    fi
+
+    resolve_effective
+    if [ -z "$EFFECTIVE_VERSION" ] || ! version_ge "$EFFECTIVE_VERSION" "$MIN_VERSION"; then
+        LOG="after the $ACTION step the installed version is '${EFFECTIVE_VERSION:-none}'."
+        return 1
+    fi
+    return 0
 }
 
-listing="$(claude plugin marketplace list --json </dev/null 2>/dev/null)"
-if ! printf '%s' "$listing" | grep -q "\"name\": \"$MARKETPLACE\""; then
-    run_step claude plugin marketplace add "$MARKETPLACE_SOURCE" || fail
-fi
-run_step claude plugin marketplace update "$MARKETPLACE" || fail
+cli_version() {
+    if command -v claude >/dev/null 2>&1; then
+        claude --version </dev/null 2>/dev/null | cut -d' ' -f1
+    else
+        echo "missing"
+    fi
+}
 
-if [ -z "$EFFECTIVE_VERSION" ]; then
-    action="installed"
-    run_step claude plugin install "$PLUGIN_REF" --scope user || fail
-else
-    action="updated"
-    run_step claude plugin update "$PLUGIN_REF" --scope "$EFFECTIVE_SCOPE" || fail
+# Reinstall the claude CLI with the native installer, which installs the
+# current release over a missing, outdated, or crashing copy. Only a missing CLI
+# or the native install is replaced; a copy another tool installed is left to
+# that tool. Skipped when this hook already reinstalled the version now
+# present: that version failed after a reinstall, so the CLI is not the cause.
+# Returns 0 when it reinstalled.
+repair_cli() {
+    local current before
+    current="$(command -v claude 2>/dev/null)"
+    case "$current" in
+        ""|"$CLI_DIR"/*) ;;
+        *)
+            REPAIR_NOTE="The claude CLI at $current was not installed by the native installer, so this hook did not reinstall it; update it with the tool that installed it."
+            return 1
+            ;;
+    esac
+    before="$(cli_version)"
+    if [ -f "$CLI_REPAIR_STAMP" ] && [ "$(cat "$CLI_REPAIR_STAMP")" = "$before" ]; then
+        REPAIR_NOTE="The claude CLI ($before) was already reinstalled by this hook, so it was not reinstalled again."
+        return 1
+    fi
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*)
+            run_step powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://claude.ai/install.ps1 | iex"
+            ;;
+        *)
+            run_step bash -c "curl -fsSL https://claude.ai/install.sh | bash"
+            ;;
+    esac || { REPAIR_NOTE="Reinstalling the claude CLI also failed: $LOG"; return 1; }
+    PATH="$CLI_DIR:$PATH"
+    hash -r
+    mkdir -p "$(dirname "$CLI_REPAIR_STAMP")"
+    cli_version > "$CLI_REPAIR_STAMP"
+    REPAIR_NOTE="Reinstalled the claude CLI ($before -> $(cat "$CLI_REPAIR_STAMP")) first."
+    return 0
+}
+
+REPAIR_NOTE=""
+if ! ensure_bootstrap; then
+    FIRST_LOG="$LOG"
+    if ! repair_cli; then
+        report "could not bring $PLUGIN_REF to $MIN_VERSION or later. $FIRST_LOG $REPAIR_NOTE Tell the user this, so bootstrap and the project's plugins can be installed."
+    fi
+    if ! ensure_bootstrap; then
+        report "could not bring $PLUGIN_REF to $MIN_VERSION or later. $FIRST_LOG $REPAIR_NOTE It still failed afterwards: $LOG Tell the user this, so bootstrap and the project's plugins can be installed."
+    fi
 fi
 
-resolve_effective
-if [ -z "$EFFECTIVE_VERSION" ] || ! version_ge "$EFFECTIVE_VERSION" "$MIN_VERSION"; then
-    LOG="after the $action step the installed version is '${EFFECTIVE_VERSION:-none}'."
-    fail
-fi
-
-emit "ensure-bootstrap: $action $PLUGIN_REF $EFFECTIVE_VERSION (minimum $MIN_VERSION). Restart Claude Code to load it; bootstrap then provisions this project's other plugins."
-exit 0
+[ -n "$ACTION" ] || exit 0
+report "$ACTION $PLUGIN_REF $EFFECTIVE_VERSION (minimum $MIN_VERSION). ${REPAIR_NOTE:+$REPAIR_NOTE }Tell the user to restart Claude Code to load it; bootstrap then provisions this project's other plugins."

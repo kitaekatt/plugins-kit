@@ -33,7 +33,12 @@ directory:
 | File | Content |
 |---|---|
 | `.claude/hooks/ensure-bootstrap.sh` | The hook script, with the minimum bootstrap version written into it. |
-| `.claude/settings.json` | One `SessionStart` entry that runs the script. |
+| `.claude/settings.json` | One `SessionStart` entry that runs the script, with `async` and `asyncRewake` set. |
+
+The entry is asynchronous, so a session never waits for the hook. When the
+hook has something to report, it writes the message to stderr and exits 2.
+`asyncRewake` then delivers that message to Claude, which passes it on to the
+user. The healthy path exits 0 with no output.
 
 At every session start the hook does this:
 
@@ -57,12 +62,35 @@ At every session start the hook does this:
      `claude plugin update bootstrap@plugins-kit --scope <scope of that record>`.
    - Tell the user the result in one message. After a successful install or
      update, the user restarts Claude Code to load bootstrap.
+4. **Repair the CLI, only on failure.** If `claude` is not on PATH, or any
+   `claude` step above fails, reinstall the CLI with Anthropic's native
+   installer (`install.ps1` under Git Bash on Windows, `install.sh`
+   elsewhere). Then run steps 2 and 3 once more.
+   - The hook replaces only a missing CLI or the native install in
+     `~/.local/bin`. A CLI that another tool installed (a package manager,
+     for example) is left alone, and the report says to update it with that
+     tool.
+   - The hook records the CLI version it installed in
+     `~/.claude/plugins/data/plugins-kit/bootstrap/ensure-bootstrap-cli-repair`.
+     If that same version fails again in a later session, the CLI is not the
+     cause, so the hook reports the failure without downloading the CLI
+     again.
+   - The hook puts `~/.local/bin` first on its own PATH, so the copy it
+     installed is the one it runs.
 
-The hook needs only bash and the `claude` CLI, because it runs before
-bootstrap has provisioned anything. It always exits 0, so a failed remediation
-reports a message and never blocks the session. The marketplace, plugin, and
-install scope are fixed in the script; the minimum version is the only value
-that changes.
+Step 4 exists because an outdated CLI can crash on
+`claude plugin marketplace update` (observed with 2.1.56:
+`panic: index out of bounds`). A broken CLI blocks every repair that goes
+through it.
+
+A record whose `installPath` no longer exists needs no special handling. A
+working CLI's `claude plugin update` reinstalls the missing cache directory
+and corrects the record.
+
+The hook needs only bash and the `claude` CLI, plus `powershell` or `curl` for
+the step 4 installer, because it runs before bootstrap has provisioned
+anything. The marketplace, plugin, and install scope are fixed in the script;
+the minimum version is the only value that changes.
 
 ## Install or refresh the hook in a project
 
