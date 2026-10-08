@@ -107,6 +107,7 @@ HARNESS_NAMES = frozenset(("codex", "opencode"))
 # Config keys whose probe value is not derivable from the policy.
 CONFIG_PROBE_VALUES = {
     "sandbox_workspace_write.network_access": "true",
+    "model_context_window": "200000",
 }
 DEFAULT_CONFIG_PROBE_VALUE = "low"
 
@@ -365,6 +366,9 @@ def collect_probes(
             continue
         backend_id = str(backend.get("id"))
         for model in re.findall(r"(?:^|\s)-m\s+(\S+)", str(command)):
+            # `<MODEL>` is a placeholder filled at dispatch time, not an id.
+            if model.startswith("<") and model.endswith(">"):
+                continue
             probes.append(
                 Probe(
                     f"{backend_id}-model",
