@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import random
 import shutil
 import signal
 import subprocess
@@ -69,7 +70,7 @@ import llm_scripting_kit.models as _lsk_models
 import llm_scripting_kit.usage_budget as _lsk_usage_budget
 import llm_scripting_kit.completion as _completion
 from llm_scripting_kit.completion import subjects_for_disallowed_tools
-from llm_scripting_kit.completion.capabilities import FILESYSTEM_WRITE
+from llm_scripting_kit.completion.requirements import arm_call
 from .store import DuplicateJobError, JobStore, StoreError, UnknownRunError
 from .workspace import WorkspaceError, WorkspaceManager, WorkspaceResolution
 
@@ -77,6 +78,11 @@ from .workspace import WorkspaceError, WorkspaceManager, WorkspaceResolution
 DEFAULT_TIMEOUT_S = 900.0
 CONTRACT_OUTPUT_LIMIT = 2000
 HALT_UNREACHABLE = "unreachable"
+#: llm-scripting-kit's kind for transient endpoint overload (HaltError.kind,
+#: or a response error code), carrying ``retry_after_s: float | None``.
+HALT_BACKPRESSURE = "backpressure"
+#: Halts that may clear within seconds: waited out before they count as halts.
+_TRANSIENT_KINDS = frozenset({HALT_BACKPRESSURE, HALT_RATE_LIMIT})
 _HALT_KINDS = frozenset(
     {HALT_AUTH, HALT_RATE_LIMIT, HALT_INSUFFICIENT_CREDIT, HALT_QUOTA, HALT_UNREACHABLE}
 )
@@ -374,6 +380,119 @@ def _is_own_deadline(exc: BaseException) -> bool:
     return False
 
 
+@dataclass(frozen=True)
+class BackpressurePolicy:
+    """How long run_job rides out a transient overload before falling back.
+
+    ``cap_s`` bounds the total seconds waited for ONE seam call. A wait is
+    the halt's ``retry_after_s`` when it carries one, else exponential
+    backoff (``base_s`` doubling to ``max_s``) with +/- ``jitter`` spread.
+    When the next wait would pass ``cap_s`` the overload is treated as the
+    persistent rate-limit halt a 429 always was. ``cap_s`` 0 disables waiting.
+    ``sleeper`` and ``rng`` are injection points for tests.
+    """
+
+    cap_s: float = 600.0
+    base_s: float = 2.0
+    max_s: float = 60.0
+    jitter: float = 0.25
+    sleeper: Callable[[float], None] = time.sleep
+    rng: Callable[[], float] = random.random
+
+    @classmethod
+    def from_environment(cls) -> "BackpressurePolicy":
+        raw = os.environ.get(BACKPRESSURE_CAP_ENV)
+        if raw is None or not raw.strip():
+            return cls()
+        try:
+            cap = float(raw)
+        except ValueError as exc:
+            raise ValueError(f"{BACKPRESSURE_CAP_ENV} must be a number of seconds") from exc
+        if cap < 0:
+            raise ValueError(f"{BACKPRESSURE_CAP_ENV} must not be negative")
+        return cls(cap_s=cap)
+
+    def wait_for(self, retry_no: int, retry_after_s: Optional[float]) -> float:
+        if retry_after_s is not None and retry_after_s >= 0:
+            return float(retry_after_s)
+        raw = min(self.max_s, self.base_s * (2 ** (retry_no - 1)))
+        return raw * (1 + self.jitter * (2 * self.rng() - 1))
+
+
+#: Environment knob: total seconds one call may wait out backpressure.
+BACKPRESSURE_CAP_ENV = "JOB_KIT_BACKPRESSURE_CAP_S"
+
+
+def _retry_after(value: object) -> Optional[float]:
+    seconds = getattr(value, "retry_after_s", None)
+    if isinstance(seconds, bool) or not isinstance(seconds, (int, float)):
+        return None
+    return float(seconds) if seconds >= 0 else None
+
+
+def _backpressure_signal(
+    backend: object, exc: BaseException
+) -> tuple[bool, Optional[float]]:
+    """Return (is_backpressure, retry_after_s) for a raised failure."""
+    if isinstance(exc, HaltError):
+        return exc.kind in _TRANSIENT_KINDS, _retry_after(exc)
+    classifier = getattr(backend, "classify_halt", None)
+    if callable(classifier) and classifier(exc) in _TRANSIENT_KINDS:
+        return True, _retry_after(exc)
+    return False, None
+
+
+def _response_backpressure(response: object) -> tuple[bool, Optional[float]]:
+    error = getattr(response, "error", None)
+    if error is not None and str(getattr(error, "code", "")) in _TRANSIENT_KINDS:
+        retry = _retry_after(error)
+        return True, retry if retry is not None else _retry_after(response)
+    return False, None
+
+
+class _WaitBudget:
+    """One seam call's backpressure waits, shared by the attempts that ride it.
+
+    Each overloaded seam invocation is its own ledger attempt; this object only
+    carries how long the call has waited so far and so when the cap is spent.
+    """
+
+    def __init__(self, policy: BackpressurePolicy) -> None:
+        self.policy = policy
+        self.waited = 0.0
+        self.retry_no = 0
+
+    def plan(self, retry_after_s: Optional[float]) -> Optional[float]:
+        """Return the next wait, or None when it would pass the cap."""
+        wait_s = self.policy.wait_for(self.retry_no + 1, retry_after_s)
+        if self.waited + wait_s > self.policy.cap_s:
+            return None
+        return wait_s
+
+    def record_and_sleep(
+        self,
+        store: JobStore,
+        attempt: Attempt,
+        wait_s: float,
+        retry_after_s: Optional[float],
+    ) -> None:
+        self.retry_no += 1
+        store.record_backpressure_wait(
+            attempt.run_id,
+            attempt.job_id,
+            attempt.attempt_no,
+            adapter=attempt.backend,
+            model=attempt.model,
+            retry_no=self.retry_no,
+            wait_s=wait_s,
+            retry_after_s=retry_after_s,
+            waited_s=self.waited,
+            at=utc_now_iso(),
+        )
+        self.policy.sleeper(wait_s)
+        self.waited += wait_s
+
+
 def _halt_for_exception(backend: object, exc: BaseException) -> Optional[str]:
     """Classify a typed transport failure without inspecting its text."""
     if _is_own_deadline(exc):
@@ -392,6 +511,9 @@ def _halt_for_exception(backend: object, exc: BaseException) -> Optional[str]:
 
 def _known_halt_kind(value: object) -> Optional[str]:
     """Accept only halt labels job-kit can classify and record."""
+    if value == HALT_BACKPRESSURE:
+        # Backpressure (or a 429) that outlasted the wait cap is today's rate-limit halt.
+        return HALT_RATE_LIMIT
     if isinstance(value, str) and value in _HALT_KINDS:
         return value
     return None
@@ -556,23 +678,7 @@ def _backend_options(
     effort = _string_option(job.options, "effort", None)
     max_tokens_value = job.options.get("max_tokens", 4096)
     temperature_value = job.options.get("temperature")
-    # codex-cli advertises FILESYSTEM_WRITE via its sandbox control, and that
-    # control only delivers it at read-only -- the adapter default is
-    # workspace-write. Selecting the endpoint on that guarantee and then not
-    # arming it would make the floor a fake gate, so set it here unless the job
-    # asked for a specific mode itself. Gate on the SUBJECTS the floor actually
-    # requires, not merely on a floor being present -- a floor naming only
-    # tools with no known subject (subjects_for_disallowed_tools returns an
-    # empty frozenset) asked for no guarantee, and arming the sandbox anyway
-    # would restrict the run without the floor ever having required it.
     extras = dict(extras_value)
-    if (
-        run_floor
-        and getattr(selection.backend, "name", None) == "codex-cli"
-        and "sandbox" not in extras
-        and FILESYSTEM_WRITE in subjects_for_disallowed_tools(run_floor)
-    ):
-        extras["sandbox"] = "read-only"
 
     return BackendOptions(
         timeout_s=float(timeout_s),
@@ -691,7 +797,7 @@ def _response_attempt(
             message=str(getattr(response_error_value, "message", "")),
         )
     error_code = response_error.code if response_error is not None else None
-    halt_kind = error_code if error_code in _HALT_KINDS else None
+    halt_kind = _known_halt_kind(error_code)
     status = str(getattr(response, "status", COMPLETED))
     dropped_value = getattr(response, "dropped_params", None)
     forwarded_value = getattr(response, "forwarded_params", None)
@@ -749,6 +855,35 @@ def run_job(
     run_id: str,
     job: Job,
     *,
+    backpressure: Optional[BackpressurePolicy] = None,
+    **kwargs: object,
+) -> Attempt:
+    """Execute one non-terminal job and return its last attempt.
+
+    Every seam invocation is its own attempt row. An invocation that ends in a
+    ``backpressure`` or ``rate_limit`` halt inside the wait cap is recorded as
+    an attempt with that halt, a ``job-kit:backpressure-wait`` event follows
+    it, and the same model is invoked again as a new attempt. Such an attempt
+    does not count toward ``max_attempts`` and does not narrow dispatch. See
+    :class:`BackpressurePolicy`; other arguments are those of
+    :func:`_run_job_attempt`.
+    """
+    waits = _WaitBudget(backpressure or BackpressurePolicy.from_environment())
+    while True:
+        attempt, wait_s, retry_after_s = _run_job_attempt(
+            store, run_id, job, waits=waits, **kwargs  # type: ignore[arg-type]
+        )
+        if wait_s is None:
+            return attempt
+        waits.record_and_sleep(store, attempt, wait_s, retry_after_s)
+
+
+def _run_job_attempt(
+    store: JobStore,
+    run_id: str,
+    job: Job,
+    *,
+    waits: _WaitBudget,
     halted_endpoints: Sequence[str] = (),
     timeout_s: float = DEFAULT_TIMEOUT_S,
     disallowed_tools: Optional[str] = None,
@@ -757,8 +892,11 @@ def run_job(
     workspace_root: Optional[str | Path] = None,
     workspace_manager: Optional[WorkspaceManager] = None,
     reachability_cache: Optional[dict] = None,
-) -> Attempt:
-    """Execute one non-terminal job with exactly one seam invocation.
+) -> tuple[Attempt, Optional[float], Optional[float]]:
+    """Execute one seam invocation as one attempt.
+
+    Returns ``(attempt, wait_s, retry_after_s)``; ``wait_s`` is set only when
+    the attempt ended in backpressure the caller should wait out and retry.
 
     The endpoint is the first usable entry of ``job.models`` in pace order
     (:func:`~.select.select_endpoint_with_readings`), with the run's halted
@@ -781,10 +919,12 @@ def run_job(
     selection_job = (
         _require_floor_subjects(job, run_floor) if run_floor is not None else job
     )
+    # An attempt whose halt was waited out and retried did not halt the endpoint.
+    waited_out = store.waited_out_attempt_numbers(run_id, job.id)
     same_job_halts = {
         attempt.endpoint
         for attempt in store.list_attempts(run_id, job.id)
-        if attempt.halt_kind is not None
+        if attempt.halt_kind is not None and attempt.attempt_no not in waited_out
     }
     selection, pace_readings = select_endpoint_with_readings(
         selection_job,
@@ -874,6 +1014,18 @@ def run_job(
             entry_effort,
         )
         capabilities = _capabilities_for(selection, advertised)
+        # Arm every request-sourced control the admitting guarantees rely on,
+        # through the kit (text-only mode, or a disallowed_tools deny). A
+        # subject with nothing to arm raises ValueError before anything runs.
+        armed_call = arm_call(
+            selection.backend,
+            options,
+            selection_job.requirements,
+            advertised.get(getattr(selection.backend, "name", None)),
+        )
+        options = armed_call.options
+        if armed_call.backend is not selection.backend:
+            selection = replace(selection, backend=armed_call.backend)
     except Exception as exc:
         store.resolve_reservation_before_invoke(
             run_id,
@@ -925,6 +1077,12 @@ def run_job(
             workspace=workspace,
             pace_readings=pace_readings,
         )
+        wait_s = None
+        limited, retry_after = _backpressure_signal(selection.backend, exc)
+        if limited and attempt.halt_kind is not None:
+            wait_s = waits.plan(retry_after)
+        if wait_s is not None:
+            terminal_state = None
         recorded = store.append_attempt(
             attempt,
             terminal_state=terminal_state,
@@ -932,7 +1090,7 @@ def run_job(
         )
         if recorded.halt_kind in _QUOTA_HALT_KINDS:
             _record_quota_halt(job, recorded.endpoint, exc)
-        return recorded
+        return recorded, wait_s, retry_after
     except (KeyboardInterrupt, SystemExit) as exc:
         attempt, terminal_state = _exception_attempt(
             run_id=run_id,
@@ -992,6 +1150,24 @@ def run_job(
             ),
         )
         raise
+    if armed_call.controls and attempt.status == COMPLETED:
+        applied = set(attempt.execution_controls_applied or ())
+        missing = [c for c in armed_call.controls if c not in applied]
+        if missing:
+            attempt = replace(
+                attempt,
+                status=ERROR,
+                error=AttemptError(
+                    code="armed_control_missing",
+                    message=(
+                        f"entry {selection.endpoint!r} was armed with {missing} "
+                        "but its response did not report them applied"
+                    ),
+                ),
+            )
+            terminal_state = _terminal_state_after_attempt(
+                job, reservation.budget_no, JobState.FAILED
+            )
     if (
         entry_effort is not None
         and attempt.status == COMPLETED
@@ -1016,6 +1192,12 @@ def run_job(
             job, reservation.budget_no, JobState.FAILED
         )
     if terminal_state is not None or attempt.status != COMPLETED:
+        wait_s = None
+        limited, retry_after = _response_backpressure(response)
+        if limited and attempt.halt_kind is not None and attempt.status != COMPLETED:
+            wait_s = waits.plan(retry_after)
+        if wait_s is not None:
+            terminal_state = None
         recorded = store.append_attempt(
             attempt,
             terminal_state=terminal_state,
@@ -1023,7 +1205,7 @@ def run_job(
         )
         if recorded.halt_kind in _QUOTA_HALT_KINDS:
             _record_quota_halt(job, recorded.endpoint, response)
-        return recorded
+        return recorded, wait_s, retry_after
 
     interrupt_request: Optional[InterruptRequest] = None
     request_fault: Optional[str] = None
@@ -1075,11 +1257,15 @@ def run_job(
                 message=str(exc) or exc.__class__.__name__,
             ),
         )
-        return store.append_attempt(
-            failed_attempt,
-            terminal_state=_terminal_state_after_attempt(
-                job, reservation.budget_no, JobState.FAILED
+        return (
+            store.append_attempt(
+                failed_attempt,
+                terminal_state=_terminal_state_after_attempt(
+                    job, reservation.budget_no, JobState.FAILED
+                ),
             ),
+            None,
+            None,
         )
     try:
         attempt = replace_attempt_acceptance(attempt, acceptance)
@@ -1112,9 +1298,13 @@ def run_job(
     if interrupt_request is not None:
         # The job waits on an operator. The reservation completes with this
         # attempt, so no live reservation spans the wait.
-        return store.append_attempt(attempt, interrupt=interrupt_request)
-    return store.append_attempt(
-        attempt, terminal_state=terminal_state, reason=request_fault
+        return store.append_attempt(attempt, interrupt=interrupt_request), None, None
+    return (
+        store.append_attempt(
+            attempt, terminal_state=terminal_state, reason=request_fault
+        ),
+        None,
+        None,
     )
 
 

@@ -33,6 +33,19 @@ Submodules:
   interleave ``controller.finalize_run`` and consult
   ``controller.unfinished_units``; see ``wave``'s module docstring, "Looping
   ``ready_wave`` alone does not drain a graph run to completion".
+- ``parallel_graph`` --
+  :class:`~content_pipeline.execution.parallel_graph.ParallelGraphStrategy`,
+  explicit per-unit dependencies run up to a ``capacity`` at once;
+  ``wave.ready_wave`` schedules it and ``wave.gated_units`` lists the units a
+  broken dependency gates.
+- ``scheduler`` -- the same dependency rule in memory
+  (:class:`~content_pipeline.execution.scheduler.Scheduler`) and a thread-pool
+  runner over it (:func:`~content_pipeline.execution.scheduler.run_graph`).
+  Standard library only.
+- ``deadlines`` -- a per-unit wall-time budget, the run-wide deadline circuit,
+  and deadline notes per attempt key. Standard library only.
+- ``failure_cache`` -- the negative cache of deterministic failures, keyed by
+  the consumer's attempt key. Standard library only.
 - ``controller`` -- :func:`~content_pipeline.execution.controller.prepare_run`
   / :func:`~content_pipeline.execution.controller.finalize_run` /
   :func:`~content_pipeline.execution.controller.unfinished_units` /

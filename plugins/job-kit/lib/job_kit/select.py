@@ -26,9 +26,9 @@ class EffortUndeliverableError(SelectionError):
 
 # The version the FRONTIER symbol shipped in, not the oldest symbol's: the
 # message names a version the user can act on, so it has to be one that
-# actually carries everything probed below. describe() (llm-scripting-kit's
-# declaration API) is the frontier.
-_MIN_LLM_SCRIPTING_KIT_VERSION = "0.46.0"
+# actually carries everything probed below. The requirements module's arm_call
+# and HaltError.retry_after_s (backpressure retry) are the frontier, 0.61.0.
+_MIN_LLM_SCRIPTING_KIT_VERSION = "0.61.0"
 
 
 class SharedLibTooOldError(SelectionError, ImportError):
@@ -58,6 +58,7 @@ class SharedLibTooOldError(SelectionError, ImportError):
 # plain ModuleNotFoundError so the message names the package; only a present
 # package lacking a module or symbol is diagnosed as "too old".
 import importlib as _importlib
+import inspect as _inspect
 
 
 def _require_module(name: str, symbols: tuple[str, ...]) -> object:
@@ -94,7 +95,21 @@ _REQUIRED_DECLARATION_SYMBOLS = ("describe", "NoUsableRoutingTarget", "CALLER_PR
 # ``entries`` argument, which run.py passes so a halt spends the whole pool.
 _REQUIRED_USAGE_SYMBOLS = ("record_observed_halt", "quota_pool_key")
 
+# arm_call arms a request's controls (text-only mode, a disallowed_tools deny);
+# first shipped in llm-scripting-kit 0.61.0.
+_REQUIRED_REQUIREMENTS_SYMBOLS = ("arm_call",)
+
 _require_module("llm_scripting_kit.completion", _REQUIRED_COMPLETION_SYMBOLS)
+_require_module(
+    "llm_scripting_kit.completion.requirements", _REQUIRED_REQUIREMENTS_SYMBOLS
+)
+# HaltError.retry_after_s (0.61.0) is what the backpressure wait honours; an
+# older HaltError has no such argument and every wait would silently fall back
+# to backoff, so a too-old lib is refused here instead.
+if "retry_after_s" not in _inspect.signature(
+    _require_module("llm_scripting_kit.completion", ("HaltError",)).HaltError
+).parameters:
+    raise SharedLibTooOldError("HaltError.retry_after_s", "llm_scripting_kit.completion")
 _declaration = _require_module(
     "llm_scripting_kit.declaration", _REQUIRED_DECLARATION_SYMBOLS
 )

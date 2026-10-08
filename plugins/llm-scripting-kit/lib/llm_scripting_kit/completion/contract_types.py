@@ -390,6 +390,11 @@ class ContractReport:
       :data:`DELIVERY_NONE`: the channel the adapter used.
     - ``disposition`` -- one of :data:`DISPOSITIONS`.
     - ``errors`` -- sorted ``(json_pointer, keyword)`` pairs.
+    - ``repaired`` -- True when the judged text is the structural repair of the
+      raw answer (the raw answer stays in ``LLMResponse.text``);
+      ``repair_edits`` are its ``(op, token, offset)`` triples, offsets into
+      the raw text. ``repair_note`` says why a repair was tried and declined
+      (``ambiguous`` or ``unrecoverable``), else "".
     """
 
     contract_id: str
@@ -399,6 +404,9 @@ class ContractReport:
     delivery: str
     disposition: str
     errors: Tuple[Tuple[str, str], ...] = ()
+    repaired: bool = False
+    repair_edits: Tuple[Tuple[str, str, int], ...] = ()
+    repair_note: str = ""
 
     def __post_init__(self) -> None:
         if self.policy not in POLICIES:
@@ -418,7 +426,7 @@ class ContractReport:
         return (self.contract_id, self.policy, self.schema_digest, self.schema_version)
 
     def to_json(self) -> dict:
-        return {
+        data = {
             "contract_id": self.contract_id,
             "schema_version": self.schema_version,
             "schema_digest": self.schema_digest,
@@ -427,6 +435,13 @@ class ContractReport:
             "disposition": self.disposition,
             "errors": [[pointer, keyword] for pointer, keyword in self.errors],
         }
+        if self.repaired or self.repair_note:
+            data["repair"] = {
+                "applied": self.repaired,
+                "edits": [[op, token, offset] for op, token, offset in self.repair_edits],
+                "note": self.repair_note,
+            }
+        return data
 
 
 __all__ = [

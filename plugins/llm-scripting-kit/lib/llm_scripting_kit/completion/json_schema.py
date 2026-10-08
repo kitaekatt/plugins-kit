@@ -422,6 +422,17 @@ def validate(
     return tuple(sorted(errors))
 
 
+def conforms(root: Mapping, node: Mapping, value: Any) -> bool:
+    """Whether ``value`` satisfies ``node``, a schema inside ``root``.
+
+    ``root`` supplies the ``#/$defs`` that ``$ref`` resolves against. Both
+    must already have passed :func:`check_schema`.
+    """
+    errors: set = set()
+    _validate(node, value, "", root, errors)
+    return not errors
+
+
 __all__ = [
     "SUBSET_V1",
     "SUPPORTED_SUBSETS",

@@ -317,7 +317,7 @@ def _claude_argv(**opts):
 #: call, so a ``source == FIXED`` filter would quietly stop asserting
 #: ``--allowedTools`` in a default argv. That is the same trap ``results.py``
 #: documents for codex's ``sandbox-mode``.
-_CLAUDE_CONDITIONAL_CONTROLS = {"disallowed-tools"}
+_CLAUDE_CONDITIONAL_CONTROLS = {"disallowed-tools", "text-only-mode"}
 
 
 def test_claude_emits_each_unconditionally_advertised_control():
@@ -714,7 +714,11 @@ def _without_later_additions(payload):
       ``structured_output`` contract keys (asserted per adapter in
       ``test_output_contract_advertisement_per_adapter``);
     - skill context: ``params.skill_context`` on every record, and the
-      top-level ``skill_context`` block on openrouter's only.
+      top-level ``skill_context`` block on openrouter's only;
+    - text-only mode: ``params["backend.text_only"]`` and the
+      ``text-only-mode`` control on claude-cli and codex-cli, and claude's
+      ``permission-bypass`` turning from fixed to request-sourced (asserted in
+      ``test_text_only_mode.py``).
 
     Removing them must restore each record byte for byte, which keeps these
     digests guarding everything else in the record.
@@ -738,6 +742,18 @@ def _without_later_additions(payload):
     else:
         assert skill_param == _HARNESS_SKILL_CONTEXT_PARAM
         assert block is None
+    if payload["adapter"] in ("claude-cli", "codex-cli"):
+        assert payload["params"].pop("backend.text_only")["type"] == "boolean"
+        controls = payload["execution_controls"]
+        assert [c["id"] for c in controls].count("text-only-mode") == 1
+        payload["execution_controls"] = [c for c in controls if c["id"] != "text-only-mode"]
+    for control in payload["execution_controls"]:
+        if payload["adapter"] == "claude-cli" and control["id"] == "permission-bypass":
+            assert control.pop("parameter") == "backend.text_only"
+            assert control.pop("when_value") == "false"
+            control.pop("note")
+            assert control["source"] == "request"
+            control["source"] = "fixed"
     return payload
 
 

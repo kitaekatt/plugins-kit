@@ -1,12 +1,21 @@
 """Ready-wave materialization: which units may be claimed right now (A-min.2).
 
 This module answers one question over the durable store -- "what is currently
-claimable for this run" -- for the two work-unit shapes
-``content_pipeline.pipeline.workunit`` exposes:
+claimable for this run" -- for three work-unit shapes: the two
+``content_pipeline.pipeline.workunit`` exposes, and
+:class:`~content_pipeline.execution.parallel_graph.ParallelGraphStrategy`:
 
-- **Flat strategies** (anything that is not a
-  :class:`~content_pipeline.pipeline.workunit.GraphWalkStrategy`) have no
-  structural ordering constraint between units. The ready wave is simply
+- **Parallel graph strategies**
+  (:class:`~content_pipeline.execution.parallel_graph.ParallelGraphStrategy`)
+  name each unit's direct dependencies. The ready wave is every ``PENDING``
+  unit whose dependencies are all settled (``SKIPPED``, or ``ACCEPTED`` and
+  applied), up to the strategy's ``capacity`` minus the units in flight, with
+  ``deferred`` units last; a transitive dependent of a broken unit is gated
+  (:func:`gated_units`). That module's docstring states the rule in full. The
+  drain-loop rule below applies to it as to the sequential graph.
+- **Flat strategies** (anything that is neither a
+  :class:`~content_pipeline.pipeline.workunit.GraphWalkStrategy` nor a
+  parallel graph) have no structural ordering constraint between units. The ready wave is simply
   every ``PENDING`` unit for the run, in ordinal order, optionally capped by
   ``max_wave_size``.
 - **Graph strategies** are treated as strictly ordinal-sequential: only one
@@ -124,12 +133,18 @@ from __future__ import annotations
 from typing import Dict, List, NamedTuple, Optional, Sequence
 
 from content_pipeline.execution.model import (
+    TERMINAL_STATES,
     AttemptKind,
     AttemptRecord,
     ExecutionError,
     UnitRecord,
     UnitState,
 )
+from content_pipeline.execution.parallel_graph import (
+    ParallelGraphStrategy,
+    is_parallel_graph_strategy,
+)
+from content_pipeline.execution.scheduler import dependents_closure
 from content_pipeline.pipeline.workunit import GraphWalkStrategy, WorkUnitStrategy
 
 
@@ -163,6 +178,35 @@ def is_graph_strategy(strategy: WorkUnitStrategy) -> bool:
     return isinstance(strategy, GraphWalkStrategy)
 
 
+class GraphRegistrationMismatchError(ExecutionError):
+    """A parallel graph's node ids differ from the unit ids registered for the run.
+
+    A registered unit outside the graph has no dependency rule, and a graph
+    node that was never registered can never settle, so its dependents would
+    wait forever. Raised by :func:`ready_wave` and :func:`gated_units`.
+    """
+
+    def __init__(self, run_id: str, unregistered: Sequence[str], ungraphed: Sequence[str]) -> None:
+        self.run_id = run_id
+        self.unregistered = list(unregistered)
+        self.ungraphed = list(ungraphed)
+        super().__init__(
+            f"run {run_id!r}: parallel graph and registered units differ -- "
+            f"graph nodes never registered: {self.unregistered!r}; "
+            f"registered units outside the graph: {self.ungraphed!r}"
+        )
+
+
+def is_dependency_ordered(strategy: WorkUnitStrategy) -> bool:
+    """Return whether ``strategy`` constrains which units may run together.
+
+    True for a sequential graph walk and for a parallel graph; a caller that
+    selects units outside :func:`ready_wave` (a wave packer, a reclaim path)
+    must narrow its selection to ``ready_wave``'s answer for these.
+    """
+    return is_graph_strategy(strategy) or is_parallel_graph_strategy(strategy)
+
+
 def ready_wave(
     store,
     run_id: str,
@@ -174,7 +218,9 @@ def ready_wave(
     """Return the units currently claimable for ``run_id`` under ``strategy``.
 
     See the module docstring for the flat vs. graph semantics. ``max_wave_size``
-    caps a flat wave's length; against a graph strategy, any ``max_wave_size``
+    caps a flat or parallel-graph wave's length (a parallel graph is also
+    capped by its ``capacity``, and ``reclaim_at`` applies to it as to the
+    sequential graph); against a graph walk strategy, any ``max_wave_size``
     greater than 1 raises :class:`UnsafeGraphParallelismError` immediately,
     before any store read. ``reclaim_at`` (graph strategies only) is a clock
     reading: a ``CLAIMED`` unit whose lease expired at or before it counts as
@@ -195,6 +241,9 @@ def ready_wave(
         if max_wave_size is not None and max_wave_size > 1:
             raise UnsafeGraphParallelismError(max_wave_size)
         return _graph_ready_wave(store, run_id, reclaim_at)
+    if is_parallel_graph_strategy(strategy):
+        wave = _parallel_graph_view(store, run_id, strategy, reclaim_at).ready
+        return wave[:max_wave_size] if max_wave_size is not None else wave
     return _flat_ready_wave(store, run_id, max_wave_size)
 
 
@@ -448,9 +497,84 @@ def graph_block_reason(
     )
 
 
+class _ParallelGraphView(NamedTuple):
+    ready: List[UnitRecord]
+    gated: List[UnitRecord]
+
+
+_BROKEN_STATES = (UnitState.FAILED, UnitState.OPERATOR_REJECTED, UnitState.INTERRUPT_EXPIRED)
+
+
+def _parallel_graph_view(
+    store, run_id: str, strategy: ParallelGraphStrategy, reclaim_at: Optional[float]
+) -> _ParallelGraphView:
+    """Ready and gated units of a parallel-graph run, from one snapshot read."""
+    _run, all_units, attempts = store.snapshot(run_id, attempt_kinds=_APPLY_KINDS)
+    units = sorted(all_units, key=lambda u: u.ordinal)
+    graph = strategy.dependencies
+    registered = {u.unit_id for u in units}
+    if registered != set(graph):
+        raise GraphRegistrationMismatchError(
+            run_id,
+            [n for n in graph if n not in registered],
+            [u.unit_id for u in units if u.unit_id not in graph],
+        )
+    attempts_by_unit = _attempts_by_unit(attempts)
+    settled = set()
+    broken = set()
+    for u in units:
+        if u.state is UnitState.SKIPPED:
+            settled.add(u.unit_id)
+        elif u.state is UnitState.ACCEPTED:
+            last = _last_apply_kind(attempts_by_unit.get(u.unit_id, []))
+            if last is AttemptKind.APPLY_SUCCEEDED:
+                settled.add(u.unit_id)
+            elif last is AttemptKind.APPLY_REJECTED:
+                broken.add(u.unit_id)
+        elif u.state in _BROKEN_STATES:
+            broken.add(u.unit_id)
+    blocked = dependents_closure(graph, broken) - broken
+    gated = [u for u in units if u.unit_id in blocked and u.state not in TERMINAL_STATES]
+    in_flight = sum(
+        1
+        for u in units
+        if u.state is UnitState.CLAIMED and not _reclaimable(u, reclaim_at)
+    )
+    candidates = [
+        u
+        for u in units
+        if (u.state is UnitState.PENDING or _reclaimable(u, reclaim_at))
+        and u.unit_id not in blocked
+        and all(dep in settled for dep in graph[u.unit_id])
+    ]
+    candidates.sort(key=lambda u: 1 if u.unit_id in strategy.deferred else 0)
+    slots = max(0, strategy.capacity - in_flight)
+    return _ParallelGraphView(candidates[:slots], gated)
+
+
+def gated_units(store, run_id: str, strategy: WorkUnitStrategy) -> List[UnitRecord]:
+    """Unfinished units of a parallel-graph run that can never be released.
+
+    A unit is gated when a dependency, direct or transitive, is broken
+    (``FAILED``, ``OPERATOR_REJECTED``, ``INTERRUPT_EXPIRED``, or ``ACCEPTED``
+    with its apply refused). A drain loop is done when every unit
+    :func:`~content_pipeline.execution.controller.unfinished_units` returns
+    is gated. Read-only, one snapshot read. Raises ``TypeError`` for any
+    strategy that is not a
+    :class:`~content_pipeline.execution.parallel_graph.ParallelGraphStrategy`
+    (a sequential graph's block is diagnosed by :func:`graph_block_reason`).
+    """
+    if not is_parallel_graph_strategy(strategy):
+        raise TypeError("gated_units needs a ParallelGraphStrategy")
+    return _parallel_graph_view(store, run_id, strategy, None).gated
+
+
 __all__ = [
     "UnsafeGraphParallelismError",
+    "GraphRegistrationMismatchError",
     "is_graph_strategy",
+    "is_dependency_ordered",
     "ready_wave",
     "graph_block_reason",
+    "gated_units",
 ]

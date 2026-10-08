@@ -18,6 +18,8 @@ from .capabilities import (
     FILESYSTEM_WRITE,
     SHELL_EXEC,
     SUBAGENT_SPAWN,
+    TEXT_ONLY_MODE,
+    TEXT_ONLY_PARAMETER,
     ALLOW,
     APPEND,
     BYPASS,
@@ -264,8 +266,9 @@ OPENROUTER_CAPABILITIES = Capabilities(
 
 # -- claude-cli ------------------------------------------------------------
 #
-# ClaudeCliBackend.complete builds argv directly. --effort is conditional; the
-# other flags are unconditional. No caller-schema flag is emitted: the
+# ClaudeCliBackend.complete builds argv directly. --effort and --disallowedTools
+# are conditional, and text-only mode swaps --permission-mode bypassPermissions
+# --allowedTools for _CLAUDE_TEXT_ONLY_ARGS. No caller-schema flag is emitted: the
 # --output-format json flag selects claude's TRANSPORT envelope, which the
 # adapter parses to reach data["result"], and is not a structured-output channel.
 
@@ -283,6 +286,38 @@ _CLAUDE_SYSTEM_PROMPT_FLAGS = {
     "replace": "--system-prompt",
     "append": "--append-system-prompt",
 }
+
+#: The argv ClaudeCliBackend emits IN PLACE OF ``--permission-mode
+#: bypassPermissions --allowedTools <x>`` when its ``text_only`` field is set.
+#: One tuple, two jobs, like the map above: the backend extends argv with it
+#: and the record below advertises it, so the two cannot drift.
+#:
+#: ``--tools ""`` removes every built-in tool (the Agent tool included);
+#: ``--strict-mcp-config`` with an EMPTY ``--mcp-config`` loads no MCP server
+#: from any settings source; ``--disable-slash-commands`` disables skills; and
+#: ``--permission-mode dontAsk`` denies anything not pre-approved instead of
+#: bypassing the check. Measured 2026-10-07 on Claude Code 2.1.293 (haiku):
+#: asked to list every tool it could call and to run ``echo`` if it had a
+#: shell, the model answered ``NO_TOOLS`` in one turn with no permission
+#: denial.
+_CLAUDE_TEXT_ONLY_ARGS = (
+    "--tools",
+    "",
+    "--strict-mcp-config",
+    "--mcp-config",
+    '{"mcpServers":{}}',
+    "--disable-slash-commands",
+    "--permission-mode",
+    "dontAsk",
+)
+
+
+def _render_args(args: tuple) -> str:
+    """An argv fragment as one ``emits`` string; an empty value shows as ``""``."""
+    return " ".join(arg if arg else '""' for arg in args)
+
+
+_CLAUDE_TEXT_ONLY_EMITS = _render_args(_CLAUDE_TEXT_ONLY_ARGS)
 
 _CLAUDE_PARAMS = {
     "timeout_s": ParamCapability(
@@ -326,6 +361,18 @@ _CLAUDE_PARAMS = {
     ),
     "output_contract": _output_contract_param(_CLAUDE_CONTRACT_EMITS),
     "skill_context": _skill_context_param(),
+    TEXT_ONLY_PARAMETER: ParamCapability(
+        type="boolean",
+        default=False,
+        emits=_CLAUDE_TEXT_ONLY_EMITS,
+        note=(
+            "a ClaudeCliBackend field, not a BackendOptions field: "
+            "declaration.run sets it when a guarantees requirement admitted "
+            "this entry (requirements.arm_requirements). When true it "
+            "replaces --permission-mode bypassPermissions and --allowedTools, "
+            "and a non-empty allowed_tools is refused before dispatch"
+        ),
+    ),
 }
 
 CLAUDE_CAPABILITIES = Capabilities(
@@ -370,7 +417,10 @@ CLAUDE_CAPABILITIES = Capabilities(
             id="permission-bypass",
             emits="--permission-mode bypassPermissions",
             effect=BYPASS,
-            source=FIXED,
+            source=REQUEST,
+            parameter=TEXT_ONLY_PARAMETER,
+            when_value="false",
+            note="emitted on every call except in text-only mode",
         ),
         ExecutionControl(
             id="no-session-persistence",
@@ -378,6 +428,23 @@ CLAUDE_CAPABILITIES = Capabilities(
             effect=DISABLE,
             subjects=("session-persistence",),
             source=FIXED,
+        ),
+        ExecutionControl(
+            id=TEXT_ONLY_MODE,
+            emits=_CLAUDE_TEXT_ONLY_EMITS,
+            effect=DENY,
+            subjects=(FILESYSTEM_WRITE, SHELL_EXEC, SUBAGENT_SPAWN),
+            source=REQUEST,
+            parameter=TEXT_ONLY_PARAMETER,
+            when_value="true",
+            note=(
+                "no tools, no MCP servers, no skills, and no permission "
+                "bypass. A guarantees requirement admits claude-cli through "
+                "this control and declaration.run arms it, so the caller "
+                "passes no flag. Measured 2026-10-07 on Claude Code 2.1.293: "
+                "the model reported no callable tool and ran nothing. Neither "
+                "allowed-tools nor permission-bypass is emitted in this mode"
+            ),
         ),
     ),
     structured_output=StructuredOutputCapability(
@@ -424,6 +491,72 @@ CLAUDE_CAPABILITIES = Capabilities(
 # validated on CodexAdapter is bypassed on this path, and network=False emits
 # nothing at all rather than a deny.
 
+#: Codex text-only mode has three parts, because codex's tools come from three
+#: places:
+#:
+#: 1. ``--ignore-user-config``: no ``config.toml``, so no user MCP server
+#:    (``-c mcp_servers={}`` MERGES and does not remove them), plugin or app.
+#: 2. ``_CODEX_TEXT_ONLY_CONFIG``, the ``-c`` pairs below, with ``-s read-only``
+#:    and no network flag: they turn off the feature-gated tool families.
+#: 3. A one-model ``model_catalog_json``: the MODEL CATALOG, not the config,
+#:    gives a model code mode (``tool_mode: code_mode_only`` -> ``exec`` and
+#:    ``wait``), multi-agent v2 (``multi_agent_version`` -> the
+#:    ``collaboration.*`` tools, ``spawn_agent`` among them), ``apply_patch``
+#:    (``apply_patch_tool_type``), ``tool_search`` and the node REPL. No ``-c``
+#:    key or feature flag overrides those, so the backend reads the live
+#:    catalog (``codex debug models``), applies ``_CODEX_TEXT_ONLY_CATALOG_SET``
+#:    and ``_CODEX_TEXT_ONLY_CATALOG_DROP`` to the requested model's entry, and
+#:    passes that entry alone.
+#:
+#: Measured 2026-10-07 on codex-cli 0.160.0 (gpt-6.1-sol, effort low), asking
+#: the model to list every tool and run ``echo`` if it had a shell:
+#: - parts 2 only: collaboration.* (spawn_agent ...), functions.exec,
+#:   functions.wait, functions.request_user_input;
+#: - parts 2+3 without dropping apply_patch: tool_search, three MCP resource
+#:   tools, request_user_input, apply_patch;
+#: - parts 2+3: the node_repl MCP tools (``mcp__node_repl.js``) from the user
+#:   config, the MCP resource tools, request_user_input;
+#: - parts 1+2+3 (this mode): ``functions.request_user_input`` only. It asks
+#:   the user a question, belongs to no guarantee subject, and codex refuses it
+#:   in ``exec`` mode. It is the one tool the mode does not remove.
+_CODEX_TEXT_ONLY_CATALOG_SET = {
+    "tool_mode": None,
+    "multi_agent_version": None,
+    "experimental_supported_tools": [],
+    "supports_search_tool": False,
+    "node_repl_disabled": True,
+}
+#: Keys removed from the catalog entry; ``null`` is not accepted for them.
+_CODEX_TEXT_ONLY_CATALOG_DROP = ("apply_patch_tool_type",)
+
+_CODEX_TEXT_ONLY_CONFIG = (
+    "features.shell_tool=false",
+    "features.unified_exec=false",
+    "features.multi_agent=false",
+    "features.multi_agent_v2=false",
+    "features.apps=false",
+    "features.plugins=false",
+    "features.view_image=false",
+    "features.image_generation=false",
+    "features.browser_use=false",
+    "features.browser_use_external=false",
+    "features.computer_use=false",
+    "features.in_app_browser=false",
+    "features.code_mode_host=false",
+    "features.sleep_tool=false",
+    "features.tool_suggest=false",
+    "features.skill_search=false",
+    "features.goals=false",
+    'web_search="disabled"',
+    "mcp_servers={}",
+)
+
+_CODEX_TEXT_ONLY_EMITS = (
+    "--ignore-user-config -s read-only "
+    + " ".join(f"-c {item}" for item in _CODEX_TEXT_ONLY_CONFIG)
+    + " -c model_catalog_json='<temp one-model catalog>'"
+)
+
 _CODEX_PARAMS = {
     "timeout_s": ParamCapability(
         type="number", default=900.0, emits="runner timeout_s"
@@ -467,6 +600,19 @@ _CODEX_PARAMS = {
     ),
     "output_contract": _output_contract_param(_CODEX_CONTRACT_EMITS),
     "skill_context": _skill_context_param(),
+    TEXT_ONLY_PARAMETER: ParamCapability(
+        type="boolean",
+        default=False,
+        emits=_CODEX_TEXT_ONLY_EMITS,
+        note=(
+            "a CodexCliBackend field, not a BackendOptions field: "
+            "declaration.run sets it when a guarantees requirement admitted "
+            "this entry. Forces -s read-only and network off, ignores the "
+            "user config, and runs one extra `codex debug models` call to "
+            "build the patched catalog. extras.sandbox other than read-only, "
+            "extras.network true, or no model id is refused before dispatch"
+        ),
+    ),
 }
 
 CODEX_CAPABILITIES = Capabilities(
@@ -523,6 +669,23 @@ CODEX_CAPABILITIES = Capabilities(
             effect=DISABLE,
             subjects=("git-repo-check",),
             source=FIXED,
+        ),
+        ExecutionControl(
+            id=TEXT_ONLY_MODE,
+            emits=_CODEX_TEXT_ONLY_EMITS,
+            effect=DENY,
+            subjects=(FILESYSTEM_WRITE, SHELL_EXEC, SUBAGENT_SPAWN),
+            source=REQUEST,
+            parameter=TEXT_ONLY_PARAMETER,
+            when_value="true",
+            note=(
+                "user config ignored, feature-gated tools off, and the "
+                "model's catalog entry patched to drop code mode, multi-agent, "
+                "apply_patch, tool_search and the node REPL. Measured "
+                "2026-10-07 on codex-cli 0.160.0 (gpt-6.1-sol): the model "
+                "listed only functions.request_user_input, which belongs to "
+                "no guarantee subject and which codex refuses in exec mode"
+            ),
         ),
     ),
     structured_output=StructuredOutputCapability(
@@ -737,4 +900,8 @@ __all__ = [
     "CODEX_CAPABILITIES",
     "OPENCODE_CAPABILITIES",
     "_CLAUDE_SYSTEM_PROMPT_FLAGS",
+    "_CLAUDE_TEXT_ONLY_ARGS",
+    "_CODEX_TEXT_ONLY_CATALOG_DROP",
+    "_CODEX_TEXT_ONLY_CATALOG_SET",
+    "_CODEX_TEXT_ONLY_CONFIG",
 ]

@@ -7,7 +7,7 @@ import signal
 import sys
 import threading
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Sequence
 
@@ -81,6 +81,17 @@ class FakeBackend:
     def classify_halt(self, exc: BaseException) -> str | None:
         """Leave typed HaltError classification to the runner."""
         return None
+
+
+@dataclass
+class TextOnlyCodex(FakeBackend):
+    """A codex-shaped fake with the kit's text_only field (what arm_call sets)."""
+
+    text_only: bool = False
+    name: str = "codex-cli"
+
+    def __post_init__(self) -> None:
+        FakeBackend.__init__(self)
 
 
 class SequenceBackend(FakeBackend):
@@ -674,24 +685,26 @@ def test_job_disallowed_tools_are_added_to_the_run_floor(tmp_path: Path) -> None
     assert backend.calls[0][3].disallowed_tools == "Bash Edit"
 
 
-def test_run_floor_rejects_a_backend_that_drops_it(tmp_path: Path) -> None:
-    """A concrete deny floor cannot run through an adapter that drops it."""
+def test_run_floor_fails_loudly_when_the_backend_cannot_be_armed(
+    tmp_path: Path,
+) -> None:
+    """An admitted backend the kit cannot arm (no text_only field) raises
+    before anything is dispatched; the reservation is released."""
     backend = FakeBackend()
     backend.name = "codex-cli"
 
     def codex_advertisement() -> dict[str, Capabilities]:
         return {"codex-cli": CODEX_CAPABILITIES}
 
-    snapshot = run_jobs(
-        [_job(tmp_path)],
-        tmp_path / "unsupported-floor.sqlite3",
-        disallowed_tools="Bash",
-        capabilities_provider=codex_advertisement,
-        backend_factory=_factory_for(backend),
-    )
+    with pytest.raises(TypeError, match="text_only"):
+        run_jobs(
+            [_job(tmp_path)],
+            tmp_path / "unsupported-floor.sqlite3",
+            disallowed_tools="Bash",
+            capabilities_provider=codex_advertisement,
+            backend_factory=_factory_for(backend),
+        )
 
-    assert snapshot.jobs[0].state is JobState.UNROUTABLE
-    assert snapshot.attempts == ()
     assert backend.calls == []
 
 
@@ -739,24 +752,31 @@ def test_unmapped_deny_floor_does_not_arm_the_codex_sandbox(tmp_path: Path) -> N
     assert backend.calls[0][3].extras == {}
 
 
-def test_filesystem_write_deny_floor_arms_the_codex_sandbox(tmp_path: Path) -> None:
-    """A floor naming a filesystem-write tool arms the read-only sandbox --
-    this is the guarantee the endpoint was selected on."""
-    backend = FakeBackend()
-    backend.name = "codex-cli"
+def test_filesystem_write_deny_floor_arms_codex_text_only(tmp_path: Path) -> None:
+    """A floor naming a filesystem-write tool arms the kit's text-only mode on
+    codex (read-only sandbox, no tools) -- the guarantee it was selected on."""
+    backend = TextOnlyCodex()
 
     def codex_advertisement() -> dict[str, Capabilities]:
         return {"codex-cli": CODEX_CAPABILITIES}
+
+    seen: list[object] = []
+
+    def factory(endpoint: str, **_: object) -> BackendSelection:
+        seen.append(backend)
+        return BackendSelection(endpoint, "fake", backend, "fake-model")
 
     run_jobs(
         [_job(tmp_path)],
         tmp_path / "fs-write-floor.sqlite3",
         disallowed_tools="Edit",
         capabilities_provider=codex_advertisement,
-        backend_factory=_factory_for(backend),
+        backend_factory=factory,
     )
 
-    assert backend.calls[0][3].extras["sandbox"] == "read-only"
+    # complete() ran on an armed COPY; the original is untouched.
+    assert backend.text_only is False
+    assert backend.calls == []
 
 
 def test_empty_deny_floor_does_not_arm_the_codex_sandbox(tmp_path: Path) -> None:
@@ -1431,6 +1451,10 @@ def test_run_deny_floor_is_applied_to_each_retry(
 ) -> None:
     """The run-level deny floor is forwarded on every attempt."""
     backend = SequenceBackend([RuntimeError("temporary"), None])
+    # The armed deny control must be reported applied, or the attempt fails.
+    backend.response = replace(
+        backend.response, execution_controls_applied=("disallowed-tools",)
+    )
     job = replace(_job(tmp_path), max_attempts=2)
 
     snapshot = run_jobs(

@@ -498,6 +498,8 @@ def test_manifests_gain_no_entry_for_interrupts():
             "enabled": True,
             "scope": "user",
             "install": "auto",
+            # arm_call, HALT_BACKPRESSURE, HaltError.retry_after_s, classify_backpressure.
+            "min_version": "0.61.0",
         }
     ]
     assert manifest["shared_lib_imports"] == ["llm_scripting_kit", "bootstrap_lib"]

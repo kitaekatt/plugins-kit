@@ -356,6 +356,25 @@ whether it is mid-sweep with hundreds of items left or running a one-shot
 script that should simply die. Exporting the type instead of raising it is what
 lets a new consumer inherit the taxonomy rather than invent one.
 
+**Backpressure is a halt that clears itself, and the rule for what counts is
+narrow.** `HALT_BACKPRESSURE` (`"backpressure"`, `completion/halt.py`) marks
+transient endpoint overload: retry after a wait, do not stop the run.
+`classify_backpressure(exc)` returns `Backpressure(status, retry_after_s)` or
+`None`, and `classify_openai_exception` checks it FIRST, so
+`OpenRouterBackend.classify_halt` reports it. A 503 counts only with
+queue/overload/busy/timeout wording or a server code such as
+`request_queue_timeout`; a bare 503 is an outage, not a halt. A 429 counts only
+with a positive signal (a `Retry-After` header, a "try again in N s" hint,
+queue/overload wording, or a code such as `rate_limit_exceeded`); a bare 429
+keeps `rate_limit`. Quota or credit wording (`insufficient_quota`, billing,
+credit, usage limit) is NEVER backpressure and keeps `rate_limit` or
+`insufficient_credit`. `retry_after_s` comes from a numeric `Retry-After`
+header, else a body hint (seconds or ms); an HTTP-date header yields `None`.
+`halt_payload(kind, exc)` builds the envelope object (`{"kind": "backpressure",
+"retry_after_s": 3.0}`, other kinds `{"kind": kind}`), and `HaltError` carries
+`retry_after_s`. A single-call `complete` halt adds the same `halt` object with
+`error.code` and exit `3` unchanged; there is no separate backpressure exit.
+
 The Codex and OpenCode transports carry additional rules their siblings do not
 need.
 
@@ -461,6 +480,40 @@ Registry loading rejects a transport entry that declares `reasoning_effort`
 without a deliverable `effort_style`; invalid styles and conflicting declared
 styles remain registry notes.
 
+**`effort_menu` and `lower_effort` are how a caller retries a length stop.**
+`effort.effort_menu(endpoint)` returns the efforts a registry endpoint accepts,
+low to high, from its resolved style (`style_effort_menu` is the same lookup by
+style): `ninfer` gives `("none", "low", "medium", "xhigh")` and rejects `high`,
+`top-level` and `chat_template_kwargs` give `("low", "medium", "high")`, and an
+endpoint that delivers no effort gives `()`. `lower_effort(endpoint, effort)`
+returns the next value below `effort` (remapping `high` to `xhigh` on ninfer
+first) and `None` at the bottom, for a value outside the menu, or for an empty
+menu. The retry rule: on a length stop (`EmptyCompletionError`, reasoning ate
+the budget) retry once per level at `lower_effort`; stop at `None`. An unknown
+endpoint raises `EndpointRegistryError`.
+
+## Plugin opinions: seam, default, or razor verdict
+
+Each hardcoded opinion either has a named seam and default, or a recorded
+verdict (the scenario a user would need and why none does). The verdicts are
+design reasoning, not measurements.
+
+| Opinion | Seam and default, or razor verdict |
+|---|---|
+| JSON repair `max_edits` / `max_walks` | Seam: parameters of `repair_json_structure` (and `repair_and_evaluate_output`); defaults `MAX_REPAIR_EDITS=24`, `MAX_REPAIR_WALKS=1500`. `finalize_contract` and the CLI do not forward them: a caller that needs other bounds calls the library function. |
+| `_MAX_CLOSER_RUN=8`, `_MAX_REF_DEPTH=16`, `_MISQUOTED_KEY_LOOKBACK=2` | Razor verdict: no seam. Scenarios considered: a run of more than 8 stray closers, a schema `$ref` chain deeper than 16, a misquoted key more than 2 tokens behind the failure. Each is outside the one-slip repair the module promises (a run that long is a different document, and the repair applies only when exactly one fit exists), and a deeper `$ref` chain is a schema fault the caller fixes. Raising them widens the guess space and the ambiguity risk without helping a slip. |
+| Claude text-only flags (`_CLAUDE_TEXT_ONLY_ARGS`) and codex text-only config and catalog sets (`_CODEX_TEXT_ONLY_CONFIG`, `_CODEX_TEXT_ONLY_CATALOG_SET`, `_CODEX_TEXT_ONLY_CATALOG_DROP`) | Razor verdict: no seam. They ARE the guarantee the mode advertises (no filesystem write, shell or subagent); a user-editable set would let the advertisement and the argv disagree. Scenarios considered: a user wanting one tool kept (then they do not want text-only mode; use a mode that allows it), a new codex tool source (a plugin change, re-measured per "A guarantees requirement admits AND arms"). |
+| Effort `_MENUS` | Razor verdict: no seam. The tables mirror what each wire style accepts (ninfer rejects `high` with a 400). A user-set menu could only disagree with the server; a server with a different menu declares a different `effort_style` in the registry, which is the existing seam. |
+
+**Home of the codex temp files.** `codex_out_*.txt`, `codex_schema_*.json` and
+`codex_catalog_*.json` (the text-only `model_catalog_json`) are created with
+`tempfile.mkstemp` in the OS temp directory and deleted in the call's
+`finally`. Per plugins/CLAUDE.md's definitions that is project-ephemeral
+scratch in neither project nor user home: one call's private working file,
+never read by another process after the call, and not derived from the
+script's location (`__file__`, `BASH_SOURCE`, `$0`). It writes no durable
+path.
+
 That inequality is no longer folklore: **each adapter ADVERTISES it.** Every
 backend class carries a `capabilities: ClassVar[Capabilities]`
 (`completion/adapter_capabilities.py`), naming the params it honors, the ones it
@@ -476,6 +529,20 @@ would be the overclaim the advertisement exists to prevent. Two corollaries,
 each got wrong once and now pinned by tests: **suppressing a flag is not a
 control** (codex emits nothing for `network=False`), and **a value menu is
 advertised only where the request-building code validates it**.
+
+**A guarantees requirement admits AND arms; a guarantee needs a live check.**
+`declaration.run` passes every call through `requirements.arm_call`, which
+arms each request-sourced control the requirement relies on (claude-cli and
+codex-cli text-only mode through the backend field `text_only`, opencode-cli
+through `disallowed_tools`) and raises when one cannot be armed; `run()` then
+refuses a response that does not report the armed control. A selector that
+admits an entry it does not arm is a fake gate. Add a canonical subject to a
+mode only after a live call shows no tool for it remains. For codex the model
+CATALOG, not the config, supplies code mode, multi-agent, apply_patch and the
+node REPL, so text-only mode patches the model's `codex debug models` entry and
+ignores the user config (`-c mcp_servers={}` merges and removes nothing);
+re-measure when codex adds a tool source. README "Text-only mode" has the argv
+and the evidence.
 
 **A protocol error is not an endpoint error.** The `complete` verb speaks a
 versioned protocol both ways; `EXIT_PROTOCOL` (4) means nothing ran and retrying

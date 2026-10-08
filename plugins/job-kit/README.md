@@ -72,10 +72,10 @@ jobs:
   Requires llm-scripting-kit >= 0.56.0, the version that added
   `completion.json_schema` with its frozen subset marker
   (`SUPPORTED_SUBSETS`), which `run`, `resume` and `resolve` probe before
-  they open the ledger (exit 3 without it). Selection needs
-  llm-scripting-kit >= 0.46.0, the
-  version that added `describe` (and, before it,
-  `subjects_for_disallowed_tools` for the deny floor); job_kit.select fails at
+  they open the ledger (exit 3 without it). Selection and backpressure retry
+  need llm-scripting-kit >= 0.61.0, the version that added
+  `completion.requirements.arm_call` and `HaltError.retry_after_s` (before
+  them, `describe` and `subjects_for_disallowed_tools` for the deny floor); job_kit.select fails at
   import time with a named remediation if an older llm-scripting-kit is
   linked in.
 - **Command-shaped acceptance.** A `contract` command must exit zero for the
@@ -221,6 +221,33 @@ configuration:
 - **Interleaved stderr.** Backends stream to stderr as they go, so N workers
   produce interleaved output. Each line carries its job through the
   `[job:<id>]` prefix; the ledger, not the console, is the record of a run.
+
+## Backpressure
+
+A transient overload does not halt a run. When a seam call raises (or returns
+an error for) a `backpressure` or `rate_limit` halt, job-kit records that call
+as its own attempt, with that halt, then waits and calls the same model again
+as a new attempt. Such a waited-out attempt does not spend the job's
+`max_attempts` and does not exclude the endpoint. The wait is the halt's
+`retry_after_s` when set, else exponential backoff with jitter. Each wait is
+recorded as a `job-kit:backpressure-wait` event on the attempt it follows
+(`retry_no`, `wait_s`, `waited_s`, and `retry_after_s` when known). When the
+next wait would push the total past the cap, that attempt is recorded as the
+`rate_limit` halt it was before, spends the budget, and the endpoint is
+excluded and the next preference tried. Quota, credit and auth halts are never
+waited out. In code, pass `backpressure=BackpressurePolicy(...)` to `run_job`.
+
+| Opinion | Default | Setting |
+|---|---|---|
+| Total wait per call before falling back to a `rate_limit` halt | 600 s | env `JOB_KIT_BACKPRESSURE_CAP_S` (`0` disables waiting), or `BackpressurePolicy.cap_s` |
+| First backoff when the halt gives no `retry_after_s` | 2 s, doubling | `BackpressurePolicy.base_s` (code only) |
+| Backoff ceiling | 60 s | `BackpressurePolicy.max_s` (code only) |
+| Jitter on a backoff wait | +/-25% | `BackpressurePolicy.jitter` (code only) |
+
+The backoff shape has no file or env key: it is a code-level default, kept
+because a caller that needs a different curve passes its own policy and no
+user-facing workflow depends on it. job-kit's new writes go only to its
+existing ledger.
 
 ## Execution events
 

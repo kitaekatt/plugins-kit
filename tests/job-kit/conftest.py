@@ -51,3 +51,19 @@ def _hermetic_declaration_reads(monkeypatch: pytest.MonkeyPatch) -> list:
 
     monkeypatch.setattr(usage_budget, "record_observed_halt", record)
     return written
+
+
+@pytest.fixture(autouse=True)
+def _no_backpressure_waiting(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep rate_limit/backpressure halts from sleeping in tests that predate waiting.
+
+    A zero cap is the pre-waiting behaviour; test_backpressure_retry.py
+    installs its own policy with an injected sleeper.
+    """
+    import job_kit.run as run_module
+
+    monkeypatch.setattr(
+        run_module.BackpressurePolicy,
+        "from_environment",
+        staticmethod(lambda: run_module.BackpressurePolicy(cap_s=0.0)),
+    )

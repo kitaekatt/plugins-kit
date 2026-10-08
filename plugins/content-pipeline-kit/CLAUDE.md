@@ -103,17 +103,27 @@ either copy, run `test_llm_spend_ledger.py::TestNetworkPathParity` as well. The
 cheaper fix is a back-pointer comment on the `execution/store.py` copy, which no
 unit owns.
 
-## Backend selection is process-wide
+## Backend selection
 
-Backend selection is process-global: one `CONTENT_PIPELINE_LLM_MODELS`
-declaration picks the entry, and its model, for the whole process. One exception:
+Routing is per pipeline when the consumer passes the declaration explicitly:
+`route(models=[...])`, `routed_model(requested, models=[...])` and
+`declared_model_names(models)` take an ordered list of llm-scripting-kit ids.
+The list wins over the environment, so two pipelines in one process can route
+differently; the declaration memo is keyed on the names. An empty explicit list
+raises `ConfigurationError`. `CONTENT_PIPELINE_LLM_MODELS` (comma list) is the
+process-wide default only when `models` is `None`; a supplied `mock` still wins
+unconditionally.
+
+With the environment default, selection is process-global: one
+`CONTENT_PIPELINE_LLM_MODELS` declaration picks the entry, and its model, for
+the whole process. One exception:
 when the declaration resolves to the `openrouter` entry, `route()` returns a
 caller-supplied `openrouter=` instance instead of building a fresh one, and
 `routed_model()` returns a non-empty caller-requested model instead of the
 entry's model. An empty request, or an entry naming another transport, still runs
 the declaration's entry and model. The consequence
 to state to a consumer: two pipelines that need different backends cannot share
-a process, and nothing at a call site signals that one of them got the other's
+a process unless each passes `models=`, and with the environment default nothing at a call site signals that one of them got the other's
 backend, so a changed environment variable can move output quality with no
 local signal.
 
@@ -123,6 +133,110 @@ A supplied `mock` wins unconditionally in `route()`, checked before
 the declaration is even read: `route(mock=FakeBackend())` always returns the
 supplied instance, regardless of `CONTENT_PIPELINE_LLM_MODELS`. A test needs
 no environment setup to keep a routed call off a live transport.
+
+## The adaptive gate
+
+An overloaded endpoint is a halt of kind `HALT_BACKPRESSURE` (`"backpressure"`)
+carrying `retry_after_s` (`None` without a hint), distinct from quota, credit
+and auth halts. `call_llm` does not retry it; wrap calls in
+`llm.gate.AdaptiveGate` (or `call_llm_gated`), one gate per run. On the halt
+the gate releases the slot, halves the concurrency limit (floor 1, once per
+wave), waits `retry_after_s` (else exponential backoff with equal jitter),
+and retries. Every `recover_after` consecutive admitted calls raise the limit
+by one, back toward `jobs`. A call still refused after `give_up_s` raises
+`EndpointBusyError`, and so does every later call at once. Quota, credit,
+auth, unreachable and all other errors pass through. `clock`, `sleep` and
+`jitter` are injectable. The retry-after hint falls back through
+`llm_scripting_kit.completion.halt.classify_backpressure`: the edge is DEGRADE
+(`platform._backpressure_classifier`), since without it the halt is still true
+and only the wait is less informed; an absent lib and a lib older than
+llm-scripting-kit 0.61.0 each raise a distinct `RuntimeWarning` naming the
+install or update command, once per state. Pinned by
+`test_backpressure_classifier_seam.py`.
+
+## Plugin-opinion razor (hardcoded numbers)
+
+| Opinion | Default | Seam | Verdict |
+| --- | --- | --- | --- |
+| `BASE_SECONDS` | 30 | `AdaptiveGate(base_s=)` | constructor parameter with documented default; the seam |
+| `CAP_SECONDS` | 600 | `AdaptiveGate(cap_s=)` | same |
+| `GIVE_UP_SECONDS` | 3600 | `AdaptiveGate(give_up_s=)` | same |
+| `RECOVER_AFTER` | 5 | `AdaptiveGate(recover_after=)` | same |
+| `DEFAULT_CIRCUIT_LIMIT` | 2 | `DeadlineCircuit(limit=)` | same |
+
+A constructor parameter with a documented default is the library's seam; no
+config-file key is added, because a consumer calls these constructors itself.
+
+## State files: which home
+
+`FailureCache(path)` and `DeadlineNotes(path)` take the path from the consumer;
+nothing derives from the module's location, and `_atomic_json` writes its
+temporary file in the target's directory. `FailureCache` is project-durable
+(`.plugin-data`): a cross-run record about the consuming project whose loss
+costs a repeated model call. `DeadlineNotes` is project-ephemeral
+(`.local-data`): it only orders work. Neither is user-scoped.
+
+## Parallel graph, deadlines and the failure cache
+
+`scheduler`, `deadlines` and `failure_cache` import only the standard library.
+
+**Parallel dependency graph.** `parallel_graph.ParallelGraphStrategy(dependencies,
+capacity=1, payload_of=None, deferred=frozenset())` names each unit's direct
+dependencies. `wave.ready_wave` releases every `pending` unit whose dependencies
+are settled (`skipped`, or `accepted` and applied), up to `capacity` in flight,
+`deferred` units last. A unit that is `failed`, `operator_rejected`,
+`interrupt_expired`, or accepted with its apply refused gates its transitive
+dependents only; `wave.gated_units` lists them. The graph is validated at build
+(unknown, duplicate and self dependencies, cycles), and registered unit ids must
+equal its node ids (`GraphRegistrationMismatchError`); register them in
+`strategy.node_ids` order. `max_wave_size` and `reclaim_at` apply as for the
+other shapes; `prepare_run` and `workerpack.build_wave_args` narrow to the same
+wave. A drain loop calls `finalize_run` between waves and is done when every
+unit `unfinished_units` returns is in `gated_units`. Without a durable store,
+`scheduler.Scheduler(nodes, capacity=)` holds the same rule in memory
+(`admit_ready`, `complete`, `fail`, `requeue` with a quiet period) and
+`scheduler.run_graph(scheduler, execute)` runs it on a thread pool. An executor
+raising `NodeFailed` fails its node and gates its dependents; any other
+exception stops admission, waits for running nodes, and is re-raised.
+
+**Per-unit deadline and run-wide circuit.** `deadlines.UnitBudget(seconds)` is
+one unit's wall-time budget, shared by its first call and repairs.
+`call_within_budget(budget, timeout_s, call, is_timeout=..., circuit=...,
+uncharged=...)` runs one admitted call with `min(timeout_s, remaining)`, charges
+its wall time, turns a budget-imposed timeout into `DeadlineExpired`, and
+refuses before dispatch when the budget is spent or the circuit is open
+(`CircuitOpen`). Call it inside the gate, `gate.run(lambda:
+call_within_budget(...))`, with `uncharged` accepting the backpressure halt so
+queueing and backoff are not charged. `DeadlineCircuit(limit=2)` opens after
+`limit` consecutive units END on a deadline (`record_outcome`, once per unit)
+and stays open. `DeadlineNotes(path)` counts expiries per attempt key; a note
+orders work (mark the unit `deferred`) and never suppresses it.
+
+**Negative failure cache.** `FailureCache(path)` records a deterministic
+failure as `FailureRecord(stage, unit_id, attempt_key, error_fingerprint,
+fingerprint_version, code, summary)`. `lookup(stage, unit_id, attempt_key)` hits
+only for the same attempt key; `clear(stage, unit_id)` on success.
+`error_fingerprint(code, details)` digests a normalized error. Never record a
+deadline, open circuit, transport error or backpressure. A corrupt cache or
+notes file reads as empty and `report` says why.
+
+## The parallel graph is a third strategy, not a mode of the graph walk
+
+`execution.parallel_graph.ParallelGraphStrategy` is deliberately NOT a
+`GraphWalkStrategy`, so `wave.is_graph_strategy` stays false for it and every
+sequential-graph guard (`UnsafeGraphParallelismError`, `prepare_run`'s order
+and unapplied-predecessor refusals, `graph_block_reason`) keeps its meaning. A
+code path that selects units outside `ready_wave` must test
+`wave.is_dependency_ordered`, not `is_graph_strategy`, or it bypasses the
+parallel graph's dependency and capacity rule; `controller._wave_with_reclaims`
+and `workerpack.build_wave_args` do. The in-memory `execution.scheduler` and the
+durable wave share one rule (`validate_graph`, `dependents_closure`); change
+them together. `scheduler`, `deadlines`, `failure_cache` and `_atomic_json` are
+stdlib-only by test (`test_parallel_graph.py`), because a consumer's portable
+run code imports them without the rest of the package. They were contributed
+from a consumer's tested modules; field names are generalized (`stage`,
+`unit_id`, `subject`), so that consumer's existing state files read as empty
+(with a `report`) the first time it switches. User docs: `README.md`.
 
 ## The durable wait is opt-in and lives in the execution store
 

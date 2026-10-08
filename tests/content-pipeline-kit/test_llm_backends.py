@@ -833,7 +833,7 @@ def test_route_takes_the_mock_openrouter_and_contract_seams():
     import inspect
 
     assert list(inspect.signature(route).parameters) == [
-        "openrouter", "mock", "output_contract"
+        "openrouter", "mock", "output_contract", "models"
     ]
 
 

@@ -23,6 +23,11 @@ SCOPED = [
     "provenance/call_audit.py",
     "provenance/snapshot.py",
     "provenance/replay.py",
+    "execution/scheduler.py",
+    "execution/parallel_graph.py",
+    "execution/deadlines.py",
+    "execution/failure_cache.py",
+    "execution/_atomic_json.py",
 ]
 TERMS = re.compile(r"glossary|\bD7\b|LOCK_FLOOR|unproducible|fills_blocked", re.I)
 

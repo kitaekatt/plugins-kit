@@ -31,6 +31,7 @@ flag is hand-assembled here; a new codex knob is added there and forwarded from
 """
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import re
@@ -43,7 +44,12 @@ from typing import Any, Callable, ClassVar, Dict, Mapping, Optional
 from .. import usage_budget
 from . import halt
 from .claude_runner import run_cli_streaming
-from .adapter_capabilities import CODEX_CAPABILITIES
+from .adapter_capabilities import (
+    _CODEX_TEXT_ONLY_CATALOG_DROP,
+    _CODEX_TEXT_ONLY_CATALOG_SET,
+    _CODEX_TEXT_ONLY_CONFIG,
+    CODEX_CAPABILITIES,
+)
 from .capabilities import Capabilities
 from .contract import finalize_contract, prepare_contract
 from .skill_context import prepare_skill_context
@@ -66,6 +72,42 @@ from .types import BackendOptions, LLMResponse
 #: Decision 6). ``read_codex_pool`` remaps ``seven_day`` to codex's own
 #: ``primary`` window, so this is the same read an opted-in entry would get.
 _QUOTA_PROBE_SPEC = usage_budget.ConserveSpec(pool=usage_budget.POOL_SEVEN_DAY)
+
+
+#: First bootstrap whose ``build_codex_exec_argv`` accepts ``ignore_user_config``.
+IGNORE_USER_CONFIG_BOOTSTRAP = "0.146.0"
+
+
+def _codex_argv_builder(*, need_ignore_user_config: bool) -> Callable[..., list]:
+    """Return ``bootstrap_lib.codex.build_codex_exec_argv``, probed for the call shape.
+
+    Edge classification (plugins/CLAUDE.md, optional use of another plugin):
+    bootstrap is REQUIRED for every codex call (no argv without the builder),
+    and the text-only mode REFUSES on a bootstrap that lacks
+    ``ignore_user_config``: dropping the flag would leave the user's codex
+    config (MCP servers, hooks, plugins) loaded, so the mode would not deliver
+    what it advertises. Absent and too-old differ because the remedies do. The
+    version in a message is this plugin's own constant, never read from the
+    module.
+    """
+    try:
+        from bootstrap_lib.codex import build_codex_exec_argv  # noqa: PLC0415
+    except ImportError as exc:
+        raise RuntimeError(
+            "bootstrap_lib.codex is not importable here, so the codex backend cannot "
+            "build its command; run `claude plugin install bootstrap@plugins-kit` "
+            f"(needs bootstrap >= {IGNORE_USER_CONFIG_BOOTSTRAP})"
+        ) from exc
+    if need_ignore_user_config and (
+        "ignore_user_config" not in inspect.signature(build_codex_exec_argv).parameters
+    ):
+        raise RuntimeError(
+            "the linked bootstrap_lib.codex.build_codex_exec_argv has no "
+            "ignore_user_config parameter, which codex text-only mode needs; it "
+            f"needs bootstrap >= {IGNORE_USER_CONFIG_BOOTSTRAP} -- run "
+            "`claude plugin update bootstrap@plugins-kit`, then restart the session"
+        )
+    return build_codex_exec_argv
 
 
 class CodexRunError(RuntimeError):
@@ -212,6 +254,16 @@ class CodexCliBackend:
             is also what wraps a Windows ``codex.cmd`` in ``cmd /c``.
         runner: The subprocess runner -- test seam; production is
             :func:`.claude_runner.run_cli_streaming`.
+        text_only: Run with no file-writing, shell or subagent tool:
+            ``--ignore-user-config``, ``-s read-only``, no network flag, the
+            ``-c`` pairs in ``_CODEX_TEXT_ONLY_CONFIG``, and a one-model
+            ``model_catalog_json`` built from ``codex debug models`` (one
+            extra runner call) with the model's code-mode, multi-agent,
+            apply_patch, tool_search and node-REPL settings removed. See
+            ``adapter_capabilities`` for the measurement. Not a caller flag:
+            :func:`~.requirements.arm_call` sets it. ``extras.sandbox`` other
+            than ``read-only``, a true ``extras.network``, or no model id is
+            refused before dispatch in this mode.
 
     Options mapping:
 
@@ -265,6 +317,7 @@ class CodexCliBackend:
     # usage_budget.CODEX_SESSIONS_DIR, the real machine-wide rollout
     # directory.
     sessions_dir: Optional[Path] = None
+    text_only: bool = False
     name: str = field(default="codex-cli", init=False)
     capabilities: ClassVar[Capabilities] = CODEX_CAPABILITIES
 
@@ -294,6 +347,13 @@ class CodexCliBackend:
             raise SkillContextUnsatisfiable(
                 f"{self.name} has no skill-context delivery path; nothing was dispatched"
             )
+        if self.text_only:
+            self._refuse_text_only_conflicts(opts.extras)
+            if not model:
+                raise ValueError(
+                    f"{self.name} text-only mode patches the model's catalog "
+                    "entry, so it needs a model id; nothing was dispatched"
+                )
         timeout_s = (
             opts.timeout_s if opts.timeout_s is not None else self.default_timeout_s
         )
@@ -312,8 +372,13 @@ class CodexCliBackend:
         os.close(handle)
         output_path = Path(raw_output_path)
         schema_path: Optional[Path] = None
+        catalog_path: Optional[Path] = None
 
         try:
+            if self.text_only:
+                catalog_path = self._write_text_only_catalog(
+                    model, root, log_prefix=opts.log_prefix, timeout_s=timeout_s
+                )
             extras = opts.extras
             if plan is not None and plan.schema_json is not None:
                 # Native contract delivery: the canonical schema document goes
@@ -325,7 +390,7 @@ class CodexCliBackend:
                 extras = {**dict(opts.extras or {}), "output_schema": str(schema_path)}
             argv = self._build_argv(
                 root=root, model=model, effort=opts.effort,
-                output_file=output_path, extras=extras,
+                output_file=output_path, extras=extras, catalog_path=catalog_path,
             )
             prompt = compose_prompt(system, user)
 
@@ -369,7 +434,7 @@ class CodexCliBackend:
 
             text = self._read_output(output_path, stdout=stdout, stderr=stderr)
         finally:
-            for path in (output_path, schema_path):
+            for path in (output_path, schema_path, catalog_path):
                 if path is None:
                     continue
                 try:
@@ -443,7 +508,110 @@ class CodexCliBackend:
             applied.append("windows-sandbox-mode")
         if "--skip-git-repo-check" in joined:
             applied.append("skip-git-repo-check")
+        pairs = {
+            str(argv[i + 1]) for i in range(len(argv) - 1) if str(argv[i]) == "-c"
+        }
+        if (
+            "--ignore-user-config" in [str(a) for a in argv]
+            and all(item in pairs for item in _CODEX_TEXT_ONLY_CONFIG)
+            and any(pair.startswith("model_catalog_json=") for pair in pairs)
+        ):
+            applied.append("text-only-mode")
         return check_applied_controls(self.capabilities, applied)
+
+    def _write_text_only_catalog(
+        self, model: str, root: Path, *, log_prefix: str, timeout_s: float
+    ) -> Path:
+        """Write ``model``'s live catalog entry, patched for text-only mode.
+
+        The catalog, not the config, decides whether a model gets code mode,
+        multi-agent tools, apply_patch, tool_search and the node REPL, so the
+        entry codex would use is read with ``codex debug models`` and rewritten
+        with ``_CODEX_TEXT_ONLY_CATALOG_SET`` / ``_CODEX_TEXT_ONLY_CATALOG_DROP``.
+        A failed read, unparseable output, or a model the catalog does not
+        list raises: without the patch the mode would not deliver what it
+        advertises. The caller deletes the file in its ``finally``.
+        """
+        prefix = self.argv_prefix
+        if prefix is None:
+            from bootstrap_lib.codex import CODEX_EXECUTABLE, resolve_cli  # noqa: PLC0415
+
+            prefix = resolve_cli(CODEX_EXECUTABLE)
+            if prefix is None:
+                raise RuntimeError(
+                    f"`{CODEX_EXECUTABLE}` is not on PATH, so text-only mode "
+                    "cannot read the model catalog"
+                )
+        stdout, stderr, returncode = self.runner(
+            [*[str(part) for part in prefix], "debug", "models"],
+            "",
+            root,
+            log_prefix=log_prefix,
+            timeout_s=timeout_s,
+            label="codex debug models",
+            hard_stop_markers=(),
+        )
+        if returncode != 0:
+            raise CodexRunError(
+                f"codex debug models failed (exit {returncode}); text-only mode "
+                "needs the model catalog",
+                stdout=stdout,
+                stderr=stderr,
+                returncode=returncode,
+            )
+        try:
+            catalog = json.loads(stdout)
+        except ValueError as exc:
+            raise CodexRunError(
+                "codex debug models printed no JSON catalog", stdout=stdout, stderr=stderr,
+                returncode=returncode,
+            ) from exc
+        models = catalog.get("models") if isinstance(catalog, Mapping) else None
+        entry = next(
+            (m for m in models or () if isinstance(m, Mapping) and m.get("slug") == model),
+            None,
+        )
+        if entry is None:
+            raise CodexRunError(
+                f"codex model catalog has no entry for {model!r}, so text-only "
+                "mode cannot remove its catalog tools; nothing was dispatched",
+                stdout=stdout, stderr=stderr, returncode=returncode,
+            )
+        patched = {
+            key: value for key, value in entry.items()
+            if key not in _CODEX_TEXT_ONLY_CATALOG_DROP
+        }
+        patched.update(_CODEX_TEXT_ONLY_CATALOG_SET)
+        handle, raw_path = tempfile.mkstemp(prefix="codex_catalog_", suffix=".json")
+        try:
+            with os.fdopen(handle, "w", encoding="ascii") as stream:
+                json.dump({"models": [patched]}, stream, ensure_ascii=True)
+        except BaseException:
+            Path(raw_path).unlink(missing_ok=True)
+            raise
+        path = Path(raw_path)
+        if "'" in str(path):
+            path.unlink(missing_ok=True)
+            raise ValueError(
+                f"temp catalog path {path} contains a single quote, which a TOML "
+                "literal string cannot carry"
+            )
+        return path
+
+    def _refuse_text_only_conflicts(self, extras: Any) -> None:
+        """Refuse an extras value text-only mode would have to override."""
+        mapping = extras if isinstance(extras, Mapping) else {}
+        sandbox = mapping.get("sandbox")
+        if sandbox is not None and sandbox != "read-only":
+            raise ValueError(
+                f"{self.name} text-only mode runs -s read-only, so "
+                f"extras.sandbox={sandbox!r} cannot be honored; nothing was dispatched"
+            )
+        if mapping.get("network"):
+            raise ValueError(
+                f"{self.name} text-only mode runs with network off, so "
+                "extras.network=true cannot be honored; nothing was dispatched"
+            )
 
     @staticmethod
     def _parse_structured(text: str, extras: Any) -> Optional[Any]:
@@ -511,6 +679,7 @@ class CodexCliBackend:
         effort: Optional[str],
         output_file: Path,
         extras: Any,
+        catalog_path: Optional[Path] = None,
     ) -> list:
         """Delegate argv construction to the shared bootstrap_lib builder.
 
@@ -521,7 +690,7 @@ class CodexCliBackend:
         import error intact, instead of poisoning ``llm_scripting_kit``'s whole
         package import.
         """
-        from bootstrap_lib.codex import build_codex_exec_argv  # noqa: PLC0415
+        build_codex_exec_argv = _codex_argv_builder(need_ignore_user_config=self.text_only)
 
         kwargs: Dict[str, Any] = {
             "root": root,
@@ -536,6 +705,17 @@ class CodexCliBackend:
         for key in CODEX_EXTRA_KEYS:
             if key in mapping and mapping[key] is not None:
                 kwargs[key] = mapping[key]
+        if self.text_only:
+            # complete() already refused a conflicting sandbox or network.
+            kwargs["sandbox"] = "read-only"
+            kwargs["network"] = False
+            kwargs["ignore_user_config"] = True
+            # A TOML literal string: no escape processing, so a Windows path's
+            # backslashes survive (_write_text_only_catalog refused a quote).
+            kwargs["extra_config"] = (
+                *_CODEX_TEXT_ONLY_CONFIG,
+                f"model_catalog_json='{catalog_path}'",
+            )
         return build_codex_exec_argv(**kwargs)
 
     @staticmethod

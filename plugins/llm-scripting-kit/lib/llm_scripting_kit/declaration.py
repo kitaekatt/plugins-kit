@@ -492,6 +492,29 @@ def _call_factory(factory: Callable[..., Any], name: str, project_root: Optional
     return factory(name, project_root=project_root)
 
 
+def _armed_call(
+    backend: Any, options: Any, requirements: Any, capabilities: Optional[Mapping[str, Any]]
+) -> Any:
+    """The call armed for the requirement that admitted it (``arm_call``).
+
+    The record is looked up exactly as :func:`describe` looked it up (the
+    injected ``capabilities`` or the shipped advertisement, keyed by the
+    backend's name), so the record that admitted the entry is the record that
+    arms it. A guarantee the record cannot arm raises ``ValueError`` before
+    the call.
+    """
+    from .completion.requirements import ArmedCall, arm_call  # noqa: PLC0415
+
+    if not requirements:
+        return ArmedCall(backend, options)
+    from .completion import adapter_capabilities  # noqa: PLC0415
+
+    advertised = capabilities if capabilities is not None else adapter_capabilities()
+    name = getattr(backend, "name", None)
+    record = advertised.get(name) if isinstance(name, str) else None
+    return arm_call(backend, options, requirements, record)
+
+
 def _adapter_name(kind: str, harness: Optional[str]) -> Optional[str]:
     if kind == TRANSPORT_KIND:
         return "openrouter"
@@ -920,6 +943,15 @@ def run(
     ``skill_context: {"digest", "skills", "estimated_tokens"}``: counts and the
     digest only, never a name, a path or text.
 
+    A ``guarantees`` requirement (``filesystem-write``, ``shell-exec``,
+    ``subagent-spawn``) both admits an entry and arms it: the selected backend
+    and options pass through :func:`~.completion.requirements.arm_call`, so a
+    claude-cli or codex-cli entry runs in text-only mode and an opencode-cli
+    entry gets the deny-list names, with no caller flag. A subject the record
+    cannot arm raises ``ValueError`` before the call, and a response that does
+    not report an armed control raises ``RuntimeError``. Without such a
+    requirement the call is dispatched unchanged.
+
     ``observer`` (keyword-only) receives execution events through its
     ``emit`` method (:class:`~.observer.ExecutionObserver`; a
     ``bootstrap_lib.execution_event.Emitter`` bound to the caller's run and
@@ -984,8 +1016,10 @@ def run(
         options = request.options or BackendOptions()
         if options.effort is None and getattr(selection, "effort", None):
             options = replace(options, effort=selection.effort)
+        armed = _armed_call(selection.backend, options, requirements, capabilities)
+        backend, options = armed.backend, armed.options
         attempt_fields: Dict[str, Any] = {"attempt_id": str(number)}
-        backend_name = getattr(selection.backend, "name", None)
+        backend_name = getattr(backend, "name", None)
         if isinstance(backend_name, str) and backend_name:
             attempt_fields["adapter"] = backend_name
         if isinstance(selection.model, str) and selection.model:
@@ -1013,7 +1047,7 @@ def run(
                 emit("usage", payload=usage, **attempt_fields)
 
         try:
-            response = selection.backend.complete(
+            response = backend.complete(
                 request.system, request.prompt, model=selection.model, options=options
             )
         except OutputContractViolation as exc:
@@ -1025,7 +1059,7 @@ def run(
             emit("result", payload={"status": "failed", "reason": "output-contract"}, **attempt_fields)
             return finish(RunResult(RUN_FAILED, chosen.id, exc.response, tuple(attempts), f"task error: {exc}"))
         except Exception as exc:  # noqa: BLE001 -- transports raise heterogeneous types
-            halt = selection.backend.classify_halt(exc)
+            halt = backend.classify_halt(exc)
             launch = halt is None and isinstance(exc, _LAUNCH_ERRORS)
             halted_payload: Dict[str, Any] = {"status": "halted"}
             halted_payload.update({"halt": halt} if halt else {"reason": "launch"})
@@ -1077,6 +1111,18 @@ def run(
                     f"attempt limit reached ({max_attempts})",
                 ))
             continue
+        if armed.controls:
+            applied = tuple(getattr(response, "execution_controls_applied", ()) or ())
+            missing = [c for c in armed.controls if c not in applied]
+            if missing:
+                # Advertisement/adapter drift: the run went out without a
+                # control the requirement depended on. Never report it as a
+                # completed call that met the guarantee.
+                raise RuntimeError(
+                    f"{chosen.id} completed without the armed control(s) "
+                    f"{missing} its guarantees requirement depends on "
+                    f"(applied: {list(applied)})"
+                )
         report(Attempt(chosen.id, number, chosen.pace, outcome="completed"))
         observe_usage(response)
         emit("result", payload={"status": "completed"}, **attempt_fields)

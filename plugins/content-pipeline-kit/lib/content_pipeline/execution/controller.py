@@ -149,6 +149,7 @@ from content_pipeline.execution.store import ExecutionStore
 from content_pipeline.execution.wave import (
     _attempts_by_unit,
     _last_apply_kind,
+    is_dependency_ordered,
     is_graph_strategy,
     ready_wave,
 )
@@ -533,12 +534,14 @@ def _wave_with_reclaims(
         safe.append(unit)
     safe_ids = {u.unit_id for u in safe}
 
-    if is_graph_strategy(strategy):
+    if is_dependency_ordered(strategy):
         wave = ready_wave(
             store, run_id, strategy, max_wave_size=max_wave_size, reclaim_at=reclaim_at
         )
         # ready_wave treats every expired CLAIMED unit as ready; keep only
-        # those that passed the open-dispatch and reclaim-limit screen.
+        # those that passed the open-dispatch and reclaim-limit screen. A
+        # parallel graph takes this path too: merging reclaimed units into
+        # its wave by hand would bypass its dependency rule and capacity.
         return [
             u for u in wave if u.state is not UnitState.CLAIMED or u.unit_id in safe_ids
         ]

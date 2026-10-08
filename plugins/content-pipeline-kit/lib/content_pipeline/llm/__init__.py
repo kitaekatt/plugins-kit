@@ -149,6 +149,7 @@ from content_pipeline.llm.platform import (
     HALT_AUTH,
     HALT_INSUFFICIENT_CREDIT,
     HALT_RATE_LIMIT,
+    HALT_BACKPRESSURE,
     HALT_UNREACHABLE,
     BackendOptions,
     CostBudget,
@@ -167,6 +168,7 @@ from content_pipeline.llm.platform import (
     call_llm,
     submit_validated,
 )
+from content_pipeline.llm.gate import AdaptiveGate, EndpointBusyError, call_llm_gated
 from content_pipeline.llm.platform import _contract_seam
 
 __all__ = [
@@ -185,6 +187,10 @@ __all__ = [
     "ModelEndpointBackend",
     "HALT_AUTH",
     "HALT_RATE_LIMIT",
+    "HALT_BACKPRESSURE",
+    "AdaptiveGate",
+    "EndpointBusyError",
+    "call_llm_gated",
     "HALT_INSUFFICIENT_CREDIT",
     "HALT_UNREACHABLE",
     "ResponseCache",

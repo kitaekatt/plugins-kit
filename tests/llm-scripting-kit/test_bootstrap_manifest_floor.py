@@ -4,7 +4,8 @@
 ``bootstrap_lib`` (plugins/CLAUDE.md, "Set the requires_bootstrap floor from
 the CALLS a plugin makes"): ``model_declaration`` (0.129.0),
 ``execution_event`` with the v1 schema and ``usage_payload`` (0.135.0), and
-``skill_material`` (0.138.0). The floor is the highest of them.
+``skill_material`` (0.138.0), and ``build_codex_exec_argv(ignore_user_config=)``
+(0.146.0). The floor is the highest of them.
 """
 from __future__ import annotations
 
@@ -34,7 +35,9 @@ def test_requires_bootstrap_covers_every_bootstrap_lib_call() -> None:
         declaration.EXECUTION_EVENT_BOOTSTRAP,
         skill_context.SKILL_MATERIAL_BOOTSTRAP,
     )
-    assert _manifest()["requires_bootstrap"] == max(floors, key=_version)
+    # The codex text-only mode passes ignore_user_config (bootstrap 0.146.0),
+    # a keyword no constant tracks, so the manifest may only sit at or above.
+    assert _version(_manifest()["requires_bootstrap"]) >= _version(max(floors, key=_version))
 
 
 def test_skill_material_floor_is_pinned_literally() -> None:
@@ -44,7 +47,7 @@ def test_skill_material_floor_is_pinned_literally() -> None:
     from llm_scripting_kit.completion import skill_context
 
     assert skill_context.SKILL_MATERIAL_BOOTSTRAP == "0.138.0"
-    assert _manifest()["requires_bootstrap"] == "0.138.0"
+    assert _manifest()["requires_bootstrap"] == "0.146.0"
 
 
 def test_manifest_adds_no_edge() -> None:

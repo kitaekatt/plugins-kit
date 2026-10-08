@@ -730,6 +730,10 @@ def _read_snapshot(
     )
 
 
+#: Event written after an attempt that ended in waited-out backpressure.
+BACKPRESSURE_WAIT_EVENT = f"{_events.PLUGIN}:backpressure-wait"
+
+
 class JobStore:
     """A durable job-shaped SQLite ledger."""
 
@@ -1246,10 +1250,22 @@ class JobStore:
     def _reservation_budget_count(
         conn: sqlite3.Connection, run_id: str, job_id: str
     ) -> int:
-        """Count observed invocations and armed process losses for one job."""
+        """Count budgeted invocations and armed process losses for one job.
+
+        An attempt that ended in backpressure and was waited out and retried
+        has a ``backpressure-wait`` event and does not spend the budget.
+        """
         attempt_count = conn.execute(
-            "SELECT COUNT(*) AS count FROM attempts WHERE run_id = ? AND job_id = ?",
-            (run_id, job_id),
+            """
+            SELECT COUNT(*) AS count FROM attempts a
+            WHERE a.run_id = ? AND a.job_id = ?
+              AND NOT EXISTS (
+                SELECT 1 FROM events e
+                WHERE e.run_id = a.run_id AND e.job_id = a.job_id
+                  AND e.attempt_no = a.attempt_no AND e.event = ?
+              )
+            """,
+            (run_id, job_id, BACKPRESSURE_WAIT_EVENT),
         ).fetchone()
         loss_count = conn.execute(
             """
@@ -1422,6 +1438,55 @@ class JobStore:
         if updated is None:  # pragma: no cover - protected by the transaction
             raise StoreError("reservation disappeared")
         return _row_to_reservation(updated)
+
+    def waited_out_attempt_numbers(self, run_id: str, job_id: str) -> frozenset[int]:
+        """Attempt numbers that ended in backpressure and were retried."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT attempt_no FROM events WHERE run_id = ? "
+                "AND job_id = ? AND event = ? AND attempt_no IS NOT NULL",
+                (run_id, job_id, BACKPRESSURE_WAIT_EVENT),
+            ).fetchall()
+        return frozenset(int(row["attempt_no"]) for row in rows)
+
+    def record_backpressure_wait(
+        self,
+        run_id: str,
+        job_id: str,
+        attempt_no: int,
+        *,
+        adapter: str,
+        model: str,
+        retry_no: int,
+        wait_s: float,
+        retry_after_s: Optional[float],
+        waited_s: float,
+        at: str,
+    ) -> int:
+        """Record one wait on endpoint backpressure as a ``job-kit`` event.
+
+        Not a ledger fact. It marks the attempt just recorded as waited out:
+        that attempt does not spend the job's attempt budget. Returns the event ``seq``.
+        """
+        payload: dict[str, object] = {
+            "retry_no": int(retry_no),
+            "wait_s": round(float(wait_s), 3),
+            "waited_s": round(float(waited_s), 3),
+        }
+        if retry_after_s is not None:
+            payload["retry_after_s"] = round(float(retry_after_s), 3)
+        with self._writer() as conn:
+            return self._record_event(
+                conn,
+                run_id=run_id,
+                event=BACKPRESSURE_WAIT_EVENT,
+                at=_events.event_at(at),
+                job_id=job_id,
+                attempt_no=attempt_no,
+                adapter=adapter,
+                model=model,
+                payload=payload,
+            )
 
     def arm_reservation(
         self,

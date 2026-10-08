@@ -47,6 +47,7 @@ from .claude_runner import (
 )
 from .adapter_capabilities import (
     _CLAUDE_SYSTEM_PROMPT_FLAGS,
+    _CLAUDE_TEXT_ONLY_ARGS,
     CLAUDE_CAPABILITIES,
     OPENROUTER_CAPABILITIES,
 )
@@ -553,6 +554,12 @@ class ClaudeCliBackend:
             via ``shutil.which`` at call time.
         runner: The subprocess runner -- test seam; production is
             :func:`.claude_runner.run_claude_streaming`.
+        text_only: Run with no tools, no MCP servers, no skills and no
+            permission bypass (``_CLAUDE_TEXT_ONLY_ARGS`` replaces
+            ``--permission-mode bypassPermissions --allowedTools``). Not a
+            caller flag: :func:`~.requirements.arm_requirements` sets it when a
+            ``guarantees`` requirement admitted this entry. A non-empty
+            ``allowed_tools`` is refused before dispatch in this mode.
 
     Cost/usage: the JSON envelope's ``usage`` block is read best-effort (absent
     on older CLIs -> zeros). Recorded cost is flat zero by design -- Claude Max
@@ -565,6 +572,7 @@ class ClaudeCliBackend:
     diagnostics_dir: Optional[Path] = None
     executable: Optional[str] = None
     runner: Callable[..., "tuple[str, str, int]"] = run_claude_streaming
+    text_only: bool = False
     name: str = field(default="claude-cli", init=False)
     capabilities: ClassVar[Capabilities] = CLAUDE_CAPABILITIES
 
@@ -612,6 +620,13 @@ class ClaudeCliBackend:
                 f"{', '.join(sorted(_CLAUDE_SYSTEM_PROMPT_FLAGS))}"
             )
 
+        if self.text_only and opts.allowed_tools:
+            raise ValueError(
+                f"{self.name} text-only mode exposes no tools, so "
+                f"allowed_tools={opts.allowed_tools!r} cannot be honored; "
+                "nothing was dispatched"
+            )
+
         cmd = [
             executable,
             "-p",
@@ -622,11 +637,16 @@ class ClaudeCliBackend:
             "--output-format",
             "json",
             "--no-session-persistence",
-            "--permission-mode",
-            "bypassPermissions",
-            "--allowedTools",
-            opts.allowed_tools if opts.allowed_tools is not None else "",
         ]
+        if self.text_only:
+            cmd.extend(_CLAUDE_TEXT_ONLY_ARGS)
+        else:
+            cmd.extend([
+                "--permission-mode",
+                "bypassPermissions",
+                "--allowedTools",
+                opts.allowed_tools if opts.allowed_tools is not None else "",
+            ])
         # Emitted only when the caller named tools to deny. The empty-string
         # treatment `--allowedTools` gets above would be wrong here: an empty
         # ALLOW-list is a meaningful restriction (allow nothing), while an empty
@@ -759,7 +779,9 @@ class ClaudeCliBackend:
     def _applied_controls(self, opts: BackendOptions) -> "tuple[str, ...]":
         """The advertised controls this adapter's argv carries, per call.
 
-        Three are unconditional, ``allowed-tools`` included: the argv above
+        In text-only mode the argv carries ``no-session-persistence`` and
+        ``text-only-mode`` instead of the three below. Otherwise three are
+        unconditional, ``allowed-tools`` included: the argv above
         emits ``--allowedTools`` on every call, passing "" when the caller named
         no tools. An empty allow-list is still an emitted allow-list -- the
         adapter suppresses nothing -- so reporting it only when the caller set
@@ -771,7 +793,10 @@ class ClaudeCliBackend:
         control for a flag the argv does not carry is precisely the overclaim
         this contract exists to prevent.
         """
-        applied = ["allowed-tools", "permission-bypass", "no-session-persistence"]
+        if self.text_only:
+            applied = ["no-session-persistence", "text-only-mode"]
+        else:
+            applied = ["allowed-tools", "permission-bypass", "no-session-persistence"]
         if opts.disallowed_tools is not None:
             applied.append("disallowed-tools")
         return check_applied_controls(self.capabilities, tuple(applied))
