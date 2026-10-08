@@ -271,17 +271,28 @@ def _unarmed_subjects(advertised: Mapping, subjects: frozenset) -> frozenset:
 
 
 def _with_text_only(backend: Any) -> Any:
-    if not dataclasses.is_dataclass(backend) or "text_only" not in {
+    """``backend.with_text_only()``: the backend in text-only mode.
+
+    The backend builds its own text-only copy rather than this module
+    rewriting a dataclass field, so a wrapper (the CLI's recording proxy, for
+    one) can arm its inner backend and stay in place. A dataclass with a
+    ``text_only`` field and no method is copied with the field set, the 0.61.0
+    contract. Anything else raises: the record says it can be armed and it
+    cannot.
+    """
+    with_text_only = getattr(backend, "with_text_only", None)
+    if callable(with_text_only):
+        return with_text_only()
+    if dataclasses.is_dataclass(backend) and "text_only" in {
         f.name for f in dataclasses.fields(backend)
     }:
-        raise TypeError(
-            f"the record admitting {getattr(backend, 'name', type(backend).__name__)!r} "
-            f"arms {TEXT_ONLY_MODE} through {TEXT_ONLY_PARAMETER}, but the backend "
-            "has no text_only field; nothing was dispatched"
-        )
-    if getattr(backend, "text_only", False):
-        return backend
-    return dataclasses.replace(backend, text_only=True)
+        return backend if backend.text_only else dataclasses.replace(backend, text_only=True)
+    raise TypeError(
+        f"the record admitting {getattr(backend, 'name', type(backend).__name__)!r} "
+        f"arms {TEXT_ONLY_MODE} through {TEXT_ONLY_PARAMETER}, but the backend "
+        f"({type(backend).__name__}) has neither with_text_only() nor a text_only "
+        "field; nothing was dispatched"
+    )
 
 
 def arm_requirements(
@@ -301,7 +312,8 @@ def arm_requirements(
 
     ``capabilities`` is the record that admitted the entry; it defaults to
     ``backend.capabilities``. A record that names the control for a backend
-    with no ``text_only`` field raises :class:`TypeError`.
+    with neither ``with_text_only()`` nor a ``text_only`` field raises
+    :class:`TypeError`.
     """
     subjects = required_guarantees(requirements)
     if not subjects:

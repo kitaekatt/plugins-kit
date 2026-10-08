@@ -37,6 +37,7 @@ import os
 import re
 import tempfile
 import time
+import dataclasses
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, ClassVar, Dict, Mapping, Optional
@@ -320,6 +321,10 @@ class CodexCliBackend:
     text_only: bool = False
     name: str = field(default="codex-cli", init=False)
     capabilities: ClassVar[Capabilities] = CODEX_CAPABILITIES
+
+    def with_text_only(self) -> "CodexCliBackend":
+        """This backend in text-only mode (``requirements.arm_call`` calls it)."""
+        return self if self.text_only else dataclasses.replace(self, text_only=True)
 
     def complete(
         self,
