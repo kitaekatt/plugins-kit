@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -422,6 +423,159 @@ def test_a_job_without_model_efforts_keeps_its_ledger_mapping(tmp_path: Path) ->
 
     assert job.model_efforts == {}
     assert "model_efforts" not in job.to_mapping()
+
+
+def test_model_requirements_and_options_round_trip_in_model_order(
+    tmp_path: Path,
+) -> None:
+    """Both sidecars are exhaustive, normalized in declaration order, and
+    merged with their disjoint job-level maps only for the named entry."""
+    job = Job.from_mapping(
+        {
+            **_job_mapping(models=["harness", "transport"]),
+            "requirements": {"guarantees": ["filesystem-write"]},
+            "options": {"system_prompt_mode": "append"},
+            "model_requirements": {
+                "transport": {"params": ["max_tokens", "temperature"]},
+                "harness": {},
+            },
+            "model_options": {
+                "transport": {"max_tokens": 2048, "temperature": 0.2},
+                "harness": {},
+            },
+        },
+        base_dir=tmp_path,
+    )
+
+    assert list(job.model_requirements) == ["harness", "transport"]
+    assert list(job.model_options) == ["harness", "transport"]
+    assert job.effective_requirements("harness") == {
+        "guarantees": ["filesystem-write"]
+    }
+    assert job.effective_requirements("transport") == {
+        "guarantees": ["filesystem-write"],
+        "params": ["max_tokens", "temperature"],
+    }
+    assert job.effective_options("harness") == {"system_prompt_mode": "append"}
+    assert job.effective_options("transport") == {
+        "system_prompt_mode": "append",
+        "max_tokens": 2048,
+        "temperature": 0.2,
+    }
+    mapping = job.to_mapping()
+    assert mapping["model_requirements"] == {
+        "harness": {},
+        "transport": {"params": ["max_tokens", "temperature"]},
+    }
+    assert mapping["model_options"] == {
+        "harness": {},
+        "transport": {"max_tokens": 2048, "temperature": 0.2},
+    }
+    restored = Job.from_mapping(mapping)
+    assert restored.model_requirements == job.model_requirements
+    assert restored.model_options == job.model_options
+
+
+@pytest.mark.parametrize("sidecar", ["model_requirements", "model_options"])
+@pytest.mark.parametrize(
+    "entries, message",
+    [
+        ({"harness": {}}, "states no entry for declared model"),
+        (
+            {"harness": {}, "transport": {}, "ghost": {}},
+            "which models does not declare",
+        ),
+    ],
+)
+def test_model_sidecars_must_exhaustively_match_declared_ids(
+    tmp_path: Path, sidecar: str, entries: object, message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        Job.from_mapping(
+            _job_mapping(
+                models=["harness", "transport"],
+                **{sidecar: entries},
+            ),
+            base_dir=tmp_path,
+        )
+
+
+@pytest.mark.parametrize(
+    "key", ["allowed_tools", "disallowed_tools", "system_prompt_mode"]
+)
+def test_model_options_reject_job_level_only_keys(tmp_path: Path, key: str) -> None:
+    with pytest.raises(ValueError, match="job-level only"):
+        Job.from_mapping(
+            _job_mapping(
+                models=["harness"],
+                model_options={"harness": {key: "value"}},
+            ),
+            base_dir=tmp_path,
+        )
+
+
+@pytest.mark.parametrize(
+    ("job_key", "sidecar_key", "job_value", "sidecar_value"),
+    [
+        ("requirements", "model_requirements", {"params": ["cwd"]}, {"params": []}),
+        ("options", "model_options", {"temperature": 0.1}, {"temperature": 0.2}),
+    ],
+)
+def test_job_and_model_sidecar_keys_cannot_collide(
+    tmp_path: Path,
+    job_key: str,
+    sidecar_key: str,
+    job_value: object,
+    sidecar_value: object,
+) -> None:
+    with pytest.raises(ValueError, match="state it in one place"):
+        Job.from_mapping(
+            {
+                **_job_mapping(models=["one"]),
+                job_key: job_value,
+                sidecar_key: {"one": sidecar_value},
+            },
+            base_dir=tmp_path,
+        )
+
+
+def test_model_efforts_and_per_model_option_effort_are_exclusive(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="state it in one place"):
+        Job.from_mapping(
+            _job_mapping(
+                models=["one"],
+                model_efforts={"one": "high"},
+                model_options={"one": {"effort": "low"}},
+            ),
+            base_dir=tmp_path,
+        )
+
+
+def test_legacy_job_mapping_bytes_are_unchanged_without_sidecars(
+    tmp_path: Path,
+) -> None:
+    """A legacy definition gains no sidecar keys or ordering changes."""
+    job = Job.from_mapping(
+        _job_mapping(models=["one"], directory="."), base_dir=tmp_path
+    )
+    encoded = json.dumps(job.to_mapping(), separators=(",", ":"))
+    expected = json.dumps(
+        {
+            "id": "declared",
+            "prompt": {"system": "", "user": "hi"},
+            "models": ["one"],
+            "requirements": {},
+            "contract": {"command": ["true"]},
+            "max_attempts": 1,
+            "options": {},
+            "directory": str(tmp_path.resolve()),
+        },
+        separators=(",", ":"),
+    )
+
+    assert encoded == expected
 
 
 @pytest.mark.parametrize(

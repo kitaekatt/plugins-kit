@@ -1,4 +1,4 @@
-"""Command-line entry point for job-kit run, status, resume, resolve, events and gc."""
+"""Command-line entry point for job-kit."""
 
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ from .store import (
     ResolutionConflictError,
     ResolutionInputError,
 )
+from . import __version__
 
 
 EXIT_OK = 0
@@ -51,6 +52,11 @@ def _parser() -> argparse.ArgumentParser:
         prog="job-kit",
         epilog=_EXIT_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"job-kit {__version__}",
     )
     subcommands = parser.add_subparsers(dest="command", required=True)
 

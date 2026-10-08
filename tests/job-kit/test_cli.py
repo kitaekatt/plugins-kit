@@ -15,7 +15,7 @@ import pytest
 
 from llm_scripting_kit.completion import BackendSelection, Capabilities, LLMResponse
 
-from job_kit import cli
+from job_kit import __version__, cli
 from job_kit.model import (
     Contract,
     Job,
@@ -29,6 +29,17 @@ from job_kit.model import (
 )
 import job_kit.run as run_module
 from job_kit.store import JobStore
+
+
+def test_version_prints_exactly_one_version_line(capsys: Any) -> None:
+    """The root version flag needs no subcommand and exits successfully."""
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main(["--version"])
+
+    assert excinfo.value.code == cli.EXIT_OK
+    captured = capsys.readouterr()
+    assert captured.out == f"job-kit {__version__}\n"
+    assert captured.err == ""
 
 
 def test_status_reads_a_run_from_an_explicit_store(
