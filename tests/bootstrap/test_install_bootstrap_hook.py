@@ -90,6 +90,9 @@ class TestGenerator:
         assert gen.VERSION_PLACEHOLDER not in body
         settings = json.loads((project / ".claude" / "settings.json").read_text(encoding="utf-8"))
         assert len(_ours(settings)) == 1
+        # The session never waits on the hook; exit 2 wakes Claude with its report.
+        assert _ours(settings)[0]["async"] is True
+        assert _ours(settings)[0]["asyncRewake"] is True
 
     def test_rerun_replaces_entry_and_keeps_other_hooks_and_keys(self, tmp_path):
         other = {"type": "command", "command": "bash other.sh", "timeout": 30}
@@ -177,19 +180,48 @@ class TestGenerator:
 # Generated hook, driven against a fake claude CLI
 # --------------------------------------------------------------------------
 
+# @ROLE@ is "path" for the copy first on PATH (the one a machine starts with)
+# and "fixed" for the copy the fake installer writes. Only the "path" copy
+# honours $FAKE_DIR/crash_marketplace_update, like an outdated CLI that panics.
 FAKE_CLAUDE = r'''#!/usr/bin/env bash
 # Fake claude CLI: logs each call, serves listings from files in $FAKE_DIR.
 printf '%s\n' "$*" >> "$FAKE_DIR/calls.log"
 if [ -n "${CLAUDECODE:-}" ]; then echo "CLAUDECODE leaked" >> "$FAKE_DIR/calls.log"; fi
 case "$*" in
+  "--version")
+    if [ "@ROLE@" = fixed ]; then echo "2.1.300 (Claude Code)"; else cat "$FAKE_DIR/version"; fi ;;
   "plugin list --json") cat "$FAKE_DIR/plugins.json" ;;
   "plugin marketplace list --json") cat "$FAKE_DIR/marketplaces.json" ;;
+  "plugin marketplace update "*)
+    if [ "@ROLE@" = path ] && [ -f "$FAKE_DIR/crash_marketplace_update" ]; then
+      echo "panic: index out of bounds: index 0, len 0"; exit 3
+    fi ;;
   "plugin install "*|"plugin update "*)
     [ -f "$FAKE_DIR/fail_plugin_step" ] && { echo "boom"; exit 1; }
     cp "$FAKE_DIR/plugins_after.json" "$FAKE_DIR/plugins.json" ;;
 esac
 exit 0
 '''
+
+# The native installer, reached as `powershell ... install.ps1` under Git Bash
+# and as `curl ... install.sh | bash` elsewhere. Both run INSTALL_SCRIPT.
+INSTALL_SCRIPT = r'''printf 'installer\n' >> "$FAKE_DIR/calls.log"
+[ -f "$FAKE_DIR/fail_installer" ] && { echo "download failed"; exit 1; }
+mkdir -p "$HOME/.local/bin"
+cp "$FAKE_DIR/fixed_claude" "$HOME/.local/bin/claude"
+chmod +x "$HOME/.local/bin/claude"
+'''
+
+FAKE_POWERSHELL = '#!/usr/bin/env bash\nexec bash "$FAKE_DIR/install.sh"\n'
+FAKE_CURL = '#!/usr/bin/env bash\ncat "$FAKE_DIR/install.sh"\n'
+
+
+def _path_without_claude():
+    """The test's PATH minus every directory holding a real claude CLI."""
+    names = ("claude", "claude.exe", "claude.cmd")
+    return os.pathsep.join(
+        d for d in os.environ.get("PATH", "").split(os.pathsep)
+        if d and not any(Path(d, n).exists() for n in names))
 
 
 def _record(version, scope, project_path=None):
@@ -208,20 +240,44 @@ def _other_plugin():
 
 class HookHarness:
 
-    def __init__(self, tmp_path, min_version="1.2.0", bootstrap_json=True):
+    def __init__(self, tmp_path, min_version="1.2.0", bootstrap_json=True, cli="native"):
+        """``cli`` is where the machine's claude lives: "native" (~/.local/bin,
+        where the native installer puts it), "other" (another tool's install
+        directory on PATH), or None (not installed)."""
         self.project = _project(tmp_path, bootstrap_json=bootstrap_json)
         self.fake = tmp_path / "fake"
         self.fake.mkdir()
+        self.home = tmp_path / "home"
+        self.home.mkdir()
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
-        claude = bin_dir / "claude"
-        claude.write_bytes(FAKE_CLAUDE.encode("ascii"))
-        claude.chmod(0o755)
+        cli_dirs = {"native": self.home / ".local" / "bin", "other": bin_dir}
+        if cli is not None:
+            cli_dirs[cli].mkdir(parents=True, exist_ok=True)
+            self._script(cli_dirs[cli] / "claude", FAKE_CLAUDE.replace("@ROLE@", "path"))
+        self._script(bin_dir / "powershell", FAKE_POWERSHELL)
+        self._script(bin_dir / "curl", FAKE_CURL)
+        self._script(self.fake / "fixed_claude", FAKE_CLAUDE.replace("@ROLE@", "fixed"))
+        (self.fake / "install.sh").write_bytes(INSTALL_SCRIPT.encode("ascii"))
+        (self.fake / "version").write_text("2.1.56 (Claude Code)\n", encoding="ascii")
         self.bin_dir = bin_dir
         template = (PLUGIN_ROOT / "templates" / gen.HOOK_FILENAME).read_bytes()
         self.hook = tmp_path / gen.HOOK_FILENAME
         self.hook.write_bytes(template.replace(b"@MIN_VERSION@", min_version.encode()))
         self.set_marketplaces(present=True)
+
+    @staticmethod
+    def _script(path, body):
+        path.write_bytes(body.encode("ascii"))
+        path.chmod(0o755)
+
+    def flag(self, name):
+        (self.fake / name).write_text("", encoding="ascii")
+
+    @property
+    def stamp(self):
+        return (self.home / ".claude" / "plugins" / "data" / "plugins-kit" / "bootstrap"
+                / "ensure-bootstrap-cli-repair")
 
     def set_plugins(self, records, after=None):
         (self.fake / "plugins.json").write_text(json.dumps(records, indent=2), encoding="utf-8")
@@ -234,7 +290,8 @@ class HookHarness:
 
     def run(self):
         env = dict(os.environ)
-        env["PATH"] = str(self.bin_dir) + os.pathsep + env.get("PATH", "")
+        env["PATH"] = str(self.bin_dir) + os.pathsep + _path_without_claude()
+        env["HOME"] = str(self.home)
         env["FAKE_DIR"] = str(self.fake)
         env["CLAUDE_PROJECT_DIR"] = str(self.project)
         env["CLAUDECODE"] = "1"
@@ -269,7 +326,9 @@ class TestGeneratedHook:
         h.set_marketplaces(present=False)
         h.set_plugins([_other_plugin()], after=[_record("1.2.0", "user")])
         proc, calls = h.run()
-        assert proc.returncode == 0
+        # Exit 2 with the message on stderr is what wakes Claude (asyncRewake).
+        assert proc.returncode == 2
+        assert proc.stdout == ""
         assert calls == [
             "plugin list --json",
             "plugin marketplace list --json",
@@ -278,8 +337,8 @@ class TestGeneratedHook:
             "plugin install bootstrap@plugins-kit --scope user",
             "plugin list --json",
         ]
-        message = json.loads(proc.stdout)["systemMessage"]
-        assert "installed bootstrap@plugins-kit 1.2.0" in message
+        assert "installed bootstrap@plugins-kit 1.2.0" in proc.stderr
+        assert "restart Claude Code" in proc.stderr
 
     def test_old_project_record_is_updated_at_its_scope(self, tmp_path):
         h = HookHarness(tmp_path)
@@ -298,7 +357,8 @@ class TestGeneratedHook:
             "plugin update bootstrap@plugins-kit --scope project",
             "plugin list --json",
         ]
-        assert "updated bootstrap@plugins-kit 1.2.1" in json.loads(proc.stdout)["systemMessage"]
+        assert proc.returncode == 2
+        assert "updated bootstrap@plugins-kit 1.2.1" in proc.stderr
 
     def test_record_for_a_differently_cased_path_does_not_count(self, tmp_path):
         # Claude Code treats D:\Dev\x and D:\dev\x as different projects, so a
@@ -320,16 +380,83 @@ class TestGeneratedHook:
         proc, calls = h.run()
         assert "plugin install bootstrap@plugins-kit --scope user" in calls
 
-    def test_failed_step_reports_and_exits_zero(self, tmp_path):
+    def test_crashing_cli_is_reinstalled_and_the_install_retried(self, tmp_path):
+        # The observed wedge: an outdated CLI on PATH panics on marketplace
+        # update, so bootstrap can never be installed through it.
         h = HookHarness(tmp_path)
-        h.set_plugins([])
-        (h.fake / "fail_plugin_step").write_text("", encoding="utf-8")
+        h.flag("crash_marketplace_update")
+        h.set_plugins([_record("0.10.11", "project", str(h.project))],
+                      after=[_record("1.2.0", "project", str(h.project))])
+        proc, calls = h.run()
+        assert proc.returncode == 2
+        assert calls.count("installer") == 1
+        update = "plugin update bootstrap@plugins-kit --scope project"
+        assert calls.index("installer") < calls.index(update)
+        assert "updated bootstrap@plugins-kit 1.2.0" in proc.stderr
+        assert "2.1.56 -> 2.1.300" in proc.stderr
+        assert h.stamp.read_text(encoding="ascii").strip() == "2.1.300"
+
+    def test_missing_cli_is_installed_then_bootstrap_installed(self, tmp_path):
+        h = HookHarness(tmp_path, cli=None)
+        h.set_plugins([], after=[_record("1.2.0", "user")])
+        proc, calls = h.run()
+        assert proc.returncode == 2
+        assert calls[0] == "installer"
+        assert "plugin install bootstrap@plugins-kit --scope user" in calls
+        assert "installed bootstrap@plugins-kit 1.2.0" in proc.stderr
+        assert "missing -> 2.1.300" in proc.stderr
+
+    def test_healthy_path_never_touches_the_cli_install(self, tmp_path):
+        h = HookHarness(tmp_path)
+        h.flag("crash_marketplace_update")
+        h.set_plugins([_record("1.10.0", "user")])
         proc, calls = h.run()
         assert proc.returncode == 0
-        message = json.loads(proc.stdout)["systemMessage"]
-        assert "could not bring bootstrap@plugins-kit to 1.2.0" in message
-        assert "boom" in message
+        assert "installer" not in calls
+        assert not h.stamp.exists()
+
+    def test_failure_with_another_cause_reports_once_reinstalled(self, tmp_path):
+        h = HookHarness(tmp_path)
+        h.set_plugins([])
+        h.flag("fail_plugin_step")
+        proc, calls = h.run()
+        assert proc.returncode == 2
+        assert calls.count("installer") == 1
+        assert "could not bring bootstrap@plugins-kit to 1.2.0" in proc.stderr
+        assert "It still failed afterwards" in proc.stderr
+        assert "boom" in proc.stderr
         assert "CLAUDECODE leaked" not in calls
+
+        # The next session finds the CLI it already reinstalled and does not
+        # download it again.
+        (h.fake / "calls.log").unlink()
+        proc, calls = h.run()
+        assert proc.returncode == 2
+        assert "installer" not in calls
+        assert "already reinstalled by this hook" in proc.stderr
+
+    def test_cli_installed_by_another_tool_is_not_replaced(self, tmp_path):
+        h = HookHarness(tmp_path, cli="other")
+        h.flag("crash_marketplace_update")
+        h.set_plugins([])
+        proc, calls = h.run()
+        assert proc.returncode == 2
+        assert "installer" not in calls
+        assert "panic: index out of bounds" in proc.stderr
+        assert "update it with the tool that installed it" in proc.stderr
+        assert not (h.home / ".local").exists()
+
+    def test_failed_reinstall_is_reported_with_both_errors(self, tmp_path):
+        h = HookHarness(tmp_path)
+        h.flag("crash_marketplace_update")
+        h.flag("fail_installer")
+        h.set_plugins([])
+        proc, calls = h.run()
+        assert proc.returncode == 2
+        assert "panic: index out of bounds" in proc.stderr
+        assert "Reinstalling the claude CLI also failed" in proc.stderr
+        assert "download failed" in proc.stderr
+        assert not h.stamp.exists()
 
     def test_version_compare_is_numeric(self, tmp_path):
         h = HookHarness(tmp_path, min_version="0.99.0")
