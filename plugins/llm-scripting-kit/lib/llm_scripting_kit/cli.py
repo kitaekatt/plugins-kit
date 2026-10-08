@@ -1318,6 +1318,12 @@ def _cmd_complete_routed(args: argparse.Namespace) -> int:
             last_exc[0] = exc
             return self._inner.classify_halt(exc)
 
+        def with_text_only(self) -> Any:
+            # Defined here, not reached through __getattr__: delegating would
+            # return the inner backend armed but UNWRAPPED, and the halt
+            # recording above would silently stop for the armed call.
+            return _Recording(self._inner.with_text_only())
+
     def on_attempt(attempt: Any) -> None:
         attempts.append(attempt)
         attempt_halts.append(

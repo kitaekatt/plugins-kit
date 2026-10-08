@@ -315,6 +315,9 @@ def test_run_refuses_a_response_without_the_armed_control(tmp_path):
         name: str = "claude-cli"
         capabilities = CLAUDE_CAPABILITIES
 
+        def with_text_only(self):
+            return replace(self, text_only=True)
+
         def complete(self, system, user, *, model, options=None):
             return LLMResponse(text="ok", model=model)
 

@@ -35,6 +35,7 @@ import socket
 import sys
 import threading
 import time
+import dataclasses
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, ClassVar, Dict, Optional
@@ -575,6 +576,10 @@ class ClaudeCliBackend:
     text_only: bool = False
     name: str = field(default="claude-cli", init=False)
     capabilities: ClassVar[Capabilities] = CLAUDE_CAPABILITIES
+
+    def with_text_only(self) -> "ClaudeCliBackend":
+        """This backend in text-only mode (``requirements.arm_call`` calls it)."""
+        return self if self.text_only else dataclasses.replace(self, text_only=True)
 
     def complete(
         self,
