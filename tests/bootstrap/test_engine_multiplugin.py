@@ -77,6 +77,130 @@ def make_fake_bootstrap_root(tmp_path, manifest=None, self_setup=None):
 
 
 class TestMultiPluginEngine:
+    def test_shared_lib_owner_runs_before_consumer_import_check(self, tmp_path):
+        """A fresh owner library must replace a stale copy before consumer venv checks."""
+        from bootstrap_lib.shared_lib import link_shared_lib
+        from bootstrap_lib.venv_check import _find_python
+
+        plugins_dir = tmp_path / "plugins"
+        plugins_dir.mkdir()
+
+        fake_root = plugins_dir / "bootstrap"
+        fake_root.mkdir()
+        link_tree(fake_root / "bootstrap_lib", os.path.join(BOOTSTRAP_ROOT, "bootstrap_lib"))
+        link_tree(fake_root / "engine", os.path.join(BOOTSTRAP_ROOT, "engine"))
+        _write_minimal_defaults(fake_root)
+        (fake_root / "bootstrap.json").write_text(json.dumps({}))
+
+        consumer_dir = plugins_dir / "a-consumer"
+        consumer_dir.mkdir()
+        (consumer_dir / "bootstrap.json").write_text(json.dumps({
+            "venv": {"check_imports": ["consumer_fixture"]},
+            "shared_lib_imports": ["shared_api"],
+        }))
+        (consumer_dir / "pyproject.toml").write_text(
+            "[project]\n"
+            "name = 'consumer-fixture'\n"
+            "version = '0.0.0'\n"
+            "\n"
+            "[tool.uv]\n"
+            "package = false\n"
+        )
+
+        owner_dir = plugins_dir / "z-owner"
+        fresh_package = owner_dir / "lib" / "shared_api"
+        fresh_package.mkdir(parents=True)
+        (fresh_package / "__init__.py").write_text("NEW_VALUE = 'fresh'\n")
+        (owner_dir / "bootstrap.json").write_text(json.dumps({
+            "shared_libs": [{"name": "shared_api", "src": "lib"}],
+        }))
+
+        data_dir = tmp_path / "data" / "kit" / "bootstrap"
+        data_dir.mkdir(parents=True)
+        shared_root = data_dir.parent / "_shared_libs"
+        stale_package = shared_root / "shared_api" / "shared_api"
+        stale_package.mkdir(parents=True)
+        (stale_package / "__init__.py").write_text("OLD_VALUE = 'stale'\n")
+
+        consumer_venv = data_dir.parent / "a-consumer" / ".venv"
+        subprocess.run(
+            [sys.executable, "-m", "venv", "--without-pip", str(consumer_venv)],
+            check=True,
+            capture_output=True,
+        )
+        consumer_python = _find_python(str(consumer_venv))
+        assert consumer_python is not None
+        link_result = link_shared_lib("shared_api", consumer_python, str(shared_root))
+        assert link_result.status == "linked"
+
+        purelib = subprocess.run(
+            [consumer_python, "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        fixture_package = os.path.join(purelib, "consumer_fixture")
+        os.makedirs(fixture_package)
+        with open(os.path.join(fixture_package, "__init__.py"), "w") as f:
+            f.write("from shared_api import NEW_VALUE\n")
+
+        registry = {"plugins": {
+            "kit:a-consumer": [{"installPath": str(consumer_dir), "version": "1.0.0"}],
+            "kit:z-owner": [{"installPath": str(owner_dir), "version": "1.0.0"}],
+        }}
+        (plugins_dir / "installed_plugins.json").write_text(json.dumps(registry))
+        (data_dir / "config.json").write_text(json.dumps({
+            "schema_version": 5,
+            "no_bootstrap": [],
+            "bootstrap_cache": [],
+            "log_success_shell": False,
+            "log_success_checks": False,
+        }))
+
+        env = _isolated_env(tmp_path)
+        env["CLAUDE_BOOTSTRAP_DATA_ROOT"] = str(tmp_path / "data")
+        result = run_engine(str(data_dir), plugin_root=str(fake_root), env=env)
+
+        assert result.returncode == 0, result.stderr
+        assert "import consumer_fixture failed in venv" not in result.stdout
+        imported = subprocess.run(
+            [consumer_python, "-c", "import consumer_fixture; print(consumer_fixture.NEW_VALUE)"],
+            capture_output=True,
+            text=True,
+        )
+        assert imported.returncode == 0, imported.stderr
+        assert imported.stdout.strip() == "fresh"
+
+    def test_shared_lib_dependency_cycle_fails_loudly(self, tmp_path):
+        from bootstrap_lib.engine import _order_plugins_by_shared_lib_dependencies
+        from bootstrap_lib.plugin_resolve import PluginInfo
+
+        plugin_a = tmp_path / "plugin-a"
+        plugin_b = tmp_path / "plugin-b"
+        plugin_a.mkdir()
+        plugin_b.mkdir()
+        (plugin_a / "bootstrap.json").write_text(json.dumps({
+            "shared_libs": [{"name": "lib_a", "src": "lib"}],
+            "shared_lib_imports": ["lib_b"],
+        }))
+        (plugin_b / "bootstrap.json").write_text(json.dumps({
+            "shared_libs": [{"name": "lib_b", "src": "lib"}],
+            "shared_lib_imports": ["lib_a"],
+        }))
+        plugins = [
+            PluginInfo("plugin-a", str(plugin_a), "1.0.0", "kit"),
+            PluginInfo("plugin-b", str(plugin_b), "1.0.0", "kit"),
+        ]
+
+        with pytest.raises(
+            RuntimeError,
+            match=(
+                r"shared-library dependency cycle .*"
+                r"kit:plugin-a -> kit:plugin-b -> kit:plugin-a"
+            ),
+        ):
+            _order_plugins_by_shared_lib_dependencies(plugins)
+
     def test_no_enabled_plugins_emits_log(self, tmp_path):
         """Engine with no enabled plugins should emit log after self-bootstrap."""
         fake_root = make_fake_bootstrap_root(tmp_path)
