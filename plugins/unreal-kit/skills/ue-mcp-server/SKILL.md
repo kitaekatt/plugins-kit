@@ -72,7 +72,7 @@ capability_skill:
       tool: manage_blueprint
       reference_section: tool-catalog.md
       gotchas:
-        - Blueprint event overrides for inherited BlueprintImplementableEvents are not supported -- add_event, K2Node_Event with eventType override, etc. all fail silently. Provide manual Editor instructions when overriding parent events.
+        - Blueprint event overrides for inherited BlueprintImplementableEvents -- on a stock bridge, add_event, K2Node_Event with eventType override, etc. all fail silently, so skip MCP and provide manual Editor instructions. Try MCP first only when the project's own docs say its bridge reports a compile result on override actions; then check compiled/errorCount (or alreadyExisted:true) in the answer and confirm the node with get_node_details.
     - id: manage_asset
       keywords: [asset, import, rename, move, delete, create material, list assets]
       user_objective: List, import, rename, move, delete assets; create material instances.
@@ -190,7 +190,7 @@ capability_skill:
       tool: manage_widget_authoring
       reference_section: tool-catalog.md
       gotchas:
-        - Widget event overrides for inherited BlueprintImplementableEvents (e.g. BP_Render in a subclass) are not supported -- the override approaches fail silently. Provide manual Editor instructions instead.
+        - Widget event overrides for inherited BlueprintImplementableEvents (e.g. BP_Render in a subclass) -- on a stock bridge the override approaches fail silently, so provide manual Editor instructions. Try MCP first only when the project's own docs say its bridge reports a compile result on override actions.
     - id: manage_gas
       keywords: [GAS, gameplay ability system, ability, gameplay effect, attribute, gameplay cue]
       user_objective: Configure abilities, gameplay effects, attributes, and cues for the Gameplay Ability System.
@@ -484,4 +484,4 @@ Multiple search strategies via `control_actor`:
 
 ## Known Limitations
 
-**Blueprint event overrides are not supported.** `manage_blueprint` and `manage_widget_authoring` cannot override inherited `BlueprintImplementableEvent`s from a parent class (e.g. overriding `BP_Render` in a widget subclass). The `add_event`, `create_node` with `K2Node_Event`, and `eventType: "override"` approaches all fail silently. When a task requires overriding a parent event, skip MCP attempts and provide manual Editor instructions immediately.
+**Blueprint event overrides depend on the bridge.** On a stock bridge, `manage_blueprint` and `manage_widget_authoring` cannot override inherited `BlueprintImplementableEvent`s from a parent class (e.g. overriding `BP_Render` in a widget subclass): the `add_event`, `create_node` with `K2Node_Event`, and `eventType: "override"` approaches all fail silently. When a task requires overriding a parent event, skip MCP attempts and provide manual Editor instructions immediately -- unless the project's own docs (for example a `.claude/docs` file) say its bridge reports a compile result on a named override action. Then use that action, check `compiled` and `errorCount` in the answer (`alreadyExisted: true` means the override is already there), and confirm the node with the action the project docs name for reading nodes; fall back to manual Editor instructions when the compile fails or the action answers `NOT_IMPLEMENTED`.
