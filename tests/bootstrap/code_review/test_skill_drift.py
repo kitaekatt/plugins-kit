@@ -641,9 +641,10 @@ class TestSkillsKitRootResolvesFromRegistryFirst:
 
     The old rule -- always pick the highest semver directory under the plugin
     cache -- is wrong whenever a higher STALE cache directory outlives the
-    active install (a downgrade, a scoped install, a dev-tree entry): the
-    registry's `[0].installPath` is the ACTIVE install per the platform
-    reference, and this machine's registry is observed populated, not the
+    active install (a downgrade, a scoped install, a dev-tree entry). The
+    registry entry for THIS project (else the user entry) is the ACTIVE
+    install -- never entry [0] by position, which can be another checkout's
+    project install -- and this machine's registry is observed populated, not the
     permanently-empty state the root CLAUDE.md's registry_v2_empty insight
     asserts. The fallback is kept so the rule stays correct under EITHER
     reading of that contradiction.
@@ -655,6 +656,18 @@ class TestSkillsKitRootResolvesFromRegistryFirst:
             assert "installed_plugins.json" in ref
             assert "skills-kit@plugins-kit" in ref
             assert "installPath" in ref
+
+    def test_registry_entry_matches_project_not_position(self):
+        # The array holds one entry per scope and project. Taking entry [0] picked
+        # another checkout's stale project install (observed 2026-10-06, 2026-10-09
+        # and 2026-10-16), so the rule must select by projectPath, then user scope.
+        for vcs in ("git", "p4"):
+            ref = gen.render_md_domain_review(vcs)
+            assert "projectPath" in ref
+            assert "bundle.project_root" in ref
+            assert '`scope: "user"`' in ref
+            assert "never take an entry by position" in ref
+            assert "entry `[0]`'s `installPath` -- the ACTIVE install" not in ref
 
     def test_cache_highest_kept_as_explicit_fallback(self):
         for vcs in ("git", "p4"):

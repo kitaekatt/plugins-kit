@@ -1888,12 +1888,21 @@ passing each lane as described in "Passing a lane script to the Workflow tool" b
 use "Manual detect invocation" below. Locate the INSTALLED skills-kit plugin:
 
 - Plugin root (`<root>`): resolve via the REGISTRY first, falling back to a cache scan only
-  when the registry is empty or unreadable. Read `~/.claude/plugins/installed_plugins.json`;
-  when its `plugins["skills-kit@plugins-kit"]` array is present and non-empty, `<root>` is
-  entry `[0]`'s `installPath` -- the ACTIVE install, which can differ from the highest cached
-  version after a downgrade, a scoped install, or a dev-tree entry. Only when that key is
-  missing, the array is empty, or the file cannot be read, fall back to the newest version
-  directory under the plugins cache for this marketplace --
+  when the registry has no usable entry. Read `~/.claude/plugins/installed_plugins.json`. Its
+  `plugins["skills-kit@plugins-kit"]` array holds ONE ENTRY PER SCOPE AND PROJECT, in no
+  meaningful order, so never take an entry by position. Pick the entry that applies to THIS
+  review, in this order:
+  1. the `scope: "project"` entry whose `projectPath` names the review's project root
+     (`bundle.project_root`), compared case-insensitively, with backslash and forward slash
+     treated as equal;
+  2. else the `scope: "user"` entry.
+  `<root>` is that entry's `installPath` -- the install active for this project, which can
+  differ from the highest cached version after a downgrade, a scoped install, or a dev-tree
+  entry. Entry `[0]` is often another checkout's project install: measured 2026-10-16, it was
+  the install for a deleted checkout, frozen at a skills-kit too old to emit `lane_models`, and
+  every claimed file came back REVIEW INCOMPLETE while this project's own entry was current.
+  Only when no entry matches 1 or 2, the key is missing, the array is empty, or the file cannot
+  be read, fall back to the newest version directory under the plugins cache for this marketplace --
   `~/.claude/plugins/cache/plugins-kit/skills-kit/<version>/` (pick the highest semver dir
   present). `${CLAUDE_PLUGIN_ROOT}` of the CURRENT skill is NOT it -- that points at git-kit /
   p4-kit, not skills-kit.

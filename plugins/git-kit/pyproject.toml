@@ -1,6 +1,6 @@
 [project]
 name = "git-kit"
-version = "0.47.6"
+version = "0.47.7"
 description = "Host-side dependencies for git-kit plugin"
 requires-python = ">=3.12,!=3.14.*"
 
