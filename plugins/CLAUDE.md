@@ -106,7 +106,7 @@ unconfigurable opinion whose test passes is a finding.
 
 - **job-kit selects deterministically: a run is explainable from the declared list plus
   the logged pace readings.** No scoring, no learned or adaptive routing: a job's
-  `models` declaration is ranked by llm-scripting-kit's `describe(caller="process")` --
+  `models` declaration is ranked by llm-kit's `describe(caller="process")` --
   unusable entries skipped silently, paced entries ordered by pace, unpaced entries in
   their declared places -- and the first usable entry runs. Every attempt row records the
   pace readings it was selected from. A user who wants "pick whichever is cheapest or
@@ -211,8 +211,8 @@ unconfigurable opinion whose test passes is a finding.
 
 - **A validator runs on an Agent entry only; the lane tool has no validator route.** A
   review profile's validator reason is an ordered list of `{id, effort}` entries, the same
-  as a reviewer's, and may name llm-scripting-kit endpoint entries. The lane tool
-  (`run_review_lane` / llm-scripting-kit `review_lane`) has no validator prompt, no
+  as a reviewer's, and may name llm-kit endpoint entries. The lane tool
+  (`run_review_lane` / `llm_kit.dispatch.review_lane`) has no validator prompt, no
   per-issue input and no verdict contract, so the skill drops a non-Agent validator entry
   at dispatch, discloses the drop in one route line, and runs the next Agent entry. A
   validator with no Agent entry fails loudly when the profile resolves. Shipped validators
@@ -222,7 +222,7 @@ unconfigurable opinion whose test passes is a finding.
   Widening the route is a plugin change.
 - **An unexplained lane failure re-selects through `describe`, and every re-selection is
   disclosed.** A reviewer declaration may cover more than one entry; when a launch
-  failure is not explained by the entry-harness rule, the lane re-runs `llm-scripting-kit
+  failure is not explained by the entry-harness rule, the lane re-runs `llm-kit models
   describe` with the same arguments plus one `--exclude <entry>` per entry already
   failed on, at most once per entry, and the rendered review carries every `route:` line
   in a `## Lane routes` section. A lane whose describe exits 1 with no entry left is still
@@ -234,7 +234,7 @@ unconfigurable opinion whose test passes is a finding.
   afterwards, which model each finding came from.
 
 - **A `conserve_usage` verdict is pinned for the session and re-evaluated downward ONLY
-  on an observed quota or credit halt.** llm-scripting-kit computes a paced endpoint's
+  on an observed quota or credit halt.** llm-kit computes a paced endpoint's
   availability once per session key and reuses it; an UNDER-QUOTA or OUT-OF-QUOTA verdict
   is recomputed only once its window resets, and an AVAILABLE one is never recomputed from
   a re-read. The one downward move is an actual failure: a dispatch that halts on quota or
@@ -243,7 +243,7 @@ unconfigurable opinion whose test passes is a finding.
   verdict expires and the next read evaluates the pool afresh (`usage_budget.pinned_evaluate`). A
   team could reasonably want live re-evaluation -- a session running for days holds an
   `available` verdict computed against numbers that have since moved -- and the only
-  remedy we leave them is to start a new session (or `"${CLAUDE_BOOTSTRAP_DATA_ROOT:-$HOME/.claude/plugins/data}"/plugins-kit/llm-scripting-kit/.venv/bin/llm-scripting-kit usage --no-pin`, or `.venv/Scripts/llm-scripting-kit.exe` in place of `.venv/bin/llm-scripting-kit` on Windows,
+  remedy we leave them is to start a new session (or `"${CLAUDE_BOOTSTRAP_DATA_ROOT:-$HOME/.claude/plugins/data}"/plugins-kit/llm-kit/.venv/bin/llm-kit models usage --no-pin`, or `.venv/Scripts/llm-kit.exe` in place of `.venv/bin/llm-kit` on Windows,
   which inspects without changing what `seats` returns). We refuse the seam because the
   alternative is the failure the feature exists to prevent: an endpoint that was usable
   when work was planned against it disappearing mid-run on a re-read, which strands that
@@ -446,7 +446,7 @@ no dependency constraint, no reinstall anywhere. The cost is the other side of
 that same coin: consumers cannot pin, so a breaking change to a shared lib
 reaches all of them at once.
 
-Publish ordering: bootstrap must ship before or with llm-scripting-kit, or
+Publish ordering: bootstrap must ship before or with llm-kit, or
 CodexCliBackend raises ModuleNotFoundError on every consumer -- shared libs
 resolve to the INSTALLED copy via .pth, not the dev tree.
 
@@ -466,20 +466,21 @@ optional-dependency section above defers to it.
 
 #### Who talks to an LLM, and through what
 
-| Plugin | Imports from llm-scripting-kit | Owns above the seam | Published |
+| Plugin | Imports from llm-kit | Owns above the seam | Published |
 |---|---|---|---|
-| content-pipeline-kit | `llm_scripting_kit.completion` (lazy/optional, via `content_pipeline.llm.platform` and `.llm.backends`) | Batch-run policy: retry, cost accounting, budgeting, concurrency, caching | Yes |
-| job-kit | `llm_scripting_kit.completion` (`BackendSelection`, `Capabilities`, `adapter_capabilities`, `create_backend`, `match_capabilities`), `llm_scripting_kit.declaration` (`describe`, `NoUsableRoutingTarget`, `CALLER_PROCESS`), `llm_scripting_kit.usage_budget` (`record_observed_halt`, `quota_pool_key`) | Run policy over llm-scripting-kit's `describe(caller="process")` ranking: halt narrowing, attempts, and the ledger's pace-reading record | Yes |
-| workflow-kit | `llm_scripting_kit.declaration` (`run`, `RunRequest`, `NoUsableRoutingTarget`), `llm_scripting_kit.completion` (`create_transport_backend`, `BackendOptions`), and `default_declaration` (via `scripts/openrouter_run.py`); `llm_scripting_kit.completion` (`OutputContract`, `POLICY_VALIDATED_RESULT`, `json_schema`) for typed artifacts (via `workflow_kit_lib/contracts.py` at compile time, lazily and only for a schema artifact, and `scripts/check_artifact.py` and `scripts/openrouter_run.py --provides` at run time); every `model:` declaration is validated with `bootstrap_lib.model_declaration` (via `workflow_kit_lib/declarations.py`), not llm-scripting-kit | The `openrouter` node strategy: one non-Claude call per workflow node over a declaration of transport entries, reporting the typed floor; agent-step routing of Claude core ids at compile time; typed node artifacts (compile-time `provides`/`requires` checks with compatibility by `schema_digest` equality, and the per-execution verdict file) | Yes |
-| awesome-kit (orchestrate) | `llm_scripting_kit.discover_model_entries` and `describe(caller="session")` (lazy/optional, via `orchestration_guidance.py` and `dispatch.py`) | Each routing row ranked by `describe(caller="session")` and passed through verbatim (no local ranking); `dispatch.py` resolves `--model` through `discover_model_entries` and REFUSES (exit 3) without llm-scripting-kit | Yes |
-| bootstrap | none directly -- `bootstrap_lib.code_review.review_profiles` and `bootstrap_lib.model_declaration` are stdlib-only and import no llm-scripting-kit module | Shape validation of reviewer `model` priority lists (ordered registry ids); ranking and dispatch live in llm-scripting-kit and the code-review kits (see the git-kit, p4-kit row) | Yes |
-| git-kit, p4-kit | `llm_scripting_kit.review_lane.main` via each kit's thin `scripts/run_review_lane.py` wrapper | The code-review skills rank each reviewer declaration through the `llm-scripting-kit describe` CLI (session caller) and dispatch by entry harness; bootstrap setup and the REFUSE probe for the shared library live here, and the lane's prompt lives in `bootstrap_lib.code_review.lane_prompts` and its guards in `llm_scripting_kit.review_lane` | Yes |
-| yaml-data-editor-kit | none directly -- reaches it via content-pipeline-kit's `content_pipeline` (the dispatch binding in `dispatch/`) | The editor's dispatch planner, not the completion transport | No (`published: false`) |
+| llm-kit (pipeline, jobs) | Its own library: `llm_kit.completion` (`capabilities.Capabilities`, `requirements.match_capabilities`, `halt`), `llm_kit.dispatch` (`declaration`, `factory.BackendSelection`, `endpoint_resolver`, `pipeline_backends`, `usage_budget`) | Batch-run policy in `llm_kit.pipeline` (retry, cost accounting, budgeting, concurrency, caching) and run policy in `llm_kit.jobs` over `describe(caller="process")`: halt narrowing, attempts, and the ledger's pace-reading record | Yes |
+| workflow-kit | `llm_kit.dispatch.declaration` (`run`, `RunRequest`, `NoUsableRoutingTarget`), `llm_kit.dispatch.factory.create_transport_backend`, `llm_kit.completion.types.BackendOptions`, and `llm_kit.registry.models.default_declaration` (via `scripts/openrouter_run.py`); `llm_kit.completion.contract` (`OutputContract`) and `llm_kit.schema.json_schema` for typed artifacts (via `workflow_kit_lib/contracts.py` at compile time, lazily and only for a schema artifact, and `scripts/check_artifact.py` and `scripts/openrouter_run.py --provides` at run time); every `model:` declaration is validated with `bootstrap_lib.model_declaration` (via `workflow_kit_lib/declarations.py`), not llm-kit | The `openrouter` node strategy: one non-Claude call per workflow node over a declaration of transport entries, reporting the typed floor; agent-step routing of Claude core ids at compile time; typed node artifacts (compile-time `provides`/`requires` checks with compatibility by `schema_digest` equality, and the per-execution verdict file) | Yes |
+| awesome-kit (orchestrate) | `llm_kit.registry.models.discover_model_entries` and `llm_kit.dispatch.declaration.describe(caller="session")` (lazy/optional, via `orchestration_guidance.py` and `dispatch.py`) | Each routing row ranked by `describe(caller="session")` and passed through verbatim (no local ranking); `dispatch.py` resolves `--model` through `discover_model_entries` and REFUSES (exit 3) without llm-kit | Yes |
+| bootstrap | none directly -- `bootstrap_lib.code_review.review_profiles` and `bootstrap_lib.model_declaration` are stdlib-only and import no llm_kit module | Shape validation of reviewer `model` priority lists (ordered registry ids); ranking and dispatch live in llm-kit and the code-review kits (see the git-kit, p4-kit row) | Yes |
+| git-kit, p4-kit | `llm_kit.dispatch.review_lane.main` via each kit's thin `scripts/run_review_lane.py` wrapper | The code-review skills rank each reviewer declaration through the `llm-kit models describe` CLI (session caller) and dispatch by entry harness; bootstrap setup and the REFUSE probe for the shared library live here, and the lane's prompt lives in `bootstrap_lib.code_review.lane_prompts` and its guards in `llm_kit.dispatch.review_lane` | Yes |
+| task-kit | `llm_kit.completion.types.BackendOptions` and `CodexCliBackend` (lazy/optional, summary repair in the review verb) | Summary repair policy; without llm-kit the review verb refuses repair with an actionable diagnostic | Yes |
+| skills-kit | none directly -- consumes `bootstrap_lib.skill_material` through `skills_kit_lib/material.py` | Skill-material reading for audits; declares `llm_kit` in `shared_lib_imports` | Yes |
+| yaml-data-editor-kit | `llm_kit.pipeline` (`core.workunit`, `execution`, `runtime.backends`, `runtime.platform`, `artifacts`) and `llm_kit.cli.run.build_commands` | The editor's dispatch planner, not the completion transport | No (`published: false`) |
 
 The code-review kits are the one entry whose consumer is a thin wrapper around a
 shared library. `bootstrap_lib.code_review.lane_prompts` owns the LLM-neutral half
 (prompts, issue schema, and dispatch classification). The seam-calling half lives
-in `llm_scripting_kit.review_lane`, which owns endpoint resolution, backend calls,
+in `llm_kit.dispatch.review_lane`, which owns endpoint resolution, backend calls,
 the context-window and output-contract guards, retries, and the result envelope.
 Each kit vendors only the wrapper that performs bootstrap setup and hosts the REFUSE
 probe for the shared library. This split is by DEPENDENCY, not by subject: importing
@@ -513,7 +514,7 @@ job-kit runs its own copy (`job_kit.model.interrupt_lapsed`), held equal by
 and imports no plugin, and it imports no validator either: the caller passes one,
 and the contract refuses any validator that does not advertise the subset
 literal `llm-scripting-kit.json-schema-subset/v1` and selects that subset with
-`subset=` on every call, so a keyword added to llm-scripting-kit later cannot
+`subset=` on every call, so a keyword added to the validator later cannot
 change what an accepted request means. Each implementing plugin keeps its own
 store, its own continuation (job-kit re-runs the job's contract,
 content-pipeline-kit offers the unit again) and its own event phases, reaches
@@ -522,14 +523,14 @@ install or update command, and declares no edge to the other plugin.
 `tests/bootstrap/test_interrupt_contract_consumers.py` drives both real stores
 with one request and one answer and compares what they record, refuse and emit.
 
-`bootstrap_lib/skill_material.py` is consumed by llm-scripting-kit
+`bootstrap_lib/skill_material.py` is consumed by llm-kit
 (`completion/skill_context.py`) and skills-kit (`skills_kit_lib/material.py`);
 its PyYAML handling and frozen report format are specified in
 `plugins/bootstrap/skills/plugin-dev/references/skill-material.md`. Each
 consumer carries `SKILL_MATERIAL_BOOTSTRAP = "0.138.0"` and pins it with
 `requires_bootstrap` "0.138.0" in its `bootstrap.json`. An installed bootstrap
 older than that floor refuses both consumers, so bootstrap ships before or with
-llm-scripting-kit and skills-kit.
+llm-kit and skills-kit.
 
 The venv-scoping above is the ordinary consequence of a per-venv install rather
 than fragility -- a `.pth` written into one environment no more appears in
@@ -538,7 +539,7 @@ satisfies that precondition itself instead of pushing it onto its caller.
 
 **The source is shared; third-party dependencies are not.** A plugin that
 imports a shared lib declares that lib's third-party requirements in its OWN
-`pyproject.toml` -- a consumer driving `llm_scripting_kit`'s OpenRouter path
+`pyproject.toml` -- a consumer driving `llm_kit`'s OpenRouter path
 declares `openai` itself. One shared lib is linked into several independently
 provisioned venvs, so shipping its pins with it would impose a single resolution
 on every consumer, and a consumer using only the paths that need no SDK would
@@ -885,22 +886,23 @@ When one plugin's library adapts another's, the seam types are duplicated on
 purpose: the consumer keeps its own `Response` / `Options` / protocol types as
 its caller-facing surface and adapts field-for-field across the boundary, so a
 shape change surfaces at the adapter instead of propagating silently.
-content-pipeline-kit's `llm/backends.py` does exactly this over
-`llm_scripting_kit.completion`.
+llm-kit's `pipeline/runtime/platform.py` does exactly this over
+`llm_kit.completion`.
 
 The duplication has a cost to state wherever the seam is documented: two
-identically-named types in a dependency chain are still two types. Until
-content-pipeline-kit 0.20.0, `llm_scripting_kit.completion.halt.HaltError` and
-`content_pipeline.llm.platform.HaltError` shared a name and nothing else, so a
-consumer that caught the former around a `content_pipeline` call got a handler
-that never fired and no error anywhere. content-pipeline-kit's type is
-`PipelineHaltError` (`HaltError` remains there as a compatibility alias). When
+identically-named types in a dependency chain are still two types.
+`llm_kit.completion.halt.HaltError` and
+`llm_kit.pipeline.runtime.platform.PipelineHaltError` share no base, so a
+consumer that caught the former around a pipeline call would get a handler
+that never fires and no error anywhere. The pipeline type is named
+`PipelineHaltError` for that reason (`HaltError` remains in that module as an
+alias). When
 adding a duplicated type to a seam, name it distinctly or document which side
 a caller must import from.
 
 ## A caller that sets the deadline owns the timeout
 
-A plugin above `llm_scripting_kit.completion` passes its own budget down as
+A plugin above `llm_kit.completion` passes its own budget down as
 `BackendOptions.timeout_s`. When that budget expires, the exception coming back
 is evidence about the CALLER's deadline and says nothing about the endpoint --
 so classifying it as a provider halt makes the consumer exclude a perfectly
@@ -909,7 +911,7 @@ believes it still has.
 
 job-kit hit this twice, with two different transports and the same reasoning:
 
-- CLI backends -- llm-scripting-kit maps `AgentTimeoutError` to
+- CLI backends -- llm-kit (`llm_kit.completion.halt`) maps `AgentTimeoutError` to
   `HALT_RATE_LIMIT`, which is correct for a caller that did NOT set the
   timeout ("CLI-layer backoff is functionally a rate limit"). job-kit did, so
   `max_attempts: 3` silently became one attempt.
@@ -925,14 +927,14 @@ classification -- the change is invisible from below and looks like a bug in the
 consumer's retry policy from above.
 
 The fix belongs on the CONSUMER side in both cases; plugin boundaries are hard
-boundaries, and llm-scripting-kit's mapping is right for the callers that did
+boundaries, and llm-kit's mapping is right for the callers that did
 not set the deadline.
 
 ## Describing a plugin
 
 Describe a plugin by the question it answers and the altitude it holds, in one
-sentence, before anything else. llm-scripting-kit answers which endpoint,
-model, key, and transport, then makes one call; content-pipeline-kit answers
+sentence, before anything else. llm-kit's completion layer answers which endpoint,
+model, key, and transport, then makes one call; its pipeline layer answers
 what a run of many calls needs. State the dependency direction and the reason
 for it in the same breath: a concern sits above the line when it is a policy
 question -- what a cache is keyed on, what a budget is measured against, how

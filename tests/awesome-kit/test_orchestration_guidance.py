@@ -11,6 +11,7 @@ process itself).
 """
 
 import json
+import ntpath
 import re
 import shlex
 import sys
@@ -2825,3 +2826,27 @@ class TestOrchestrateLaneAgents:
         assert "NOT dialable" not in block["note"]
         assert "no per-call effort" not in " ".join(block["up_effort_note"].split())
 
+
+def test_placeholder_path_is_drive_qualified_and_absolute_on_windows(monkeypatch):
+    """Python 3.13 `ntpath.isabs` rejects a root-relative path with no drive
+    (3.12 accepted it), and llm_kit's harness adapters refuse a non-absolute cwd.
+    The Windows placeholder therefore carries a fixed drive. Runs on any host by
+    faking the Windows flavour of the module's `os`."""
+    monkeypatch.setattr(
+        og, "os", SimpleNamespace(name="nt", path=ntpath, sep=ntpath.sep)
+    )
+    for label in ("root", "result", "scratchpad"):
+        placeholder = og._placeholder_path(label)
+        drive, rest = ntpath.splitdrive(placeholder)
+        assert drive != "", placeholder
+        assert rest[:1] in ("\\", "/"), placeholder
+        assert rest.endswith(label), placeholder
+
+
+def test_placeholder_path_posix_is_unchanged(monkeypatch):
+    import posixpath
+
+    monkeypatch.setattr(
+        og, "os", SimpleNamespace(name="posix", path=posixpath, sep="/")
+    )
+    assert og._placeholder_path("root") == "/__orchestrate_placeholder__/root"

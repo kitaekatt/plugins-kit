@@ -470,7 +470,7 @@ Section: "Emitted one-job file" (line 197).
 
 Change:
 - Emit the contract as `[<absolute sys.executable of the runner>, <absolute
-  acceptance script>, ...]`, never a bare `python`. This follows the Python
+  acceptance script>, ...]`, never a bare interpreter command word. This follows the Python
   interpreter variables rule in root CLAUDE.md.
 
 ### 23. nit -- Idempotency keys are redundant for v1

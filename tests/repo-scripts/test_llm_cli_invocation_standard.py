@@ -209,11 +209,6 @@ _SHORTHAND_REASON = (
 )
 
 _WHOLE_FILE_EXEMPTIONS: dict[str, AllowlistEntry] = {
-    "plugins/CLAUDE.md": AllowlistEntry(
-        "rank each reviewer declaration through the `llm-scripting-kit describe` CLI",
-        "repo-level maintainer guidance; both hits are descriptive prose naming "
-        "the mechanism a skill uses, not an invocation a reader runs",
-    ),
     "plugins/llm-scripting-kit/README.md": AllowlistEntry(
         "In the examples below, `llm-scripting-kit`",
         _SHORTHAND_REASON + "; the file also discusses the PATH situation itself, "
@@ -238,6 +233,13 @@ class SnippetExemption(NamedTuple):
 
 
 _SNIPPET_EXEMPTIONS: dict[str, tuple[SnippetExemption, ...]] = {
+    "plugins/CLAUDE.md": (
+        SnippetExemption(
+            "`llm-scripting-kit/lib/llm_scripting_kit`",
+            "a directory path in the list of plugin library roots, not an "
+            "invocation; the rest of the file stays scanned",
+        ),
+    ),
     "plugins/content-pipeline-kit/skills/content-pipeline-domain/references/"
     "building-a-pipeline.md": (
         SnippetExemption(

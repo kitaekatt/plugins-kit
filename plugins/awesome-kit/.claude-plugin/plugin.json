@@ -1,6 +1,6 @@
 {
   "name": "awesome-kit",
-  "version": "0.73.0",
+  "version": "0.74.0",
   "description": "Provides plugin-ecosystem, orchestrate, debug-context, and verbose-updates skills for plugin browsing, delegated work, answering why-did-you questions from context, and progress communication.",
   "author": {
     "name": "Christina"

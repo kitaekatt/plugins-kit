@@ -211,7 +211,7 @@ authorization, and the other values describe a run rather than the task.
 - `models` contains exactly the chosen Claude or Codex registry entry.
 - The contract argv starts with the runner's absolute `sys.executable`, then the
   absolute acceptance script, task ref, item id, run id, start revision, start
-  HEAD, and branch; it never names bare `python`.
+  HEAD, and branch; it never names an interpreter by its bare command word.
 ### Prompt and result contract
 The system prompt names the project root, task ref, item, permissions, allowed
 writes, no-commit rule, sub-agent limits, block procedure, and acceptance

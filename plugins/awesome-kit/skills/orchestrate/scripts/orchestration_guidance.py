@@ -1632,8 +1632,13 @@ def _routable_backend_ids(
 
 
 def _placeholder_path(label: str) -> str:
-    """Build an absolute, machine-independent path for adapter rendering."""
-    return os.path.join(os.path.sep, "__orchestrate_placeholder__", label)
+    """Build an absolute, machine-independent path for adapter rendering.
+
+    Windows needs a drive: Python 3.13 `ntpath.isabs` rejects a root-relative
+    path without one, and the llm_kit harness adapters refuse such a cwd.
+    """
+    anchor = "C:" + os.path.sep if os.name == "nt" else os.path.sep
+    return os.path.join(anchor, "__orchestrate_placeholder__", label)
 
 
 def _adapter_entry(
