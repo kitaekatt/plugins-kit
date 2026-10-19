@@ -203,7 +203,7 @@ The user sent a message this turn or recently and has not dismissed the agent.
 **Test:** would a foreground tool call now be time the user spends waiting?
 
 ### `user-afk` `[concept]`
-The user dismissed the agent ("go", "get it done", a loop) or has gone quiet since their last message.
+The user said they are stepping away or handed the work over ("get it done", a loop), or has gone quiet since their last message.
 **Test:** does anyone read the reply before the work is done?
 
 ### `consult` `[concept]`

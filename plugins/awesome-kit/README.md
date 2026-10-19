@@ -22,6 +22,9 @@ Also in the box, one line each:
   `skills/orchestrate/defaults/orchestration.yaml` under a per-user and a
   per-project override. See
   [skills/orchestrate/references/configuration.md](skills/orchestrate/references/configuration.md).
+  When the optional presence-kit plugin is installed and current, the skill
+  also surfaces its waiting rule at invocation; without it, orchestrate is
+  unchanged and prints nothing about it.
 - `verbose-updates` -- a smaller supporting skill.
 - `debug-context` -- when a present user asks why the agent did something,
   answer from context immediately with premises marked, then verify in the

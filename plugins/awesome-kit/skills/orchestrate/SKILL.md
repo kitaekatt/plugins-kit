@@ -157,6 +157,12 @@ technique_skill:
             itself, and rendering after the plan exists can only trigger a retrospective
             review, never route the plan's creation. Keep the output in view for steps 3-5;
             it is the source of truth for routing, backends and capacity on this machine.
+
+            Then, in the same step, run the presence probe once, inline:
+            `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_SKILL_DIR}/scripts/presence_probe.py"`.
+            It prints one to three lines when the sibling plugin presence-kit is installed and
+            current, and nothing otherwise. Keep any stdout beside the rendered policy for steps
+            3-5; when it prints nothing, carry on, since orchestration is complete without it.
         - n: 3
           action: Place planning by model fit and context, then decompose and apply the rendered parallel-development razor.
           detail: |

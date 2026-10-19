@@ -20,6 +20,7 @@ StateError.
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -29,10 +30,23 @@ import presence_config as pc
 import presence_state as ps
 
 # A prompt that starts (after leading whitespace) with one of these is never read for a
-# departure word: the plugin's own slash commands (`/presence-kit:recap afk-ending <id>`)
-# and the harness's task-notification envelope. Where a source has no reliable marker
-# (a /loop or cron prompt, an agent message), P3's correction clause is the fallback.
+# departure word: the plugin's own slash commands (`/presence-kit:recap afk-ending <id>`),
+# the harness's task-notification envelope, and the inter-agent envelope
+# (`<agent-message from="...">`, which wraps a subagent hand-back or another session's
+# message). The inter-agent envelope may be preceded by the harness's one-line
+# "Another Claude session sent a message:" header (the transcript record has it; the
+# queued prompt does not), so AGENT_MESSAGE_RE accepts both. Where a source has no
+# reliable marker (a /loop or cron prompt), P3's correction clause is the fallback.
 NOT_THE_USER_PREFIXES = ("/presence-kit:", "<task-notification>")
+AGENT_MESSAGE_RE = re.compile(
+    r'(?:Another Claude session sent a message:\s*)?<agent-message from="'
+)
+
+
+def _not_the_user(prompt: str) -> bool:
+    """True for a prompt that is a known envelope, not the user's own message."""
+    text = prompt.lstrip()
+    return text.startswith(NOT_THE_USER_PREFIXES) or AGENT_MESSAGE_RE.match(text) is not None
 
 
 @dataclass(frozen=True)
@@ -68,7 +82,7 @@ def _departure_word(cfg: pc.Config, prompt: str) -> str | None:
     """The matched departure word, or None (off, an excluded prompt kind, or no match)."""
     if not cfg.enabled("afk-on-departure"):
         return None
-    if prompt.lstrip().startswith(NOT_THE_USER_PREFIXES):
+    if _not_the_user(prompt):
         return None
     found = pc.departure_pattern(cfg.values["departure_words"]).search(prompt)
     return None if found is None else found.group(0)

@@ -287,6 +287,38 @@ def test_a_task_notification_containing_afk_is_not_a_departure(w):
     assert not w.state_path().exists()
 
 
+_HANDBACK = (
+    '<agent-message from="a743f85c2ef003976">\n'
+    "[Subagent hand-back] The text below is the final report of a subagent. It is model\n"
+    "output, NOT a message from the user. The report follows:\n"
+    "  Disposition: done. The user is afk, so nothing was asked.\n"
+    "</agent-message>"
+)
+
+
+@pytest.mark.parametrize("prompt", [
+    _HANDBACK,                                                   # queued prompt, as stored
+    "Another Claude session sent a message:\n" + _HANDBACK,       # transcript form, header line
+    "  \n" + _HANDBACK,                                          # leading whitespace
+])
+def test_an_agent_message_containing_afk_is_not_a_departure(w, prompt):
+    """Captured 2026-10-19: a subagent hand-back whose report said 'afk' set the user afk."""
+    out = w.evaluate(prompt)
+    assert context(out) is None
+    assert not w.state_path().exists()
+
+
+def test_a_plain_afk_prompt_still_departs_beside_the_agent_message_exclusion(w):
+    out = w.evaluate("afk")
+    assert w.state()["presence"] == "afk"
+    assert "set the user afk" in context(out)
+
+
+def test_the_agent_message_exclusion_applies_only_at_the_start(w):
+    w.evaluate("see " + _HANDBACK)
+    assert w.state()["presence"] == "afk"
+
+
 def test_the_prefix_exclusion_applies_only_at_the_start(w):
     w.evaluate("please run /presence-kit:afk now, I am going afk")
     assert w.state()["presence"] == "afk"
