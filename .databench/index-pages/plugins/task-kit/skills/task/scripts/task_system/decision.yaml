@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/task-kit/skills/task/scripts/task_system",
+  "decision": "page",
+  "source_sha": "bfb555f5dc37f72e2d2c92fc42fa368e877240c8",
+  "generation_spec_sha256": "d40323919c23e31cc9c5afe305627667e78bca3c257330f0fc0b3a9b1c826ade",
+  "input_sha256": "234ca2588235768a2d111da2cafc67999577375ddcb330936e8a516725536080",
+  "input_shape_sha256": "dd4a8c9a15ba7d36a217e85ebb1962e1dce9267f445b500d4ca7753f8346cf01",
+  "dirty": false,
+  "identity": "The task-system implementation: lifecycle verbs for task folders, cross-project discovery and validation, and the local read-only dashboard server.",
+  "instructions": "",
+  "references": []
+}

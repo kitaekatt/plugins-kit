@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "docs/planning/llm-kit",
+  "decision": "none",
+  "source_sha": "564e27d1ee1d7d68c964003bb9c7fb535851a3d3",
+  "input_sha256": "0cac4f989ca2aeeaccf930fecb00886217f864d2b059d2bfef91aa21c2c88f52",
+  "input_shape_sha256": "47db4ac550412b614023abf92284cbe5ed328fe24f7ea617a1e1937379a8d725",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

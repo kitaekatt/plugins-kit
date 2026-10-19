@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/llm-kit/lib/llm_kit/adapters",
+  "decision": "none",
+  "source_sha": "46d06a33c436c89b94ae4bbb8c50807df1fae875",
+  "input_sha256": "051207a1aad745d679fef7d05c2a4387b3a648d22e99038fb5dcef3261f292c9",
+  "input_shape_sha256": "75272cd8e3b683df2e67314dd127fe693dc51e72f4e1ea4ecdb12dcdc9f95108",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "directory": "tests/llm-kit",
+  "decision": "page",
+  "source_sha": "a157bc275e56fc92001fee5b2345fa534593871d",
+  "generation_spec_sha256": "d40323919c23e31cc9c5afe305627667e78bca3c257330f0fc0b3a9b1c826ade",
+  "input_sha256": "200a970d929b037eb200eb1441c0a31858b1589c3cce5512119ebcea0b64df84",
+  "input_shape_sha256": "8a96d95d8abbe5b03c96aa751d3ff5c43736ae848c6d9ef81445bee665489c46",
+  "dirty": false,
+  "identity": "Tests that verify llm-kit behavioral parity with the legacy plugins and validate the repoint map, disposition ledgers, and schema fixtures.",
+  "instructions": "",
+  "references": []
+}

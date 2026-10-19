@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/skills-kit/contract",
+  "decision": "none",
+  "source_sha": "2a2a57e4adb2a01e8d3abb1c78a750b464d1eac6",
+  "input_sha256": "40f6c283281d39bd10374f41e1a0a1fc1f0e456573ab5c6e3ea539ffc49d69a6",
+  "input_shape_sha256": "09a0935f2593084452bf90cc1f1bc24c0d7eea8ac191c8aae749cb00410bcf68",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

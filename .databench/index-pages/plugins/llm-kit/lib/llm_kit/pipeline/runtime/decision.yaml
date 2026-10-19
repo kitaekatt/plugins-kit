@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/llm-kit/lib/llm_kit/pipeline/runtime",
+  "decision": "none",
+  "source_sha": "46d06a33c436c89b94ae4bbb8c50807df1fae875",
+  "input_sha256": "88cf5e351fc82ac107ad28105ab4ac02ff053c1ef403b9c63d76a5c9b70495db",
+  "input_shape_sha256": "a66f83d3a803f4eb4b68675e360687ba5da5418c21e2e14876083cb31e58f376",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

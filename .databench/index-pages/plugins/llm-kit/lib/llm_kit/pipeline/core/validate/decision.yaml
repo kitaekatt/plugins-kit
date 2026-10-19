@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/llm-kit/lib/llm_kit/pipeline/core/validate",
+  "decision": "none",
+  "source_sha": "d48df39f06a3ac46d80c6cfe9df9daec21a66469",
+  "input_sha256": "5bcf388f4794333acdc8a059c79bd4e9e876e0fa5a6d8684b9f4c01e82078d41",
+  "input_shape_sha256": "a6a34d43dd5a377305d320f3b5125f387408c64e92aeb85460ad8beaf11d47c9",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

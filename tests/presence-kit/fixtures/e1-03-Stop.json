@@ -1,0 +1,23 @@
+{
+ "session_id": "53a3fce5-cbcb-4d03-b0a7-10710b484bea",
+ "transcript_path": "<HOME>\\.claude\\projects\\<SCRATCH_KEY>\\53a3fce5-cbcb-4d03-b0a7-10710b484bea.jsonl",
+ "cwd": "<SCRATCH>",
+ "prompt_id": "239faeec-0aea-466d-9106-250c2fab2c1c",
+ "permission_mode": "default",
+ "effort": {
+  "level": "medium"
+ },
+ "hook_event_name": "Stop",
+ "stop_hook_active": false,
+ "last_assistant_message": "DONE",
+ "background_tasks": [
+  {
+   "id": "a4d05e9e3ec957819",
+   "type": "subagent",
+   "status": "running",
+   "description": "Run sleep 20 and reply",
+   "agent_type": "general-purpose"
+  }
+ ],
+ "session_crons": []
+}

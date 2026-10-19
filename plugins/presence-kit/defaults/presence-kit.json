@@ -1,0 +1,19 @@
+{
+  "$comment": "Shipped presence-kit defaults (lowest layer). Must define every behavior id and every value. Override in ~/.claude/config/presence-kit.json (or $CLAUDE_CONFIG_DIR/config/presence-kit.json) or <project>/.claude/presence-kit.json; see references/configuring.md.",
+  "behaviors": {
+    "afk-on-departure": true,
+    "afk-on-quiet": true,
+    "autonomous-on-handover": true,
+    "recap-on-return": true,
+    "waiting-guard": true,
+    "ending-recap": true,
+    "terse-while-away": true,
+    "park-questions": true,
+    "notify-for-input": true
+  },
+  "values": {
+    "afk_quiet_minutes": 10,
+    "departure_words": ["afk"],
+    "waiter_model": "haiku"
+  }
+}

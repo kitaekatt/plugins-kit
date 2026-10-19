@@ -1,0 +1,993 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Task dashboard - Prototype A</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg:#f5f7fa; --panel:#ffffff; --panel2:#eef2f6; --text:#17202c; --muted:#5d6b7d; --line:#d9e0e8;
+  --accent:#1769aa; --on-accent:#ffffff; --warn:#8f5c00; --bad:#b42318; --good:#147a43; --queue:#6b4fd1; --run:#1769aa;
+  --shadow:0 6px 18px #0002;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:#10151d; --panel:#18212d; --panel2:#1f2a39; --text:#e9eef5; --muted:#9eabba; --line:#334255;
+    --accent:#71b7ff; --on-accent:#08111c; --warn:#f2b84b; --bad:#ff7b7b; --good:#83d6a3; --queue:#b79cff; --run:#71b7ff;
+    --shadow:0 6px 18px #0007;
+  }
+}
+* { box-sizing:border-box; }
+html { -webkit-text-size-adjust:100%; }
+body { margin:0; background:var(--bg); color:var(--text); font:14px/1.35 system-ui,-apple-system,"Segoe UI",sans-serif; }
+button, input, select, textarea { font:inherit; color:inherit; }
+h1,h2,h3,h4,p { margin:0; }
+.mono { font-family:ui-monospace,"Cascadia Mono",Consolas,monospace; }
+.muted { color:var(--muted); }
+.grow { flex:1; }
+.ic { width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; flex:none; }
+.ic.fill { fill:currentColor; stroke:none; }
+
+/* ---------- header ---------- */
+.top { max-width:1520px; margin:0 auto; padding:10px 16px 0; }
+.top-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:8px; }
+.top h1 { font-size:1.25em; }
+.proto { font-size:12px; border:1px dashed var(--accent); color:var(--accent); border-radius:99px; padding:1px 9px; }
+.status { color:var(--muted); font-size:13px; }
+.status b { color:var(--text); font-weight:650; }
+.chips { display:flex; gap:6px; flex-wrap:wrap; }
+.fchip { border:1px solid var(--line); background:var(--panel); border-radius:99px; padding:3px 11px; cursor:pointer; font-size:13px; }
+.fchip:hover { border-color:var(--accent); }
+.fchip[aria-pressed=true] { background:var(--accent); border-color:var(--accent); color:var(--on-accent); }
+.fchip .n { opacity:.75; margin-left:4px; font-size:12px; }
+.fchip.needs[aria-pressed=false] { color:var(--warn); border-color:color-mix(in srgb,var(--warn) 55%,var(--line)); }
+.search { border:1px solid var(--line); background:var(--panel); border-radius:6px; padding:4px 9px; width:190px; }
+.search:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+
+.btn { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--line); background:var(--panel2); border-radius:6px; padding:5px 11px; cursor:pointer; font-size:13px; line-height:1.2; white-space:nowrap; }
+.btn:hover { border-color:var(--accent); }
+.btn:focus-visible, .bubble:focus-visible, .pill:focus-visible, .task-id-copy:focus-visible, .fchip:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.btn.primary { background:var(--accent); border-color:var(--accent); color:var(--on-accent); font-weight:600; }
+.btn.danger { color:var(--bad); border-color:color-mix(in srgb,var(--bad) 55%,var(--line)); }
+.btn.warn { background:color-mix(in srgb,var(--warn) 18%,var(--panel)); border-color:var(--warn); color:var(--text); font-weight:600; }
+.btn.sm { padding:2px 8px; font-size:12px; }
+.btn[disabled] { opacity:.5; cursor:not-allowed; }
+
+/* ---------- layout ---------- */
+.layout { max-width:1520px; margin:0 auto; padding:4px 16px 64px; display:grid; grid-template-columns:minmax(0,1fr) 410px; gap:18px; align-items:start; }
+.panel { position:sticky; top:10px; max-height:calc(100vh - 20px); overflow:auto; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:14px; }
+.sec-title { display:flex; align-items:center; gap:8px; font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:12px 0 5px; font-weight:650; }
+.sec-title .count { text-transform:none; letter-spacing:0; font-weight:400; }
+.sec-title:first-child { margin-top:2px; }
+.count { font-size:.85em; color:var(--muted); font-weight:400; }
+
+/* ---------- now running ---------- */
+.run-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(270px,1fr)); gap:10px; align-items:start; }
+.run-card { background:var(--panel); border:1px solid var(--line); border-left:4px solid var(--run); border-radius:8px; padding:10px 12px; display:flex; flex-direction:column; gap:6px; min-width:0; }
+.run-card.idle { border-left-color:var(--line); border-style:dashed; color:var(--muted); justify-content:center; }
+.run-card .proj { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); display:flex; justify-content:space-between; gap:6px; }
+.run-card .ttl { font-weight:650; font-size:15px; overflow-wrap:anywhere; }
+.run-card .sub { font-size:12px; color:var(--muted); overflow-wrap:anywhere; }
+.run-card .row { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.bar { height:5px; background:color-mix(in srgb,var(--run) 18%,var(--line)); border-radius:99px; overflow:hidden; }
+.bar > i { display:block; height:100%; background:var(--run); border-radius:99px; transition:width .4s; }
+.tail { margin:0; font:12px/1.4 ui-monospace,"Cascadia Mono",Consolas,monospace; color:var(--muted); background:var(--panel2); border-radius:5px; padding:6px 8px; white-space:pre-wrap; overflow-wrap:anywhere; max-height:7.6em; overflow:auto; }
+.tail .err { color:var(--bad); }
+.panel .tail { max-height:13em; }
+.elapsed { font-variant-numeric:tabular-nums; font-weight:650; }
+.live { display:inline-flex; align-items:center; gap:5px; color:var(--run); font-size:12px; font-weight:650; }
+.live::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--run); animation:blink 1.4s infinite; }
+@keyframes blink { 50% { opacity:.25; } }
+
+/* ---------- needs you ---------- */
+.need-list { border:1px solid color-mix(in srgb,var(--warn) 45%,var(--line)); border-radius:8px; background:var(--panel); overflow:hidden; }
+.need-row { display:grid; grid-template-columns:minmax(130px,auto) minmax(150px,1fr) minmax(0,2fr) auto; gap:4px 12px; align-items:center; padding:6px 10px; border-top:1px solid var(--line); border-left:4px solid var(--warn); }
+.need-row:first-child { border-top:0; }
+.need-row.failed { border-left-color:var(--bad); }
+.need-row .kind { font-size:11px; text-transform:uppercase; letter-spacing:.05em; font-weight:700; color:var(--warn); display:flex; gap:5px; align-items:center; white-space:nowrap; }
+.need-row.failed .kind { color:var(--bad); }
+.need-row .ttl { font-weight:650; min-width:0; overflow-wrap:anywhere; }
+.need-row .ttl small { display:block; font:11px ui-monospace,Consolas,monospace; color:var(--muted); font-weight:400; }
+.need-row .why { font-size:12.5px; color:var(--muted); display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; min-width:0; }
+.need-row .acts { display:flex; gap:6px; margin:0; flex-wrap:wrap; justify-content:flex-end; }
+@media (max-width:760px) { .need-row { grid-template-columns:1fr; } .need-row .acts { justify-content:flex-start; } }
+
+/* ---------- projects & stage maps ---------- */
+.project-card { background:var(--panel); border:1px solid var(--line); border-radius:8px; margin:8px 0; }
+.project-card[open] { border-color:color-mix(in srgb,var(--accent) 55%,var(--line)); }
+.project-row { cursor:pointer; list-style:none; display:flex; align-items:center; gap:10px; padding:7px 12px; flex-wrap:wrap; }
+.project-row::-webkit-details-marker { display:none; }
+.project-row::before { content:''; width:7px; height:7px; border-right:2px solid var(--muted); border-bottom:2px solid var(--muted); transform:rotate(-45deg); transition:transform .15s; }
+.project-card[open] > .project-row::before { transform:rotate(45deg); }
+.project-title { font-weight:700; font-size:15px; }
+.project-root { color:var(--muted); font:12px ui-monospace,Consolas,monospace; overflow-wrap:anywhere; }
+.pstat { display:flex; gap:6px; flex-wrap:wrap; margin-left:auto; }
+.project-body { border-top:1px solid var(--line); padding:4px 12px 10px; }
+.sub-sec { margin-top:6px; }
+.sub-sec > summary { cursor:pointer; list-style:none; display:flex; gap:6px; align-items:center; font-weight:650; border-bottom:1px solid var(--line); padding:4px 0 3px; }
+.sub-sec > summary::-webkit-details-marker { display:none; }
+.sub-sec > summary .count { font-weight:400; }
+.sub-sec > summary::before { content:'+'; color:var(--muted); width:10px; }
+.sub-sec[open] > summary::before { content:'-'; }
+.sub-head { display:flex; gap:6px; align-items:center; font-weight:650; border-bottom:1px solid var(--line); padding:4px 0 3px; }
+
+.task-card { border:1px solid var(--line); border-radius:7px; background:color-mix(in srgb,var(--panel) 80%,var(--bg)); margin:7px 0; padding:7px 10px 6px; }
+.task-card.deferred { border-style:dashed; }
+.task-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.task-meta { opacity:var(--age,1); display:flex; align-items:center; gap:8px; flex-wrap:wrap; min-width:0; }
+.task-name-wrap { position:relative; min-width:0; }
+.task-title { font-weight:650; cursor:help; }
+.task-title:focus-visible { outline:1px solid var(--accent); outline-offset:2px; }
+.summary-card { display:none; position:absolute; z-index:6; top:calc(100% + 5px); left:0; width:min(420px,calc(100vw - 40px)); padding:9px 11px; border:1px solid var(--accent); border-radius:6px; background:var(--panel); box-shadow:var(--shadow); white-space:normal; font-size:13px; font-weight:400; }
+.task-name-wrap:hover .summary-card, .task-title:focus + .summary-card { display:block; }
+.task-id-copy { appearance:none; border:0; background:transparent; color:var(--muted); font:12px ui-monospace,Consolas,monospace; padding:0; cursor:pointer; }
+.task-id-copy:hover { color:var(--accent); text-decoration:underline; }
+.pri { font-size:11px; font-weight:700; padding:0 6px; border-radius:4px; border:1px solid var(--line); color:var(--muted); }
+.pri.P1 { color:var(--bad); border-color:color-mix(in srgb,var(--bad) 50%,var(--line)); }
+.pri.P2 { color:var(--warn); border-color:color-mix(in srgb,var(--warn) 50%,var(--line)); }
+.mini { width:56px; height:4px; background:var(--line); border-radius:99px; overflow:hidden; }
+.mini > i { display:block; height:100%; background:var(--good); }
+.task-acts { margin-left:auto; display:flex; gap:6px; }
+
+.pipeline { display:flex; overflow-x:auto; padding:8px 2px 4px; scrollbar-width:thin; }
+.node { position:relative; width:104px; flex:none; display:flex; flex-direction:column; align-items:center; gap:4px; --c:var(--muted); }
+.node + .node::before { content:''; position:absolute; left:-33px; width:66px; top:18px; border-top:2px dashed var(--line); }
+.node.edge-done::before { border-top:2px solid color-mix(in srgb,var(--good) 70%,var(--line)); }
+.bubble { position:relative; width:38px; height:38px; border-radius:50%; border:2px solid var(--c); background:color-mix(in srgb,var(--c) 14%,var(--panel)); color:var(--c); display:grid; place-items:center; cursor:pointer; padding:0; transition:transform .12s; z-index:1; }
+.bubble:hover { transform:scale(1.08); }
+.bubble .ic { width:18px; height:18px; position:relative; }
+.bubble .qn { font-weight:700; font-size:13px; position:relative; }
+.node.sel .bubble { outline:2px solid var(--accent); outline-offset:3px; }
+.nlabel { font-size:12px; text-align:center; line-height:1.25; width:100%; padding:0 3px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; min-height:30px; overflow-wrap:anywhere; }
+.nsub { font-size:11px; color:var(--muted); min-height:20px; display:flex; align-items:center; gap:4px; }
+.pill { border:1px solid var(--line); background:var(--panel); border-radius:99px; padding:0 9px; font-size:11px; line-height:18px; cursor:pointer; color:var(--text); }
+.pill:hover { border-color:var(--accent); color:var(--accent); }
+.pill.bad { color:var(--bad); border-color:color-mix(in srgb,var(--bad) 55%,var(--line)); }
+
+.st-available .bubble { --c:var(--accent); border-color:color-mix(in srgb,var(--accent) 50%,var(--line)); background:var(--panel); color:var(--muted); }
+.st-available .bubble:hover { color:var(--accent); border-color:var(--accent); }
+.st-queued { --c:var(--queue); } .st-queued .bubble { border-style:dashed; }
+.st-running { --c:var(--run); }
+.st-running .bubble { border-color:transparent; background:conic-gradient(var(--run) calc(var(--p,0) * 1%), color-mix(in srgb,var(--run) 22%,var(--line)) 0); animation:pulse 2s infinite; }
+.st-running .bubble::before { content:''; position:absolute; inset:3px; border-radius:50%; background:var(--panel); }
+.st-blocked { --c:var(--warn); }
+.st-failed { --c:var(--bad); }
+.st-deferred { --c:var(--muted); } .st-deferred .bubble { border-style:dashed; opacity:.65; }
+.st-done { --c:var(--good); } .st-done .bubble { background:var(--good); color:var(--panel); border-color:var(--good); }
+.st-done .nlabel, .st-done .nsub { opacity:.7; }
+.addnode .bubble { border-style:dashed; color:var(--muted); background:transparent; --c:var(--muted); }
+.addnode .bubble:hover { color:var(--accent); border-color:var(--accent); }
+@keyframes pulse { 0% { box-shadow:0 0 0 0 color-mix(in srgb,var(--run) 45%,transparent); } 100% { box-shadow:0 0 0 9px transparent; } }
+@media (prefers-reduced-motion: reduce) { .st-running .bubble, .live::before { animation:none; } .bubble, .bar > i { transition:none; } }
+
+.closed-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; border:1px solid var(--line); border-radius:7px; padding:5px 10px; margin:5px 0; opacity:var(--age,1); }
+.empty { color:var(--muted); padding:8px 2px; }
+
+/* ---------- history ---------- */
+.runs-table { width:100%; border-collapse:collapse; font-size:13px; background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+.runs-table th { text-align:left; font-weight:600; color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.05em; padding:5px 10px; background:var(--panel2); }
+.runs-table td { padding:5px 10px; border-top:1px solid var(--line); vertical-align:top; }
+.runs-table tr.click { cursor:pointer; } .runs-table tr.click:hover td { background:var(--panel2); }
+.out { font-size:11px; font-weight:700; padding:1px 8px; border-radius:99px; border:1px solid currentColor; white-space:nowrap; }
+.out.done { color:var(--good); } .out.failed { color:var(--bad); } .out.blocked { color:var(--warn); } .out.cancelled { color:var(--muted); }
+
+/* ---------- side panel ---------- */
+.p-head { display:flex; align-items:flex-start; gap:8px; }
+.p-head .crumbs { font-size:12px; color:var(--muted); display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+.panel h2 { font-size:1.15em; margin:6px 0 6px; overflow-wrap:anywhere; }
+.badges { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-bottom:8px; }
+.badge { font-size:12px; font-weight:650; padding:2px 10px; border-radius:99px; border:1px solid var(--c,var(--line)); color:var(--c,var(--text)); background:color-mix(in srgb,var(--c,var(--panel)) 12%,var(--panel)); }
+.chip { font-size:11px; padding:1px 8px; border-radius:99px; border:1px solid var(--line); color:var(--muted); white-space:nowrap; display:inline-flex; gap:5px; align-items:center; }
+.chip .dot { width:7px; height:7px; border-radius:50%; background:var(--muted); }
+.chip.claude .dot { background:#d9835b; } .chip.codex .dot { background:#4fa88f; }
+.callout { border:1px solid var(--c); background:color-mix(in srgb,var(--c) 10%,var(--panel)); border-radius:7px; padding:9px 11px; margin:8px 0; --c:var(--warn); }
+.callout.bad { --c:var(--bad); } .callout.info { --c:var(--accent); } .callout.good { --c:var(--good); }
+.callout strong { display:block; margin-bottom:2px; }
+.callout p { font-size:13px; overflow-wrap:anywhere; }
+.acts { display:flex; gap:6px; flex-wrap:wrap; margin:10px 0; }
+.card { background:var(--panel2); border:1px solid var(--line); border-radius:7px; padding:8px 10px; }
+.kv { display:grid; grid-template-columns:90px 1fr; gap:4px 8px; align-items:center; font-size:13px; }
+.kv dt { color:var(--muted); } .kv dd { margin:0; display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+.seg { display:inline-flex; border:1px solid var(--line); border-radius:6px; overflow:hidden; }
+.seg button { border:0; background:var(--panel); padding:3px 11px; cursor:pointer; font-size:13px; }
+.seg button + button { border-left:1px solid var(--line); }
+.seg button[aria-pressed=true] { background:var(--accent); color:var(--on-accent); font-weight:600; }
+.seg button[disabled] { cursor:not-allowed; opacity:.6; }
+select, textarea, input.f { border:1px solid var(--line); background:var(--panel); border-radius:6px; padding:4px 8px; width:100%; }
+select { width:auto; }
+textarea { resize:vertical; min-height:84px; }
+select:focus-visible, textarea:focus-visible, input.f:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+.field { display:flex; flex-direction:column; gap:3px; margin:9px 0; font-size:13px; }
+.field label { font-weight:600; }
+.hint { font-size:12px; color:var(--muted); }
+.err-msg { color:var(--bad); font-size:12px; min-height:16px; }
+.cmdbox { border:1px solid var(--line); border-radius:7px; background:var(--panel2); margin:8px 0; overflow:hidden; }
+.cmdrow { display:flex; align-items:center; gap:8px; padding:6px 8px; }
+.cmdrow + .cmdrow { border-top:1px solid var(--line); }
+.cmdrow .n { color:var(--muted); font-size:11px; width:14px; }
+.cmdrow code { flex:1; font:12.5px ui-monospace,Consolas,monospace; overflow-wrap:anywhere; }
+.cmdcap { font-size:12px; color:var(--muted); padding:6px 8px; border-top:1px solid var(--line); }
+.secbody { font-size:13px; white-space:pre-wrap; overflow-wrap:anywhere; }
+.qrow { display:flex; align-items:center; gap:8px; padding:4px 0; border-top:1px solid var(--line); font-size:13px; }
+.qrow:first-of-type { border-top:0; }
+.qrow .t { flex:1; min-width:0; overflow-wrap:anywhere; }
+.mini-run { display:flex; gap:8px; align-items:baseline; font-size:12.5px; padding:3px 0; border-top:1px solid var(--line); }
+.mini-run:first-of-type { border-top:0; }
+.mini-run .m { color:var(--muted); font-size:12px; }
+
+/* ---------- toasts, demo bar ---------- */
+#toasts { position:fixed; left:16px; bottom:48px; display:flex; flex-direction:column; gap:6px; z-index:50; max-width:min(420px,calc(100vw - 32px)); }
+.toast { background:var(--panel); border:1px solid var(--line); border-left:4px solid var(--accent); border-radius:6px; padding:7px 11px; box-shadow:var(--shadow); font-size:13px; }
+.toast.warn { border-left-color:var(--warn); } .toast.bad { border-left-color:var(--bad); } .toast.good { border-left-color:var(--good); }
+.demo { position:fixed; left:0; right:0; bottom:0; background:var(--panel); border-top:1px solid var(--line); padding:5px 16px; display:flex; gap:10px; align-items:center; font-size:12px; color:var(--muted); z-index:40; flex-wrap:wrap; }
+.demo select { padding:1px 6px; font-size:12px; }
+
+.scrim { display:none; }
+@media (max-width:1000px) {
+  .layout { grid-template-columns:1fr; }
+  .panel { position:fixed; top:0; right:0; bottom:0; width:min(430px,100vw); max-height:none; border-radius:0; z-index:30; transform:translateX(104%); transition:transform .18s; box-shadow:var(--shadow); }
+  .panel.open { transform:none; }
+  .scrim.on { display:block; position:fixed; inset:0; background:#0006; z-index:25; }
+}
+@media (max-width:640px) { .search { width:100%; } .task-acts { margin-left:0; } }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="top-row">
+    <h1>Tasks</h1>
+    <span class="proto">Prototype A -- stage map</span>
+    <span class="muted" style="font-size:12px">Mock data, no backend. Click around: queue, cancel, retry, resolve.</span>
+    <span class="grow"></span>
+    <button class="btn" id="pauseBtn" data-action="pause" aria-pressed="false"></button>
+  </div>
+  <div class="top-row">
+    <div class="chips" id="chips" role="group" aria-label="Project filter"></div>
+    <input class="search" id="search" type="search" placeholder="Filter tasks and items" aria-label="Filter tasks and items">
+    <span class="grow"></span>
+    <div class="status" id="status" role="status" aria-live="polite"></div>
+    <button class="btn primary" data-action="newtask"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New task</button>
+  </div>
+</header>
+
+<div class="layout">
+  <main id="main" aria-label="Task pipelines"></main>
+  <aside class="panel" id="panel" aria-label="Selection details"></aside>
+</div>
+<div class="scrim" id="scrim" data-action="closepanel"></div>
+<div id="toasts" aria-live="polite"></div>
+<div class="demo">
+  <span>Prototype controls:</span>
+  <label>Demo speed <select id="speed" aria-label="Demo speed"><option value="1">1x</option><option value="4">4x</option><option value="12">12x</option></select></label>
+  <button class="btn sm" data-action="reset">Reset mock data</button>
+  <span class="grow"></span>
+  <span>One running job per project; projects run in parallel. Blocked work never guesses.</span>
+</div>
+
+<script>
+(function () {
+'use strict';
+
+/* ================= helpers ================= */
+var SVG = {
+  check:'<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  x:'<path d="M6 6l12 12M18 6L6 18"/>',
+  play:'<path class="f" d="M8 5.5v13l11-6.5z"/>',
+  pause:'<path d="M9 6v12M15 6v12"/>',
+  alert:'<path d="M12 6.5v7M12 17.5h.01"/>',
+  plus:'<path d="M12 5v14M5 12h14"/>',
+  clock:'<circle cx="12" cy="12" r="8"/><path d="M12 8v4.5l3 1.8"/>',
+  copy:'<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/>',
+  term:'<path d="M4 6l6 6-6 6M12 19h8"/>',
+  retry:'<path d="M20 12a8 8 0 1 1-2.4-5.7M20 4v5h-5"/>',
+  stop:'<rect x="7" y="7" width="10" height="10" rx="1.5"/>',
+  close:'<path d="M6 6l12 12M18 6L6 18"/>',
+  eye:'<path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="2.5"/>'
+};
+function ic(n, cls) { return '<svg class="ic ' + (cls || '') + '" viewBox="0 0 24 24" aria-hidden="true">' + SVG[n] + '</svg>'; }
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]; }); }
+function $(id) { return document.getElementById(id); }
+function pad(n) { return (n < 10 ? '0' : '') + n; }
+function fmtDur(ms) {
+  var s = Math.floor(ms / 1000), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  s = s % 60;
+  return h ? h + ':' + pad(m) + ':' + pad(s) : m + ':' + pad(s);
+}
+function ago(ts) {
+  var m = Math.floor((Date.now() - ts) / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return m + ' min ago';
+  var h = Math.floor(m / 60);
+  if (h < 48) return h + 'h ago';
+  return Math.floor(h / 24) + 'd ago';
+}
+function slug(s) { return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48); }
+/* Same age-dimming rule as the static review page. */
+var FRESH_H = 4, STALE_H = 120, MIN_B = 0.33;
+function brightness(ts) {
+  var hrs = (Date.now() - ts) / 3600000;
+  if (hrs <= FRESH_H) return 1;
+  if (hrs >= STALE_H) return MIN_B;
+  return 1 - ((hrs - FRESH_H) / (STALE_H - FRESH_H)) * (1 - MIN_B);
+}
+var EFFORTS = { claude: ['low', 'medium', 'high', 'xhigh', 'max'], codex: ['low', 'medium', 'high', 'xhigh'] };
+var STATE_LABEL = { available:'Available', queued:'Queued', running:'Running', blocked:'Needs you', failed:'Failed', deferred:'Deferred', done:'Done this session' };
+var H = 3600000;
+
+/* ================= seed data ================= */
+var GENERIC = [
+  'Read the plan.md section for this item', 'Outlined the approach', 'Editing files',
+  'Running targeted checks', 'Fixing check findings', 'Re-running checks - green', 'Receipt written to log.md'
+];
+function heroScript(name, a, b) {
+  var s = ['Read the plan.md section for ' + name, 'Loaded prompt template v3 (hero-prompts/pack3.md)', 'Checked reference frames ' + a + '-' + b + ' exist'];
+  for (var f = a; f <= b; f++) s.push('Rendering frame ' + f + '/' + b + ' - ok');
+  s.push('Contact check on frames ' + a + '-' + b, 'Fixing 2 soft-focus frames', 'Receipt written to log.md');
+  return s;
+}
+var UX_SCRIPT = [
+  'Read the plan.md section for ux-prototypes', 'Read research/production-queue.md', 'Read review_html.py for the visual language',
+  'Drafting the stage-map layout', 'Wiring queue / cancel / retry interactions', 'Checking light and dark themes',
+  'Checking laptop width', 'Tightening the blocked-state copy', 'Writing the result summary', 'Receipt written to log.md'
+];
+var AUDIT_SCRIPT = [
+  'Read the plan.md section for audit-model-defaults', 'Listing shipped model declarations', 'Comparing Claude and Codex entries',
+  'Found a Codex-only default - preparing the fix', 'Need to edit ~/.claude/settings.json (outside the project)',
+  'Applied the fix and re-ran the declaration check', 'Receipt written to log.md'
+];
+function mk(id, title, state, o) {
+  o = o || {};
+  return {
+    id: id, title: title, state: state, pri: o.pri || null, hasSection: o.hasSection !== false, sec: o.sec || '',
+    model: o.model || 'claude', effort: o.effort || 'medium', block: o.block || null, err: o.err || null,
+    fate: o.fate || null, script: o.script || GENERIC.slice(), period: o.period || 2.5,
+    attempts: o.attempts || 0, log: o.log || [], job: null, qseq: 0
+  };
+}
+function makeSeed() {
+  var now = Date.now();
+  var projects = [
+    { id:'afterplay', name:'afterplay', root:'D:\\dev\\afterplay' },
+    { id:'plugins-kit', name:'plugins-kit', root:'D:\\dev\\plugins-kit' },
+    { id:'claude-settings', name:'claude-settings', root:'D:\\dev\\claude-settings' }
+  ];
+  var tasks = [];
+  var hero2 = mk('hero-batch-02', 'Generate hero batch 2 (frames 9-16)', 'running', { model:'codex', effort:'high', script:heroScript('hero-batch-02', 9, 16), period:6, attempts:1, sec:'Render frames 9-16 with prompt template v3. Output to media/hero/pack3/. Stop at the contact sheet; do not publish.' });
+  hero2.job = { i:8, elapsed:7 * 60000 + 12000, acc:0, period:6 }; hero2.log = hero2.script.slice(0, 8);
+  var ux = mk('ux-prototypes', 'Build dashboard UX prototypes', 'running', { model:'claude', effort:'xhigh', script:UX_SCRIPT, period:7, attempts:1, sec:'Three static HTML prototypes of the task dashboard, mock data, light and dark, no network. Variant A is the stage map.' });
+  ux.job = { i:4, elapsed:3 * 60000 + 41000, acc:0, period:7 }; ux.log = ux.script.slice(0, 4);
+  var failed = mk('differential-suite-refresh', 'Refresh the llm-kit differential suite', 'failed', { model:'codex', effort:'high', attempts:1, sec:'Re-run scripts/llm_kit_repoint.py sync, then the old-versus-final differential over tests/llm-kit/.',
+    err:{ title:'The run failed', detail:'pytest exited 1 - 3 failures in tests/llm-kit/test_differential.py. The mirror under tmp/ was regenerated before the failure.' },
+    log:['Read the plan.md section for differential-suite-refresh', 'Ran llm_kit_repoint.py sync - ok', 'Running tests/llm-kit/test_differential.py', 'ERROR test_differential.py::test_job_select_parity - AssertionError', 'ERROR test_differential.py::test_cost_ledger_roundtrip - KeyError: schema', 'ERROR test_differential.py::test_halt_narrowing - TimeoutError', '3 failed, 41 passed in 212.4s', 'Run stopped: pytest exited 1'] });
+
+  tasks.push({ stub:'moment-hero-regen', project:'afterplay', title:'Regenerate hero frames for Moment pack 3', pri:'P1', status:'open', last:now - 0.1 * H,
+    summary:'Regenerate the hero frames for Moment pack 3 with the v3 prompt template, review them on a contact sheet, then hand off to the slice build.',
+    items:[
+      mk('audit-hero-prompts', 'Audit the hero prompt template', 'done'),
+      mk('hero-batch-01', 'Generate hero batch 1 (frames 1-8)', 'done', { model:'codex', effort:'high' }),
+      hero2,
+      mk('hero-batch-03', 'Generate hero batch 3 (frames 17-24)', 'queued', { model:'codex', effort:'high', script:heroScript('hero-batch-03', 17, 24), sec:'Render frames 17-24 with prompt template v3. Output to media/hero/pack3/.' }),
+      mk('hero-review-sheet', 'Build the hero review contact sheet', 'available', { effort:'medium', sec:'Assemble all 24 frames into media/hero/pack3/contact.html with keep / fix / cut controls.' })
+    ] });
+  tasks.push({ stub:'living-slice-timing', project:'afterplay', title:'Tune living-slice loop timing', pri:'P2', status:'open', last:now - 26 * H,
+    summary:'Measure and choose a loop length for living slices, then apply it across all slices.',
+    items:[
+      mk('capture-baseline', 'Capture baseline loop timings', 'available', { effort:'low', sec:'Record current loop length and seam position for every living slice into research/baseline.csv.' }),
+      mk('loop-length-decision', 'Pick the living-slice loop length', 'blocked', { effort:'high', sec:'Choose between a 4s and a 6s loop using the playtest clips.',
+        block:{ kind:'input', title:'Waiting for your decision', detail:'The agent measured both loops against the playtest clips and cannot choose: 4s feels snappier, 6s hides the seam. This is a product call.', ask:'Answer 4s or 6s in Claude Code, and record it in the item\'s plan.md section.' } }),
+      mk('apply-timing', 'Apply the chosen loop length to all slices', 'available', { effort:'medium', sec:'Update loop_seconds in every slice spec and re-run the slice check.' })
+    ] });
+  tasks.push({ stub:'release-notes-oct', project:'afterplay', title:'Draft the October release notes', pri:'P3', status:'deferred', last:now - 150 * H,
+    summary:'Deferred until the pack 3 review is finished: collect merged Moments and draft the notes.',
+    items:[
+      mk('collect-merged-moments', 'Collect merged Moments since 1 Oct', 'deferred', { sec:'List Moments merged to main since 1 October with their hero frames.' }),
+      mk('draft-notes', 'Draft the release notes', 'deferred', { sec:'Draft docs/release-notes/2026-10.md from the collected list.' })
+    ] });
+
+  tasks.push({ stub:'task-kit-extraction', project:'plugins-kit', title:'Extract task-kit from awesome-kit', pri:'P1', status:'open', last:now - 0.3 * H,
+    summary:'Move the task skill into its own plugin, then add a local dashboard that queues task items as autonomous jobs.',
+    items:[
+      mk('research-production-queue', 'Study the production queue and Beta pipeline', 'done', { effort:'xhigh' }),
+      ux,
+      mk('launcher-spec', 'Specify the task-kit launcher', 'queued', { effort:'high', sec:'Fixed port, liveness probe, state dir, Windows process handling, refuse stop while jobs run.' }),
+      mk('job-translation-spec', 'Specify item-to-job translation', 'available', { effort:'high', sec:'Define how an item and its plan.md section become a job file; list every failure that blocks an item.' }),
+      mk('publish-checklist', 'Write the publish checklist', 'blocked', { hasSection:false,
+        block:{ kind:'translation', title:'Could not translate this item into a job', detail:'Item has no plan.md section. Translation looked for "## publish-checklist" and found none; the item exists only as a title in the task_items block.', ask:'Add the section in Claude Code (what to check, what counts as done), then re-check.' } })
+    ] });
+  tasks.push({ stub:'llm-kit-cutover', project:'plugins-kit', title:'Cut callers over to llm-kit', pri:'P2', status:'open', last:now - 5 * H,
+    summary:'Re-point job-kit and content-pipeline-kit callers at llm_kit and keep the old-versus-final differential green.',
+    items:[
+      mk('repoint-job-kit-callers', 'Re-point job-kit callers', 'available', { effort:'high', sec:'Replace job_kit imports with llm_kit.jobs equivalents under the deprecation window.' }),
+      failed,
+      mk('freeze-legacy-plugins', 'Freeze the legacy plugins', 'deferred', { sec:'Mark the three legacy plugins frozen after the cutover publishes.' })
+    ] });
+  tasks.push({ stub:'claudx-enablement-docs', project:'plugins-kit', title:'Document the claudx enablement trap', pri:'P3', status:'closed', last:now - 70 * H, closedLabel:'closed 2026-10-14',
+    summary:'Documented the false-pass trap when a plugin is not enabled for the project claudx is launched from.', items:[] });
+
+  tasks.push({ stub:'fleet-model-defaults', project:'claude-settings', title:'Align fleet model defaults', pri:'P2', status:'open', last:now - 2 * H,
+    summary:'Make sure shipped model defaults let a user with only Claude or only Codex usage still perform every action.',
+    items:[
+      mk('audit-model-defaults', 'Audit shipped model defaults against both pools', 'available', { effort:'high', script:AUDIT_SCRIPT, sec:'List every shipped model declaration; each must carry a Claude and a Codex entry.',
+        fate:{ kind:'block', at:5, lines:['Stopped: permission needed outside the project folder'], block:{ kind:'input', title:'Needs permission outside the project', detail:'The agent needs to edit ~/.claude/settings.json, which is outside D:\\dev\\claude-settings.', ask:'Grant it from an interactive session so you can see the diff, then re-check.' }, summary:'Needs permission outside the project' } }),
+      mk('rotate-codex-profile', 'Rotate the Codex profile config', 'blocked', { effort:'medium', sec:'Replace the Codex profile with the new default and verify codex exec still starts.',
+        block:{ kind:'input', title:'Needs permission outside the project', detail:'The agent needs to edit C:\\Users\\truff\\.codex\\config.toml, which is outside D:\\dev\\claude-settings. Unattended jobs cannot approve that.', ask:'Run it in Claude Code and approve the edit, or widen the allowed directories.' } }),
+      mk('document-fleet-defaults', 'Document fleet defaults in USER-PREFERENCES', 'available', { effort:'medium', sec:'Add the default model line and the fallback rule to USER-PREFERENCES.md.' })
+    ] });
+  tasks.push({ stub:'windows-launch-scripts', project:'claude-settings', title:'One-command launch scripts for Windows', pri:'P2', status:'open', last:now - 60 * H,
+    summary:'Every user-run step ships as one script with self-elevation and a clipboard-ready launch command.',
+    items:[
+      mk('inventory-launchers', 'Inventory existing launcher scripts', 'done', { effort:'low' }),
+      mk('unify-uac-relaunch', 'Unify the UAC self-elevation relaunch', 'available', { effort:'medium', sec:'One helper for relaunching elevated, used by every script that needs admin.' }),
+      mk('clipboard-handoff', 'Add clipboard handoff to launchers', 'available', { model:'codex', effort:'medium', sec:'Copy the launch command to the clipboard and print it.' })
+    ] });
+
+  var seq = 0;
+  tasks.forEach(function (t) { t.items.forEach(function (it) { if (it.state === 'queued') it.qseq = ++seq; }); });
+  var runs = [
+    { at:now - 0.8 * H, key:'moment-hero-regen/hero-batch-01', title:'Generate hero batch 1 (frames 1-8)', project:'afterplay', model:'codex', effort:'high', outcome:'done', ms:668000, summary:'Frames 1-8 rendered; contact check passed' },
+    { at:now - 1.6 * H, key:'moment-hero-regen/audit-hero-prompts', title:'Audit the hero prompt template', project:'afterplay', model:'claude', effort:'medium', outcome:'done', ms:260000, summary:'Template v3 passes all 6 prompt checks' },
+    { at:now - 2.2 * H, key:'task-kit-extraction/research-production-queue', title:'Study the production queue and Beta pipeline', project:'plugins-kit', model:'claude', effort:'xhigh', outcome:'done', ms:1361000, summary:'Report written to research/production-queue.md' },
+    { at:now - 3 * H, key:'fleet-model-defaults/rotate-codex-profile', title:'Rotate the Codex profile config', project:'claude-settings', model:'claude', effort:'medium', outcome:'blocked', ms:72000, summary:'Needs permission outside the project' },
+    { at:now - 5 * H, key:'llm-kit-cutover/differential-suite-refresh', title:'Refresh the llm-kit differential suite', project:'plugins-kit', model:'codex', effort:'high', outcome:'failed', ms:543000, summary:'pytest exited 1 - 3 failures in test_differential.py' },
+    { at:now - 20 * H, key:'windows-launch-scripts/inventory-launchers', title:'Inventory existing launcher scripts', project:'claude-settings', model:'claude', effort:'low', outcome:'done', ms:175000, summary:'14 launchers inventoried' },
+    { at:now - 25 * H, key:'living-slice-timing/loop-length-decision', title:'Pick the living-slice loop length', project:'afterplay', model:'claude', effort:'high', outcome:'blocked', ms:362000, summary:'Needs a product decision: 4s vs 6s loop' }
+  ];
+  return { projects:projects, tasks:tasks, runs:runs, seq:seq, paused:false, speed:1,
+    ui:{ sel:null, mode:'overview', addTask:null, filter:'all', needs:false, q:'', open:{}, resolve:{}, panelOpen:false } };
+}
+var S = makeSeed();
+
+/* ================= lookups ================= */
+function key(t, it) { return t.stub + '/' + it.id; }
+function find(k) {
+  var p = k.split('/');
+  for (var i = 0; i < S.tasks.length; i++) {
+    if (S.tasks[i].stub !== p[0]) continue;
+    for (var j = 0; j < S.tasks[i].items.length; j++) if (S.tasks[i].items[j].id === p[1]) return { t:S.tasks[i], it:S.tasks[i].items[j] };
+  }
+  return null;
+}
+function proj(id) { return S.projects.filter(function (p) { return p.id === id; })[0]; }
+function runningIn(pid) {
+  for (var i = 0; i < S.tasks.length; i++) {
+    if (S.tasks[i].project !== pid) continue;
+    for (var j = 0; j < S.tasks[i].items.length; j++) if (S.tasks[i].items[j].state === 'running') return { t:S.tasks[i], it:S.tasks[i].items[j] };
+  }
+  return null;
+}
+function queueIn(pid) {
+  var out = [];
+  S.tasks.forEach(function (t) { if (t.project === pid) t.items.forEach(function (it) { if (it.state === 'queued') out.push({ t:t, it:it }); }); });
+  return out.sort(function (a, b) { return a.it.qseq - b.it.qseq; });
+}
+function qpos(t, it) {
+  var q = queueIn(t.project);
+  for (var i = 0; i < q.length; i++) if (q[i].it === it) return i + 1;
+  return 0;
+}
+function allItems() {
+  var out = [];
+  S.tasks.forEach(function (t) { t.items.forEach(function (it) { out.push({ t:t, it:it }); }); });
+  return out;
+}
+function touch(t) { t.last = Date.now(); }
+function tailText(it, n) { return it.log.slice(-n).map(function (l) { return '> ' + l; }).join('\n'); }
+function pct(it) { return it.job ? Math.min(100, Math.round((it.job.i / it.script.length) * 100)) : 0; }
+
+/* ================= worker simulation ================= */
+function toast(msg, kind) {
+  var el = document.createElement('div');
+  el.className = 'toast ' + (kind || '');
+  el.textContent = msg;
+  $('toasts').appendChild(el);
+  setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 4200);
+}
+function endRun(t, it, outcome, summary) {
+  S.runs.unshift({ at:Date.now(), key:key(t, it), title:it.title, project:t.project, model:it.model, effort:it.effort, outcome:outcome, ms:it.job ? it.job.elapsed : 0, summary:summary });
+  S.runs = S.runs.slice(0, 40);
+  touch(t);
+}
+function setBlocked(it, block) { it.state = 'blocked'; it.block = block; }
+function startJob(t, it) {
+  it.state = 'running'; it.attempts += 1; it.err = null; it.block = null;
+  it.job = { i:0, elapsed:0, acc:0, period:it.period };
+  it.log = ['Translated the plan.md section into a job (' + it.model + ', ' + it.effort + ')'];
+  touch(t);
+}
+function startNext(pid) {
+  if (S.paused || runningIn(pid)) return;
+  var q = queueIn(pid);
+  if (q.length) { startJob(q[0].t, q[0].it); toast('Started: ' + q[0].it.title, ''); }
+}
+/* Translation preflight: runs at Queue time so the failure is immediate and visible. */
+function translate(t, it) {
+  if (!it.hasSection) {
+    setBlocked(it, { kind:'translation', title:'Could not translate this item into a job', detail:'Item has no plan.md section. Translation looked for "## ' + it.id + '" and found none; the item exists only as a title in the task_items block.', ask:'Add the section in Claude Code (what to do, what counts as done), then re-check.' });
+    touch(t);
+    toast('Could not queue "' + it.title + '": it has no plan.md section.', 'warn');
+    return false;
+  }
+  return true;
+}
+function queueItem(t, it, quiet) {
+  if (it.state !== 'available') return;
+  if (!translate(t, it)) return;
+  it.state = 'queued'; it.qseq = ++S.seq; touch(t);
+  var busy = runningIn(t.project);
+  if (!quiet) toast('Queued "' + it.title + '"' + (busy && !S.paused ? ' - runs after the current job in ' + t.project : ''), 'good');
+  startNext(t.project);
+}
+function advance(t, it) {
+  var j = it.job, line = it.script[j.i];
+  it.log.push(line); j.i++;
+  var f = it.fate;
+  if (f && it.attempts === 1 && j.i === f.at) {
+    if (f.kind === 'block') {
+      f.lines.forEach(function (l) { it.log.push(l); });
+      setBlocked(it, f.block); endRun(t, it, 'blocked', f.summary);
+      toast('"' + it.title + '" needs you: ' + f.block.title, 'warn');
+      return true;
+    }
+  }
+  if (j.i >= it.script.length) {
+    it.state = 'done'; endRun(t, it, 'done', it.log[it.log.length - 1]);
+    toast('Finished "' + it.title + '" in ' + fmtDur(j.elapsed), 'good');
+    return true;
+  }
+  return false;
+}
+function tick() {
+  var dt = 500 * S.speed, changed = false;
+  S.projects.forEach(function (p) {
+    var r = runningIn(p.id);
+    if (!r) { var before = queueIn(p.id).length; startNext(p.id); if (before && runningIn(p.id)) changed = true; return; }
+    var j = r.it.job;
+    j.elapsed += dt; j.acc += dt;
+    while (j.acc >= j.period * 1000 && r.it.state === 'running') {
+      j.acc -= j.period * 1000;
+      if (advance(r.t, r.it)) { changed = true; startNext(p.id); break; }
+      changed = changed || false;
+    }
+  });
+  if (changed) render(); else tickDom();
+}
+function tickDom() {
+  document.querySelectorAll('[data-elapsed]').forEach(function (el) {
+    var f = find(el.getAttribute('data-elapsed'));
+    if (f && f.it.state === 'running') el.textContent = fmtDur(f.it.job.elapsed);
+  });
+  document.querySelectorAll('[data-prog]').forEach(function (el) {
+    var f = find(el.getAttribute('data-prog'));
+    if (f && f.it.state === 'running') el.style.width = pct(f.it) + '%';
+  });
+  document.querySelectorAll('[data-ring]').forEach(function (el) {
+    var f = find(el.getAttribute('data-ring'));
+    if (f && f.it.state === 'running') el.style.setProperty('--p', Math.max(6, pct(f.it)));
+  });
+  document.querySelectorAll('[data-log]').forEach(function (el) {
+    var f = find(el.getAttribute('data-log'));
+    if (!f || f.it.state !== 'running') return;
+    var txt = tailText(f.it, +el.getAttribute('data-n'));
+    if (el.textContent !== txt) { el.textContent = txt; el.scrollTop = el.scrollHeight; }
+  });
+  document.querySelectorAll('[data-step]').forEach(function (el) {
+    var f = find(el.getAttribute('data-step'));
+    if (f && f.it.state === 'running') el.textContent = 'step ' + f.it.job.i + ' of ' + f.it.script.length;
+  });
+}
+
+/* ================= actions ================= */
+function resolveCmds(t) {
+  var p = proj(t.project);
+  return ['cd ' + p.root + ' && claude', '/task work dev/tasks/' + t.stub];
+}
+var ACTIONS = {
+  select: function (a) { S.ui.sel = a.key; S.ui.mode = 'item'; S.ui.panelOpen = true; render({ panel:true }); },
+  closepanel: function () { S.ui.sel = null; S.ui.mode = 'overview'; S.ui.panelOpen = false; render({ panel:true }); },
+  queue: function (a) { var f = find(a.key); queueItem(f.t, f.it); render(); },
+  qall: function (a) {
+    var t = S.tasks.filter(function (x) { return x.stub === a.key; })[0], n = 0;
+    t.items.forEach(function (it) { if (it.state === 'available') { queueItem(t, it, true); n++; } });
+    toast(n + ' item(s) from "' + t.title + '" sent to the queue.', 'good'); render();
+  },
+  unqueue: function (a) { var f = find(a.key); f.it.state = 'available'; toast('Removed from the queue.', ''); render(); },
+  runnext: function (a) {
+    var f = find(a.key), q = queueIn(f.t.project);
+    f.it.qseq = (q.length ? q[0].it.qseq : S.seq) - 1; toast('Moved to the front of the ' + f.t.project + ' queue.', ''); render();
+  },
+  cancel: function (a) {
+    var f = find(a.key);
+    f.it.log.push('Cancelled by you');
+    endRun(f.t, f.it, 'cancelled', 'Cancelled after ' + fmtDur(f.it.job.elapsed));
+    f.it.state = 'available'; f.it.job = null;
+    toast('Cancelled "' + f.it.title + '". It is available again.', 'warn');
+    startNext(f.t.project); render();
+  },
+  retry: function (a) {
+    var f = find(a.key);
+    f.it.state = 'queued'; f.it.qseq = ++S.seq; f.it.err = null; touch(f.t);
+    toast('Retry queued for "' + f.it.title + '" (attempt ' + (f.it.attempts + 1) + ').', 'good');
+    startNext(f.t.project); render();
+  },
+  defer: function (a) { var f = find(a.key); f.it.state = 'deferred'; touch(f.t); toast('Deferred "' + f.it.title + '".', ''); render(); },
+  undefer: function (a) { var f = find(a.key); f.it.state = 'available'; touch(f.t); render(); },
+  resolve: function (a) { S.ui.resolve[a.key] = !S.ui.resolve[a.key]; render({ panel:true }); },
+  resolvesel: function (a) { S.ui.resolve[a.key] = true; ACTIONS.select(a); },
+  recheck: function (a) {
+    var f = find(a.key), b = f.it.block;
+    if (b && b.kind === 'translation') f.it.hasSection = true;
+    f.it.state = 'available'; f.it.block = null; touch(f.t);
+    toast('Re-read plan.md: "' + f.it.title + '" is available again.', 'good'); render({ panel:true });
+  },
+  model: function (a) {
+    var f = find(S.ui.sel); f.it.model = a.v;
+    if (EFFORTS[a.v].indexOf(f.it.effort) < 0) f.it.effort = 'high';
+    render({ panel:true });
+  },
+  copy: function (a, el) {
+    var txt = el.getAttribute('data-text'), orig = el.innerHTML;
+    function done(ok) { el.innerHTML = ok ? 'Copied' : 'Copy failed'; setTimeout(function () { el.innerHTML = orig; }, 1400); }
+    function legacy() {
+      var ta = document.createElement('textarea'); ta.value = txt; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;opacity:0';
+      document.body.appendChild(ta); ta.select(); var ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+      ta.remove(); done(ok);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(function () { done(true); }, legacy);
+    else legacy();
+  },
+  filter: function (a) { S.ui.filter = a.v; render(); },
+  needsfilter: function () { S.ui.needs = !S.ui.needs; render(); },
+  pause: function () { S.paused = !S.paused; toast(S.paused ? 'Worker paused: running jobs finish, nothing new starts.' : 'Worker resumed.', ''); if (!S.paused) S.projects.forEach(function (p) { startNext(p.id); }); render(); },
+  reset: function () { var sp = S.speed; S = makeSeed(); S.speed = sp; $('search').value = ''; render({ panel:true }); toast('Mock data reset.', ''); },
+  newtask: function () { S.ui.sel = null; S.ui.mode = 'newtask'; S.ui.panelOpen = true; render({ panel:true }); },
+  additem: function (a) { S.ui.sel = null; S.ui.mode = 'add'; S.ui.addTask = a.key; S.ui.panelOpen = true; render({ panel:true }); },
+  submitadd: function (a) {
+    var t = S.tasks.filter(function (x) { return x.stub === S.ui.addTask; })[0];
+    var title = $('f-title').value.trim(), err = $('f-err');
+    if (!title) { err.textContent = 'Give the item a title.'; $('f-title').focus(); return; }
+    var id = slug(title) || 'item', base = id, n = 2;
+    while (t.items.some(function (x) { return x.id === id; })) id = base + '-' + (n++);
+    var det = $('f-det').value.trim();
+    var it = mk(id, title, 'available', { hasSection:det.length > 0, sec:det, effort:'medium' });
+    it.pri = $('f-pri').value;
+    t.items.push(it); touch(t);
+    toast('Added "' + title + '"' + (det ? '.' : ' without a plan.md section - it will block if queued.'), det ? 'good' : 'warn');
+    S.ui.sel = key(t, it); S.ui.mode = 'item';
+    if (a.q === '1') queueItem(t, it);
+    render({ panel:true });
+  },
+  submitnew: function () {
+    var title = $('f-title').value.trim(), err = $('f-err');
+    if (!title) { err.textContent = 'Give the task a title.'; $('f-title').focus(); return; }
+    var stub = slug($('f-stub').value) || slug(title);
+    if (S.tasks.some(function (x) { return x.stub === stub; })) { err.textContent = 'A task named "' + stub + '" already exists.'; return; }
+    var itTitle = $('f-item').value.trim() || 'First step', det = $('f-det').value.trim();
+    var it = mk(slug(itTitle) || 'first-step', itTitle, 'available', { hasSection:det.length > 0, sec:det });
+    var t = { stub:stub, project:$('f-proj').value, title:title, pri:$('f-pri').value, status:'open', last:Date.now(), summary:'New task created in the dashboard.', items:[it] };
+    S.tasks.unshift(t);
+    S.ui.filter = 'all'; S.ui.sel = key(t, it); S.ui.mode = 'item';
+    toast('Created "' + title + '" in ' + t.project + '.', 'good'); render({ panel:true });
+  },
+  cancelform: function () { S.ui.mode = 'overview'; S.ui.panelOpen = false; render({ panel:true }); }
+};
+
+document.addEventListener('click', function (e) {
+  var el = e.target.closest('[data-action]');
+  if (!el || el.disabled) return;
+  var name = el.getAttribute('data-action');
+  if (!ACTIONS[name]) return;
+  e.stopPropagation();
+  ACTIONS[name]({ key:el.getAttribute('data-key'), v:el.getAttribute('data-v'), q:el.getAttribute('data-q') }, el);
+});
+document.addEventListener('change', function (e) {
+  if (e.target.id === 'speed') { S.speed = +e.target.value; return; }
+  if (e.target.getAttribute('data-field') === 'effort') { var f = find(S.ui.sel); f.it.effort = e.target.value; render({ panel:true }); }
+});
+document.addEventListener('toggle', function (e) {
+  var k = e.target.getAttribute && e.target.getAttribute('data-open');
+  if (k) S.ui.open[k] = e.target.open;
+}, true);
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape' && (S.ui.sel || S.ui.mode !== 'overview')) ACTIONS.closepanel();
+});
+$('search').addEventListener('input', function (e) { S.ui.q = e.target.value.toLowerCase(); render(); });
+
+/* ================= rendering ================= */
+function visibleTask(t) {
+  if (S.ui.filter !== 'all' && t.project !== S.ui.filter) return false;
+  if (S.ui.needs && !t.items.some(function (i) { return i.state === 'blocked' || i.state === 'failed'; })) return false;
+  var q = S.ui.q;
+  if (q && (t.title + ' ' + t.stub + ' ' + t.items.map(function (i) { return i.title + ' ' + i.id; }).join(' ')).toLowerCase().indexOf(q) < 0) return false;
+  return true;
+}
+function chipHtml(it) { return '<span class="chip ' + it.model + '"><i class="dot"></i>' + it.model + ' / ' + it.effort + '</span>'; }
+
+function renderStatus() {
+  var c = { running:0, queued:0, need:0, done:0 };
+  allItems().forEach(function (x) {
+    var s = x.it.state;
+    if (s === 'running') c.running++; else if (s === 'queued') c.queued++; else if (s === 'blocked' || s === 'failed') c.need++; else if (s === 'done') c.done++;
+  });
+  $('status').innerHTML = 'Worker <b>' + (S.paused ? 'paused' : 'online') + '</b> - <b>' + c.running + '</b> running - <b>' + c.queued + '</b> queued - <b>' + c.need + '</b> need you - <b>' + c.done + '</b> done this session';
+  var pb = $('pauseBtn');
+  pb.setAttribute('aria-pressed', S.paused ? 'true' : 'false');
+  pb.innerHTML = S.paused ? ic('play') + 'Resume worker' : ic('pause') + 'Pause worker';
+  pb.title = S.paused ? 'Queued items start again' : 'Running jobs finish; nothing new starts';
+}
+function renderChips() {
+  var need = allItems().filter(function (x) { return x.it.state === 'blocked' || x.it.state === 'failed'; }).length;
+  var h = '<button class="fchip" data-action="filter" data-v="all" data-fk="chip:all" aria-pressed="' + (S.ui.filter === 'all') + '">All projects</button>';
+  S.projects.forEach(function (p) {
+    var n = S.tasks.filter(function (t) { return t.project === p.id && t.status === 'open'; }).length;
+    h += '<button class="fchip" data-action="filter" data-v="' + p.id + '" data-fk="chip:' + p.id + '" aria-pressed="' + (S.ui.filter === p.id) + '">' + esc(p.name) + '<span class="n">' + n + '</span></button>';
+  });
+  h += '<button class="fchip needs" data-action="needsfilter" data-fk="chip:needs" aria-pressed="' + S.ui.needs + '">Needs you<span class="n">' + need + '</span></button>';
+  $('chips').innerHTML = h;
+}
+
+function renderRunning() {
+  var h = '<div class="sec-title">Now running <span class="count">one job per project, projects in parallel</span></div><div class="run-grid">';
+  S.projects.forEach(function (p) {
+    if (S.ui.filter !== 'all' && S.ui.filter !== p.id) return;
+    var r = runningIn(p.id), q = queueIn(p.id);
+    if (r) {
+      var k = key(r.t, r.it);
+      h += '<div class="run-card"><div class="proj"><span>' + esc(p.name) + ' / ' + esc(r.t.stub) + '</span><span class="live">running</span></div>'
+        + '<div class="ttl">' + esc(r.it.title) + '</div>'
+        + '<div class="row">' + chipHtml(r.it) + '<span class="elapsed" data-elapsed="' + k + '">' + fmtDur(r.it.job.elapsed) + '</span><span class="muted" style="font-size:12px" data-step="' + k + '">step ' + r.it.job.i + ' of ' + r.it.script.length + '</span><span class="muted" style="font-size:12px">' + (q.length ? q.length + ' queued behind' : 'nothing queued behind') + '</span></div>'
+        + '<div class="bar"><i data-prog="' + k + '" style="width:' + pct(r.it) + '%"></i></div>'
+        + '<pre class="tail" data-log="' + k + '" data-n="2">' + esc(tailText(r.it, 2)) + '</pre>'
+        + '<div class="row"><button class="btn sm" data-action="select" data-key="' + k + '" data-fk="rc:' + k + '">' + ic('eye') + 'Open</button>'
+        + '<button class="btn sm danger" data-action="cancel" data-key="' + k + '">' + ic('stop') + 'Cancel run</button></div></div>';
+    } else {
+      var av = 0;
+      S.tasks.forEach(function (t) { if (t.project === p.id && t.status === 'open') t.items.forEach(function (i) { if (i.state === 'available') av++; }); });
+      h += '<div class="run-card idle"><div class="proj"><span>' + esc(p.name) + '</span><span>idle</span></div><div>Nothing running. ' + (S.paused ? 'The worker is paused.' : (av ? av + ' available item(s) - queue one below and it starts right away.' : 'No available items.')) + '</div></div>';
+    }
+  });
+  $('main-running').innerHTML = h + '</div>';
+}
+function renderNeeds() {
+  var list = allItems().filter(function (x) {
+    return (x.it.state === 'blocked' || x.it.state === 'failed') && (S.ui.filter === 'all' || S.ui.filter === x.t.project) && x.t.status !== 'closed';
+  });
+  if (!list.length) { $('main-needs').innerHTML = ''; return; }
+  var h = '<div class="sec-title">Needs you <span class="count">' + list.length + ' - blocked work stops and waits; nothing guesses</span></div><div class="need-list">';
+  list.forEach(function (x) {
+    var k = key(x.t, x.it), failed = x.it.state === 'failed';
+    var kind = failed ? 'Run failed' : (x.it.block.kind === 'translation' ? 'Cannot start' : (/permission/i.test(x.it.block.title) ? 'Needs permission' : 'Needs decision'));
+    var why = failed ? x.it.err.detail : x.it.block.detail;
+    h += '<div class="need-row ' + (failed ? 'failed' : '') + '"><div class="kind">' + ic(failed ? 'x' : 'alert') + kind + '</div>'
+      + '<div class="ttl">' + esc(x.it.title) + '<small>' + esc(x.t.project) + ' / ' + esc(x.t.stub) + '</small></div>'
+      + '<div class="why" title="' + esc(why) + '">' + esc(why) + '</div><div class="acts">'
+      + (failed ? '<button class="btn sm primary" data-action="retry" data-key="' + k + '">' + ic('retry') + 'Retry</button>' : '')
+      + '<button class="btn sm ' + (failed ? '' : 'warn') + '" data-action="resolvesel" data-key="' + k + '" data-fk="nc:' + k + '">' + ic('term') + 'Resolve in Claude Code</button></div></div>';
+  });
+  $('main-needs').innerHTML = h + '</div>';
+}
+function iconFor(t, it) {
+  switch (it.state) {
+    case 'done': return ic('check');
+    case 'running': return ic('play', 'fill');
+    case 'blocked': return ic('alert');
+    case 'failed': return ic('x');
+    case 'deferred': return ic('pause');
+    case 'queued': return '<span class="qn">' + qpos(t, it) + '</span>';
+    default: return ic('play');
+  }
+}
+function nodeHtml(t, it, prevDone) {
+  var k = key(t, it), sel = S.ui.sel === k && S.ui.mode === 'item';
+  var sub = '';
+  switch (it.state) {
+    case 'available': sub = '<button class="pill" data-action="queue" data-key="' + k + '" data-fk="q:' + k + '" title="Queue this item to run autonomously">Queue</button>'; break;
+    case 'queued': sub = '<span style="color:var(--queue);font-weight:650">queued #' + qpos(t, it) + '</span>'; break;
+    case 'running': sub = '<span class="elapsed" style="color:var(--run)" data-elapsed="' + k + '">' + fmtDur(it.job.elapsed) + '</span>'; break;
+    case 'blocked': sub = '<span style="color:var(--warn);font-weight:650">needs you</span>'; break;
+    case 'failed': sub = '<button class="pill bad" data-action="retry" data-key="' + k + '" data-fk="r:' + k + '">Retry</button>'; break;
+    case 'deferred': sub = 'deferred'; break;
+    case 'done': sub = 'done'; break;
+  }
+  var label = it.title + ' - ' + STATE_LABEL[it.state];
+  return '<div class="node st-' + it.state + (sel ? ' sel' : '') + (prevDone ? ' edge-done' : '') + '">'
+    + '<button class="bubble" data-action="select" data-key="' + k + '" data-fk="b:' + k + '" data-ring="' + k + '" style="--p:' + Math.max(6, pct(it)) + '" aria-label="' + esc(label) + '" aria-pressed="' + sel + '" title="' + esc(label) + '">' + iconFor(t, it) + '</button>'
+    + '<div class="nlabel" title="' + esc(it.title) + '">' + esc(it.title) + '</div><div class="nsub">' + sub + '</div></div>';
+}
+function taskHtml(t) {
+  var done = t.items.filter(function (i) { return i.state === 'done'; }).length, total = t.items.length;
+  var avail = t.items.filter(function (i) { return i.state === 'available'; }).length;
+  var nodes = '', prevDone = false;
+  t.items.forEach(function (it, idx) { nodes += nodeHtml(t, it, idx > 0 && t.items[idx - 1].state === 'done'); });
+  if (t.status === 'open') nodes += '<div class="node addnode"><button class="bubble" data-action="additem" data-key="' + t.stub + '" data-fk="add:' + t.stub + '" aria-label="Add an item to ' + esc(t.title) + '" title="Add an item">' + ic('plus') + '</button><div class="nlabel muted">Add item</div><div class="nsub"></div></div>';
+  return '<div class="task-card ' + t.status + '"><div class="task-head"><div class="task-meta" style="--age:' + brightness(t.last).toFixed(2) + '">'
+    + '<span class="pri ' + t.pri + '">' + t.pri + '</span>'
+    + '<span class="task-name-wrap"><span class="task-title" tabindex="0">' + esc(t.title) + '</span><span class="summary-card" role="tooltip"><strong>Summary:</strong> ' + esc(t.summary) + '</span></span>'
+    + '<button class="task-id-copy" data-action="copy" data-text="' + esc(t.stub) + '" title="Copy task name">' + esc(t.stub) + '</button>'
+    + '<span class="mini" title="' + done + ' of ' + total + ' done this session"><i style="width:' + (total ? Math.round(done / total * 100) : 0) + '%"></i></span>'
+    + '<span class="muted" style="font-size:12px">' + done + '/' + total + ' - ' + ago(t.last) + '</span></div>'
+    + '<div class="task-acts">' + (t.status === 'open' && avail > 1 ? '<button class="btn sm" data-action="qall" data-key="' + t.stub + '" data-fk="qa:' + t.stub + '">Queue all available (' + avail + ')</button>' : '') + '</div></div>'
+    + '<div class="pipeline" role="list">' + nodes + '</div></div>';
+}
+function closedHtml(t) {
+  return '<div class="closed-row" style="--age:' + brightness(t.last).toFixed(2) + '"><span class="pri ' + t.pri + '">' + t.pri + '</span>'
+    + '<span class="task-name-wrap"><span class="task-title" tabindex="0">' + esc(t.title) + '</span><span class="summary-card" role="tooltip"><strong>Summary:</strong> ' + esc(t.summary) + '</span></span>'
+    + '<button class="task-id-copy" data-action="copy" data-text="' + esc(t.stub) + '">' + esc(t.stub) + '</button><span class="muted" style="font-size:12px">' + esc(t.closedLabel || 'closed') + '</span></div>';
+}
+function renderMaps() {
+  var h = '<div class="sec-title">Pipelines <span class="count">stages follow plan.md order; any available item can be queued out of order</span></div>', any = false;
+  S.projects.forEach(function (p) {
+    if (S.ui.filter !== 'all' && S.ui.filter !== p.id) return;
+    var mine = S.tasks.filter(function (t) { return t.project === p.id && visibleTask(t); });
+    if (!mine.length) return;
+    any = true;
+    var open = mine.filter(function (t) { return t.status === 'open'; }).sort(function (a, b) { return a.pri < b.pri ? -1 : a.pri > b.pri ? 1 : 0; });
+    var def = mine.filter(function (t) { return t.status === 'deferred'; });
+    var cl = mine.filter(function (t) { return t.status === 'closed'; });
+    var c = { run:0, q:0, need:0 };
+    mine.forEach(function (t) { t.items.forEach(function (i) { if (i.state === 'running') c.run++; else if (i.state === 'queued') c.q++; else if (i.state === 'blocked' || i.state === 'failed') c.need++; }); });
+    var pOpen = S.ui.open['p:' + p.id] !== false;
+    h += '<details class="project-card" data-open="p:' + p.id + '"' + (pOpen ? ' open' : '') + '><summary class="project-row"><span class="project-title">' + esc(p.name) + '</span><span class="project-root">' + esc(p.root) + '</span>'
+      + '<span class="pstat">' + (c.run ? '<span class="chip" style="color:var(--run)">' + c.run + ' running</span>' : '') + (c.q ? '<span class="chip" style="color:var(--queue)">' + c.q + ' queued</span>' : '') + (c.need ? '<span class="chip" style="color:var(--warn)">' + c.need + ' need you</span>' : '') + '<span class="chip">' + mine.length + ' task(s)</span></span></summary><div class="project-body">';
+    h += '<div class="sub-head">Open tasks <span class="count">' + open.length + '</span></div>' + (open.length ? open.map(taskHtml).join('') : '<div class="empty">No open tasks match.</div>');
+    if (def.length) h += '<details class="sub-sec" data-open="d:' + p.id + '"' + (S.ui.open['d:' + p.id] ? ' open' : '') + '><summary>Deferred tasks <span class="count">' + def.length + '</span></summary>' + def.map(taskHtml).join('') + '</details>';
+    if (cl.length) h += '<details class="sub-sec" data-open="c:' + p.id + '"' + (S.ui.open['c:' + p.id] ? ' open' : '') + '><summary>Closed tasks <span class="count">' + cl.length + '</span></summary>' + cl.map(closedHtml).join('') + '</details>';
+    h += '</div></details>';
+  });
+  if (!any) h += '<p class="empty">No tasks match the current filter.</p>';
+  $('main-maps').innerHTML = h;
+}
+function renderRuns() {
+  var rows = S.runs.filter(function (r) { return S.ui.filter === 'all' || S.ui.filter === r.project; }).slice(0, 8);
+  var h = '<div class="sec-title">Recent runs <span class="count">newest first</span></div>';
+  if (!rows.length) { $('main-runs').innerHTML = h + '<p class="empty">No runs yet.</p>'; return; }
+  h += '<table class="runs-table"><thead><tr><th>When</th><th>Item</th><th>Job</th><th>Result</th><th>Took</th></tr></thead><tbody>';
+  rows.forEach(function (r) {
+    h += '<tr class="' + (find(r.key) ? 'click' : '') + '"' + (find(r.key) ? ' data-action="select" data-key="' + r.key + '"' : '') + '><td class="muted">' + ago(r.at) + '</td><td>' + esc(r.title) + '<div class="muted mono" style="font-size:11px">' + esc(r.project) + ' / ' + esc(r.key.split('/')[0]) + '</div></td>'
+      + '<td>' + chipHtml(r) + '</td><td><span class="out ' + r.outcome + '">' + r.outcome + '</span><div class="muted" style="font-size:12px;margin-top:2px">' + esc(r.summary) + '</div></td><td class="elapsed muted">' + fmtDur(r.ms) + '</td></tr>';
+  });
+  $('main-runs').innerHTML = h + '</tbody></table>';
+}
+
+/* ---- side panel ---- */
+function cmdBox(t) {
+  var c = resolveCmds(t);
+  return '<div class="cmdbox"><div class="cmdrow"><span class="n">1</span><code>' + esc(c[0]) + '</code><button class="btn sm" data-action="copy" data-text="' + esc(c[0]) + '">' + ic('copy') + 'Copy</button></div>'
+    + '<div class="cmdrow"><span class="n">2</span><code>' + esc(c[1]) + '</code><button class="btn sm" data-action="copy" data-text="' + esc(c[1]) + '">' + ic('copy') + 'Copy</button></div>'
+    + '<div class="cmdcap">Run 1 in a terminal, then paste 2 at the Claude prompt. Fix it there, then come back and press Re-check.</div></div>';
+}
+function logPre(it, n) {
+  return '<pre class="tail">' + it.log.slice(-n).map(function (l) { return (/^ERROR|failed|Run stopped/.test(l) ? '<span class="err">' : '<span>') + esc('> ' + l) + '</span>'; }).join('\n') + '</pre>';
+}
+function panelOverview() {
+  var h = '<h2>Queues</h2><p class="muted" style="font-size:13px">Select a stage to see its summary, job and log. Queued items start on their own, in order, one per project.</p>';
+  S.projects.forEach(function (p) {
+    if (S.ui.filter !== 'all' && S.ui.filter !== p.id) return;
+    var r = runningIn(p.id), q = queueIn(p.id);
+    h += '<div class="sec-title">' + esc(p.name) + '</div>';
+    if (r) h += '<div class="qrow"><span class="live">running</span><span class="t">' + esc(r.it.title) + '</span><span class="elapsed muted" data-elapsed="' + key(r.t, r.it) + '">' + fmtDur(r.it.job.elapsed) + '</span></div>';
+    q.forEach(function (x, i) {
+      var k = key(x.t, x.it);
+      h += '<div class="qrow"><span class="muted">#' + (i + 1) + '</span><span class="t">' + esc(x.it.title) + '</span>'
+        + (i > 0 ? '<button class="btn sm" data-action="runnext" data-key="' + k + '">Run next</button>' : '')
+        + '<button class="btn sm" data-action="unqueue" data-key="' + k + '">Remove</button></div>';
+    });
+    if (!r && !q.length) h += '<p class="muted" style="font-size:13px">Idle - nothing queued.</p>';
+  });
+  h += '<div class="callout info" style="margin-top:14px"><strong>How blocked work behaves</strong><p>A job that cannot continue (no plan.md section, needs a decision, needs a permission) stops and marks the item Needs you. For now you resolve it by opening the task in Claude Code; the dashboard shows the exact command.</p></div>';
+  return h;
+}
+function panelItem() {
+  var f = find(S.ui.sel);
+  if (!f) return panelOverview();
+  var t = f.t, it = f.it, k = S.ui.sel, p = proj(t.project), st = it.state, locked = st === 'running' || st === 'done';
+  var h = '<div class="p-head"><div class="crumbs"><span>' + esc(p.name) + '</span><span>/</span><button class="task-id-copy" data-action="copy" data-text="' + esc(t.stub) + '" title="Copy task name">' + esc(t.stub) + '</button></div><span class="grow"></span><button class="btn sm" data-action="closepanel" aria-label="Close panel">' + ic('close') + '</button></div>'
+    + '<h2>' + esc(it.title) + '</h2>'
+    + '<div class="badges"><span class="badge" style="--c:' + ({ available:'var(--accent)', queued:'var(--queue)', running:'var(--run)', blocked:'var(--warn)', failed:'var(--bad)', deferred:'var(--muted)', done:'var(--good)' }[st]) + '">' + STATE_LABEL[st] + (st === 'queued' ? ' #' + qpos(t, it) : '') + '</span>'
+    + (it.pri ? '<span class="pri ' + it.pri + '">' + it.pri + '</span>' : '') + chipHtml(it) + '<span class="chip mono">' + esc(it.id) + '</span></div>';
+
+  /* state block */
+  if (st === 'running') {
+    h += '<div class="callout info"><strong class="live">Running - attempt ' + it.attempts + '</strong><div class="row" style="display:flex;gap:10px;align-items:center;margin:4px 0"><span class="elapsed" data-elapsed="' + k + '" style="font-size:18px">' + fmtDur(it.job.elapsed) + '</span><span class="muted" data-step="' + k + '">step ' + it.job.i + ' of ' + it.script.length + '</span></div>'
+      + '<div class="bar"><i data-prog="' + k + '" style="width:' + pct(it) + '%"></i></div></div>'
+      + '<div class="sec-title">Progress log</div><pre class="tail" data-log="' + k + '" data-n="8">' + esc(tailText(it, 8)) + '</pre>';
+  } else if (st === 'queued') {
+    var q = queueIn(t.project), busy = runningIn(t.project);
+    h += '<div class="callout info"><strong>Queued at position ' + qpos(t, it) + ' in ' + esc(t.project) + '</strong><p>' + (S.paused ? 'The worker is paused; it starts when you resume.' : busy ? 'Starts automatically when "' + esc(busy.it.title) + '" finishes.' : 'Starting momentarily.') + '</p></div>';
+  } else if (st === 'blocked') {
+    var b = it.block;
+    h += '<div class="callout"><strong>' + esc(b.title) + '</strong><p>' + esc(b.detail) + '</p>' + (b.ask ? '<p style="margin-top:4px"><b>To resolve:</b> ' + esc(b.ask) + '</p>' : '') + '</div>';
+    if (it.log.length) h += '<div class="sec-title">Last run</div>' + logPre(it, 5);
+    if (S.ui.resolve[k]) h += cmdBox(t);
+  } else if (st === 'failed') {
+    h += '<div class="callout bad"><strong>' + esc(it.err.title) + ' (attempt ' + it.attempts + ')</strong><p>' + esc(it.err.detail) + '</p><p class="muted" style="margin-top:4px">Failed runs never retry on their own, so no paid loop can start.</p></div>'
+      + '<div class="sec-title">Log tail</div>' + logPre(it, 8);
+    if (S.ui.resolve[k]) h += cmdBox(t);
+  } else if (st === 'done') {
+    h += '<div class="callout good"><strong>Done this session</strong><p>The item leaves the plan.md task_items block on completion; the receipt is in log.md. It stays visible here until the next page load.</p></div>';
+  } else if (st === 'deferred') {
+    h += '<div class="callout" style="--c:var(--muted)"><strong>Deferred</strong><p>Not eligible to run. Undefer it to make it available.</p></div>';
+  } else if (!it.hasSection) {
+    h += '<div class="callout"><strong>No plan.md section for this item</strong><p>Queueing will fail translation and mark the item Needs you. Add a section in Claude Code first (what to do, what counts as done).</p></div>';
+  }
+
+  /* actions */
+  h += '<div class="acts">';
+  if (st === 'available') h += '<button class="btn primary" data-action="queue" data-key="' + k + '" data-fk="a:queue">' + ic('play', 'fill') + 'Queue</button><button class="btn" data-action="defer" data-key="' + k + '">Defer</button>';
+  if (st === 'queued') h += (qpos(t, it) > 1 ? '<button class="btn" data-action="runnext" data-key="' + k + '">Run next</button>' : '') + '<button class="btn" data-action="unqueue" data-key="' + k + '">Remove from queue</button>';
+  if (st === 'running') h += '<button class="btn danger" data-action="cancel" data-key="' + k + '" data-fk="a:cancel">' + ic('stop') + 'Cancel run</button>';
+  if (st === 'failed') h += '<button class="btn primary" data-action="retry" data-key="' + k + '" data-fk="a:retry">' + ic('retry') + 'Retry</button><button class="btn" data-action="resolve" data-key="' + k + '">' + ic('term') + 'Resolve in Claude Code</button><button class="btn" data-action="defer" data-key="' + k + '">Defer</button>';
+  if (st === 'blocked') h += '<button class="btn warn" data-action="resolve" data-key="' + k + '" data-fk="a:resolve" aria-expanded="' + !!S.ui.resolve[k] + '">' + ic('term') + 'Resolve in Claude Code</button><button class="btn" data-action="recheck" data-key="' + k + '" title="Re-read plan.md and task state after you fixed it">' + ic('retry') + 'Re-check</button>';
+  if (st === 'deferred') h += '<button class="btn primary" data-action="undefer" data-key="' + k + '">Undefer</button>';
+  h += '</div>';
+
+  /* job */
+  h += '<div class="sec-title">Job</div><div class="card"><dl class="kv" style="margin:0">'
+    + '<dt>Model</dt><dd><span class="seg" role="group" aria-label="Model"><button data-action="model" data-v="claude" aria-pressed="' + (it.model === 'claude') + '"' + (locked ? ' disabled' : '') + '>Claude</button><button data-action="model" data-v="codex" aria-pressed="' + (it.model === 'codex') + '"' + (locked ? ' disabled' : '') + '>Codex</button></span></dd>'
+    + '<dt>Effort</dt><dd><select data-field="effort" data-fk="eff" aria-label="Effort"' + (locked ? ' disabled' : '') + '>' + EFFORTS[it.model].map(function (e) { return '<option' + (e === it.effort ? ' selected' : '') + '>' + e + '</option>'; }).join('') + '</select></dd>'
+    + '<dt>Runs in</dt><dd class="mono" style="font-size:12px">' + esc(p.root) + '</dd>'
+    + '<dt>Prompt</dt><dd class="mono" style="font-size:12px">plan.md &gt; ## ' + esc(it.id) + '</dd></dl>'
+    + '<p class="hint" style="margin-top:6px">If the agent needs a decision or a permission it cannot get, the job stops and the item turns Needs you.</p></div>';
+
+  /* plan section */
+  h += '<div class="sec-title">plan.md section</div><div class="card"><div class="secbody">' + (it.hasSection ? esc(it.sec || 'Details live in the plan.md section for this item.') : '<span class="muted">(missing)</span>') + '</div></div>';
+  h += '<div class="sec-title">Task summary</div><p style="font-size:13px">' + esc(t.summary) + '</p>';
+
+  /* runs for this task */
+  var mine = S.runs.filter(function (r) { return r.key.split('/')[0] === t.stub; }).slice(0, 4);
+  h += '<div class="sec-title">Recent runs on this task</div>';
+  h += mine.length ? mine.map(function (r) { return '<div class="mini-run"><span class="out ' + r.outcome + '">' + r.outcome + '</span><span style="flex:1;min-width:0;overflow-wrap:anywhere">' + esc(r.title) + '</span><span class="m">' + fmtDur(r.ms) + ' - ' + ago(r.at) + '</span></div>'; }).join('') : '<p class="muted" style="font-size:13px">No runs yet.</p>';
+  return h;
+}
+function projOptions(sel) { return S.projects.map(function (p) { return '<option value="' + p.id + '"' + (p.id === sel ? ' selected' : '') + '>' + esc(p.name) + '</option>'; }).join(''); }
+function priOptions() { return '<option>P1</option><option selected>P2</option><option>P3</option>'; }
+function panelAdd() {
+  var t = S.tasks.filter(function (x) { return x.stub === S.ui.addTask; })[0];
+  return '<div class="p-head"><div class="crumbs"><span>' + esc(t.project) + ' / ' + esc(t.stub) + '</span></div><span class="grow"></span><button class="btn sm" data-action="cancelform" aria-label="Close">' + ic('close') + '</button></div>'
+    + '<h2>Add an item</h2><p class="muted" style="font-size:13px">Define the work, then queue it. Other jobs keep running.</p>'
+    + '<div class="field"><label for="f-title">Title</label><input class="f" id="f-title" autocomplete="off" placeholder="What should the agent do?"></div>'
+    + '<div class="field"><label for="f-pri">Priority</label><select id="f-pri">' + priOptions() + '</select></div>'
+    + '<div class="field"><label for="f-det">Details (becomes the plan.md section)</label><textarea id="f-det" placeholder="What to do, where, and what counts as done."></textarea><span class="hint">Required to run: an item without a section fails translation and shows up as Needs you.</span></div>'
+    + '<div class="err-msg" id="f-err" role="alert"></div>'
+    + '<div class="acts"><button class="btn primary" data-action="submitadd" data-q="1">Add and queue</button><button class="btn" data-action="submitadd" data-q="0">Add only</button><button class="btn" data-action="cancelform">Cancel</button></div>';
+}
+function panelNew() {
+  return '<div class="p-head"><h2 style="margin:0">New task</h2><span class="grow"></span><button class="btn sm" data-action="cancelform" aria-label="Close">' + ic('close') + '</button></div>'
+    + '<div class="field"><label for="f-proj">Project</label><select id="f-proj">' + projOptions(S.ui.filter !== 'all' ? S.ui.filter : 'afterplay') + '</select></div>'
+    + '<div class="field"><label for="f-title">Title</label><input class="f" id="f-title" autocomplete="off" placeholder="Short name for the outcome"></div>'
+    + '<div class="field"><label for="f-stub">Folder name (dev/tasks/&lt;name&gt;)</label><input class="f mono" id="f-stub" autocomplete="off" placeholder="derived from the title"></div>'
+    + '<div class="field"><label for="f-pri">Priority</label><select id="f-pri">' + priOptions() + '</select></div>'
+    + '<div class="field"><label for="f-item">First item</label><input class="f" id="f-item" autocomplete="off" placeholder="The first unit of work"></div>'
+    + '<div class="field"><label for="f-det">Details for that item</label><textarea id="f-det" placeholder="What to do, where, and what counts as done."></textarea><span class="hint">Leave empty to add the item without a plan.md section.</span></div>'
+    + '<div class="err-msg" id="f-err" role="alert"></div>'
+    + '<div class="acts"><button class="btn primary" data-action="submitnew">Create task</button><button class="btn" data-action="cancelform">Cancel</button></div>';
+}
+function renderPanel() {
+  var pn = $('panel');
+  pn.innerHTML = S.ui.mode === 'item' ? panelItem() : S.ui.mode === 'add' ? panelAdd() : S.ui.mode === 'newtask' ? panelNew() : panelOverview();
+  pn.classList.toggle('open', S.ui.panelOpen);
+  $('scrim').classList.toggle('on', S.ui.panelOpen);
+  var ti = $('f-title'); if (ti) ti.focus();
+}
+
+function render(opts) {
+  var ae = document.activeElement, fk = ae && ae.getAttribute ? ae.getAttribute('data-fk') : null;
+  var mode = S.ui.mode, keepForm = (mode === 'add' || mode === 'newtask') && !(opts && opts.panel);
+  renderStatus(); renderChips(); renderRunning(); renderNeeds(); renderMaps(); renderRuns();
+  if (!keepForm) {
+    var pn = $('panel'), top = pn.scrollTop;
+    renderPanel();
+    if (!(opts && opts.panel)) pn.scrollTop = top;
+  }
+  if (fk) { var again = document.querySelector('[data-fk="' + fk.replace(/"/g, '\\"') + '"]'); if (again) again.focus({ preventScroll:true }); }
+}
+
+/* mount points inside #main */
+$('main').innerHTML = '<section id="main-running"></section><section id="main-needs"></section><section id="main-maps"></section><section id="main-runs"></section>';
+render({ panel:true });
+setInterval(tick, 500);
+})();
+</script>
+</body>
+</html>

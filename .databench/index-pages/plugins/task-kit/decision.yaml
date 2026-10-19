@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/task-kit",
+  "decision": "none",
+  "source_sha": "05d39e524e7b1e160ed35fd7bd1db510bfe03afa",
+  "input_sha256": "755945fa63ad3f7e96579342e5775263b2016adf7a5426b7268eea3fe41dd596",
+  "input_shape_sha256": "61b5aee1c36b09be2b3285683177aedbbdbb7af86d25c07af007196397885ea2",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

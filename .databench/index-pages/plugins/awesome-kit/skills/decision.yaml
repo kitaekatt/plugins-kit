@@ -1,13 +1,12 @@
 {
   "schema_version": 1,
   "directory": "plugins/awesome-kit/skills",
-  "decision": "page",
-  "source_sha": "fbc34cb104a77cad71b071e4a792a7f2ca11d6f0",
-  "generation_spec_sha256": "d40323919c23e31cc9c5afe305627667e78bca3c257330f0fc0b3a9b1c826ade",
-  "input_sha256": "4953c64ca5c52c9243e94543b43e0a207e08fb174ae794e11ab0809c2ae76128",
-  "input_shape_sha256": "73894b5fadedc59f040d16f557f2dd4f83f5235dcd39396f0d7490937a4e5fd2",
+  "decision": "none",
+  "source_sha": "d1d3e74fb347554216f73d550e8a828129d3b41b",
+  "input_sha256": "b9bc1097f15061166d52d9cfb0e05addaac5e07c66c10bc48c50b3ecaafc8231",
+  "input_shape_sha256": "2b39bfc3f3a02e5f42e69954fd7e382676a84d3b094c171fc74a9dd816c5253c",
   "dirty": false,
-  "identity": "awesome-kit skills: session-interaction skills (debug-context, recap, verbose-updates), the task-folder system with its 14-verb CLI and design diagrams, and the plugin-ecosystem poster generator",
+  "identity": "",
   "instructions": "",
   "references": []
 }

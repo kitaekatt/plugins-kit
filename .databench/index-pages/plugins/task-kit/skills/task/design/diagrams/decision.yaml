@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/task-kit/skills/task/design/diagrams",
+  "decision": "none",
+  "source_sha": "0b2790cf4287bd080fc7a023504ef782390b4e25",
+  "input_sha256": "f0c16b0a59ce1ee4d50879dba04c4314eb07c1577fec072204e673a09afc0527",
+  "input_shape_sha256": "9d5cf3605edfd2e520c5458aec29adc9422d3ba308cbadd5c5d3ed19016f37f7",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

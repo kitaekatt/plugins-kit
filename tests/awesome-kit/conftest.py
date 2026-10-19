@@ -26,7 +26,7 @@ for _p in _SYS_PATHS:
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-# Orchestrate's routing render consults llm-scripting-kit's live subscription
+# Orchestrate's routing render consults llm-kit's live subscription
 # quota, so without this every routing assertion turns on the DEVELOPER's
 # current balance -- a test that passes or fails by how much Fable was spent
 # this week. Off by default here; the quota tests re-enable it deliberately.

@@ -2,12 +2,12 @@
   "schema_version": 1,
   "directory": "plugins",
   "decision": "page",
-  "source_sha": "963816b784e59846507180cb5efa67631ff982cb",
+  "source_sha": "d1d3e74fb347554216f73d550e8a828129d3b41b",
   "generation_spec_sha256": "d40323919c23e31cc9c5afe305627667e78bca3c257330f0fc0b3a9b1c826ade",
-  "input_sha256": "e64508abb85609cd46e6bce6bda473abf7d00469d40f51ce0cf8e5d6293e90ff",
-  "input_shape_sha256": "3ce4bad12c9c0ba3a7d249c3847d966825f35770a4bd815a2952b49b673f5e1b",
+  "input_sha256": "63a4c05beef9df0dadf236ff6680dcb6d1ccdd275caaedb555f3463fcd5975c4",
+  "input_shape_sha256": "3077bb0dd31f786a992b69ec4da04a1c787775a85b7e4f49c4f110d8f77ffd5f",
   "dirty": false,
-  "identity": "The plugins-kit marketplace: independently installable Claude Code plugins sharing the bootstrap provisioning engine and the llm-scripting-kit access layer, covering git and Perforce code review, durable job execution, LLM endpoint dispatch, Hue scene sync, PDF rendering, fleet secrets, prompt statusline, cache forensics, markdown auditing, and Unreal Engine automation.",
+  "identity": "The plugins-kit marketplace: independently installable Claude Code plugins for code review, LLM dispatch, job execution, Hue scenes, PDF rendering, secrets, tasks, and Unreal Engine automation, provisioned by the bootstrap engine and linked through shared libraries",
   "instructions": "",
   "references": []
 }

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/llm-kit/workflows",
+  "decision": "none",
+  "source_sha": "46d06a33c436c89b94ae4bbb8c50807df1fae875",
+  "input_sha256": "7451e1eeda2050316113659fa272a75302babbea78d56572dd6aedbeb22b330e",
+  "input_shape_sha256": "a7ac3402bafb841d5b2680c8f91798ba5e6350669598ffa866457e259b76c84f",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

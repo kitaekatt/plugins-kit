@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/llm-kit/skills/content-pipeline-domain/references",
+  "decision": "none",
+  "source_sha": "46d06a33c436c89b94ae4bbb8c50807df1fae875",
+  "input_sha256": "406f8efa6df623d2a4bb651149d3e41528670d6e18ab82e38253ffea18189816",
+  "input_shape_sha256": "c28eec89979325a5f5e9dcb6524dc43e99ec6619e7b1e58ba65afad7d48f9fe4",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

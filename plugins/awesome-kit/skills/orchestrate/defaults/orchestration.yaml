@@ -32,7 +32,7 @@
 # {id, effort} entries, in preference order (bootstrap plugin-dev
 # references/model-declaration.md). The core ids
 # fable, opus, sonnet and haiku are the Claude harness's own; every other id
-# resolves against llm-scripting-kit.
+# resolves against llm-kit.
 #
 # The MACHINE half (backends, capacity) is not derived -- it is what this
 # machine has and how to drive it.
@@ -640,9 +640,9 @@ backends:
 
       The rendered command uses one discovered entry as an example. Before
       every launch, take `<entry-id>` from the chosen
-      `opencode/<entry-id>` target and run `"${CLAUDE_BOOTSTRAP_DATA_ROOT:-$HOME/.claude/plugins/data}"/plugins-kit/llm-scripting-kit/.venv/bin/llm-scripting-kit
-      resolve --models <entry-id> --project-root <ABSOLUTE root>`
-      (Windows: "${CLAUDE_BOOTSTRAP_DATA_ROOT:-$HOME/.claude/plugins/data}"/plugins-kit/llm-scripting-kit/.venv/Scripts/llm-scripting-kit.exe). Replace the
+      `opencode/<entry-id>` target and run `"${CLAUDE_BOOTSTRAP_DATA_ROOT:-$HOME/.claude/plugins/data}"/plugins-kit/llm-kit/.venv/bin/llm-kit
+      models resolve --models <entry-id> --project-root <ABSOLUTE root>`
+      (Windows: "${CLAUDE_BOOTSTRAP_DATA_ROOT:-$HOME/.claude/plugins/data}"/plugins-kit/llm-kit/.venv/Scripts/llm-kit.exe). Replace the
       displayed `-m` value with the returned `model`. Remove any displayed
       `--variant`, then add `--variant <effort>` only when the returned
       `effort` is non-null. Never reuse the example model for another target.

@@ -105,7 +105,6 @@ def _e(owner: str, *tokens: str, reason: str) -> Entry:
 _LSK_INSTALL = "llm-scripting-" + "kit@plugins-kit"
 _LSK_REF = "plugins-kit:llm-scripting-" + "kit"
 
-_M9 = "awesome-kit migration (M9) points orchestration diagnostics at llm-kit"
 _M10 = (
     "bootstrap standing documentation and a compatibility fixture; not a consumer "
     "migration, so legacy deletion (M10) rewrites them unless an earlier "
@@ -114,15 +113,6 @@ _M10 = (
 
 #: Files that may still carry an old qualified reference. Shrinks to empty.
 ALLOWLIST: Dict[str, Entry] = {
-    # M9: awesome-kit
-    "plugins/awesome-kit/skills/orchestrate/scripts/dispatch.py": _e(
-        "M9", _LSK_REF, _LSK_INSTALL, reason=_M9
-    ),
-    "plugins/awesome-kit/skills/orchestrate/scripts/orchestration_guidance.py": _e(
-        "M9", _LSK_INSTALL, reason=_M9
-    ),
-    "tests/awesome-kit/test_dispatch.py": _e("M9", _LSK_INSTALL, reason=_M9),
-    "tests/awesome-kit/test_orchestration_guidance.py": _e("M9", _LSK_INSTALL, reason=_M9),
     # M10: bootstrap standing documents and a compatibility fixture
     "plugins/bootstrap/skills/bootstrap/references/action-triggered-install.md": _e(
         "M10", _LSK_INSTALL, reason=_M10

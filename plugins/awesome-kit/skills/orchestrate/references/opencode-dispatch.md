@@ -7,7 +7,7 @@ detail.
 
 Rendered policy: `scripts/orchestration_guidance.py`. Backend record and the
 one-line command: `defaults/orchestration.yaml`, `backends[id: opencode]`.
-Command source: `llm_scripting_kit.harness_adapters.OpencodeAdapter`. The
+Command source: `llm_kit.adapters.harness_adapters.OpencodeAdapter`. The
 adapter builds argv only. The launch adds the stream redirects shown below.
 
 ## When a harness is warranted at all
@@ -43,10 +43,10 @@ The rendered policy's command uses one discovered entry as an example. Before
 every launch, take `<entry-id>` from the chosen `opencode/<entry-id>` target
 and resolve it:
 
-  "${CLAUDE_BOOTSTRAP_DATA_ROOT:-$HOME/.claude/plugins/data}"/plugins-kit/llm-scripting-kit/.venv/bin/llm-scripting-kit \
-    resolve --models <entry-id> --project-root <ABSOLUTE root>
+  "${CLAUDE_BOOTSTRAP_DATA_ROOT:-$HOME/.claude/plugins/data}"/plugins-kit/llm-kit/.venv/bin/llm-kit \
+    models resolve --models <entry-id> --project-root <ABSOLUTE root>
 
-(Windows: "${CLAUDE_BOOTSTRAP_DATA_ROOT:-$HOME/.claude/plugins/data}"/plugins-kit/llm-scripting-kit/.venv/Scripts/llm-scripting-kit.exe)
+(Windows: "${CLAUDE_BOOTSTRAP_DATA_ROOT:-$HOME/.claude/plugins/data}"/plugins-kit/llm-kit/.venv/Scripts/llm-kit.exe)
 
 Read the returned JSON. Replace the displayed `-m` value with its `model`.
 Remove any displayed `--variant`, then add `--variant <effort>` only when the

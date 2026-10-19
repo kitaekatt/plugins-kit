@@ -206,7 +206,7 @@ technique_skill:
             machine, ordered by pace, and marks the first usable one `[default]`. Choose one
             usable entry and announce it as the `Rule:` line printed under the rows says; that
             line, the `Re-select:` line, and any `Independence:` line come from
-            llm-scripting-kit and govern the choice. When a dispatch fails, apply the
+            llm-kit and govern the choice. When a dispatch fails, apply the
             launch-correction rule in references/configuration.md first; any failure it does
             not explain is handled by re-selection as the `Re-select:` line says -- another
             usable entry of the same row, announced with the entry that failed and how. A

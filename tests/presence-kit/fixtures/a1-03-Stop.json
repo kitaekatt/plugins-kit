@@ -1,0 +1,23 @@
+{
+ "session_id": "42128eef-3596-4352-be1b-2ac5267cf044",
+ "transcript_path": "<HOME>\\.claude\\projects\\<SCRATCH_KEY>\\42128eef-3596-4352-be1b-2ac5267cf044.jsonl",
+ "cwd": "<SCRATCH>",
+ "prompt_id": "01421474-d2d2-4e67-82c1-0b8843da9e5d",
+ "permission_mode": "default",
+ "effort": {
+  "level": "medium"
+ },
+ "hook_event_name": "Stop",
+ "stop_hook_active": false,
+ "last_assistant_message": "DONE",
+ "background_tasks": [
+  {
+   "id": "b0sln3cn0",
+   "type": "shell",
+   "status": "running",
+   "description": "Run sleep 120 in background",
+   "command": "sleep 120"
+  }
+ ],
+ "session_crons": []
+}

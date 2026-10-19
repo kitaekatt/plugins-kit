@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "tests/llm-kit/fixtures/job_schema/legacy",
+  "decision": "none",
+  "source_sha": "a992accbd36482769c038380d0425854a025592b",
+  "input_sha256": "1781785fc6e02277cab4fe221e8df299bdd76b2f487d0f9b0a65c9755371e66d",
+  "input_shape_sha256": "930afd800952a11a0a8ee21ae5ebd5a3fffae657c2bd4a698a11856753202592",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

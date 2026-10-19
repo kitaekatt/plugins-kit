@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/presence-kit/hooks",
+  "decision": "none",
+  "source_sha": "d1d3e74fb347554216f73d550e8a828129d3b41b",
+  "input_sha256": "199c94a558a84a9cf6637248a5f0707d6f3c593ab82835e4f54d2baee9adf96e",
+  "input_shape_sha256": "1a979fe6bcd3fd3a7e6fefb3b005f88ff1e94513f996a4dfbfa821b7e09d07d4",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

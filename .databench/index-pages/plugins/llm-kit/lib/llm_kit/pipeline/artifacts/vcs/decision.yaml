@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/llm-kit/lib/llm_kit/pipeline/artifacts/vcs",
+  "decision": "none",
+  "source_sha": "f43f78247ee89fee23be4f1cf28f9e596aadd34c",
+  "input_sha256": "f8f47da29851a933f833fd3c3eafd05e43ed14820498cd9ca60f8e22258c1cc5",
+  "input_shape_sha256": "33d7540afebafb12fffd893f94980e0e1001b222da5a89f18f0ab736cdd8c8fc",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

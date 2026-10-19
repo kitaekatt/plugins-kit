@@ -1,4 +1,4 @@
-"""presence-kit 0.1.0 manifest shape: plugin.json, bootstrap.json, hooks.json."""
+"""presence-kit 0.2.0 manifest shape: plugin.json, bootstrap.json, hooks.json."""
 import json
 from pathlib import Path
 
@@ -12,7 +12,7 @@ def _load(rel: str) -> dict:
 def test_plugin_json_shape():
     manifest = _load(".claude-plugin/plugin.json")
     assert manifest["name"] == "presence-kit"
-    assert manifest["version"] == "0.1.0"
+    assert manifest["version"] == "0.2.0"
     assert manifest["dependencies"] == ["bootstrap"]
     assert manifest["description"].strip()
 
@@ -23,9 +23,6 @@ def test_bootstrap_json_shape():
     assert isinstance(manifest["$comment"], str) and manifest["$comment"]
 
 
-def test_hooks_json_is_empty():
-    assert _load("hooks/hooks.json") == {"hooks": {}}
-
-
-def test_no_skills_directory():
-    assert not (PLUGIN / "skills").exists()
+def test_hooks_json_wires_only_stop():
+    # Command and wrapper detail: test_hook_wrappers.py.
+    assert list(_load("hooks/hooks.json")["hooks"]) == ["Stop"]

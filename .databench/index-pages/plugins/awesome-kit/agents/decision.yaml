@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/awesome-kit/agents",
+  "decision": "none",
+  "source_sha": "68ea9b9260eb8a50fc7197d5cd63a49ab366d1de",
+  "input_sha256": "804d1324be3cf469176b7293d9a8822300dd39aad3a3bac80b4ac64b771ae84e",
+  "input_shape_sha256": "c633ee7a10e7b45eb14f3982d84e33a19cb2a3ef3d3f2a477fe8b5dd482ccfbe",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

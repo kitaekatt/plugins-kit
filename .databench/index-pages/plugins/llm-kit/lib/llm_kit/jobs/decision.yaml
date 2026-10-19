@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/llm-kit/lib/llm_kit/jobs",
+  "decision": "none",
+  "source_sha": "46d06a33c436c89b94ae4bbb8c50807df1fae875",
+  "input_sha256": "748e597fafbe28504ffa2364ec69a567e005eb298cc02d655de6ede8da63d3dd",
+  "input_shape_sha256": "c65e951dc3796feec667255172f7a563ca0d3c21d6a348741beb7d0aa8353a3a",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/llm-kit/lib/llm_kit/pipeline/artifacts/freshness",
+  "decision": "none",
+  "source_sha": "f43f78247ee89fee23be4f1cf28f9e596aadd34c",
+  "input_sha256": "b3615c6015662940cc446787d27d5eaef1c4ec3b976880b285be8fab4a4af6e0",
+  "input_shape_sha256": "87567df864ea4e532f017de4ce4ad33a6f89e1598e6fa2aa4a1c044b574d9750",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

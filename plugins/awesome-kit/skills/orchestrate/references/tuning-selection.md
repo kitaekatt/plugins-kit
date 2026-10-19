@@ -69,7 +69,7 @@ A row's `models` is a model declaration, in preference order. Entries with a pac
 re-sorted by pace in the rendered menu, entries without one keep their places, and the first
 usable entry is the default. Later entries are the other choices and the re-selection targets
 after a failed dispatch. An id is a core id (`fable`, `opus`, `sonnet`, `haiku`) or an entry
-exposed by `llm_scripting_kit`.
+exposed by `llm_kit`.
 
 ```yaml
 routing:

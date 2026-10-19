@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/presence-kit/skills",
+  "decision": "none",
+  "source_sha": "d1d3e74fb347554216f73d550e8a828129d3b41b",
+  "input_sha256": "70d0b58c176c2924ac2e1ebdefaa95771e376408a393c8631a4271a48d5673ab",
+  "input_shape_sha256": "74f6937ecb8692bb3710c0f83886585ad6897d686a0c475cbb6bfcece8f73d81",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

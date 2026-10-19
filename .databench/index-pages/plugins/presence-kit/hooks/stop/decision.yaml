@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/presence-kit/hooks/stop",
+  "decision": "none",
+  "source_sha": "d1d3e74fb347554216f73d550e8a828129d3b41b",
+  "input_sha256": "e418c0682ac84334d1d9af5e69fa5a3983f1b79b79c73f26b7547c84895f443d",
+  "input_shape_sha256": "f0ac1eefda0748103cf7bc1799f4b93070c35094da5727e864f0be78bf691d49",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

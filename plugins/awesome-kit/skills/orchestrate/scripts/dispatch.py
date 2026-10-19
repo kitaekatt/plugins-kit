@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import hashlib
+import importlib
 import json
 from pathlib import Path
 import re
@@ -69,12 +70,14 @@ if not callable(getattr(codex_lib, "build_codex_exec_argv", None)):
 
 # `--model` is a model-declaration id (orchestrate's routing rows name ids,
 # not provider model values), resolved to its `harness: codex` registry entry
-# through llm-scripting-kit. There is no default model: the row's chosen entry
-# is always passed. Posture: REFUSE -- without llm-scripting-kit there is no
-# registry to resolve an id against, and a dispatch on a guessed model value
-# would be read as the entry the routing chose. awesome-kit declares no
-# install edge to llm-scripting-kit, so the probe below carries the floor.
-LLM_SCRIPTING_KIT_FLOOR = "0.46.0"
+# through llm-kit (`llm_kit.registry.models.discover_model_entries`). There is
+# no default model: the row's chosen entry is always passed. Posture: REFUSE --
+# without llm-kit there is no registry to resolve an id against, and a dispatch
+# on a guessed model value would be read as the entry the routing chose. No
+# legacy library is consulted in its place. awesome-kit declares no install
+# edge to llm-kit, so the probe below carries the floor: llm-kit 0.1.9 is the
+# first published release and carries `discover_model_entries`.
+LLM_KIT_FLOOR = "0.1.9"
 EXIT_REFUSED = 3
 DEFAULT_EFFORT = "high"
 DEFAULT_SANDBOX = "workspace-write"
@@ -250,27 +253,35 @@ class RefusedError(RuntimeError):
 
 
 def _discover_model_entries() -> Any:
-    """Return llm-scripting-kit's discover_model_entries, or refuse.
+    """Return llm-kit's discover_model_entries, or refuse.
 
     Absent and too old are diagnosed apart: a shared-lib link pins no
     version, and the two states have different remedies.
     """
     try:
-        import llm_scripting_kit as model_kit  # noqa: PLC0415
+        importlib.import_module("llm_kit")
     except ImportError as exc:
         raise RefusedError(
             "[awesome-kit] codex dispatch resolves --model through the "
-            "plugins-kit:llm-scripting-kit model registry, which is not "
+            "plugins-kit:llm-kit model registry, which is not "
             f"available here ({type(exc).__name__}). Install it with `claude "
-            "plugin install llm-scripting-kit@plugins-kit` and start a new session."
+            "plugin install llm-kit@plugins-kit` and start a new session."
         ) from exc
-    discover = getattr(model_kit, "discover_model_entries", None)
+    try:
+        registry = importlib.import_module("llm_kit.registry.models")
+    except ModuleNotFoundError as exc:
+        # Only a missing llm-kit module is "too old"; a broken import inside
+        # a present module is a real error and propagates.
+        if exc.name not in ("llm_kit.registry", "llm_kit.registry.models"):
+            raise
+        registry = None
+    discover = getattr(registry, "discover_model_entries", None)
     if not callable(discover):
         raise RefusedError(
-            "[awesome-kit] the plugins-kit:llm-scripting-kit installed here predates "
-            "discover_model_entries, so codex dispatch cannot resolve --model "
-            f"(awesome-kit needs llm-scripting-kit >= {LLM_SCRIPTING_KIT_FLOOR}). "
-            "Update it with `claude plugin update llm-scripting-kit@plugins-kit`."
+            "[awesome-kit] the plugins-kit:llm-kit installed here predates "
+            "llm_kit.registry.models.discover_model_entries, so codex dispatch "
+            f"cannot resolve --model (awesome-kit needs llm-kit >= {LLM_KIT_FLOOR}). "
+            "Update it with `claude plugin update llm-kit@plugins-kit`."
         )
     return discover
 

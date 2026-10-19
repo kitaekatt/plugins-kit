@@ -96,8 +96,8 @@
     },
     {
       "name": "awesome-kit",
-      "description": "Provides plugin-ecosystem, orchestrate, recap, debug-context, and verbose-updates skills for plugin browsing, delegated work, response distillation, answering why-did-you questions from context, and progress communication.",
-      "version": "0.71.0",
+      "description": "Provides plugin-ecosystem, orchestrate, debug-context, and verbose-updates skills for plugin browsing, delegated work, answering why-did-you questions from context, and progress communication.",
+      "version": "0.73.0",
       "author": {
         "name": "Christina"
       },
@@ -230,7 +230,7 @@
     {
       "name": "presence-kit",
       "description": "Is the user at the keyboard, away, or has the work been handed over, and how should Claude wait, ask and recap in each case? Sits above bootstrap, which provisions the environment, because presence is a policy question bootstrap cannot answer for any session.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "author": {
         "name": "Christina"
       },

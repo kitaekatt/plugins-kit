@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/llm-kit/skills/background-pipeline",
+  "decision": "none",
+  "source_sha": "46d06a33c436c89b94ae4bbb8c50807df1fae875",
+  "input_sha256": "69a911886471d00831749f9a2f6fc3c0bae2c20206e59756953059f5aa2063ad",
+  "input_shape_sha256": "fa0c48a55327312821a06537c69f7cb340ca0a937d53b5f255d51f5fd637cf6a",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

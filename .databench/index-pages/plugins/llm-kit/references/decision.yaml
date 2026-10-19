@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/llm-kit/references",
+  "decision": "none",
+  "source_sha": "46d06a33c436c89b94ae4bbb8c50807df1fae875",
+  "input_sha256": "ad7e05b4b73df4de104fa843ae9077a831ae77fda2b289cf1367ea4bb2470438",
+  "input_shape_sha256": "7e42e2a7099025ce5659ecd0c2211bea2b91a6cdeb4a8eb629f378c72a415fa3",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

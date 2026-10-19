@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "tests/llm-kit/fixtures/job_schema/llm-kit",
+  "decision": "none",
+  "source_sha": "a992accbd36482769c038380d0425854a025592b",
+  "input_sha256": "ca3e58cdff366e61b4f4c77443dcfaab2b944e820e8fced7d69958e209210efc",
+  "input_shape_sha256": "940148bacbc2420177238f9e143bacc337e174bbabddb6fe56642512ef704d4a",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

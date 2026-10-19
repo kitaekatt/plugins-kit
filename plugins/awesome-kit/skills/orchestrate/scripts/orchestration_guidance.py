@@ -27,6 +27,7 @@ Usage:
 
 import argparse
 from functools import partial
+import importlib
 import inspect
 import json
 import os
@@ -518,7 +519,7 @@ def window_rows(snapshot: Dict[str, Any], capacity: Dict[str, Any]) -> Tuple[Lis
 
 
 def format_reset_time(resets_at: Any) -> str:
-    """An absolute UTC reset time, in the form llm-scripting-kit renders."""
+    """An absolute UTC reset time, in the form llm-kit renders."""
     if not isinstance(resets_at, (int, float)):
         return "an unknown time"
     return time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(resets_at))
@@ -562,16 +563,39 @@ def live(records: Any) -> List[Dict[str, Any]]:
 HARNESS_NAMES = frozenset(("codex", "opencode"))
 CLAUDE_HARNESS = "claude"
 
-# The llm-scripting-kit release that shipped `describe` with the keywords
-# passed below, the bootstrap release that shipped model_declaration, and the
-# bootstrap release that shipped its `parse_entries` ({id, effort} entries).
-# awesome-kit's manifest has no install edge to llm-scripting-kit (the
-# renderer DEGRADES, dispatch.py REFUSES), so this floor is enforced by the
-# probes that read these constants, not by bootstrap.
-DECLARATION_FLOOR = "0.46.0"
+# The llm-kit release floor, the bootstrap release that shipped
+# model_declaration, and the bootstrap release that shipped its `parse_entries`
+# ({id, effort} entries). llm-kit 0.1.9 is the first published release; it
+# carries every API this renderer reads (`describe` with the keywords passed
+# below, `discover_model_entries`, `discover_seats`, the harness adapters and
+# the CodexAdapter `add_dirs` argument). awesome-kit's manifest has no install
+# edge to llm-kit (the renderer DEGRADES, dispatch.py REFUSES), so this floor is
+# enforced by the probes that read these constants, not by bootstrap. No
+# legacy library is consulted in llm-kit's place.
+LLM_KIT_FLOOR = "0.1.9"
+LLM_KIT_INSTALL = "claude plugin install llm-kit@plugins-kit"
+LLM_KIT_UPDATE = "claude plugin update llm-kit@plugins-kit"
 MODEL_DECLARATION_BOOTSTRAP = "0.129.0"
 PARSE_ENTRIES_BOOTSTRAP = "0.150.0"
 _DESCRIBE_KEYWORDS = ("caller", "self_ref", "backend_factory", "reachability_cache", "entries")
+
+
+def _llm_kit_member(module: str, name: str) -> Any:
+    """Return ``name`` from the llm_kit ``module``, or None when llm-kit lacks it.
+
+    ``llm_kit`` re-exports nothing at its root, so each API is read from the
+    subpackage that owns it. A llm-kit that predates the module (or the name)
+    is "too old" and yields None; any other import failure is a real error
+    and propagates.
+    """
+    try:
+        owner = importlib.import_module(module)
+    except ModuleNotFoundError as exc:
+        missing = exc.name or ""
+        if not (missing.startswith("llm_kit") and module.startswith(missing)):
+            raise
+        return None
+    return getattr(owner, name, None)
 
 
 def _backend_id(backend: Mapping[str, Any]) -> str:
@@ -616,24 +640,30 @@ def discover_model_definitions(project_root: Path) -> Tuple[Dict[str, Dict[str, 
     members and `--explain` receives a diagnostic.
     """
     try:
-        import llm_scripting_kit as model_kit  # noqa: PLC0415
+        importlib.import_module("llm_kit")
     except ImportError as exc:
         return {}, [
-            "llm_scripting_kit unavailable; harness model rows skipped "
+            "llm_kit unavailable; harness model rows skipped "
             f"({type(exc).__name__}). Install the owning plugin with "
-            "`claude plugin install llm-scripting-kit@plugins-kit` and start a "
+            f"`{LLM_KIT_INSTALL}` and start a "
             "new session to restore those rows."
         ]
 
-    discover = getattr(model_kit, "discover_model_entries", None)
-    harness_kind = getattr(model_kit, "HARNESS_KIND", None)
-    entry_type = getattr(model_kit, "EndpointEntry", None)
+    try:
+        discover = _llm_kit_member("llm_kit.registry.models", "discover_model_entries")
+        harness_kind = _llm_kit_member("llm_kit.registry.model_endpoints", "HARNESS_KIND")
+        entry_type = _llm_kit_member("llm_kit.registry.model_endpoints", "EndpointEntry")
+    except Exception as exc:  # noqa: BLE001 -- a broken llm_kit import degrades, disclosed
+        return {}, [
+            "llm_kit harness-model discovery could not be imported; harness model "
+            f"rows skipped ({type(exc).__name__}: {exc})"
+        ]
     if not callable(discover) or harness_kind != "harness" or entry_type is None:
         return {}, [
-            "llm_scripting_kit is importable but lacks the harness-model discovery "
+            "llm_kit is importable but lacks the harness-model discovery "
             "feature, so the linked shared library is older than this policy "
-            "renderer requires; harness model rows skipped. Update it with "
-            "`claude plugin update llm-scripting-kit@plugins-kit` and start a new "
+            f"renderer requires (llm-kit >= {LLM_KIT_FLOOR}); harness model rows "
+            f"skipped. Update it with `{LLM_KIT_UPDATE}` and start a new "
             "session."
         ]
 
@@ -641,14 +671,14 @@ def discover_model_definitions(project_root: Path) -> Tuple[Dict[str, Dict[str, 
         discovery = discover(project_root=str(project_root))
     except Exception as exc:  # noqa: BLE001 -- stale/version-skewed shared libs degrade
         return {}, [
-            "llm_scripting_kit harness-model discovery failed; harness model rows skipped "
+            "llm_kit harness-model discovery failed; harness model rows skipped "
             f"({type(exc).__name__}: {exc})"
         ]
 
     entries = getattr(discovery, "entries", discovery)
     if not isinstance(entries, Mapping):
         return {}, [
-            "llm_scripting_kit harness-model discovery returned an unsupported value; "
+            "llm_kit harness-model discovery returned an unsupported value; "
             "harness model rows skipped"
         ]
 
@@ -787,14 +817,14 @@ def load_model_declaration() -> Any:
 
 
 def load_declaration_api() -> Tuple[Optional[SimpleNamespace], Optional[str]]:
-    """Return llm-scripting-kit's declaration API, or the note saying why not.
+    """Return llm-kit's declaration API, or the note saying why not.
 
     DEGRADES rather than refuses. Without the library the harness still
     routes the Claude core ids, so each row lists the core ids it declares, in
     declared order, and the note -- which the caller renders into the policy
     -- says the menu is reduced. The probe targets ``describe`` and the
     keyword arguments this renderer passes it, the newest call shape used
-    (llm-scripting-kit ``DECLARATION_FLOOR``): an older linked copy can
+    (llm-kit ``LLM_KIT_FLOOR``): an older linked copy can
     import cleanly while lacking them, and absence and staleness have
     different remedies, so their messages differ.
     """
@@ -804,29 +834,35 @@ def load_declaration_api() -> Tuple[Optional[SimpleNamespace], Optional[str]]:
         "and without the choice and re-selection rule"
     )
     try:
-        import llm_scripting_kit as model_kit  # noqa: PLC0415
+        importlib.import_module("llm_kit")
     except ImportError as exc:
         return None, (
-            f"llm_scripting_kit unavailable ({type(exc).__name__}); {reduced}. Install "
-            "the owning plugin with `claude plugin install llm-scripting-kit@plugins-kit` "
+            f"llm_kit unavailable ({type(exc).__name__}); {reduced}. Install "
+            f"the owning plugin with `{LLM_KIT_INSTALL}` "
             "and start a new session."
         )
 
-    describe = getattr(model_kit, "describe", None)
+    try:
+        describe = _llm_kit_member("llm_kit.dispatch.declaration", "describe")
+        api = SimpleNamespace(
+            describe=describe,
+            no_usable=_llm_kit_member("llm_kit.dispatch.declaration", "NoUsableRoutingTarget"),
+            reachability=_llm_kit_member("llm_kit.dispatch.reachability", "Reachability"),
+            resolve_error=_llm_kit_member("llm_kit.registry.models", "EndpointResolveError"),
+            reachable=_llm_kit_member("llm_kit.dispatch.reachability", "STATUS_REACHABLE"),
+            unreachable=_llm_kit_member("llm_kit.dispatch.reachability", "STATUS_UNREACHABLE"),
+        )
+    except Exception as exc:  # noqa: BLE001 -- a broken llm_kit import degrades, disclosed
+        return None, (
+            f"llm_kit declaration API could not be imported ({type(exc).__name__}: "
+            f"{exc}); {reduced}."
+        )
     parameters: Mapping[str, Any] = {}
     if callable(describe):
         try:
             parameters = inspect.signature(describe).parameters
         except (TypeError, ValueError):
             parameters = {}
-    api = SimpleNamespace(
-        describe=describe,
-        no_usable=getattr(model_kit, "NoUsableRoutingTarget", None),
-        reachability=getattr(model_kit, "Reachability", None),
-        resolve_error=getattr(model_kit, "EndpointResolveError", None),
-        reachable=getattr(model_kit, "STATUS_REACHABLE", None),
-        unreachable=getattr(model_kit, "STATUS_UNREACHABLE", None),
-    )
     if (
         not callable(describe)
         or any(name not in parameters for name in _DESCRIBE_KEYWORDS)
@@ -838,10 +874,10 @@ def load_declaration_api() -> Tuple[Optional[SimpleNamespace], Optional[str]]:
         or not api.unreachable
     ):
         return None, (
-            f"the linked llm_scripting_kit is older than {DECLARATION_FLOOR} (no "
+            f"the linked llm_kit is older than {LLM_KIT_FLOOR} (no "
             "`describe` accepting the keywords this renderer passes); "
-            f"{reduced}. Update it with `claude plugin update "
-            "llm-scripting-kit@plugins-kit` and start a new session."
+            f"{reduced}. Update it with `{LLM_KIT_UPDATE}` "
+            "and start a new session."
         )
     return api, None
 
@@ -1034,7 +1070,7 @@ def _reduced_row(
     reason: str,
     efforts: Optional[Mapping[str, Optional[str]]] = None,
 ) -> Dict[str, Any]:
-    """One row's menu without llm-scripting-kit: its core ids, in declared order."""
+    """One row's menu without llm-kit: its core ids, in declared order."""
     efforts = efforts or {}
     kept = [entry_id for entry_id in ids if entry_id in core_ids]
     if not kept:
@@ -1087,7 +1123,7 @@ def resolve_routing_models(
 ) -> Tuple[List[Dict[str, Any]], List[str]]:
     """Resolve each routing row's model declaration into its rendered menu.
 
-    A row's `models` is a model declaration. With llm-scripting-kit's
+    A row's `models` is a model declaration. With llm-kit's
     declaration API (`api`), the menu is ``describe(caller="session")``:
     unresolved and unroutable ids are skipped SILENTLY -- no note on any
     surface -- out-of-quota and unreachable entries stay visible, the menu
@@ -1180,7 +1216,7 @@ def resolve_routing_models(
                 row = _describe_row(api, ids, context, efforts)
             except Exception as exc:  # noqa: BLE001 -- a version-skewed library degrades
                 note = (
-                    "llm_scripting_kit describe() failed "
+                    "llm_kit describe() failed "
                     f"({type(exc).__name__}: {exc}); routing rows list only the Claude "
                     "models the harness routes by itself, in declared order"
                 )
@@ -1189,9 +1225,9 @@ def resolve_routing_models(
                 row = None
         if row is None:
             reason = (
-                "llm_scripting_kit is unavailable here"
+                "llm_kit is unavailable here"
                 if api is None
-                else "llm_scripting_kit describe() failed here"
+                else "llm_kit describe() failed here"
             )
             row = _reduced_row(ids, core_ids, self_ref, reason, efforts)
 
@@ -1348,7 +1384,7 @@ def render_routing(
 ) -> None:
     """Render the ordered shape rows, each with its model-declaration menu.
 
-    The menu header, each entry line, and the rule lines are llm-scripting-kit
+    The menu header, each entry line, and the rule lines are llm-kit
     ``describe`` output passed through verbatim: the choice, announcement and
     re-selection rule is owned (and tested) there, never restated here. The
     rule is identical for every row, so it renders once, after the rows.
@@ -1681,15 +1717,17 @@ def adapter_command_text_provider(
         break
 
     try:
-        import llm_scripting_kit as model_kit  # noqa: PLC0415
+        importlib.import_module("llm_kit")
+        resolve_adapter = _llm_kit_member(
+            "llm_kit.adapters.harness_adapters", "resolve_harness_adapter"
+        )
+        entry_type = _llm_kit_member("llm_kit.registry.model_endpoints", "EndpointEntry")
+        harness_kind = _llm_kit_member("llm_kit.registry.model_endpoints", "HARNESS_KIND")
     except Exception as exc:  # noqa: BLE001 -- optional/version-skewed library degrades
         return _command_fallback(
-            backend, notes, f"llm_scripting_kit unavailable: {type(exc).__name__}"
+            backend, notes, f"llm_kit unavailable: {type(exc).__name__}"
         )
 
-    resolve_adapter = getattr(model_kit, "resolve_harness_adapter", None)
-    entry_type = getattr(model_kit, "EndpointEntry", None)
-    harness_kind = getattr(model_kit, "HARNESS_KIND", None)
     if (
         not callable(resolve_adapter)
         or not callable(entry_type)
@@ -1698,7 +1736,7 @@ def adapter_command_text_provider(
         return _command_fallback(
             backend,
             notes,
-            "llm_scripting_kit lacks the harness adapter feature",
+            "llm_kit lacks the harness adapter feature",
         )
     if selected_id is None:
         return _command_fallback(
@@ -1733,17 +1771,15 @@ def adapter_command_text_provider(
             # message ("build_argv() got an unexpected keyword argument
             # 'add_dirs'") names neither the owning plugin nor the remedy, and
             # is indistinguishable from an adapter bug. add_dirs was added in
-            # llm-scripting-kit 0.10.0 -- the first published version carrying
-            # it (bootstrap 7e4b18ab added the kwarg without a version bump;
-            # the next bump, same day, was to 0.10.0).
+            # llm-kit LLM_KIT_FLOOR -- the first published version, which
+            # carries it.
             if "add_dirs" not in inspect.signature(build_argv).parameters:
                 return _command_fallback(
                     backend,
                     notes,
-                    "llm-scripting-kit is older than 0.10.0 (its CodexAdapter."
+                    f"llm-kit is older than {LLM_KIT_FLOOR} (its CodexAdapter."
                     "build_argv has no add_dirs parameter, so the scratchpad "
-                    "--add-dir cannot be rendered); update with `claude "
-                    "plugin update llm-scripting-kit@plugins-kit`",
+                    f"--add-dir cannot be rendered); update with `{LLM_KIT_UPDATE}`",
                 )
             # The scratchpad --add-dir is not decoration. Under
             # `-s workspace-write` the session scratchpad sits outside the
@@ -1911,11 +1947,14 @@ def discover_consult_seats(
         return None, "self_not_provided", None
 
     try:
-        import llm_scripting_kit as model_kit  # noqa: PLC0415
+        importlib.import_module("llm_kit")
     except ImportError as exc:
         return None, "library_absent", str(exc)
 
-    discover = getattr(model_kit, "discover_seats", None)
+    try:
+        discover = _llm_kit_member("llm_kit.dispatch.seats", "discover_seats")
+    except Exception as exc:  # noqa: BLE001 -- discovery errors are rendered
+        return None, "discovery_failed", f"{type(exc).__name__}: {exc}"
     if not callable(discover):
         return None, "library_too_old", None
 
@@ -1983,14 +2022,13 @@ def explain_consult_seats(
         print("seats  skipped   --self was not provided")
     elif status == "library_absent":
         print(
-            "seats  skipped   llm_scripting_kit is absent; install with "
-            "`claude plugin install llm-scripting-kit@plugins-kit`"
+            "seats  skipped   llm_kit is absent; install with "
+            f"`{LLM_KIT_INSTALL}`"
         )
     elif status == "library_too_old":
         print(
-            "seats  skipped   llm_scripting_kit lacks discover_seats; owner "
-            "version is 0.28.0; update with `claude plugin update "
-            "llm-scripting-kit@plugins-kit`"
+            "seats  skipped   llm_kit lacks discover_seats; owner "
+            f"version is {LLM_KIT_FLOOR}; update with `{LLM_KIT_UPDATE}`"
         )
     elif status == "discovery_failed":
         error_class = detail.split(":", 1)[0] if detail else "Exception"
@@ -2083,7 +2121,7 @@ def render(
     # The other three optional-library sites (model definitions, quota, the
     # adapter command renderer) all disclose a degraded render via
     # degradation_notes. Without this note, a too-old or absent
-    # llm_scripting_kit makes the whole "## Consult seats" section vanish
+    # llm_kit makes the whole "## Consult seats" section vanish
     # with nothing said -- and a
     # render missing the section is indistinguishable from one where no seat
     # qualified, even though SKILL.md tells the reader a healthy render is
@@ -2091,14 +2129,13 @@ def render(
     # simply not requested) and stays silent, matching render_consult_seats.
     if seat_status == "library_absent":
         degradation_notes.append(
-            "consult seats unavailable: llm_scripting_kit is absent; install "
-            "with `claude plugin install llm-scripting-kit@plugins-kit`"
+            "consult seats unavailable: llm_kit is absent; install "
+            f"with `{LLM_KIT_INSTALL}`"
         )
     elif seat_status == "library_too_old":
         degradation_notes.append(
-            "consult seats unavailable: llm_scripting_kit lacks discover_seats; "
-            "owner version is 0.28.0; update with `claude plugin update "
-            "llm-scripting-kit@plugins-kit`"
+            "consult seats unavailable: llm_kit lacks discover_seats; "
+            f"owner version is {LLM_KIT_FLOOR}; update with `{LLM_KIT_UPDATE}`"
         )
     render_consult_seats(seat_result, seat_status, seat_detail, out)
     render_backends(

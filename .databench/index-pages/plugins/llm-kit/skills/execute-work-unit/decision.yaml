@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/llm-kit/skills/execute-work-unit",
+  "decision": "none",
+  "source_sha": "46d06a33c436c89b94ae4bbb8c50807df1fae875",
+  "input_sha256": "a05fc02333b403ca1082b6ccdba48a353da2771ff60c306c1cce4f099e702110",
+  "input_shape_sha256": "62e39a6f05ef41757e1d4617dc743ae1d1b257aa6707f2bab5ae0c0cf5a1efab",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

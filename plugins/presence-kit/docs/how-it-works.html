@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Presence: how it works</title>
+<!-- presence.md sha256: af245cb894e2b105f25f683a810fa9b3611b074b13d25b22ec99e9f46d4a858f -->
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --ink: #1d2330; --muted: #5d6677; --line: #e2e6ec;
+    --here: #1f8a4c; --here-soft: #e5f5ec;
+    --away: #a86a00; --away-soft: #fbf1dc;
+    --auto: #6b4fc8; --auto-soft: #efebfb;
+    --accent: #2f6fde; --accent-soft: #e8f0fd;
+    --stop: #c2412d; --stop-soft: #fbeae7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --card: #1a1f27; --ink: #e6e9ef; --muted: #9aa3b2; --line: #2b323d;
+      --here: #4cc483; --here-soft: #17301f;
+      --away: #f0b545; --away-soft: #362a12;
+      --auto: #a993ff; --auto-soft: #272040;
+      --accent: #6ea0ff; --accent-soft: #1e2a40;
+      --stop: #ff7d68; --stop-soft: #3a1d18;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 17px/1.6 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 44px 24px 80px; }
+  h1 { font-size: 34px; margin: 0 0 8px; }
+  .lede { font-size: 19px; color: var(--muted); margin: 0 0 34px; }
+  code { font-family: Consolas, "SF Mono", Menlo, monospace; font-size: .86em;
+    background: var(--accent-soft); padding: 1px 6px; border-radius: 5px; }
+
+  .modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 34px; }
+  @media (max-width: 760px) { .modes { grid-template-columns: 1fr; } }
+  .mode { border-radius: 14px; padding: 22px; border: 1px solid var(--line); background: var(--card); }
+  .mode .badge { display: inline-block; font-size: 13px; font-weight: 800; letter-spacing: .06em;
+    text-transform: uppercase; padding: 5px 12px; border-radius: 999px; margin-bottom: 12px; }
+  .mode h2 { font-size: 20px; margin: 0 0 6px; }
+  .mode .how { font-size: 15px; color: var(--muted); margin: 0 0 14px; }
+  .mode ul { margin: 0; padding-left: 18px; }
+  .mode li { margin: 6px 0; }
+  .here { border-top: 5px solid var(--here); } .here .badge { background: var(--here-soft); color: var(--here); }
+  .away { border-top: 5px solid var(--away); } .away .badge { background: var(--away-soft); color: var(--away); }
+  .auto { border-top: 5px solid var(--auto); } .auto .badge { background: var(--auto-soft); color: var(--auto); }
+
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 28px; margin-bottom: 22px; }
+  section h2 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+
+  .timeline { list-style: none; margin: 0; padding: 0; position: relative; }
+  .timeline::before { content: ""; position: absolute; left: 15px; top: 8px; bottom: 8px; width: 2px; background: var(--line); }
+  .timeline li { position: relative; padding: 0 0 22px 50px; }
+  .timeline li:last-child { padding-bottom: 0; }
+  .dot { position: absolute; left: 6px; top: 4px; width: 20px; height: 20px; border-radius: 50%; border: 4px solid var(--card); }
+  .d-here { background: var(--here); } .d-away { background: var(--away); } .d-auto { background: var(--auto); }
+  .timeline b { display: block; font-size: 17px; }
+  .timeline span { color: var(--muted); }
+
+  .waits { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 760px) { .waits { grid-template-columns: 1fr; } }
+  .wcard { border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+  .wcard b { display: block; margin-bottom: 6px; }
+  .wcard p { margin: 0 0 12px; color: var(--muted); font-size: 15px; }
+  .flow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .chip { padding: 6px 12px; border-radius: 8px; background: var(--accent-soft); font-size: 14px; font-weight: 600; }
+  .op { color: var(--muted); font-weight: 700; }
+  .promise { margin-top: 16px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  @media (max-width: 760px) { .promise { grid-template-columns: 1fr; } }
+  .promise div { background: var(--here-soft); border-radius: 10px; padding: 12px 14px; font-size: 15px; }
+  .promise div b { color: var(--here); display: block; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 16px; }
+  th, td { text-align: left; padding: 13px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  td:first-child { white-space: nowrap; font-weight: 700; }
+  .pill { display: inline-block; font-size: 13px; font-weight: 700; padding: 3px 10px; border-radius: 999px; }
+  .p-all { background: var(--accent-soft); color: var(--accent); }
+  .p-here { background: var(--here-soft); color: var(--here); }
+  .p-away { background: var(--away-soft); color: var(--away); }
+  .p-auto { background: var(--auto-soft); color: var(--auto); }
+  .p-you { background: var(--stop-soft); color: var(--stop); }
+
+  .seeing { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 760px) { .seeing { grid-template-columns: 1fr; } }
+  .see { border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
+  .see .q { font-size: 13px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .see .a { margin-top: 6px; }
+  .quote { font-family: Consolas, "SF Mono", Menlo, monospace; font-size: 14px; background: var(--accent-soft);
+    padding: 8px 12px; border-radius: 8px; margin-top: 8px; }
+
+  .commands { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  @media (max-width: 760px) { .commands { grid-template-columns: 1fr; } }
+  .cmd { border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .cmd .k { font-family: Consolas, "SF Mono", Menlo, monospace; font-weight: 700; font-size: 17px; }
+  .cmd p { margin: 6px 0 0; color: var(--muted); font-size: 15px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>How Claude handles presence</h1>
+<p class="lede">The <code>presence-kit</code> plugin sets how Claude behaves when you are here, when you step away, and when you hand work over. You opt in by installing it. Every behavior has an id and can be turned off.</p>
+
+<div class="modes">
+  <div class="mode here">
+    <span class="badge">You're here</span>
+    <h2>Present</h2>
+    <p class="how">The default. Your own message puts Claude back here.</p>
+    <ul>
+      <li>Decides how to build it, routing, checks, and in-scope fixes</li>
+      <li>Asks you the decisions you have kept for yourself, what the product is for, and unclear intent that would waste real work</li>
+      <li>Never holds the prompt with a foreground wait, so you can talk anytime</li>
+    </ul>
+  </div>
+  <div class="mode away">
+    <span class="badge">You stepped away</span>
+    <h2>Afk</h2>
+    <p class="how">You type /presence-kit:afk, Claude sees you are leaving, or you send nothing of your own for 10 minutes. "Go" does not count.</p>
+    <ul>
+      <li>Keeps working on everything that doesn't need you</li>
+      <li>Parks your questions for the recap instead of stopping</li>
+      <li>Keeps updates short: nobody is reading</li>
+      <li>Notifies you only when it needs your input</li>
+    </ul>
+  </div>
+  <div class="mode auto">
+    <span class="badge">You handed it over</span>
+    <h2>Autonomous</h2>
+    <p class="how">Only on an explicit hand-over, or <code>/presence-kit:autonomous</code>. It records the goal and implies afk.</p>
+    <ul>
+      <li>Decides everything not gated; asks only what a gate requires</li>
+      <li>Each load-bearing call gets a line in the recap</li>
+      <li>Ends when you revoke it or the goal is done</li>
+    </ul>
+  </div>
+</div>
+
+<section>
+  <h2>The plugin</h2>
+  <p class="sub">One plugin, three skills. Typing the full <code>plugin:skill</code> form is how you invoke them.</p>
+  <div class="commands">
+    <div class="cmd"><div class="k">/presence-kit:afk</div><p>You are stepping away. Claude covers running jobs, parks questions, and ends with a recap.</p></div>
+    <div class="cmd"><div class="k">/presence-kit:autonomous</div><p>Hand work over to finish without you. Claude decides instead of asking and recaps when the goal is done.</p></div>
+    <div class="cmd"><div class="k">/presence-kit:recap</div><p>A recap now, or the one that fits the trigger. Bare <code>/recap</code> is a Claude Code built-in, so the plugin one needs the full name.</p></div>
+  </div>
+</section>
+
+<section>
+  <h2>How afk starts and ends</h2>
+  <p class="sub">Claude decides who sent a prompt. A hook line only suggests it.</p>
+  <div class="seeing">
+    <div class="see"><div class="q">Afk starts: you say so</div><div class="a">You type <code>/presence-kit:afk</code>, or Claude recognizes that you are leaving. This is <code>afk-on-departure</code>. Reacting to a departure word such as "afk" in a plain message is not part of this release.</div></div>
+    <div class="see"><div class="q">Afk starts: you go quiet</div><div class="a">You send no message of your own for <code>afk_quiet_minutes</code> (default 10). The stop hook decides this (<code>afk-on-quiet</code>).</div></div>
+    <div class="see"><div class="q">Not you</div><div class="a">A scheduled task, an agent report, a task notification, or another session's message is not you.</div></div>
+    <div class="see"><div class="q">Back</div><div class="a">Your own message while away always makes you present. With <code>recap-on-return</code> on, Claude gives the return recap; the stop hook asks for it if it is missing. With it off, you are present again and no return recap runs.</div></div>
+  </div>
+</section>
+
+<section>
+  <h2>A typical session</h2>
+  <p class="sub">What you experience from start to finish.</p>
+  <ul class="timeline">
+    <li><span class="dot d-here"></span><b>You're working with Claude</b><span>It asks you only what's genuinely yours to decide and handles the rest.</span></li>
+    <li><span class="dot d-away"></span><b>You type /presence-kit:afk and leave</b><span>Or you go quiet for 10 minutes. Claude covers every running job that is not an agent, then keeps going.</span></li>
+    <li><span class="dot d-away"></span><b>While you're gone</b><span>Updates stay short because nobody is reading them. A question for you gets parked, and Claude carries on with everything else.</span></li>
+    <li><span class="dot d-away"></span><b>Only if it needs you</b><span>You get a push notification when your input is needed. No other pings.</span></li>
+    <li><span class="dot d-away"></span><b>The work runs out</b><span>If nothing is left running, the turn ends with one recap. In autonomous mode, Claude either keeps working or, if the goal is done, writes the final recap.</span></li>
+    <li><span class="dot d-here"></span><b>You come back to a recap</b><span>Claude greets you with what finished, what was decided for you, what is waiting on you, and what is still running. Nothing is dropped: the recap carries every result, decision, question and running job.</span></li>
+  </ul>
+</section>
+
+<section>
+  <h2>Recap fits its trigger</h2>
+  <p class="sub">There is no one-size recap. Its shape follows what started it.</p>
+  <table>
+    <thead><tr><th>Trigger</th><th>Covers</th><th>Contains</th></tr></thead>
+    <tbody>
+      <tr><td><span class="pill p-here">You ask</span></td><td>Recent turns, widened if thin</td><td>What got done; decisions I need from you</td></tr>
+      <tr><td><span class="pill p-away">You return</span></td><td>Everything since you left</td><td>Finished, decided for you, waiting on you, and still running if jobs remain</td></tr>
+      <tr><td><span class="pill p-all">Return after a recap</span></td><td>&mdash;</td><td>Nothing new. The standing recap is not repeated</td></tr>
+      <tr><td><span class="pill p-away">Afk ends</span></td><td>Everything since you left</td><td>Finished, decided for you, waiting on you. Written to be read cold</td></tr>
+      <tr><td><span class="pill p-auto">Autonomous done</span></td><td>Everything since the hand-over</td><td>Outcome against the goal, each load-bearing decision, waiting on you</td></tr>
+    </tbody>
+  </table>
+  <p class="sub" style="margin-top:16px">After a recap, if your reply has no content, Claude asks the open decisions in one batch. One ending gives exactly one recap. A recap is recorded with <code>recap-done</code>, which is what the stop hook checks: recap-shaped prose without it satisfies nothing.</p>
+</section>
+
+<section>
+  <h2>Waiting on background work</h2>
+  <p class="sub">The same in every mode (<code>waiting-guard</code>). The stop hook reads the list of running background tasks.</p>
+  <div class="waits">
+    <div class="wcard"><b>An agent or workflow is running</b><p>Nothing extra needed. The terminal shows working by itself.</p>
+      <div class="flow"><span class="chip">Agent</span><span class="op">&rarr;</span><span class="chip">Terminal shows working</span></div></div>
+    <div class="wcard"><b>A shell, Codex CLI, or external job is running</b><p>Claude adds a Monitor for progress. It also adds a waiter agent.</p>
+      <div class="flow"><span class="chip">Job</span><span class="op">+</span><span class="chip">Monitor</span><span class="op">+</span><span class="chip">Waiter agent</span></div></div>
+  </div>
+  <div class="promise">
+    <div><b>The last line says it</b>While owned work runs or a session cron is pending, the turn ends with "Waiting on &lt;what&gt;".</div>
+    <div><b>You can always talk</b>Claude never holds the main session with a foreground wait.</div>
+    <div><b>Stalls get caught</b>The waiter reports a job that stops making progress.</div>
+  </div>
+  <p class="sub" style="margin-top:16px">The waiter agent runs on <code>waiter_model</code> (default "haiku"), watches one job, reports one line, and changes nothing. Its completion wakes Claude.</p>
+</section>
+
+<section>
+  <h2>What the stop hook nudges about</h2>
+  <p class="sub">When Claude tries to stop, the hook checks four things. It acts only in a session you are attending.</p>
+  <div class="seeing">
+    <div class="see"><div class="q">You are back</div><div class="a">Claude must give the return recap first (<code>recap-on-return</code>).</div></div>
+    <div class="see"><div class="q">A job needs cover</div><div class="a">A non-agent job runs with no waiter agent covering it (<code>waiting-guard</code>).</div></div>
+    <div class="see"><div class="q">Work is running</div><div class="a">The last line must be "Waiting on &lt;what&gt;" (<code>waiting-guard</code>).</div></div>
+    <div class="see"><div class="q">Away and nothing is running</div><div class="a">End with one recap. In autonomous mode: keep working, or recap if the goal is done (<code>ending-recap</code>).</div></div>
+  </div>
+  <div class="promise">
+    <div><b>One nudge</b>Every unmet condition goes into a single message, so the recap is never crowded out.</div>
+    <div><b>Three at most</b>After three nudges for one prompt, the hook lets Claude stop and shows you what was unresolved.</div>
+    <div><b>Listed in the recap</b>Unresolved checks appear under "Waiting on you" in the next recap.</div>
+  </div>
+</section>
+
+<section>
+  <h2>Who decides what</h2>
+  <p class="sub">Being here or away changes how a question reaches you, not who answers it.</p>
+  <table>
+    <thead><tr><th>When</th><th>Claude decides</th><th>You decide</th></tr></thead>
+    <tbody>
+      <tr><td><span class="pill p-all">Any mode</span></td><td>Implementation, routing, verification, in-scope fixes, git you already authorized, calls that are cheap to reverse</td><td>&mdash;</td></tr>
+      <tr><td><span class="pill p-here">Present</span></td><td>The above</td><td>Decisions you've claimed, what the product is for, and costly ambiguity about your intent</td></tr>
+      <tr><td><span class="pill p-away">Afk</span></td><td>The above, and keeps going on independent work</td><td>The same questions, parked for the recap</td></tr>
+      <tr><td><span class="pill p-auto">Autonomous</span></td><td>Everything not gated; each load-bearing call gets a line in the recap</td><td>Nothing beyond what a gate requires</td></tr>
+      <tr><td><span class="pill p-you">User only</span></td><td>Never</td><td>Permissions, auto mode, publication gates, and standing prohibitions hold in every mode</td></tr>
+    </tbody>
+  </table>
+  <p class="sub" style="margin-top:16px">Where <code>awesome-kit:orchestrate</code> is installed, its consultation policy owns seat routing for a load-bearing call. presence-kit does not change that policy.</p>
+</section>
+
+<section>
+  <h2>What you'll see</h2>
+  <p class="sub">How Claude reports, in each situation.</p>
+  <div class="seeing">
+    <div class="see"><div class="q">Claude is waiting on a job</div><div class="a">The turn ends with what it's waiting on.</div><div class="quote">Waiting on the test run</div></div>
+    <div class="see"><div class="q">While you're away</div><div class="a">Short updates, questions held for the recap, and a notification only when your input is needed.</div></div>
+    <div class="see"><div class="q">You were away</div><div class="a">A recap since you left: finished, decided for you, waiting on you, still running.</div></div>
+    <div class="see"><div class="q">You type /presence-kit:recap</div><div class="a">A recap on demand, fit to the moment.</div></div>
+    <div class="see"><div class="q">A settings problem</div><div class="a">A message starts with the file path and says what is wrong. Presence behavior is unavailable until you fix the file. Your prompt still goes through.</div></div>
+  </div>
+</section>
+
+<section>
+  <h2>Configuration</h2>
+  <p class="sub">A small JSON file. Turn behaviors off, or change three values. Nothing else is configurable.</p>
+  <div class="quote">{"behaviors": {"recap-on-return": false}, "values": {"afk_quiet_minutes": 15}}</div>
+  <table style="margin-top:16px">
+    <thead><tr><th>Behavior</th><th>What it does (all on by default)</th></tr></thead>
+    <tbody>
+      <tr><td><code>afk-on-departure</code></td><td>Claude recognizing you are leaving enters afk (the departure-word hook is not in this release)</td></tr>
+      <tr><td><code>afk-on-quiet</code></td><td>Quiet for <code>afk_quiet_minutes</code> enters afk</td></tr>
+      <tr><td><code>autonomous-on-handover</code></td><td>An explicit hand-over enters autonomous</td></tr>
+      <tr><td><code>recap-on-return</code></td><td>Your first message after afk gets the return recap</td></tr>
+      <tr><td><code>waiting-guard</code></td><td>The waiting rule, checked at the stop</td></tr>
+      <tr><td><code>ending-recap</code></td><td>An away turn with nothing running ends with one recap (in autonomous mode: or keeps working until the goal is done)</td></tr>
+      <tr><td><code>terse-while-away</code>, <code>park-questions</code>, <code>notify-for-input</code></td><td>Short updates, questions wait for the recap, pings only when you're needed</td></tr>
+    </tbody>
+  </table>
+  <table style="margin-top:16px">
+    <thead><tr><th>Value</th><th>Default</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>afk_quiet_minutes</code></td><td>10</td><td>Minutes of quiet before afk</td></tr>
+      <tr><td><code>departure_words</code></td><td>["afk"]</td><td>No effect in this release (the prompt hook that reads it comes later); whole words, any case; the list is replaced, not extended</td></tr>
+      <tr><td><code>waiter_model</code></td><td>"haiku"</td><td>Model for the waiter agent</td></tr>
+    </tbody>
+  </table>
+  <p class="sub" style="margin-top:16px">Files, lowest to highest. A later file wins, key by key; lists and single values replace. An absent file is skipped.</p>
+  <table>
+    <tbody>
+      <tr><td>Shipped</td><td><code>defaults/presence-kit.json</code> in the plugin</td></tr>
+      <tr><td>You</td><td><code>~/.claude/config/presence-kit.json</code> (<code>$CLAUDE_CONFIG_DIR/config/presence-kit.json</code> when <code>CLAUDE_CONFIG_DIR</code> is set)</td></tr>
+      <tr><td>Project</td><td><code>&lt;project&gt;/.claude/presence-kit.json</code>, committed to share</td></tr>
+    </tbody>
+  </table>
+  <p class="sub" style="margin-top:16px">JSON has no comments, so a key that starts with <code>$comment</code> is ignored at every level. An invalid file is reported loudly and never falls back: presence behavior stays unavailable until you fix it. Your own <code>/presence-kit:afk</code> and <code>/presence-kit:autonomous</code> still work when their behavior is off.</p>
+</section>
+
+<section>
+  <h2>What you type</h2>
+  <p class="sub">Three ways to steer it.</p>
+  <div class="commands">
+    <div class="cmd"><div class="k">/presence-kit:afk</div><p>Type it when you are leaving. Claude switches to afk.</p></div>
+    <div class="cmd"><div class="k">/presence-kit:autonomous</div><p>Hand over fully. <code>/loop</code>, routines, <code>claude -p</code>, and <code>--bg</code> never start it.</p></div>
+    <div class="cmd"><div class="k">any message</div><p>You're back. Claude gives the return recap, answers, and you are present again.</p></div>
+  </div>
+</section>
+
+</div>
+</body>
+</html>

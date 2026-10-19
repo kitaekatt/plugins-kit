@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/llm-kit/lib/llm_kit/pipeline/artifacts/roundtrip",
+  "decision": "none",
+  "source_sha": "f43f78247ee89fee23be4f1cf28f9e596aadd34c",
+  "input_sha256": "ad5586703f7638fed973ed32ee6ee3b8c95dfce228c26de4acfb4af5b38d8bc8",
+  "input_shape_sha256": "1413103b20a80a0de302d482604b0984b376f2552505d4f149bcb8a7718d693e",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

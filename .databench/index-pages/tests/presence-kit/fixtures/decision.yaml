@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "tests/presence-kit/fixtures",
+  "decision": "none",
+  "source_sha": "d1d3e74fb347554216f73d550e8a828129d3b41b",
+  "input_sha256": "54588f9605c595aae27f9b624598d0335e0be52e0e5fcbb1790d4b119777feca",
+  "input_shape_sha256": "ff08e9171870d5a47457e80f257770d5e227de25f5aec1ad882a05384b868967",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

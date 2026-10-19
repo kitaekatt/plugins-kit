@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/llm-kit/lib/llm_kit/pipeline/execution/drivers",
+  "decision": "none",
+  "source_sha": "f65ee40708693be9f51f1d09a6ac20f2ee92ed0c",
+  "input_sha256": "8b8ec7d05f357a9c4429541cec3b90eb671e71bfff16a41521ed069dbb589df6",
+  "input_shape_sha256": "8ecc22af49619694e6d143a6bebc0f974edc06e1b5e74466bcf76466ae6d63b4",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

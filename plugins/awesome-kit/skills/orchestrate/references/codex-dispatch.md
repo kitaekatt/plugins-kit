@@ -6,7 +6,7 @@ the launch -- the rendered policy carries the summary; this carries the detail.
 
 Rendered policy: `scripts/orchestration_guidance.py`. Backend record and the
 one-line command: `defaults/orchestration.yaml`, `backends[id: codex]`.
-Command source: `llm_scripting_kit.harness_adapters.CodexAdapter`. The
+Command source: `llm_kit.adapters.harness_adapters.CodexAdapter`. The
 adapter builds argv only. The launch adds the stream redirects shown below.
 
 ## When a harness is warranted at all
@@ -300,9 +300,9 @@ cache entry. Run it with the plugin venv's Python; for example, on macOS/Linux:
 
 Windows uses `.venv/Scripts/python.exe`. A dispatch names its model with
 `--model <entry-id>`: the routing row's chosen id (for example `sol`), whose
-llm-scripting-kit registry entry must have harness `codex`. The script resolves
+llm-kit registry entry must have harness `codex`. The script resolves
 it to the entry's model value and, when `--effort` is omitted, the entry's own
-effort. There is no default model. Without llm-scripting-kit the script refuses
+effort. There is no default model. Without llm-kit the script refuses
 (exit 3) and names the plugin to install or update. Its first printed line is the entry
 directory handle, prefixed
 `CACHE HIT ` when served from cache; the finished run then prints the

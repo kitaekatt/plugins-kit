@@ -1,0 +1,15 @@
+{
+ "session_id": "42128eef-3596-4352-be1b-2ac5267cf044",
+ "transcript_path": "<HOME>\\.claude\\projects\\<SCRATCH_KEY>\\42128eef-3596-4352-be1b-2ac5267cf044.jsonl",
+ "cwd": "<SCRATCH>",
+ "prompt_id": "82d07219-223f-499e-82b8-a733fbc6e7c3",
+ "permission_mode": "default",
+ "effort": {
+  "level": "medium"
+ },
+ "hook_event_name": "Stop",
+ "stop_hook_active": false,
+ "last_assistant_message": "The background `sleep 120` finished with exit code 0. Nothing else was pending from my side.",
+ "background_tasks": [],
+ "session_crons": []
+}

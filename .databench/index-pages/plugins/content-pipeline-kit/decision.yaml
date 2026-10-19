@@ -2,12 +2,12 @@
   "schema_version": 1,
   "directory": "plugins/content-pipeline-kit",
   "decision": "page",
-  "source_sha": "639a7c001f2516e8271161147a8cbef5b158a99b",
+  "source_sha": "4b4b1ef3a3ea5b2b2c69cdb60602a9d422a7ae80",
   "generation_spec_sha256": "d40323919c23e31cc9c5afe305627667e78bca3c257330f0fc0b3a9b1c826ade",
-  "input_sha256": "1e48e900d32c1fd60f9e3690cafdb46cfcd354408678309c0051b19fc34b878f",
+  "input_sha256": "dcaffe03f71506ec3249570486c98ac0e916252e1be49675d3074e70a40c693b",
   "input_shape_sha256": "5b6c4aec4926183b1ac4b2435ce6db5df5498afa7c85f6008dbcc6fa086a0585",
   "dirty": false,
-  "identity": "Content-pipeline-kit plugin packaging: bootstrap configuration, public API surface contract, one-unit worker agent, consumer contract checker, and parallel wave workflow.",
+  "identity": "Frozen content-pipeline-kit plugin: legacy bootstrap and packaging configuration, with a migration map to llm-kit for the maintained pipeline library, agent, skills, and workflow.",
   "instructions": "",
   "references": []
 }

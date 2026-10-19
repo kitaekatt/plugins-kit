@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/llm-kit/lib/llm_kit/pipeline/analysis/audit",
+  "decision": "none",
+  "source_sha": "71b08a64dde7da316968c141ec331934594df898",
+  "input_sha256": "185845d76e6db5a816b3a7513c41d8a69219a1eb4487f7339e88919944d791b3",
+  "input_shape_sha256": "f38bce29cfe74d8a5bc5fbc91edde2fbb01b422649b78f8a2c2bedbe98b51f3f",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

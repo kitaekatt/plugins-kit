@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/presence-kit/scripts",
+  "decision": "none",
+  "source_sha": "d1d3e74fb347554216f73d550e8a828129d3b41b",
+  "input_sha256": "79ffc979c9ae70ddb1dc0a835d45c23bf500c34fe09acd2ee3317a958a84d543",
+  "input_shape_sha256": "26ed0f9ef45c3378a5117140aa120c344909b208f37c900f5e6ecb8c5f105dd4",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

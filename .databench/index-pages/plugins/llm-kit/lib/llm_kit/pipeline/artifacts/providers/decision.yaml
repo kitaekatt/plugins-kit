@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/llm-kit/lib/llm_kit/pipeline/artifacts/providers",
+  "decision": "none",
+  "source_sha": "f43f78247ee89fee23be4f1cf28f9e596aadd34c",
+  "input_sha256": "3716e07653dc636e59a25a6f73b65011983b1f9ad0a73f59ffd04af9e62b1433",
+  "input_shape_sha256": "04c3989f86aaf3bc30102bd22b2c5c483bc6321e83f8d2b7e01e8a5f26af211f",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

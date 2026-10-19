@@ -91,7 +91,7 @@ A row's `models` is a model declaration: a list of model ids in preference order
 format every plugin in this marketplace uses (bootstrap's plugin-dev skill,
 `references/model-declaration.md`). The core ids `fable`, `opus`, `sonnet`, and `haiku` are the
 Claude harness's own, driven by the Agent tool. Every other id resolves against the model
-entries exposed by `llm-scripting-kit`. The harness belongs to the resolved entry, not to the
+entries exposed by `llm-kit`. The harness belongs to the resolved entry, not to the
 id: a registry entry named `sol` whose harness is Codex is announced as `codex/sol`. The
 former `agent:<id>` prefix is not accepted -- an `agent:<id>` entry is an ordinary unknown
 id and resolves to nothing, like any other unrecognized prefix.
@@ -105,21 +105,21 @@ bootstrap 0.150.0 or later.
 
 ### How a row's menu is rendered
 
-With `llm-scripting-kit` 0.46.0 or later, each row's menu is that library's `describe` output
+With `llm-kit` 0.1.9 or later, each row's menu is that library's `describe` output
 for an in-session caller:
 
 - An id that resolves to nothing, or that this policy cannot drive, is left out of the render
   without comment. A registry id is drivable only when its harness has an active
   `backends[]` record that yields an adapter-rendered command, a record `command`, or
   dispatch prose; CLI presence proves the tool exists, not that the policy can drive it.
-- An entry whose subscription pool is spent (llm-scripting-kit `conserve_usage`) stays listed
+- An entry whose subscription pool is spent (llm-kit `conserve_usage`) stays listed
   as out of quota until its reset time and is not usable until then. An entry whose harness
   CLI is not detected stays listed as unreachable.
 - Entries with a pace reading (quota remaining divided by window remaining) are re-sorted,
   highest pace first; entries without one keep their declared places. The first usable entry
   is marked `[default]`, and an entry matching `--self` is marked `[author]`.
 - The `Rule:`, `Re-select:`, and `Independence:` lines under the rows are printed by
-  llm-scripting-kit; they say how to choose, announce, and re-select.
+  llm-kit; they say how to choose, announce, and re-select.
 
 Quota verdicts are evaluated once per session and pinned; only an observed quota halt moves
 one down.
@@ -129,7 +129,7 @@ and why it cannot run here. The row is kept rather than deleted, because deletin
 send the unit to a row chosen for a different shape. A unit that matches it stops, and the
 floor goes to the user.
 
-When `llm-scripting-kit` is absent or older than 0.46.0, each row lists only its core ids, in
+When `llm-kit` is absent or older than 0.1.9, each row lists only its core ids, in
 declared order, without pace ordering or rule lines, and the rendered policy says so under
 **Degraded render**. Setting `ORCHESTRATE_QUOTA_ROUTING=0` turns quota reads off deliberately
 and emits no note: no entry shows a pace or an out-of-quota status. Use it when a policy
@@ -173,7 +173,7 @@ to tune when implementation is split; do not copy the whole `shape.tests` list. 
 `[parallel-leaf, known, rule-applying]` row routes each admitted leaf independently. Higher
 priority rows keep `unverifiable` or `mutating` leaves on a stronger worker. To use a local
 implementation worker, replace the complete `routing` list and put its discovered
-llm-scripting-kit model-entry id first in that row; keep a second model in the row for machines
+llm-kit model-entry id first in that row; keep a second model in the row for machines
 where the entry or harness is absent.
 
 ## `review_overlap`
@@ -234,14 +234,14 @@ Command detection is fail-closed and resolves bare commands through `PATHEXT` on
 A `detect` mapping must name `always`, `command`, or `path`; an unrecognized mapping fails
 closed and omits the backend.
 
-The optional `llm_scripting_kit` dependency is feature-detected. An importable stale or
+The optional `llm_kit` dependency is feature-detected. An importable stale or
 version-skewed copy is insufficient: the renderer requires the model-discovery callable and
 the harness entry-kind markers. A missing feature drops registry entries from every row and
 removes their model section; the Agent-tool core ids still render, and a row left with no core
 id renders the floor.
 
-Consult seats use a separate degradation ladder: no `llm-scripting-kit` -> no section;
-`llm-scripting-kit` without `discover_seats` (< 0.28.0) -> no section; entries without tier
+Consult seats use a separate degradation ladder: no `llm-kit` -> no section;
+`llm-kit` without `llm_kit.dispatch.seats.discover_seats` (< 0.1.9) -> no section; entries without tier
 or family are listed as `unclassified`, never `BESIDE`; nothing reachable ->
 `none reachable -- decide and say so`. The section makes no claim when the optional library
 is absent, so its absence is not a degraded answer; `--explain` reports why it was skipped.

@@ -147,7 +147,7 @@ does not have opinions about my process.*
 `awesome-kit`. Multi-agent review before push; SKILL.md, CLAUDE.md, and
 project-doc auditing and authoring; durable task folders; background-agent
 delegation under a rendered routing policy; plus the smaller conveniences
-those plugins carry (recap, the poster). This preset changes how
+those plugins carry (the poster). This preset changes how
 the user is made to work -- review becomes a gate, task folders want
 committing, delegated work spends tokens without a hard ceiling -- so it is
 deliberately not the default, and it is deliberately the preset the picker

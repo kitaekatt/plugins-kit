@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/llm-kit/skills/openrouter-account",
+  "decision": "none",
+  "source_sha": "46d06a33c436c89b94ae4bbb8c50807df1fae875",
+  "input_sha256": "5a207d878d920a36eb3bc8f44421e2e4621b0eb6487b3360ddd8189100915c1e",
+  "input_shape_sha256": "4a950e4951d5605103bd9558b61e04119335d9c5c3ccd5ed3023ad8e468ba5fa",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

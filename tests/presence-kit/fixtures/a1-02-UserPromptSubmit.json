@@ -1,0 +1,9 @@
+{
+ "session_id": "42128eef-3596-4352-be1b-2ac5267cf044",
+ "transcript_path": "<HOME>\\.claude\\projects\\<SCRATCH_KEY>\\42128eef-3596-4352-be1b-2ac5267cf044.jsonl",
+ "cwd": "<SCRATCH>",
+ "prompt_id": "01421474-d2d2-4e67-82c1-0b8843da9e5d",
+ "permission_mode": "default",
+ "hook_event_name": "UserPromptSubmit",
+ "prompt": "Use the Bash tool with run_in_background set to true to run exactly this command: sleep 120. Do not wait for it and do not poll it. Immediately end your turn by replying with the single word DONE."
+}

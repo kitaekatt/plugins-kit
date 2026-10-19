@@ -1,13 +1,12 @@
 {
   "schema_version": 1,
   "directory": "tests/bootstrap",
-  "decision": "page",
-  "source_sha": "25485f5692186b726e4f9e8b94bd3efe7aa28ec1",
-  "generation_spec_sha256": "d40323919c23e31cc9c5afe305627667e78bca3c257330f0fc0b3a9b1c826ade",
-  "input_sha256": "0f67c4ebec8a50a7c2315222b623d97b8180467f003d00098786708f38270a1b",
-  "input_shape_sha256": "64ef7cfcab46085651014a4c31b481369d859f096018b1babd4fc0a6bf0b10de",
+  "decision": "none",
+  "source_sha": "12f45e097e447435c790d98bf22e1d3d18ace154",
+  "input_sha256": "60e4aca52e9dcbb58453b53ee6f6171977e10f0f98656e8af010e74fb3f16695",
+  "input_shape_sha256": "22cb60487c680f13be25547ad0c97b72889bdabac1638db48b488bccb6772ba9",
   "dirty": false,
-  "identity": "Test suite for the bootstrap plugin: engine, installation backends, CLI, environment checks, marketplace lifecycle, and the code review pipeline",
+  "identity": "",
   "instructions": "",
   "references": []
 }

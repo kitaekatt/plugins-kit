@@ -1,0 +1,15 @@
+{
+ "session_id": "2c7dc538-886e-4a25-8846-59052fc87239",
+ "transcript_path": "<HOME>\\.claude\\projects\\<SCRATCH_KEY>\\2c7dc538-886e-4a25-8846-59052fc87239.jsonl",
+ "cwd": "<SCRATCH>",
+ "prompt_id": "9575395e-61fa-4b60-96cc-3b1ce3610330",
+ "permission_mode": "default",
+ "effort": {
+  "level": "medium"
+ },
+ "hook_event_name": "Stop",
+ "stop_hook_active": false,
+ "last_assistant_message": "DONE",
+ "background_tasks": [],
+ "session_crons": []
+}

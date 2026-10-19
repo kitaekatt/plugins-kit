@@ -26,11 +26,11 @@ import orchestration_guidance as og
 
 @pytest.fixture(autouse=True)
 def _forget_model_kit_imports():
-    """Drop llm_scripting_kit modules a test imported, so the next test's path
+    """Drop llm_kit modules a test imported, so the next test's path
     (describe or the reduced menu) is chosen by that test, not by import order."""
-    before = {name for name in sys.modules if name.startswith("llm_scripting_kit")}
+    before = {name for name in sys.modules if name.startswith("llm_kit")}
     yield
-    for name in [n for n in sys.modules if n.startswith("llm_scripting_kit")]:
+    for name in [n for n in sys.modules if n.startswith("llm_kit")]:
         if name not in before:
             del sys.modules[name]
 
@@ -695,10 +695,29 @@ class TestRender:
         assert og.CONFIG_NAME in text
 
 
-def _fake_seats_module(discover_seats):
-    module = ModuleType("llm_scripting_kit")
-    module.discover_seats = discover_seats
-    return module
+def _install_fake_llm_kit(monkeypatch, modules=None):
+    """Install a stand-in llm_kit: a package root plus the named submodules.
+
+    `modules` maps a dotted submodule name to its attributes. Every cached
+    real llm_kit module is dropped first, so a name absent from `modules`
+    reads as a llm-kit that predates it rather than as a cached real one.
+    """
+    for name in tuple(sys.modules):
+        if name == "llm_kit" or name.startswith("llm_kit."):
+            monkeypatch.delitem(sys.modules, name, raising=False)
+    root = ModuleType("llm_kit")
+    root.__path__ = []
+    monkeypatch.setitem(sys.modules, "llm_kit", root)
+    for dotted, attrs in (modules or {}).items():
+        module = ModuleType(dotted)
+        vars(module).update(attrs)
+        monkeypatch.setitem(sys.modules, dotted, module)
+
+
+def _install_fake_seats(monkeypatch, discover_seats):
+    _install_fake_llm_kit(
+        monkeypatch, {"llm_kit.dispatch.seats": {"discover_seats": discover_seats}}
+    )
 
 
 def _seat_result(seats=(), unclassified=(), probe_unknown=()):
@@ -729,7 +748,7 @@ class TestConsultSeats:
             assert project_root == str(layered.project_root)
             return result
 
-        monkeypatch.setitem(sys.modules, "llm_scripting_kit", _fake_seats_module(discover))
+        _install_fake_seats(monkeypatch, discover)
         monkeypatch.setattr(og, "discover_model_definitions", lambda _root: ({}, []))
         config, provenance = self._config(layered)
         text = og.render(config, provenance, self_ref="opus")
@@ -746,7 +765,7 @@ class TestConsultSeats:
     def test_self_with_library_absent_is_disclosed_in_the_degraded_render(
         self, layered, monkeypatch, capsys
     ):
-        monkeypatch.setitem(sys.modules, "llm_scripting_kit", None)
+        monkeypatch.setitem(sys.modules, "llm_kit", None)
         monkeypatch.setattr(og, "discover_model_definitions", lambda _root: ({}, []))
         config, provenance = self._config(layered)
         rendered = og.render(config, provenance, self_ref="opus")
@@ -755,14 +774,14 @@ class TestConsultSeats:
         assert "## Consult seats" not in rendered
         assert "**Degraded render.**" in rendered
         assert "consult seats unavailable" in rendered
-        assert "llm_scripting_kit is absent" in rendered
-        assert "claude plugin install llm-scripting-kit@plugins-kit" in rendered
+        assert "llm_kit is absent" in rendered
+        assert "claude plugin install llm-kit@plugins-kit" in rendered
 
         assert og.main(["--self", "opus", "--explain", "--project-root", str(layered.project_root)]) == 0
         explained = capsys.readouterr().out
         assert "seats  skipped" in explained
-        assert "llm_scripting_kit is absent" in explained
-        assert "claude plugin install llm-scripting-kit@plugins-kit" in explained
+        assert "llm_kit is absent" in explained
+        assert "claude plugin install llm-kit@plugins-kit" in explained
 
     def test_self_with_old_library_is_disclosed_in_the_degraded_render(
         self, layered, monkeypatch, capsys
@@ -775,22 +794,22 @@ class TestConsultSeats:
         reverts): render() must disclose the same diagnosis --explain
         always carried, not only --explain.
         """
-        monkeypatch.setitem(sys.modules, "llm_scripting_kit", ModuleType("llm_scripting_kit"))
+        _install_fake_llm_kit(monkeypatch)
         monkeypatch.setattr(og, "discover_model_definitions", lambda _root: ({}, []))
         config, provenance = self._config(layered)
         rendered = og.render(config, provenance, self_ref="opus")
         assert "## Consult seats" not in rendered
         assert "**Degraded render.**" in rendered
         assert "discover_seats" in rendered
-        assert "0.28.0" in rendered
-        assert "claude plugin update llm-scripting-kit@plugins-kit" in rendered
+        assert "0.1.9" in rendered
+        assert "claude plugin update llm-kit@plugins-kit" in rendered
 
         assert og.main(["--self", "opus", "--explain", "--project-root", str(layered.project_root)]) == 0
         explained = capsys.readouterr().out
         assert "seats  skipped" in explained
         assert "lacks discover_seats" in explained
-        assert "0.28.0" in explained
-        assert "claude plugin update llm-scripting-kit@plugins-kit" in explained
+        assert "0.1.9" in explained
+        assert "claude plugin update llm-kit@plugins-kit" in explained
 
     def test_without_self_is_silent_even_when_seats_are_available(self, layered, monkeypatch):
         calls = []
@@ -799,18 +818,14 @@ class TestConsultSeats:
             calls.append((args, kwargs))
             return _seat_result()
 
-        monkeypatch.setitem(sys.modules, "llm_scripting_kit", _fake_seats_module(discover))
+        _install_fake_seats(monkeypatch, discover)
         monkeypatch.setattr(og, "discover_model_definitions", lambda _root: ({}, []))
         config, provenance = self._config(layered)
         assert "## Consult seats" not in og.render(config, provenance)
         assert calls == []
 
     def test_empty_seats_render_the_explicit_decision_line(self, layered, monkeypatch):
-        monkeypatch.setitem(
-            sys.modules,
-            "llm_scripting_kit",
-            _fake_seats_module(lambda _self_ref, *, project_root: _seat_result()),
-        )
+        _install_fake_seats(monkeypatch, lambda _self_ref, *, project_root: _seat_result())
         monkeypatch.setattr(og, "discover_model_definitions", lambda _root: ({}, []))
         config, provenance = self._config(layered)
         text = og.render(config, provenance, self_ref="opus")
@@ -819,11 +834,7 @@ class TestConsultSeats:
     def test_probe_unknown_is_explain_only(self, layered, monkeypatch, capsys):
         unknown = SimpleNamespace(endpoint="mystery")
         result = _seat_result(probe_unknown=(unknown,))
-        monkeypatch.setitem(
-            sys.modules,
-            "llm_scripting_kit",
-            _fake_seats_module(lambda _self_ref, *, project_root: result),
-        )
+        _install_fake_seats(monkeypatch, lambda _self_ref, *, project_root: result)
         monkeypatch.setattr(og, "discover_model_definitions", lambda _root: ({}, []))
         config, provenance = self._config(layered)
         rendered = og.render(config, provenance, self_ref="opus")
@@ -835,7 +846,7 @@ class TestConsultSeats:
         def fail(_self_ref, *, project_root):
             raise RuntimeError("registry config is broken")
 
-        monkeypatch.setitem(sys.modules, "llm_scripting_kit", _fake_seats_module(fail))
+        _install_fake_seats(monkeypatch, fail)
         monkeypatch.setattr(og, "discover_model_definitions", lambda _root: ({}, []))
         config, provenance = self._config(layered)
         text = og.render(config, provenance, self_ref="opus")
@@ -872,11 +883,9 @@ def _install_repo_harness_library(monkeypatch):
     """Put the working shared libraries before any stale installed copies."""
     repo_root = Path(__file__).resolve().parents[2]
     monkeypatch.syspath_prepend(str(repo_root / "plugins" / "bootstrap"))
-    monkeypatch.syspath_prepend(
-        str(repo_root / "plugins" / "llm-scripting-kit" / "lib")
-    )
+    monkeypatch.syspath_prepend(str(repo_root / "plugins" / "llm-kit" / "lib"))
     for name in tuple(sys.modules):
-        if name == "llm_scripting_kit" or name.startswith("llm_scripting_kit."):
+        if name == "llm_kit" or name.startswith("llm_kit."):
             monkeypatch.delitem(sys.modules, name, raising=False)
         if name == "bootstrap_lib" or name.startswith("bootstrap_lib."):
             monkeypatch.delitem(sys.modules, name, raising=False)
@@ -951,7 +960,7 @@ class TestShippedOpencodeBackend:
             "-m example/model --agent build --auto"
         )
         assert re.search(
-            r"llm-scripting-kit\s+resolve\s+--models <entry-id> "
+            r"llm-kit\s+models\s+resolve\s+--models <entry-id> "
             r"--project-root <ABSOLUTE root>",
             rendered,
         )
@@ -1013,7 +1022,7 @@ class TestCommandTextProvider:
     def test_fallback_command_is_reported_by_explain_when_library_is_unavailable(
         self, monkeypatch, capsys, tmp_path
     ):
-        monkeypatch.setitem(sys.modules, "llm_scripting_kit", None)
+        monkeypatch.setitem(sys.modules, "llm_kit", None)
         config, provenance = self._codex_setup(monkeypatch, tmp_path, {})
         rendered = og.render(config, provenance)
         command = _codex_command(rendered)
@@ -1026,7 +1035,7 @@ class TestCommandTextProvider:
         explained = capsys.readouterr().out
         assert (
             "command  note      backend `codex` command adapter unavailable; "
-            "using fallback command from config (llm_scripting_kit unavailable"
+            "using fallback command from config (llm_kit unavailable"
             in explained
         )
 
@@ -1041,11 +1050,11 @@ class TestCommandTextProvider:
         turns a degradation into a false claim about the machine, so the
         disclosure has to reach the artifact and not stop at --explain.
         """
-        monkeypatch.setitem(sys.modules, "llm_scripting_kit", None)
+        monkeypatch.setitem(sys.modules, "llm_kit", None)
         config, provenance = self._codex_setup(monkeypatch, tmp_path, {})
         rendered = og.render(config, provenance)
         assert "Degraded render" in rendered
-        assert "llm_scripting_kit unavailable" in rendered
+        assert "llm_kit unavailable" in rendered
 
     def test_healthy_render_carries_no_degradation_notice(self, monkeypatch, tmp_path):
         """The notice is absent when nothing degraded -- it must not cry wolf."""
@@ -1971,7 +1980,7 @@ class TestRenderedCodexCommandKeepsItsSilentFailureFlags:
         # adapter dropped the flag. Put the libs on the path so the ADAPTER
         # path is the one under test.
         repo = Path(__file__).resolve().parents[2]
-        for lib in (repo / "plugins" / "llm-scripting-kit" / "lib", repo / "plugins" / "bootstrap"):
+        for lib in (repo / "plugins" / "llm-kit" / "lib", repo / "plugins" / "bootstrap"):
             monkeypatch.syspath_prepend(str(lib))
 
     def test_the_adapter_rendered_command_grants_the_scratchpad(self):
@@ -1995,26 +2004,26 @@ class TestRenderedCodexCommandKeepsItsSilentFailureFlags:
         )
 
 
-class TestAddDirsProbeDiagnosesAStaleLlmScriptingKit:
-    """A too-old llm-scripting-kit lacks build_argv's `add_dirs` keyword.
+class TestAddDirsProbeDiagnosesAStaleLlmKit:
+    """A too-old llm-kit lacks build_argv's `add_dirs` keyword.
 
     A bare try/except Exception around the whole call would mean the
     fallback note was `TypeError: build_argv() got an unexpected keyword
     argument 'add_dirs'` -- true, but naming neither the owning plugin nor
     the remedy, and indistinguishable from an adapter bug. The probe must
-    check the keyword BEFORE the call and name llm-scripting-kit, the floor
-    (0.10.0, the first published version carrying add_dirs), and the update
+    check the keyword BEFORE the call and name llm-kit, the floor
+    (0.1.9, the first published version carrying add_dirs), and the update
     command.
     """
 
     @pytest.fixture(autouse=True)
     def _shared_libs_on_path(self, monkeypatch):
         repo = Path(__file__).resolve().parents[2]
-        for lib in (repo / "plugins" / "llm-scripting-kit" / "lib", repo / "plugins" / "bootstrap"):
+        for lib in (repo / "plugins" / "llm-kit" / "lib", repo / "plugins" / "bootstrap"):
             monkeypatch.syspath_prepend(str(lib))
 
     def test_probe_names_the_owner_and_the_floor_not_a_raw_typeerror(self, monkeypatch):
-        import llm_scripting_kit as model_kit
+        import llm_kit.adapters.harness_adapters as harness_adapters
 
         class _PreAddDirsCodexAdapter:
             """Stands in for a CodexAdapter published before add_dirs existed."""
@@ -2025,7 +2034,9 @@ class TestAddDirsProbeDiagnosesAStaleLlmScriptingKit:
             def build_argv(self, entry, root, *, prompt, output_file=None):
                 return ["codex", "exec", "-C", str(root), "-o", str(output_file), "-"]
 
-        monkeypatch.setattr(model_kit, "resolve_harness_adapter", lambda entry: _PreAddDirsCodexAdapter())
+        monkeypatch.setattr(
+            harness_adapters, "resolve_harness_adapter", lambda entry: _PreAddDirsCodexAdapter()
+        )
         notes: list = []
         rendered = og.adapter_command_text_provider(
             {"id": "codex", "command": "codex exec ... -"},
@@ -2043,8 +2054,9 @@ class TestAddDirsProbeDiagnosesAStaleLlmScriptingKit:
         assert rendered == "codex exec ... -"
         assert len(notes) == 1
         note = notes[0]
-        assert "llm-scripting-kit" in note or "llm_scripting_kit" in note
-        assert "0.10.0" in note
+        assert "llm-kit" in note
+        assert "0.1.9" in note
+        assert "claude plugin update llm-kit@plugins-kit" in note
         assert "update" in note.lower()
         assert "TypeError" not in note
         assert "unexpected keyword" not in note
@@ -2082,7 +2094,7 @@ class TestCodexDispatchDocMatchesTheShippedCommand:
 
     def test_doc_names_its_command_source(self):
         text = self._REF_PATH.read_text(encoding="utf-8")
-        assert "Command source: `llm_scripting_kit.harness_adapters.CodexAdapter`" in text
+        assert "Command source: `llm_kit.adapters.harness_adapters.CodexAdapter`" in text
 
 
 # --------------------------------------------------------------------------
@@ -2224,7 +2236,7 @@ class TestAppliedStatusDecoration:
 # --- model declarations: describe()'s filtered render ----------------------
 #
 # Routing rows are model declarations (plugins/bootstrap/skills/plugin-dev/
-# references/model-declaration.md). Each row's menu is llm-scripting-kit's
+# references/model-declaration.md). Each row's menu is llm-kit's
 # describe(caller="session") result, passed through: hidden entries
 # (unresolved, unroutable here) are skipped SILENTLY, out-of-quota and
 # unreachable entries stay visible, the rest is pace-ordered, and the rule
@@ -2355,8 +2367,8 @@ def quota(monkeypatch):
     and fractions; every other id reads as no-data.
     """
     monkeypatch.delenv("ORCHESTRATE_QUOTA_ROUTING", raising=False)
-    import llm_scripting_kit.declaration as declaration
-    from llm_scripting_kit.usage_budget import Budget
+    import llm_kit.dispatch.declaration as declaration
+    from llm_kit.dispatch.usage_budget import Budget
 
     pinned: dict = {}
     fresh: dict = {}
@@ -2442,7 +2454,7 @@ class TestDeclarationRender:
         assert "pace 76%" in _entry_line(text, 1, "opus")
 
     def test_rule_text_is_describes_own_and_rendered_once(self, declared):
-        import llm_scripting_kit.declaration as declaration
+        import llm_kit.dispatch.declaration as declaration
 
         text = declared([
             {"shape": ["novel"], "models": ["fable", "sol"]},
@@ -2458,7 +2470,7 @@ class TestDeclarationRender:
             assert retired not in text
 
     def test_author_is_marked_and_the_independence_rule_renders(self, declared):
-        import llm_scripting_kit.declaration as declaration
+        import llm_kit.dispatch.declaration as declaration
 
         text = declared([{"shape": ["novel"], "models": ["fable", "sol"]}], self_ref="fable")
         assert "[author]" in _entry_line(text, 1, "fable")
@@ -2507,7 +2519,7 @@ class TestDeclarationRender:
         assert "is read as" not in out
 
     def test_quota_opt_out_makes_no_reads(self, declared, monkeypatch):
-        import llm_scripting_kit.declaration as declaration
+        import llm_kit.dispatch.declaration as declaration
 
         def forbidden(*_args, **_kwargs):
             raise AssertionError("ORCHESTRATE_QUOTA_ROUTING=0 must not read quota")
@@ -2550,7 +2562,7 @@ class TestDeclarationRender:
 
 class TestDeclarationRenderDegrades:
     def test_without_the_library_rows_list_claude_models_only(self, layered, monkeypatch):
-        monkeypatch.setitem(sys.modules, "llm_scripting_kit", None)
+        monkeypatch.setitem(sys.modules, "llm_kit", None)
         layered("shipped", cfg(
             routing=[
                 {"shape": ["novel"], "models": ["sol", "fable", "sonnet"]},
@@ -2565,25 +2577,24 @@ class TestDeclarationRenderDegrades:
         # A row with no Claude model reaches the floor rather than vanishing.
         assert "no usable routing target" in "\n".join(_row_lines(text, 2))
         degraded = text.split("**Degraded render.**", 1)[1]
-        assert "llm_scripting_kit" in degraded
-        assert "claude plugin install llm-scripting-kit@plugins-kit" in degraded
+        assert "llm_kit" in degraded
+        assert "claude plugin install llm-kit@plugins-kit" in degraded
         assert not _has_word(degraded, "sol")
 
     def test_a_library_older_than_describe_is_diagnosed_apart_from_absence(
         self, layered, monkeypatch
     ):
         layered("shipped", cfg(backends=[_AGENT_RECORD]))
-        monkeypatch.setitem(sys.modules, "llm_scripting_kit", None)
+        monkeypatch.setitem(sys.modules, "llm_kit", None)
         config, provenance = og.resolve_config(layered.project_root)
         absent = og.render(config, provenance).split("**Degraded render.**", 1)[1]
 
-        stale = ModuleType("llm_scripting_kit")
-        monkeypatch.setitem(sys.modules, "llm_scripting_kit", stale)
+        _install_fake_llm_kit(monkeypatch)
         too_old = og.render(config, provenance).split("**Degraded render.**", 1)[1]
 
-        assert "claude plugin install llm-scripting-kit@plugins-kit" in absent
-        assert "0.46.0" in too_old
-        assert "claude plugin update llm-scripting-kit@plugins-kit" in too_old
+        assert "claude plugin install llm-kit@plugins-kit" in absent
+        assert "0.1.9" in too_old
+        assert "claude plugin update llm-kit@plugins-kit" in too_old
         assert absent != too_old
 
 
@@ -2601,8 +2612,7 @@ def test_out_of_quota_consult_seats_render_with_their_reset_time(layered, monkey
             ),
         ),
     )
-    module = _fake_seats_module(lambda _self_ref, *, project_root: result)
-    monkeypatch.setitem(sys.modules, "llm_scripting_kit", module)
+    _install_fake_seats(monkeypatch, lambda _self_ref, *, project_root: result)
     monkeypatch.setattr(og, "discover_model_definitions", lambda _root: ({}, []))
     layered("shipped", cfg())
     config, provenance = og.resolve_config(layered.project_root)
@@ -2729,7 +2739,7 @@ def _frontmatter(path):
 
 class TestRoutingEffort:
     def test_reduced_menu_lines_state_each_entrys_effort(self, layered, monkeypatch):
-        monkeypatch.setitem(sys.modules, "llm_scripting_kit", None)
+        monkeypatch.setitem(sys.modules, "llm_kit", None)
         layered("shipped", cfg(routing=[
             {"shape": ["novel"], "models": [
                 {"id": "fable", "effort": "xhigh"}, {"id": "sonnet", "effort": "low"},
@@ -2753,7 +2763,7 @@ class TestRoutingEffort:
         assert _entry_line(text, 1, "sol").endswith("effort: medium")
 
     def test_an_unknown_effort_skips_the_row(self, layered, monkeypatch):
-        monkeypatch.setitem(sys.modules, "llm_scripting_kit", None)
+        monkeypatch.setitem(sys.modules, "llm_kit", None)
         layered("shipped", cfg(routing=[
             {"shape": ["novel"], "models": [{"id": "fable", "effort": "extreme"}]},
             {"shape": [], "models": ["sonnet"]},

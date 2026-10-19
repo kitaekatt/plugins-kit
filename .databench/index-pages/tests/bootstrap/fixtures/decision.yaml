@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "tests/bootstrap/fixtures",
+  "decision": "none",
+  "source_sha": "f6e3be8888cec5740e73d1c39df12d23ef9154d7",
+  "input_sha256": "d1568dbe855a73ad154d499aa86e8590644873dd73f3ab6c8ce6f46cede138d3",
+  "input_shape_sha256": "38ca0bdcb15fe0677ec1a030debf2746f8225d4f17baaf9d8436645a3d396e13",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

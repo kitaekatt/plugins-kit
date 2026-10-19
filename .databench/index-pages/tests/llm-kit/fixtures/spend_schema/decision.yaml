@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "tests/llm-kit/fixtures/spend_schema",
+  "decision": "none",
+  "source_sha": "a992accbd36482769c038380d0425854a025592b",
+  "input_sha256": "16cc7cfa79c8752e92d20b5ba8e6cd38f390da91f842558722db97be19f1690d",
+  "input_shape_sha256": "e1af3c347d51a24dbac3735013614b1a01ee392b39d7b95c1be4e966bf0f13a5",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

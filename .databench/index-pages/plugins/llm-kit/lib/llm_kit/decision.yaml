@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/llm-kit/lib/llm_kit",
+  "decision": "page",
+  "source_sha": "46d06a33c436c89b94ae4bbb8c50807df1fae875",
+  "generation_spec_sha256": "d40323919c23e31cc9c5afe305627667e78bca3c257330f0fc0b3a9b1c826ade",
+  "input_sha256": "17d4f2819cd5964a32c9b966fe5dff33dee8e9fb75c0b04929a059dd6d7245e5",
+  "input_shape_sha256": "de7b591cd1013f6e093c3d153458e4a419df657a275e7290b88e39fa55b47e0f",
+  "dirty": false,
+  "identity": "The llm_kit library: LLM completion routing across OpenRouter, Claude, Codex and OpenCode backends, durable agent jobs, batch content pipelines, and the front-door HTTP server.",
+  "instructions": "",
+  "references": []
+}

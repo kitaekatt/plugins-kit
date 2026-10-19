@@ -1,12 +1,13 @@
 {
   "schema_version": 1,
   "directory": "plugins/skills-kit/skills_kit_lib",
-  "decision": "none",
-  "source_sha": "25485f5692186b726e4f9e8b94bd3efe7aa28ec1",
-  "input_sha256": "64ec306e90926a2ea73ae9efaea06902e752d6e2580eaffbe2bd4c28d10ff8bd",
-  "input_shape_sha256": "2baf7521437558ccce4304a4063659b7ee723a59d008dfa53bddce924890fdb0",
+  "decision": "page",
+  "source_sha": "60f10b423af49463267c1e477eb093321d377faa",
+  "generation_spec_sha256": "d40323919c23e31cc9c5afe305627667e78bca3c257330f0fc0b3a9b1c826ade",
+  "input_sha256": "29ab6f04deeeb03a8e38b4d7332fc8958b199b7d2ed863cd366bf2be9cb79234",
+  "input_shape_sha256": "2acaf6f65002c06044cdc61335c731e5b2dfbf77797299a84e4154a7b734ce74",
   "dirty": false,
-  "identity": "",
+  "identity": "The skills-kit plugin library that validates, classifies, and audits skill documents against typed-unit schemas, with its shipped standards and lane-model configuration.",
   "instructions": "",
   "references": []
 }

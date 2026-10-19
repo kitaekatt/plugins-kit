@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/llm-kit/skills/workflow-pipeline",
+  "decision": "none",
+  "source_sha": "46d06a33c436c89b94ae4bbb8c50807df1fae875",
+  "input_sha256": "70f8a245cd03984601c43876d1cd37c40916175df4d56596afbbf84bca6d5023",
+  "input_shape_sha256": "0b22ab6d3188cce9931c9d9f493c070a1ee52d7671884877a0011b92ec2df376",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

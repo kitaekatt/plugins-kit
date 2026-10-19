@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/llm-kit/skills",
+  "decision": "none",
+  "source_sha": "46d06a33c436c89b94ae4bbb8c50807df1fae875",
+  "input_sha256": "598980bbc5a4e836af1f9d9094f9741bb5fa832531ee670990b19242ef0b70a7",
+  "input_shape_sha256": "bb67f4be0470004e3154d8cea6d88a7115a82a5cd0d8cfe7fc141633eac02043",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

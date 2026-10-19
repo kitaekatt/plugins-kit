@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "tests/task-kit",
+  "decision": "none",
+  "source_sha": "05d39e524e7b1e160ed35fd7bd1db510bfe03afa",
+  "input_sha256": "0dbb9fe599aa2e0297b4c84e29061a6065ca5099ac7d9289c8a4b4f53760e156",
+  "input_shape_sha256": "99d844ff1aea70ef926d00f0fe8a4be4fd332805c1b97d53d9721c07e0740d63",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

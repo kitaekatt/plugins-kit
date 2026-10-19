@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/task-kit/skills/task/scripts",
+  "decision": "none",
+  "source_sha": "0b2790cf4287bd080fc7a023504ef782390b4e25",
+  "input_sha256": "439a2dacd4d53309f5ede53148d2afc6e57e95592235dd859b6f3bad694d943a",
+  "input_shape_sha256": "36304a6d1139fd769ab0dc472d09d97a3b6ea1bda87d94f2ac39ceae0199cc73",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

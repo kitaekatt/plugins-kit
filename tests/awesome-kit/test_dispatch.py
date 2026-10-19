@@ -24,9 +24,20 @@ import pytest
 import dispatch
 
 
-def _registry_module(entries=None, *, omit_discover=False):
-    """A stand-in llm_scripting_kit exposing the model registry dispatch reads."""
-    module = ModuleType("llm_scripting_kit")
+def _install_registry(monkeypatch, entries=None, *, omit_discover=False, omit_registry=False):
+    """Install a stand-in llm_kit exposing the model registry dispatch reads.
+
+    The registry lives in llm_kit.registry.models; `omit_discover` leaves that
+    module without discover_model_entries and `omit_registry` leaves the
+    module out, the two shapes of a llm-kit that predates the registry API.
+    """
+    for name in tuple(sys.modules):
+        if name == "llm_kit" or name.startswith("llm_kit."):
+            monkeypatch.delitem(sys.modules, name, raising=False)
+    root = ModuleType("llm_kit")
+    root.__path__ = []
+    monkeypatch.setitem(sys.modules, "llm_kit", root)
+    module = ModuleType("llm_kit.registry.models")
     found = entries if entries is not None else {
         "sol": SimpleNamespace(kind="harness", harness="codex", model="gpt-5.6-sol", effort="high"),
         "luna": SimpleNamespace(kind="harness", harness="codex", model="gpt-5.6-luna", effort="medium"),
@@ -37,13 +48,14 @@ def _registry_module(entries=None, *, omit_discover=False):
         module.discover_model_entries = lambda project_root=None: SimpleNamespace(
             entries=found, notes=[]
         )
-    return module
+    if not omit_registry:
+        monkeypatch.setitem(sys.modules, "llm_kit.registry.models", module)
 
 
 @pytest.fixture(autouse=True)
 def model_registry(monkeypatch):
     """Every dispatch resolves --model through this registry unless a test swaps it."""
-    monkeypatch.setitem(sys.modules, "llm_scripting_kit", _registry_module())
+    _install_registry(monkeypatch)
 
 
 def _brief(tmp_path: Path, text: bytes = b"do the unit\n", name: str = "brief.md") -> Path:
@@ -405,25 +417,33 @@ def test_an_id_without_a_codex_entry_is_refused(tmp_path, capsys, entry_id):
 
 
 def test_an_absent_model_library_refuses_and_names_the_owner(tmp_path, monkeypatch, capsys):
-    monkeypatch.setitem(sys.modules, "llm_scripting_kit", None)
+    monkeypatch.setitem(sys.modules, "llm_kit", None)
     code, captured = _print_only(tmp_path, capsys, "--model", "sol")
     assert code == dispatch.EXIT_REFUSED
-    assert "claude plugin install llm-scripting-kit@plugins-kit" in captured.err
+    assert "claude plugin install llm-kit@plugins-kit" in captured.err
     assert not (tmp_path / "cache").exists() or not any((tmp_path / "cache").iterdir())
 
 
-LLM_FLOOR = "0.46.0"
+LLM_FLOOR = "0.1.9"
 
 
-def test_a_too_old_model_library_is_diagnosed_apart_from_absence(tmp_path, monkeypatch, capsys):
-    monkeypatch.setitem(sys.modules, "llm_scripting_kit", _registry_module(omit_discover=True))
+@pytest.mark.parametrize("shape", ["registry_without_discover", "registry_module_missing"])
+def test_a_too_old_model_library_is_diagnosed_apart_from_absence(
+    tmp_path, monkeypatch, capsys, shape
+):
+    _install_registry(
+        monkeypatch,
+        omit_discover=shape == "registry_without_discover",
+        omit_registry=shape == "registry_module_missing",
+    )
     code, captured = _print_only(tmp_path, capsys, "--model", "sol")
     assert code == dispatch.EXIT_REFUSED
-    assert "claude plugin update llm-scripting-kit@plugins-kit" in captured.err
+    assert "claude plugin update llm-kit@plugins-kit" in captured.err
     assert "claude plugin install" not in captured.err
     assert LLM_FLOOR in captured.err
+    assert dispatch.LLM_KIT_FLOOR == LLM_FLOOR
 
 
 def test_list_needs_no_model_library(tmp_path, monkeypatch, capsys):
-    monkeypatch.setitem(sys.modules, "llm_scripting_kit", None)
+    monkeypatch.setitem(sys.modules, "llm_kit", None)
     assert dispatch.main(["--list", "--cache-dir", str(tmp_path / "none")]) == 0

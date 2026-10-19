@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "tests/llm-kit/fixtures/pipeline_schema/llm-kit",
+  "decision": "none",
+  "source_sha": "f65ee40708693be9f51f1d09a6ac20f2ee92ed0c",
+  "input_sha256": "9cf303e7d56019eab85fd7b2e547b3a8037daa8baa38ffbc37b82c254bbd813d",
+  "input_shape_sha256": "bac36ba8b4d367e4d5714d008024ba31a14fb65aca288572688185d962edd909",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}
