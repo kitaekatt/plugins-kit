@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Presence: how it works</title>
-<!-- presence.md sha256: af245cb894e2b105f25f683a810fa9b3611b074b13d25b22ec99e9f46d4a858f -->
+<!-- presence.md sha256: 0921c13643d84089cdad55089fa4dc2a3b7a874c819d422875903cc5b72f0ba3 -->
 <style>
   :root {
     --bg: #f6f7f9; --card: #ffffff; --ink: #1d2330; --muted: #5d6677; --line: #e2e6ec;
@@ -153,10 +153,11 @@
   <h2>How afk starts and ends</h2>
   <p class="sub">Claude decides who sent a prompt. A hook line only suggests it.</p>
   <div class="seeing">
-    <div class="see"><div class="q">Afk starts: you say so</div><div class="a">You type <code>/presence-kit:afk</code>, or Claude recognizes that you are leaving. This is <code>afk-on-departure</code>. Reacting to a departure word such as "afk" in a plain message is not part of this release.</div></div>
+    <div class="see"><div class="q">Afk starts: you say so</div><div class="a">You type <code>/presence-kit:afk</code>, or your message contains a departure word such as "afk" (<code>departure_words</code>). A hook sets you afk right then and tells Claude before it answers; saying it again while you are afk keeps you afk. Claude recognizing that you are leaving, without the word, is the backup. All of this is <code>afk-on-departure</code>.</div></div>
+    <div class="see"><div class="q">A wrong guess</div><div class="a">The hook matches the word and nothing else, so a message that only talks about "afk", or an automatic prompt that contains it, can set afk by mistake. Claude is told what the hook did. When you are not leaving, it undoes the change with <code>state set present</code> and tells you once in one line.</div></div>
     <div class="see"><div class="q">Afk starts: you go quiet</div><div class="a">You send no message of your own for <code>afk_quiet_minutes</code> (default 10). The stop hook decides this (<code>afk-on-quiet</code>).</div></div>
     <div class="see"><div class="q">Not you</div><div class="a">A scheduled task, an agent report, a task notification, or another session's message is not you.</div></div>
-    <div class="see"><div class="q">Back</div><div class="a">Your own message while away always makes you present. With <code>recap-on-return</code> on, Claude gives the return recap; the stop hook asks for it if it is missing. With it off, you are present again and no return recap runs.</div></div>
+    <div class="see"><div class="q">Back</div><div class="a">Your own message while away always makes you present, except the message that set or kept you afk. With <code>recap-on-return</code> on, Claude gives the return recap; the stop hook asks for it if it is missing. With it off, you are present again and no return recap runs.</div></div>
   </div>
 </section>
 
@@ -165,7 +166,7 @@
   <p class="sub">What you experience from start to finish.</p>
   <ul class="timeline">
     <li><span class="dot d-here"></span><b>You're working with Claude</b><span>It asks you only what's genuinely yours to decide and handles the rest.</span></li>
-    <li><span class="dot d-away"></span><b>You type /presence-kit:afk and leave</b><span>Or you go quiet for 10 minutes. Claude covers every running job that is not an agent, then keeps going.</span></li>
+    <li><span class="dot d-away"></span><b>You type /presence-kit:afk or say afk, and leave</b><span>Or you go quiet for 10 minutes. Claude covers every running job that is not an agent, then keeps going.</span></li>
     <li><span class="dot d-away"></span><b>While you're gone</b><span>Updates stay short because nobody is reading them. A question for you gets parked, and Claude carries on with everything else.</span></li>
     <li><span class="dot d-away"></span><b>Only if it needs you</b><span>You get a push notification when your input is needed. No other pings.</span></li>
     <li><span class="dot d-away"></span><b>The work runs out</b><span>If nothing is left running, the turn ends with one recap. In autonomous mode, Claude either keeps working or, if the goal is done, writes the final recap.</span></li>
@@ -257,7 +258,7 @@
   <table style="margin-top:16px">
     <thead><tr><th>Behavior</th><th>What it does (all on by default)</th></tr></thead>
     <tbody>
-      <tr><td><code>afk-on-departure</code></td><td>Claude recognizing you are leaving enters afk (the departure-word hook is not in this release)</td></tr>
+      <tr><td><code>afk-on-departure</code></td><td>A departure word in your message sets you afk, and Claude is told so it can undo a wrong match; Claude recognizing you are leaving enters afk too</td></tr>
       <tr><td><code>afk-on-quiet</code></td><td>Quiet for <code>afk_quiet_minutes</code> enters afk</td></tr>
       <tr><td><code>autonomous-on-handover</code></td><td>An explicit hand-over enters autonomous</td></tr>
       <tr><td><code>recap-on-return</code></td><td>Your first message after afk gets the return recap</td></tr>
@@ -270,7 +271,7 @@
     <thead><tr><th>Value</th><th>Default</th><th>Meaning</th></tr></thead>
     <tbody>
       <tr><td><code>afk_quiet_minutes</code></td><td>10</td><td>Minutes of quiet before afk</td></tr>
-      <tr><td><code>departure_words</code></td><td>["afk"]</td><td>No effect in this release (the prompt hook that reads it comes later); whole words, any case; the list is replaced, not extended</td></tr>
+      <tr><td><code>departure_words</code></td><td>["afk"]</td><td>Words that set you afk when they stand alone in your message, in any case (not inside a longer name such as <code>afk-on-departure</code>); the list is replaced, not extended</td></tr>
       <tr><td><code>waiter_model</code></td><td>"haiku"</td><td>Model for the waiter agent</td></tr>
     </tbody>
   </table>

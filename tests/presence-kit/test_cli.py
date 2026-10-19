@@ -1,4 +1,4 @@
-"""presence-kit CLI: scripts/presence.py (config, state get|set, recap-done, stop).
+"""presence-kit CLI: scripts/presence.py (config, state get|set, recap-done, prompt, stop).
 
 Contract: dev/tasks/presence-kit/contracts.md sections 2, 5 and 11. The real K2a
 (config), K2b (state) and K2d (stop) modules run against a temp data root
@@ -8,8 +8,8 @@ env, streams and clock; the subprocess tests at the end run the script itself
 through the real fixture payloads with CLAUDE_CODE_SESSION_ATTENDED 1 / 0 / unset.
 
 Expected strings are restated literally (L) so a change to a shared module
-cannot silently move them. The `prompt` verb and its hook are unit K3: here it
-is an unknown verb (usage error, exit 2).
+cannot silently move them. The `prompt` verb has its own file, test_prompt.py;
+here it is only checked to be a dispatched hook verb, never an argparse one.
 """
 import copy
 import io
@@ -342,6 +342,35 @@ def test_autonomous_goal_is_stripped_and_repeat_keeps_goal_since(world):
     assert other.obj["state"]["goal_since"] == "2026-10-17T14:00:00Z"
 
 
+def test_state_set_present_undoes_afk_keeps_afk_since_and_authority(world):
+    world.run("state", "set", "autonomous", "--by", "user", "--goal", "ship", "--session", SID)
+    def mark(doc):
+        doc["afk_prompt"] = "p1"
+        doc["pending_return"] = "p1"
+
+    ps.update(SID, mark, world.env)
+    res = world.run("state", "set", "present", "--session", SID, now=T0 + timedelta(hours=1))
+    assert res.rc == 0 and res.err == ""
+    obj = res.obj
+    assert list(obj) == ["written", "by", "state"]
+    assert obj["written"] is True and obj["by"] == "user"
+    st = obj["state"]
+    assert (st["presence"], st["afk_prompt"], st["pending_return"]) == ("present", None, None)
+    assert st["afk_since"] == "2026-10-17T12:00:00Z" and st["goal"] == "ship"
+    assert world.state(SID) == st
+
+
+def test_state_set_present_uses_the_env_session_and_never_loads_config(world):
+    world.config(raw="{not json")           # a broken config cannot block the undo
+    world.run("state", "set", "afk", "--by", "user", "--session", SID)
+    res = world.run("state", "set", "present", CLAUDE_CODE_SESSION_ID=SID)
+    assert res.rc == 0 and res.obj["state"]["presence"] == "present"
+
+
+def test_state_set_present_without_a_session_is_a_state_error(world):
+    error_of(world.run("state", "set", "present"), 1, "state", "no-session")
+
+
 def test_state_set_normal_clears_goal_keeps_presence(world):
     world.run("state", "set", "autonomous", "--by", "user", "--goal", "g", "--session", SID)
     res = world.run("state", "set", "normal", "--session", SID)
@@ -362,6 +391,8 @@ def test_blank_goal_is_a_usage_error(world, goal):
     ["state", "set", "afk"],                                              # --by missing
     ["state", "set", "afk", "--by", "robot"],                             # bad --by
     ["state", "set", "normal", "--by", "user"],                           # normal takes no --by
+    ["state", "set", "present", "--by", "user"],                          # present takes no --by
+    ["state", "set", "present", "--goal", "g"],                           # present takes no --goal
     ["state", "set", "afk", "--by", "user", "--goal", "g"],               # afk takes no --goal
     ["state", "set", "away", "--by", "user"],                             # unknown target
     ["state", "set"], ["state"], ["state", "frob"],
@@ -376,11 +407,11 @@ def test_usage_errors_exit_2_with_an_object(world, argv):
     assert not world.state_file().exists()
 
 
-def test_prompt_verb_is_not_implemented_yet(world):
-    """K3 owns `prompt`: until it lands it is an unknown verb, never a pretend success."""
+def test_prompt_is_a_dispatched_hook_verb_not_an_argparse_one(world):
+    """Unattended it prints `{}` (exit 0); it never reaches argparse, so it never exits 2."""
     res = world.run("prompt", stdin='{"session_id": "s", "prompt_id": "p"}')
-    obj = error_of(res, 2, "usage", "bad-argv")
-    assert "invalid choice: 'prompt'" in obj["message"]
+    assert (res.rc, res.out, res.err) == (0, "{}\n", "")
+    assert not world.state_file("s").exists()
 
 
 def test_abbreviated_flags_are_refused(world):
@@ -391,7 +422,7 @@ def test_help_exits_0(world):
     res = world.run("--help")
     assert res.rc == 0 and res.err == ""
     assert "usage: presence.py" in res.out
-    for verb in ("config", "state", "recap-done", "stop"):
+    for verb in ("config", "state", "recap-done", "prompt", "stop"):
         assert verb in res.out
     assert world.run("state", "set", "afk", "--help").rc == 0
 
@@ -790,8 +821,10 @@ def test_subprocess_cli_verbs_and_exit_codes(tmp_path):
     assert json.loads(got.stdout)["state"]["presence"] == "afk"
     done = _subprocess(tmp_path, ["recap-done", "return", "p9", "--session", "sub-sid"])
     assert json.loads(done.stdout)["state"]["presence"] == "present"
-    usage = _subprocess(tmp_path, ["prompt"])
+    usage = _subprocess(tmp_path, ["frobnicate"])
     assert usage.returncode == 2 and json.loads(usage.stdout)["kind"] == "bad-argv"
+    undone = _subprocess(tmp_path, ["state", "set", "present", "--session", "sub-sid"])
+    assert undone.returncode == 0 and json.loads(undone.stdout)["state"]["presence"] == "present"
     nosession = _subprocess(tmp_path, ["state", "get"])
     assert nosession.returncode == 1 and json.loads(nosession.stdout)["kind"] == "no-session"
     assert nosession.stderr.strip() == json.loads(nosession.stdout)["message"]

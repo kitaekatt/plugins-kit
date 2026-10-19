@@ -1,13 +1,11 @@
-"""presence-kit CLI: config, state get|set, recap-done and the Stop hook verb.
+"""presence-kit CLI: config, state get|set, recap-done and the hook verbs prompt and stop.
 
 Stdlib only; sibling imports. Contract: dev/tasks/presence-kit/contracts.md
-sections 1, 2, 5 and 11. Every failure of `config`, `state` and `recap-done`
-prints ONE object `{"error": class, "kind": kind, "message": text}` on stdout
-and the same text on stderr (usage errors exit 2, other failures exit 1).
-`stop` never prints on failure: stderr only, empty stdout, exit 1.
-
-The `prompt` verb (UserPromptSubmit hook) is unit K3 and is not part of this
-CLI yet: it is an unknown verb here (usage error, exit 2).
+sections 1, 2, 5 and 11. Every failure of `config`, `state`, `recap-done` and
+`prompt` prints ONE object `{"error": class, "kind": kind, "message": text}` on
+stdout and the same text on stderr (usage errors exit 2, other failures exit 1;
+the hook verbs never exit 2). `stop` never prints on failure: stderr only, empty
+stdout, exit 1.
 """
 from __future__ import annotations
 
@@ -26,6 +24,7 @@ from typing import Any, TextIO
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import presence_config as pc  # noqa: E402
+import presence_prompt as pprompt  # noqa: E402
 import presence_state as ps  # noqa: E402
 import presence_stop as pstop  # noqa: E402
 
@@ -70,7 +69,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = _Parser(
         prog=PROG,
         allow_abbrev=False,
-        description="presence-kit CLI. The Stop hook verb `stop` reads a Stop payload on stdin and takes no arguments.",
+        description=(
+            "presence-kit CLI. The hook verbs `prompt` and `stop` read a hook payload on stdin "
+            "and take no arguments."
+        ),
     )
     verbs = parser.add_subparsers(dest="verb", required=True, metavar="VERB")
 
@@ -81,7 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
     actions = state.add_subparsers(dest="action", required=True, metavar="ACTION")
     get = actions.add_parser("get", allow_abbrev=False, help="print the session state")
     get.add_argument("--session", metavar="ID")
-    set_ = actions.add_parser("set", allow_abbrev=False, help="set afk, autonomous or normal")
+    set_ = actions.add_parser("set", allow_abbrev=False, help="set afk, autonomous, normal or present")
     targets = set_.add_subparsers(dest="target", required=True, metavar="TARGET")
     for name in ("afk", "autonomous"):
         sub = targets.add_parser(name, allow_abbrev=False, help=f"enter {name}")
@@ -92,13 +94,16 @@ def build_parser() -> argparse.ArgumentParser:
         sub.add_argument("--session", metavar="ID")
     normal = targets.add_parser("normal", allow_abbrev=False, help="revoke the granted goal")
     normal.add_argument("--session", metavar="ID")
+    present = targets.add_parser("present", allow_abbrev=False, help="undo afk: the user is here")
+    present.add_argument("--session", metavar="ID")
 
     recap = verbs.add_parser("recap-done", allow_abbrev=False, help="record a finished recap")
     recap.add_argument("trigger", choices=ps.RECAP_TRIGGERS)
     recap.add_argument("prompt_id", metavar="PID")
     recap.add_argument("--session", metavar="ID")
 
-    # Listed for --help only: `stop` is dispatched before argparse (no argv, section 2).
+    # Listed for --help only: `prompt` and `stop` are dispatched before argparse (no argv, section 2).
+    verbs.add_parser("prompt", add_help=False, help="UserPromptSubmit hook: payload on stdin, no arguments")
     verbs.add_parser("stop", add_help=False, help="Stop hook: payload on stdin, no arguments")
     return parser
 
@@ -139,12 +144,12 @@ def cmd_state(args: argparse.Namespace, ctx: _Ctx) -> int:
         _emit(ctx, ps.state_get(sid, ctx.env))
         return 0
     behaviors = None
-    if args.target != "normal" and args.by == "model":
+    if args.target not in ("normal", "present") and args.by == "model":
         behaviors = pc.resolve(_project_dir(args.project_dir, ctx.env), ctx.env).behaviors
     goal = None
     if args.target == "autonomous":
         goal = args.goal.strip()
-    by = "user" if args.target == "normal" else args.by
+    by = "user" if args.target in ("normal", "present") else args.by
     _emit(ctx, ps.state_set(sid, args.target, by, goal, behaviors, ctx.env, ctx.now))
     return 0
 
@@ -156,7 +161,7 @@ def cmd_recap_done(args: argparse.Namespace, ctx: _Ctx) -> int:
 
 
 def _read_payload(stdin: TextIO) -> dict:
-    """The Stop payload: UTF-8, one JSON object, ids present (contracts.md section 5)."""
+    """A hook payload: UTF-8, one JSON object, ids present (contracts.md section 5)."""
     raw = stdin.buffer.read() if hasattr(stdin, "buffer") else stdin.read()
     try:
         text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
@@ -199,6 +204,30 @@ def _json_type(value: Any) -> str:
     return "object"
 
 
+def _project(payload: dict, env: Mapping[str, str]) -> Path:
+    """Hook verbs: CLAUDE_PROJECT_DIR, else the payload's cwd, else the process cwd."""
+    cwd = payload.get("cwd")
+    return Path(env.get(PROJECT_ENV) or (cwd if isinstance(cwd, str) and cwd else None) or Path.cwd())
+
+
+def cmd_prompt(argv: Sequence[str], ctx: _Ctx) -> int:
+    """argv check, ATTENDED gate, payload, config, evaluate (contracts.md section 2)."""
+    if argv:
+        raise CliError("usage", "extra-argv", f"prompt takes no arguments; got {' '.join(argv)}")
+    if ctx.env.get(ATTENDED_ENV) != "1":
+        _emit(ctx, {})
+        return 0
+    payload = _read_payload(ctx.stdin)
+    try:
+        cfg = pc.resolve(_project(payload, ctx.env), ctx.env)
+    except pc.ConfigError as err:
+        output = pprompt.config_error_output(err, payload)
+    else:
+        output = pprompt.evaluate(payload, cfg, ctx.env, ctx.now)
+    _emit(ctx, output.to_output())
+    return 0
+
+
 def cmd_stop(argv: Sequence[str], ctx: _Ctx) -> int:
     """argv check, ATTENDED gate, payload, config, evaluate (contracts.md section 2)."""
     if argv:
@@ -206,12 +235,8 @@ def cmd_stop(argv: Sequence[str], ctx: _Ctx) -> int:
     if ctx.env.get(ATTENDED_ENV) != "1":
         return 0
     payload = _read_payload(ctx.stdin)
-    cwd = payload.get("cwd")
-    project = Path(
-        ctx.env.get(PROJECT_ENV) or (cwd if isinstance(cwd, str) and cwd else None) or Path.cwd()
-    )
     try:
-        cfg = pc.resolve(project, ctx.env)
+        cfg = pc.resolve(_project(payload, ctx.env), ctx.env)
     except pc.ConfigError as err:
         decision = pstop.config_error_decision(err, payload)
     else:
@@ -256,6 +281,8 @@ def main(
     try:
         if hook:
             return cmd_stop(args_in[1:], ctx)
+        if args_in and args_in[0] == "prompt":
+            return cmd_prompt(args_in[1:], ctx)
         try:
             with contextlib.redirect_stdout(ctx.stdout):
                 args = build_parser().parse_args(args_in)

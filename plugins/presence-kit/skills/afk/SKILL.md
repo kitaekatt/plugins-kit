@@ -1,6 +1,6 @@
 ---
 name: afk
-description: "Use when the user says afk or steps away while work runs: cover jobs, park questions, end with a recap. Do NOT use for a hand-over (presence-kit:autonomous)."
+description: "Use when the user says afk or steps away, even with nothing running: cover jobs, park questions, recap. Do NOT use for a hand-over (presence-kit:autonomous)."
 skill-type: technique-skill
 ---
 
@@ -19,10 +19,10 @@ configuration.
 ```yaml
 technique_skill:
   _schema_version: "1"
-  identity: Enter afk, then cover the running work, park questions and end with a recap.
+  identity: Enter afk, then cover any running work, park questions and end with a recap.
   scope:
     covers:
-      - the user saying afk, or stepping away while work runs
+      - the user saying afk or stepping away, whether or not any work is running
     excludes:
       - a hand-over of the work to finish without the user (presence-kit:autonomous)
       - the user coming back (presence-kit:recap)
@@ -51,6 +51,16 @@ technique_skill:
             or when the user is not actually leaving (for example "afk" appears
             in a quotation or in a question about afk). If the user typed
             `/presence-kit:afk`, continue whatever the configuration says.
+            One exception: when a presence-kit hook line for this prompt (id
+            `afk-on-departure`, beginning "set the user afk" or "kept the user
+            afk") already set afk and the user is not leaving, undo it with
+            the tool below, tell the user once in one line, follow that line's
+            own return-recap instruction if it has one, and end here.
+          tool: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/presence.py" state set present'
+          expected: '`{"written": true, "by": "user", "state": {...}}` with presence present; run only in the undo case.'
+          on_failure: >-
+            An `{"error": ...}` reply: report its `message` once and change
+            nothing further.
         - n: 3
           action: >-
             Only when the user typed `/presence-kit:afk`: set the state with
@@ -72,7 +82,7 @@ technique_skill:
             reply: report its `message` once and change nothing further.
         - n: 5
           action: >-
-            Say in one line that afk is on. Then cover the work as
+            Say in one line that afk is on. Then cover any running work as
             the presence model describes, for the behaviors that are on:
             the waiting rule (start each waiter agent on the model named by
             `values.waiter_model`), terse interim messages, parked questions,

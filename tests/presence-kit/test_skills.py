@@ -11,8 +11,8 @@ NAMES = ("afk", "autonomous", "recap")
 
 DESCRIPTIONS = {
     "afk": (
-        "Use when the user says afk or steps away while work runs: cover jobs, "
-        "park questions, end with a recap. Do NOT use for a hand-over "
+        "Use when the user says afk or steps away, even with nothing running: "
+        "cover jobs, park questions, recap. Do NOT use for a hand-over "
         "(presence-kit:autonomous)."
     ),
     "autonomous": (
@@ -257,3 +257,29 @@ def test_recap_names_its_behavior_ids_and_state_reads():
     _, body = _split("recap")
     for token in ("recap-on-return", "ending-recap", "unresolved", "greeted", "state get"):
         assert token in body
+
+
+def test_afk_undoes_a_hook_set_afk_when_the_user_is_not_leaving():
+    """K3: the prompt hook sets afk itself; the skill's step 2 is the undo branch (`state set present`)."""
+    steps = _contract("afk")["technique_skill"]["techniques"][0]["steps"]
+    step = steps[1]
+    assert step["n"] == 2
+    assert step["tool"] == (
+        '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/presence.py" '
+        "state set present"
+    )
+    action = " ".join(step["action"].split())
+    assert 'beginning "set the user afk" or "kept the user afk"' in action
+    assert "id `afk-on-departure`" in action
+    assert "the user is not leaving" in action and "undo it" in action
+    # the undo is the only place the skill unsets afk
+    _, body = _split("afk")
+    assert len([l for l in body.splitlines() if "state set present" in l]) == 1
+    # the config still runs first and the skill keeps its two enter paths
+    assert body.index(CONFIG_COMMAND) < body.index("state set present")
+
+
+def test_afk_description_is_unchanged_by_the_prompt_hook():
+    """Ruling 17 fixed the description text; K3 must not touch it."""
+    front, _ = _split("afk")
+    assert front["description"] == DESCRIPTIONS["afk"]

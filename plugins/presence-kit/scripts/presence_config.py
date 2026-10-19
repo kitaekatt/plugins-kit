@@ -266,12 +266,20 @@ def resolve(
     return Config(behaviors=behaviors, values=values, layers=tuple(layers))
 
 
+# A departure word is not adjacent to a word character, `-`, `:`, `/` or a backtick:
+# that keeps `afk-on-departure`, `presence-kit:afk`, `/presence-kit:recap afk-ending`,
+# `afk_since` and a backticked `afk` from matching while "AFK." and "(afk)" still do.
+_DEPARTURE_EDGE = r"\w\-:/`"
+
+
 def departure_pattern(words: Sequence[str]) -> re.Pattern:
-    """Whole-word, case-insensitive match for any departure word."""
+    """Case-insensitive match for any departure word standing alone (see _DEPARTURE_EDGE)."""
     if not words:
         raise ValueError("departure_pattern needs at least one word")
     alternation = "|".join(re.escape(w) for w in words)
-    return re.compile(rf"\b(?:{alternation})\b", re.IGNORECASE)
+    return re.compile(
+        rf"(?<![{_DEPARTURE_EDGE}])(?:{alternation})(?![{_DEPARTURE_EDGE}])", re.IGNORECASE
+    )
 
 
 def line(ids: str, pid: str, text: str) -> str:
@@ -292,9 +300,31 @@ P2_RECAP = (
     "before answering."
 )
 P3_DEPARTURE_IDS = "afk-on-departure"
+# {undo} is P3_UNDO formatted with the session id; Claude runs it to correct a wrong match.
+P3_UNDO = (
+    '"${{BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" '
+    '"${{PRESENCE_KIT_ROOT:?presence-kit is not provisioned}}/scripts/presence.py" '
+    "state set present --session {sid}"
+)
+_P3_WRONG = (
+    "If that is wrong (the word is quoted or discussed, or the prompt is not the user's own "
+    "message), run `{undo}` and tell the user once in one line"
+)
 P3_DEPARTURE = (
-    'the prompt contains the departure word "{word}"; '
-    "if this is the user saying they are leaving, invoke `presence-kit:afk`."
+    'set the user afk because the prompt contains the departure word "{word}". '
+    + _P3_WRONG
+    + "; otherwise invoke `presence-kit:afk` to cover running work."
+)
+# Already afk (a repeated departure keeps the user afk). The return clause is added only
+# with recap-on-return on, because the hook withholds P2 on this prompt.
+P3_DEPARTURE_KEPT = (
+    'kept the user afk because the prompt contains the departure word "{word}". '
+    + _P3_WRONG
+    + "{return_clause}; otherwise invoke `presence-kit:afk` to cover running work."
+)
+P3_KEPT_RETURN_CLAUSE = (
+    " (if it was the user's own message, they are back: also invoke "
+    "`presence-kit:recap return {pid}`)"
 )
 CONFIG_IDS = "config"
 P4_CONFIG_SYSTEM = "{err_text} Presence behavior is unavailable until the file is fixed."

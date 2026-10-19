@@ -23,6 +23,7 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 sys.path.insert(0, str(SCRIPTS))
 
 import presence_config as pc  # noqa: E402
+import presence_prompt as pprompt  # noqa: E402
 import presence_state as ps  # noqa: E402
 import presence_stop as pstop  # noqa: E402
 import presence_transcript as pt  # noqa: E402
@@ -1080,3 +1081,148 @@ def test_an_exception_inside_the_update_leaves_no_partial_write(s, monkeypatch):
     with pytest.raises(RuntimeError):
         s.stop(tasks=[], crons=[])
     assert not ps.state_path(SID, s.env).exists()  # rows 3-4 and 8 are one atomic update
+
+
+# ============================================ K3: the prompt hook's departure and row 4
+
+# The real a1 capture: the transcript entry (17:16:10.089Z) precedes the UserPromptSubmit
+# hook (17:16:10.265) by 176 ms, in 8 of 8 captures. afk_since is truncated to the second,
+# so the entry looks NEWER than afk_since and row 4 used to count the departure prompt itself
+# as a return.
+A1_ENTRY = datetime(2026, 10, 17, 17, 16, 10, 89000, tzinfo=timezone.utc)
+A1_HOOK = datetime(2026, 10, 17, 17, 16, 10, 265000, tzinfo=timezone.utc)
+
+
+def hook(s, pid, prompt, now):
+    """The real prompt hook for this session; returns its PromptOutput."""
+    payload = {"session_id": SID, "prompt_id": pid, "prompt": prompt}
+    return pprompt.evaluate(payload, s.cfg, s.env, now)
+
+
+def test_departure_prompt_is_not_a_return(s):
+    """The row-4 guard, from the real a1 timings. With the guard reverted: present + R, not afk + E."""
+    hook(s, PID, "going afk for lunch", A1_HOOK)
+    state = s.state()
+    assert state["afk_since"] == "2026-10-17T17:16:10Z"
+    assert A1_ENTRY > ps.parse_timestamp(state["afk_since"])     # the timing that fooled row 4
+    s.human(PID, A1_ENTRY)
+    decision = s.stop(now=A1_HOOK + timedelta(seconds=5), tasks=[], crons=[])
+    state = s.state()
+    assert (state["presence"], state["afk_prompt"], state["pending_return"]) == ("afk", PID, None)
+    assert decision.held == ("E",)
+    assert decision.nudge == line_E()
+
+
+def test_a_later_prompt_still_returns_the_user_after_a_hook_departure(s):
+    """Paired with the guard test: the guard is the one prompt, not a blanket skip."""
+    hook(s, PID, "going afk for lunch", A1_HOOK)
+    s.human(PID, A1_ENTRY)
+    s.stop(now=A1_HOOK + timedelta(seconds=5), tasks=[], crons=[])
+    later = A1_HOOK + timedelta(minutes=20)
+    s.human("prompt-2", later)
+    decision = s.stop(pid="prompt-2", now=later + timedelta(seconds=5), **owned_quiet())
+    state = s.state()
+    assert (state["presence"], state["pending_return"]) == ("present", "prompt-2")
+    assert state["afk_prompt"] is None                     # ends with the afk period
+    assert decision.held == ("R",)
+    assert decision.nudge == line_R("prompt-2")
+
+
+def test_a_repeated_departure_while_afk_is_not_a_return(s):
+    """Ruling 19: the hook keeps the user afk and Stop does not count that prompt as a return."""
+    s.go_afk(since=mins(30))
+    s.human("prompt-2", NOW)
+    out = hook(s, "prompt-2", "afk again", NOW)
+    assert "kept the user afk" in out.additional_context
+    decision = s.stop(pid="prompt-2", tasks=[], crons=[])
+    state = s.state()
+    assert (state["presence"], state["afk_prompt"]) == ("afk", "prompt-2")
+    assert state["afk_since"] == ps.format_timestamp(mins(30))      # the recap window still starts at the first departure
+    assert (decision.held, state["pending_return"]) == (("E",), None)
+
+
+def test_a_returning_user_kept_afk_by_the_hook_and_undone_by_claude_is_present(s):
+    """Cross-check fix 1 end to end: kept afk, then `state set present`, then Stop."""
+    s.go_afk(since=mins(30))
+    s.human("prompt-2", NOW)
+    hook(s, "prompt-2", "what does afk do?", NOW)
+    ps.state_set(SID, "present", "user", None, None, s.env, NOW)
+    decision = s.stop(pid="prompt-2", **owned_quiet())
+    state = s.state()
+    assert (state["presence"], state["afk_prompt"], state["pending_return"]) == ("present", None, None)
+    assert decision.held == ()
+
+
+def test_the_guard_compares_the_payload_prompt_id_to_afk_prompt(s):
+    """Fix 3: Entry.prompt_id is built from the same pid, so the comparison is on the payload's."""
+    s.go_afk(since=mins(30))
+    s.set_state(afk_prompt=PID)
+    s.human(PID, mins(1))
+    assert s.stop(**owned_quiet()).held == ()
+    assert s.state()["presence"] == "afk"
+    s.human("prompt-2", mins(0))
+    assert s.stop(pid="prompt-2", **owned_quiet()).held == ("R",)
+    assert s.state()["presence"] == "present"
+
+
+# --- a return when the prompt's entry is missing (cross-check fix 3) ---
+
+N1_TEXT = "skipped quiet-afk and return detection: the transcript has no user entry for this prompt yet."
+
+
+def line_N1(pid):
+    return L("afk-on-quiet,recap-on-return", pid, N1_TEXT)
+
+
+def p2_clause(pid):
+    return f"invoke `presence-kit:recap return {pid}` before answering."
+
+
+def test_same_pid_entry_missing_after_a_hook_departure_keeps_afk(s):
+    hook(s, PID, "going afk", A1_HOOK)
+    decision = s.stop(now=A1_HOOK + timedelta(seconds=5), tasks=[], crons=[])   # no transcript at all
+    state = s.state()
+    assert (state["presence"], state["afk_prompt"]) == ("afk", PID)
+    assert decision.system_message == line_N1(PID)
+    assert decision.held == ("E",)
+
+
+@pytest.mark.parametrize("recap_on_return", [True, False])
+def test_later_pid_entry_missing_leaves_the_user_afk_until_something_returns_them(make, recap_on_return):
+    s = make(behaviors={"recap-on-return": recap_on_return})
+    hook(s, PID, "going afk", A1_HOOK)
+    s.human(PID, A1_ENTRY)
+    later = A1_HOOK + timedelta(minutes=20)
+    out = hook(s, "prompt-2", "back", later)
+    # the hook asks for the return recap only with recap-on-return on
+    assert (p2_clause("prompt-2") in out.additional_context) is recap_on_return
+    decision = s.stop(pid="prompt-2", now=later + timedelta(seconds=5), tasks=[], crons=[])   # prompt-2 has no entry
+    state = s.state()
+    assert state["presence"] == "afk"                      # row 4 cannot see the entry
+    assert decision.system_message == line_N1("prompt-2")
+    assert state["pending_return"] is None
+
+
+def test_a_p2_driven_return_recap_makes_the_user_present_though_the_entry_is_missing(s):
+    hook(s, PID, "going afk", A1_HOOK)
+    later = A1_HOOK + timedelta(minutes=20)
+    hook(s, "prompt-2", "back", later)
+    s.recap_done("return", "prompt-2")                      # Claude followed P2
+    decision = s.stop(pid="prompt-2", now=later + timedelta(seconds=5), **owned_quiet())
+    state = s.state()
+    assert (state["presence"], state["pending_return"], state["afk_prompt"]) == ("present", None, None)
+    assert state["recaps"]["prompt-2"] == "return"
+    assert decision.held == () and decision.system_message == line_N1("prompt-2")
+
+
+def test_a_later_usable_human_entry_returns_the_user_after_a_missing_one(s):
+    hook(s, PID, "going afk", A1_HOOK)
+    s.human(PID, A1_ENTRY)
+    t2 = A1_HOOK + timedelta(minutes=10)
+    s.stop(pid="prompt-2", now=t2, tasks=[], crons=[])      # prompt-2's entry is missing
+    assert s.state()["presence"] == "afk"
+    t3 = A1_HOOK + timedelta(minutes=20)
+    s.human("prompt-3", t3)
+    decision = s.stop(pid="prompt-3", now=t3 + timedelta(seconds=5), **owned_quiet())
+    assert s.state()["presence"] == "present"
+    assert decision.held == ("R",) and decision.nudge == line_R("prompt-3")

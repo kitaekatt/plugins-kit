@@ -55,10 +55,10 @@ All default to `true`. Off means the behavior does not apply.
 
 | Id | Acts in | When on | When off |
 |---|---|---|---|
-| `afk-on-departure` | `presence-kit:afk` (the prompt-hook half is not in this release) | Claude recognizing you are leaving enters afk | Claude entering afk on its own is skipped; your own `/presence-kit:afk` still works |
+| `afk-on-departure` | prompt hook, `presence-kit:afk` | A word from `departure_words` in your message sets you afk, and Claude is told so it can undo a wrong match; Claude recognizing you are leaving enters afk too | The hook ignores the words and Claude entering afk on its own is skipped; your own `/presence-kit:afk` still works |
 | `afk-on-quiet` | Stop hook | No message of your own for `afk_quiet_minutes` enters afk | You stay present however long you are quiet |
 | `autonomous-on-handover` | `presence-kit:autonomous` | An explicit hand-over enters autonomous | Claude does not enter autonomous on its own; your own `/presence-kit:autonomous` still works |
-| `recap-on-return` | Stop hook, `presence.md` (the prompt-hook half is not in this release) | Your first message after afk gets the return recap | You become present with no return recap and no nudge |
+| `recap-on-return` | prompt hook, Stop hook, `presence.md` | Your first message after afk gets the return recap | You become present with no return recap and no nudge |
 | `waiting-guard` | Stop hook, `presence.md` | While owned work runs, non-agent jobs get a waiter agent and the turn ends with `Waiting on <what>` | No waiting check |
 | `ending-recap` | Stop hook | An away turn with nothing running ends with one recap (in autonomy: or keeps working until the goal is done) | No ending recap is demanded |
 | `terse-while-away` | `presence.md` | Interim messages are short while you are away | Messages keep normal length |
@@ -70,7 +70,7 @@ All default to `true`. Off means the behavior does not apply.
 | Name | Type | Default | Accepted |
 |---|---|---|---|
 | `afk_quiet_minutes` | integer | `10` | a positive integer (not a boolean) |
-| `departure_words` | list of strings | `["afk"]` | no effect in this release (read by the prompt hook, which arrives later); a non-empty list; each entry letters, digits or underscore only; matched as a whole word in any case |
+| `departure_words` | list of strings | `["afk"]` | a non-empty list; each entry letters, digits or underscore only; read by the prompt hook, which matches an entry on its own in any case: "AFK." and "(afk)" match; a longer name such as `afk-on-departure` or `afk_since`, `presence-kit:afk`, a backticked `afk`, and a message starting with `/presence-kit:` or `<task-notification>` do not |
 | `waiter_model` | string | `"haiku"` | a non-empty model name without spaces, passed to the Agent tool; not checked against a list |
 
 `departure_words` replaces the whole list: `["afk", "brb"]` keeps `afk`;
@@ -125,16 +125,16 @@ reinstall or update presence-kit.
 Every hook line has the form `presence-kit [<ids>] prompt <prompt id>: <text>
 See references/configuring.md.`, so it names the behavior ids that produced it
 and where to switch them off. `config` is not a behavior: it marks a
-configuration error. The Stop hook (`presence.py stop`) acts only in an attended
-session. The UserPromptSubmit prompt hook (`presence.py prompt`) is not part of
-this release; it arrives in a later one, and P1-P5 below are its messages, so
-none is emitted yet.
+configuration error. Both hooks act only in an attended session. The
+UserPromptSubmit prompt hook (`presence.py prompt`) sends P1-P5 below; the Stop
+hook (`presence.py stop`) sends S1, R, C, W, E, N1-N5 and S6. The prompt hook writes state only
+when a departure word sets you afk (P3); everything else it says is read-only.
 
 | Code | Reaches | Ids | Text |
 |---|---|---|---|
-| P1 | Claude, while afk | `terse-while-away,park-questions,notify-for-input` | the user counts as away since `<afk_since>`, with ` [goal: <goal>]` when autonomous. Apply the away behaviors in references/presence.md that are on. |
-| P2 | Claude, while afk | `recap-on-return` | if this prompt is the user's own message, not a scheduled task, agent report, task notification or another session's message, invoke `presence-kit:recap return <prompt id>` before answering. |
-| P3 | Claude, while present | `afk-on-departure` | the prompt contains the departure word "`<word>`"; if this is the user saying they are leaving, invoke `presence-kit:afk`. |
+| P1 | Claude, while afk (including right after P3) | `terse-while-away,park-questions,notify-for-input` | the user counts as away since `<afk_since>`, with ` [goal: <goal>]` when autonomous. Apply the away behaviors in references/presence.md that are on. |
+| P2 | Claude, while afk, except on the prompt P3 acted on | `recap-on-return` | if this prompt is the user's own message, not a scheduled task, agent report, task notification or another session's message, invoke `presence-kit:recap return <prompt id>` before answering. |
+| P3 | Claude, when the hook acted on a departure word | `afk-on-departure` | set the user afk because the prompt contains the departure word "`<word>`". If that is wrong (the word is quoted or discussed, or the prompt is not the user's own message), run `<state set present command>` and tell the user once in one line; otherwise invoke `presence-kit:afk` to cover running work. When you were already afk the text begins "kept the user afk" instead, and with `recap-on-return` on adds that, if the wrong match was your own message, the return recap is due. P3 comes first, then P1. |
 | P4 | you | `config` | the error text, then: Presence behavior is unavailable until the file is fixed. |
 | P5 | Claude | `config` | presence behavior is unavailable because its configuration is invalid; apply no presence-kit rule this turn. |
 | S1 | you (Stop hook) | `config` | same as P4 |

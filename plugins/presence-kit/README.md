@@ -8,7 +8,8 @@ opt-in by installation. Every behavior has an id and can be switched off.
 ## What it does
 
 - **Tracks presence.** You are present or afk. Afk starts when you say so (the
-  word `afk` by default), when Claude recognizes you are leaving, or after ten
+  word `afk` by default, which a hook acts on and tells Claude, so Claude can
+  undo a wrong match), when Claude recognizes you are leaving, or after ten
   minutes (by default) without a message of your own. Your first message after
   afk makes you present again. A scheduled task, agent report or another session's message is
   never counted as you.
@@ -41,7 +42,7 @@ Bare `/recap` stays Claude Code's built-in.
 Or declare `{"ref": "plugins-kit:presence-kit"}` in the `plugins` array of
 `~/.claude/bootstrap.json` to have bootstrap install it on every machine.
 
-The plugin depends on `bootstrap` (requires 0.120.0 or later), which provisions
+The plugin depends on `bootstrap` (requires 0.141.0 or later), which provisions
 the Python interpreter the hooks and scripts run on; there is nothing else to
 install. The hooks act only in an attended, interactive session.
 

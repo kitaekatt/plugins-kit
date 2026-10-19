@@ -200,15 +200,15 @@ def test_now_utc_is_aware_utc():
 def test_default_state_shape_and_key_order():
     doc = ps.default_state()
     assert list(doc) == [
-        "version", "presence", "afk_since", "goal", "goal_since", "recaps", "nudges",
-        "greeted", "unresolved", "pending_return", "notices",
+        "version", "presence", "afk_since", "afk_prompt", "goal", "goal_since", "recaps",
+        "nudges", "greeted", "unresolved", "pending_return", "notices",
     ]
     assert doc == {
-        "version": 1, "presence": "present", "afk_since": None, "goal": None,
-        "goal_since": None, "recaps": {}, "nudges": {}, "greeted": False,
+        "version": 2, "presence": "present", "afk_since": None, "afk_prompt": None,
+        "goal": None, "goal_since": None, "recaps": {}, "nudges": {}, "greeted": False,
         "unresolved": [], "pending_return": None, "notices": [],
     }
-    assert ps.SCHEMA_VERSION == 1 and ps.KEEP_PROMPTS == 20
+    assert ps.SCHEMA_VERSION == 2 and ps.KEEP_PROMPTS == 20
     assert ps.default_state() is not ps.default_state()
 
 
@@ -349,7 +349,13 @@ BAD_FILES = {
     "root-null": "null",
     "missing-key": _without("notices"),
     "extra-key": _mut(color="red"),
-    "version-2": _mut(version=2),
+    "version-3": _mut(version=3),
+    "version-0": _mut(version=0),
+    "version-1-with-the-v2-keys": _mut(version=1),
+    "v2-missing-afk-prompt": _without("afk_prompt"),
+    "afk-prompt-number": _mut(afk_prompt=5),
+    "afk-prompt-empty": _mut(afk_prompt=""),
+    "afk-prompt-whitespace": _mut(afk_prompt="a b"),
     "version-bool": _mut(version=True),
     "version-string": _mut(version="1"),
     "presence-bad": _mut(presence="asleep"),
@@ -406,6 +412,102 @@ def test_valid_document_with_timestamps_and_markers_loads(base, env):
     )
     doc = ps.load(SID, env)
     assert doc["presence"] == "afk" and doc["nudges"] == {"p1": 2}
+
+
+# ----------------------------------------------------- v1 -> v2 upgrade (0.2.x files)
+
+V1_DOC = {
+    "version": 1, "presence": "afk", "afk_since": S0, "goal": "ship", "goal_since": S1,
+    "recaps": {"p1": "return"}, "nudges": {"p1": 2}, "greeted": True,
+    "unresolved": ["w: x (prompt p1)"], "pending_return": "p1", "notices": ["entry-missing"],
+}
+
+
+def write_raw(base, text, sid=SID):
+    path = sessions_dir(base) / f"{sid}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_v1_file_is_upgraded_in_memory_and_written_as_v2_on_disk(base, env, monkeypatch):
+    path = write_raw(base, json.dumps(V1_DOC))
+    seen = []
+    real = os.replace
+
+    def spy(src, dst):
+        seen.append((Path(src).name, Path(dst).name, json.loads(Path(src).read_text(encoding="utf-8"))))
+        real(src, dst)
+
+    monkeypatch.setattr(os, "replace", spy)
+    doc = ps.load(SID, env)
+    expected = dict(V1_DOC, version=2, afk_prompt=None)
+    assert doc == expected
+    assert list(doc) == list(ps.default_state())
+    # the v2 file landed by atomic rename of a complete temp, not by an in-place edit
+    assert [(src, dst) for src, dst, _ in seen] == [(f"{SID}.json.tmp{os.getpid()}", f"{SID}.json")]
+    assert seen[0][2] == expected
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    assert on_disk == expected and list(on_disk) == list(ps.default_state())
+    assert sorted(p.name for p in path.parent.iterdir()) == [f"{SID}.json", f"{SID}.lock"]
+
+
+def test_v1_upgrade_happens_once_and_every_reader_sees_v2(base, env, monkeypatch):
+    path = write_raw(base, json.dumps(V1_DOC))
+    assert ps.state_get(SID, env)["state"]["version"] == 2
+    after_first = path.read_bytes()
+    writes = count_writes(monkeypatch)
+    assert ps.load(SID, env)["afk_prompt"] is None
+    assert ps.update(SID, lambda d: None, env)["version"] == 2
+    assert writes == [] and path.read_bytes() == after_first
+
+
+def test_v1_file_through_update_applies_the_change_on_top_of_the_upgrade(base, env):
+    path = write_raw(base, json.dumps(V1_DOC))
+    seen = []
+    new = ps.update(SID, lambda d: (seen.append(d["version"]), d.update(greeted=False))[0], env)
+    assert seen == [2] and new["greeted"] is False and new["afk_prompt"] is None
+    assert json.loads(path.read_text(encoding="utf-8")) == new
+
+
+V1_BAD = {
+    "v1-bad-presence": dict(V1_DOC, presence="asleep"),
+    "v1-bad-afk-since": dict(V1_DOC, afk_since="soon"),
+    "v1-bad-nudges": dict(V1_DOC, nudges={"p1": "2"}),
+    "v1-bool-version": dict(V1_DOC, version=True),
+    "v1-version-0": dict(V1_DOC, version=0),
+    "v1-version-3": dict(V1_DOC, version=3),
+    "v1-extra-key": dict(V1_DOC, color="red"),
+    "v1-missing-key": {k: v for k, v in V1_DOC.items() if k != "notices"},
+    "v2-keys-with-v1-version": dict(V1_DOC, afk_prompt=None),
+    "v2-missing-afk-prompt": dict(V1_DOC, version=2),
+    "v2-extra-key": dict(V1_DOC, version=2, afk_prompt=None, color="red"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(V1_BAD))
+def test_only_an_exact_valid_v1_file_is_upgraded(name, base, env):
+    """Everything else stays malformed and untouched on disk (no rewrite)."""
+    text = json.dumps(V1_BAD[name])
+    path = write_raw(base, text)
+    for call in (
+        lambda: ps.load(SID, env),
+        lambda: ps.state_get(SID, env),
+        lambda: ps.update(SID, lambda d: d.update(greeted=False), env),
+    ):
+        with pytest.raises(ps.StateError) as err:
+            call()
+        assert err.value.kind == "malformed"
+    assert path.read_text(encoding="utf-8") == text
+    assert sorted(p.name for p in path.parent.iterdir()) == [f"{SID}.json", f"{SID}.lock"]
+
+
+def test_a_v2_file_is_read_as_is_and_not_rewritten(base, env, monkeypatch):
+    path = write_raw(base, json.dumps(dict(V1_DOC, version=2, afk_prompt="p9")))
+    before = path.read_bytes()
+    writes = count_writes(monkeypatch)
+    assert ps.load(SID, env)["afk_prompt"] == "p9"
+    assert writes == [] and path.read_bytes() == before
 
 
 # -------------------------------------------------------------------------- locking
@@ -536,6 +638,51 @@ def test_enter_afk_when_already_afk_changes_nothing():
     assert json.dumps(doc) == before
 
 
+def test_enter_afk_without_a_prompt_leaves_afk_prompt_null():
+    doc = ps.default_state()
+    ps.enter_afk(doc, S0)
+    assert doc["afk_prompt"] is None
+
+
+def test_enter_afk_with_a_prompt_records_it_on_a_fresh_afk():
+    doc = ps.default_state()
+    doc["greeted"] = True
+    ps.enter_afk(doc, S0, prompt="p1")
+    assert (doc["presence"], doc["afk_since"], doc["afk_prompt"], doc["greeted"]) == ("afk", S0, "p1", False)
+
+
+def test_a_fresh_afk_without_a_prompt_overwrites_a_stale_afk_prompt():
+    doc = ps.default_state()
+    doc["afk_prompt"] = "stale"
+    ps.enter_afk(doc, S0)
+    assert doc["afk_prompt"] is None
+
+
+def test_enter_afk_already_afk_with_a_prompt_records_only_the_prompt():
+    doc = ps.default_state()
+    ps.enter_afk(doc, S0, prompt="p1")
+    doc["greeted"] = True
+    ps.enter_afk(doc, S1, prompt="p2")
+    assert (doc["afk_since"], doc["afk_prompt"], doc["greeted"]) == (S0, "p2", True)
+
+
+def test_enter_afk_already_afk_without_a_prompt_keeps_the_hooks_afk_prompt():
+    """The afk skill's own `state set afk` on the hook's prompt must not clear the record."""
+    doc = ps.default_state()
+    ps.enter_afk(doc, S0, prompt="p1")
+    before = json.dumps(doc)
+    ps.enter_afk(doc, S1)
+    assert json.dumps(doc) == before
+
+
+def test_enter_afk_refuses_a_bad_prompt_id():
+    doc = ps.default_state()
+    with pytest.raises(ps.StateError) as err:
+        ps.enter_afk(doc, S0, prompt="a b")
+    assert err.value.kind == "bad-prompt-id"
+    assert doc == ps.default_state()
+
+
 def test_enter_afk_after_return_starts_a_new_afk_period():
     doc = ps.default_state()
     ps.enter_afk(doc, S0)
@@ -563,9 +710,11 @@ def test_set_present_only_flips_presence():
     ps.enter_afk(doc, S0)
     doc["greeted"] = True
     doc["pending_return"] = "p9"
+    doc["afk_prompt"] = "p1"
     ps.set_present(doc)
     assert doc["presence"] == "present" and doc["afk_since"] == S0
     assert doc["greeted"] is True and doc["pending_return"] == "p9"
+    assert doc["afk_prompt"] is None   # the hook's record ends with the afk period
 
 
 def test_mark_recap_last_write_wins_and_moves_key_to_end():
@@ -879,6 +1028,50 @@ def test_autonomous_after_normal_resets_goal_since(env):
     assert st["goal"] == "ship the thing"
     assert st["goal_since"] == S2
     assert ps.load(SID, env)["goal_since"] == S2
+
+
+# --------------------------------------------------------------------- state set: present
+
+def test_state_set_present_undoes_a_hook_set_afk(env):
+    """Cross-check fix 1: the undo path P3 hands to Claude."""
+    def hook_sets_afk(doc):
+        ps.enter_afk(doc, S0, prompt="p1")
+        ps.enter_autonomous(doc, "ship", S0)
+        doc["pending_return"] = "p1"
+
+    ps.update(SID, hook_sets_afk, env)
+    out = ps.state_set(SID, "present", "user", None, None, env, T2)
+    assert list(out) == ["written", "by", "state"]
+    assert out["written"] is True and out["by"] == "user"
+    st = out["state"]
+    assert st["presence"] == "present" and st["afk_prompt"] is None and st["pending_return"] is None
+    assert st["afk_since"] == S0                       # kept for the recap window
+    assert (st["goal"], st["goal_since"]) == ("ship", S0)   # authority untouched
+    assert ps.load(SID, env) == st
+
+
+def test_state_set_present_while_present_changes_nothing(env, monkeypatch):
+    writes = count_writes(monkeypatch)
+    out = ps.state_set(SID, "present", "user", None, None, env, T0)
+    assert out["state"] == ps.default_state() and out["by"] == "user"
+    assert writes == []
+
+
+def test_state_set_present_ignores_by_and_the_gates(env):
+    cfg = FakeConfig(afk_on_departure=False, autonomous_on_handover=False)
+    ps.state_set(SID, "afk", "user", None, None, env, T0)
+    out = ps.state_set(SID, "present", "model", None, cfg.behaviors, env, T1)
+    assert out["by"] == "user" and out["state"]["presence"] == "present"
+
+
+def test_state_set_present_is_a_set_target():
+    assert ps.SET_TARGETS == ("afk", "autonomous", "normal", "present")
+
+
+def test_recap_done_return_clears_the_hooks_afk_prompt(env):
+    ps.update(SID, lambda d: ps.enter_afk(d, S0, prompt="p1"), env)
+    st = ps.recap_done(SID, "return", "p2", env, T1)["state"]
+    assert st["presence"] == "present" and st["afk_prompt"] is None
 
 
 # ---------------------------------------------------------------------- state set: normal

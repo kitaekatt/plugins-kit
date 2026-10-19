@@ -19,22 +19,41 @@ the command prints an `{"error": ...}` object, tell the user its message (it
 names the file and key) and apply no presence rule this turn.
 
 Hook lines read `presence-kit [<ids>] prompt <prompt id>: ...`. They come from
-this plugin's Stop hook (`hooks/hooks.json`, `scripts/presence.py stop`), and
-each names the behavior ids that produced it. The UserPromptSubmit prompt hook
-is not part of this release; it arrives in a later one. Until then
-`departure_words` and the prompt-hook half of `afk-on-departure` and
-`recap-on-return` have no effect, and no hook line announces a departure word
-or a return before you answer.
+this plugin's two hooks (`hooks/hooks.json`): the UserPromptSubmit prompt hook
+(`scripts/presence.py prompt`) and the Stop hook (`scripts/presence.py stop`),
+and each line names the behavior ids that produced it. The prompt hook speaks
+before you answer: while the user is afk it says so (the away line, plus the
+instruction to give the return recap when `recap-on-return` is on), and when
+the prompt contains a word from `departure_words` it sets the user afk itself
+and tells you so (section Presence). The Stop hook detects a return at the end
+of the turn and records it (section Return).
 
 ## Presence
 
 The user is `present` or `afk`.
 
-- Afk starts when the user declares it (`afk-on-departure`: you recognize they
-  are leaving, or they type `/presence-kit:afk`; no hook acts on a word from
-  `departure_words` in this release) or when no message of
-  the user's own arrives for `afk_quiet_minutes` (`afk-on-quiet`, decided by the
-  Stop hook).
+- Afk starts when the user declares it or when no message of the user's own
+  arrives for `afk_quiet_minutes` (`afk-on-quiet`, decided by the Stop hook).
+  The user declares it (`afk-on-departure`) by typing `/presence-kit:afk`, by a
+  word from `departure_words`, or by leaving in words you recognize as leaving
+  (the backup when no listed word was used; you invoke `presence-kit:afk`).
+- A listed word is acted on by the prompt hook, before you answer: it matches
+  the word on its own in any case, so "AFK." and "(afk)" count while
+  `afk-on-departure`, `presence-kit:afk`, `afk_since` and a backticked `afk` do
+  not. It writes the afk state itself and tells you in a line that begins "set
+  the user afk". It does no inference beyond the word, so a prompt that quotes
+  or discusses the word, or an automatic prompt, can set afk by mistake. That
+  line gives you the correction: when the user is not leaving or the prompt is
+  not the user's own message, run `state set present` (section Commands) and
+  tell the user once in one line. The hook skips a prompt that starts with
+  `/presence-kit:` or `<task-notification>`; any other automatic prompt (a
+  `/loop` or cron prompt, an agent or other-session message) carries no marker
+  it can read, so your correction is the safeguard there.
+- Already afk, a prompt with a listed word keeps the user afk: the line begins
+  "kept the user afk" and no return recap is asked for that prompt. If that is
+  wrong, because the user is back and only mentions the word, undo it the same
+  way (and, with `recap-on-return` on, the line also tells you to give the
+  return recap).
 - A scheduled task, agent report, task notification or another session's
   message is not the user. You classify who sent a prompt; a hook line only
   suggests it.
@@ -63,7 +82,7 @@ when you can tell the message is the user's own: invoke
 `presence-kit:recap return <prompt id>` with the id a hook nudge gave. When the
 Stop hook finds no return recap for the prompt, its nudge asks for one. With no
 id in view, invoke `presence-kit:recap` bare; it reads state. With `recap-on-return` off, the user is present again and
-no return recap runs.
+no return recap runs. The prompt that set (or kept) the user afk is not a return.
 
 ## Modes
 
@@ -128,16 +147,21 @@ All take `--session ID`; the default is `CLAUDE_CODE_SESSION_ID`. Each prints on
 JSON object. A `{"skipped": ...}` reply means stop: change nothing and tell the
 user once. `--by user` only when the user typed `/presence-kit:afk` or
 `/presence-kit:autonomous` themselves; otherwise `--by model`, which is skipped
-when the matching id is off.
+when the matching id is off. `state set normal` and `state set present` take no
+`--by`.
 
     "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${PRESENCE_KIT_ROOT:?presence-kit is not provisioned}/scripts/presence.py" config
     "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${PRESENCE_KIT_ROOT:?presence-kit is not provisioned}/scripts/presence.py" state get
     "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${PRESENCE_KIT_ROOT:?presence-kit is not provisioned}/scripts/presence.py" state set afk --by user|model
     "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${PRESENCE_KIT_ROOT:?presence-kit is not provisioned}/scripts/presence.py" state set autonomous --by user|model --goal "<granted goal>"
     "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${PRESENCE_KIT_ROOT:?presence-kit is not provisioned}/scripts/presence.py" state set normal
+    "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${PRESENCE_KIT_ROOT:?presence-kit is not provisioned}/scripts/presence.py" state set present
     "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${PRESENCE_KIT_ROOT:?presence-kit is not provisioned}/scripts/presence.py" recap-done return|afk-ending|autonomous-done <prompt id>
 
 `state set afk` is governed by `afk-on-departure`, `state set autonomous` by
 `autonomous-on-handover`. `state set normal` revokes authority and leaves
-presence unchanged. `recap-done` is what the Stop hook checks after a recap:
+presence unchanged. `state set present` undoes afk: presence is present, the
+pending return and the hook's prompt record are cleared, `afk_since` is kept,
+and no behavior id gates it; it is the correction for a wrong departure match
+and leaves authority alone. `recap-done` is what the Stop hook checks after a recap:
 recap-shaped prose without it satisfies nothing.

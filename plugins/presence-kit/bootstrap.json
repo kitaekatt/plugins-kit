@@ -1,4 +1,4 @@
 {
-  "$comment": "Minimal manifest: this plugin provisions no dependencies yet. It exists so bootstrap's self-registration (engine.py Step 4b2 / bootstrap_lib/self_register.py) picks the plugin up for in-session auto-update -- that pass only considers installed plugins that ship a bootstrap.json. Declare real dependencies here if this plugin ever gains any. requires_bootstrap: 0.120.0 is interpreter_env.MIN_VERSION, the first bootstrap that exports BOOTSTRAP_PYTHON.",
-  "requires_bootstrap": "0.120.0"
+  "$comment": "Minimal manifest: this plugin provisions no dependencies yet. It exists so bootstrap's self-registration (engine.py Step 4b2 / bootstrap_lib/self_register.py) picks the plugin up for in-session auto-update -- that pass only considers installed plugins that ship a bootstrap.json. Declare real dependencies here if this plugin ever gains any. requires_bootstrap: 0.141.0 is the first bootstrap that re-emits the recorded <PLUGIN>_ROOT names (PRESENCE_KIT_ROOT) into a gate-skipped session, which the hook's undo command and the skills' references rely on; BOOTSTRAP_PYTHON itself needs only 0.120.0 (interpreter_env.MIN_VERSION).",
+  "requires_bootstrap": "0.141.0"
 }

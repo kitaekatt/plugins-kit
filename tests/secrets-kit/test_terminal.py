@@ -6,6 +6,7 @@ assert is that the launcher HANDS OFF -- it composes a command for another
 window and returns -- rather than ever reading a passphrase itself.
 """
 
+import os
 import subprocess
 import sys
 
@@ -138,6 +139,33 @@ def test_windows_script_survives_quotes_and_spaces(monkeypatch, tmp_path):
     body = open(script, encoding="utf-8").read()
     assert subprocess.list2cmdline(argv) in body
     assert "pause" in body
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows launcher")
+def test_windows_script_deletes_itself_without_an_error(monkeypatch):
+    """Regression: a bare `del "%~f0"` printed "The batch file cannot be
+    found." in the window after the user pressed a key."""
+    captured = {}
+
+    def fake_popen(args, **kw):
+        captured["args"] = args
+        return None
+
+    monkeypatch.setattr(term.subprocess, "Popen", fake_popen)
+    term._launch_windows(["cmd.exe", "/c", "echo", "ran"], "secrets-kit")
+    script = captured["args"][-1]
+    monkeypatch.undo()  # term.subprocess is the real module; restore Popen
+
+    result = subprocess.run(
+        ["cmd.exe", "/c", script],
+        input="\r\n",
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert "ran" in result.stdout
+    assert "cannot be found" not in result.stdout + result.stderr
+    assert not os.path.exists(script)
 
 
 def _load_cli():

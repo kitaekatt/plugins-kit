@@ -2,7 +2,9 @@
 
 Leaf module (stdlib only). Contract: dev/tasks/presence-kit/contracts.md
 sections 1-3. Every write is a locked read-modify-write that lands by atomic
-rename; the file is the whole truth (nothing is filled in or repaired on read).
+rename; the file is the whole truth (nothing is filled in or repaired on read),
+with one defined exception: a version-1 file (schema of presence-kit 0.2.x) that
+validates exactly is upgraded to version 2 and rewritten (`_migrate_v1`).
 
 Locking: an exclusive lock on a sibling `<sid>.lock` file, polled without
 blocking for up to LOCK_TIMEOUT_SECONDS. Windows uses msvcrt.locking on byte 0
@@ -26,7 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 KEEP_PROMPTS = 20
 LOCK_TIMEOUT_SECONDS = 5.0
 LOCK_POLL_SECONDS = 0.02
@@ -36,7 +38,7 @@ PLUGIN = "presence-kit"
 
 PRESENCE_VALUES = ("present", "afk")
 RECAP_TRIGGERS = ("return", "afk-ending", "autonomous-done")
-SET_TARGETS = ("afk", "autonomous", "normal")
+SET_TARGETS = ("afk", "autonomous", "normal", "present")
 SET_BYS = ("user", "model")
 # `state set ... --by model` is gated by these behavior ids (contracts.md section 2).
 GATE_IDS = {"afk": "afk-on-departure", "autonomous": "autonomous-on-handover"}
@@ -47,11 +49,13 @@ _TS_RE = re.compile(
     r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})"
 )
 
-# Document keys in file order (contracts.md section 3).
+# Document keys in file order (contracts.md section 3). Version 1 (presence-kit
+# 0.2.x) had every key except `afk_prompt`.
 _KEYS = (
-    "version", "presence", "afk_since", "goal", "goal_since", "recaps",
+    "version", "presence", "afk_since", "afk_prompt", "goal", "goal_since", "recaps",
     "nudges", "greeted", "unresolved", "pending_return", "notices",
 )
+_V1_KEYS = tuple(key for key in _KEYS if key != "afk_prompt")
 
 if sys.platform == "win32":
     import msvcrt
@@ -181,6 +185,7 @@ def default_state() -> dict:
         "version": SCHEMA_VERSION,
         "presence": "present",
         "afk_since": None,
+        "afk_prompt": None,
         "goal": None,
         "goal_since": None,
         "recaps": {},
@@ -196,21 +201,22 @@ def _is_ts_or_none(value: Any) -> bool:
     return value is None or parse_timestamp(value) is not None
 
 
-def _validate(doc: Any) -> str | None:
-    """Return None when `doc` is a valid state document, else the problem."""
+def _validate(doc: Any, version_wanted: int = SCHEMA_VERSION) -> str | None:
+    """Return None when `doc` is a valid state document of `version_wanted`, else the problem."""
     if not isinstance(doc, dict):
         return f"root must be an object, got {type(doc).__name__}"
-    missing = [k for k in _KEYS if k not in doc]
-    extra = [k for k in doc if k not in _KEYS]
+    keys = _KEYS if version_wanted == SCHEMA_VERSION else _V1_KEYS
+    missing = [k for k in keys if k not in doc]
+    extra = [k for k in doc if k not in keys]
     if missing:
         return f"missing key(s): {', '.join(missing)}"
     if extra:
         return f"unknown key(s): {', '.join(sorted(extra))}"
     version = doc["version"]
     if isinstance(version, bool) or not isinstance(version, int):
-        return f"'version' must be the integer {SCHEMA_VERSION}"
-    if version != SCHEMA_VERSION:
-        return f"unsupported version {version}; this build reads version {SCHEMA_VERSION}"
+        return f"'version' must be the integer {version_wanted}"
+    if version != version_wanted:
+        return f"unsupported version {version}; this build reads version {version_wanted}"
     if doc["presence"] not in PRESENCE_VALUES:
         return "'presence' must be \"present\" or \"afk\""
     for key in ("afk_since", "goal_since"):
@@ -237,11 +243,40 @@ def _validate(doc: Any) -> str | None:
             return f"'{key}' must be a list of strings"
     if doc["pending_return"] is not None and not isinstance(doc["pending_return"], str):
         return "'pending_return' must be null or a prompt id string"
+    if version_wanted == SCHEMA_VERSION:
+        afk_prompt = doc["afk_prompt"]
+        if afk_prompt is not None and (
+            not isinstance(afk_prompt, str) or _PID_RE.fullmatch(afk_prompt) is None
+        ):
+            return "'afk_prompt' must be null or a prompt id string"
     return None
 
 
+def _migrate_v1(doc: Any) -> dict | None:
+    """The version-2 form of `doc` when it is exactly a valid version-1 document, else None.
+
+    Migrates only a document whose key set is exactly the version-1 keys, whose
+    version is the integer 1 and which validates whole as version 1; anything
+    else (malformed v1, version 0 or 3, a version-2 file with missing or extra
+    keys) is left for `_validate` to refuse. `afk_prompt` starts null.
+    """
+    if not isinstance(doc, dict) or set(doc) != set(_V1_KEYS):
+        return None
+    version = doc["version"]
+    if isinstance(version, bool) or version != 1 or _validate(doc, 1) is not None:
+        return None
+    upgraded = {key: doc.get(key) for key in _KEYS}
+    upgraded["version"] = SCHEMA_VERSION
+    upgraded["afk_prompt"] = None
+    return upgraded
+
+
 def _read(path: Path) -> dict:
-    """Read and validate one state file (caller holds the lock). Absent -> defaults."""
+    """Read and validate one state file (caller holds the lock). Absent -> defaults.
+
+    An exact version-1 file is upgraded and rewritten as version 2 on disk
+    (atomic rename) before it is returned.
+    """
     try:
         raw = path.read_bytes()
     except FileNotFoundError:
@@ -252,6 +287,10 @@ def _read(path: Path) -> dict:
         doc = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, ValueError) as exc:
         raise StateError("malformed", f"{path}: malformed state file -- {exc}")
+    upgraded = _migrate_v1(doc)
+    if upgraded is not None:
+        _write_atomic(path, upgraded)
+        return upgraded
     problem = _validate(doc)
     if problem is not None:
         raise StateError("malformed", f"{path}: malformed state file -- {problem}")
@@ -329,12 +368,22 @@ def update(sid: str, fn: Callable[[dict], None], env: Mapping[str, str]) -> dict
 
 # -------------------------------------------------------------------- mutators
 
-def enter_afk(state: dict, since: str) -> None:
-    """Already afk: nothing changes. Else afk, `afk_since` = since, `greeted` cleared."""
+def enter_afk(state: dict, since: str, prompt: str | None = None) -> None:
+    """Afk from `since`; `prompt` is the prompt id of a hook that set it, else None.
+
+    Already afk: `afk_since` and everything else stay; only a non-None `prompt`
+    is recorded (`afk_prompt`, the hook keeping the user afk on this prompt).
+    Else afk, `afk_since` = since, `greeted` cleared, `afk_prompt` = prompt.
+    """
+    if prompt is not None:
+        check_prompt_id(prompt)
     if state["presence"] == "afk":
+        if prompt is not None:
+            state["afk_prompt"] = prompt
         return
     state["presence"] = "afk"
     state["afk_since"] = since
+    state["afk_prompt"] = prompt
     state["greeted"] = False
 
 
@@ -353,8 +402,9 @@ def set_normal(state: dict) -> None:
 
 
 def set_present(state: dict) -> None:
-    """Presence present; `afk_since` is kept for the recap window."""
+    """Presence present; `afk_since` is kept for the recap window; `afk_prompt` cleared."""
     state["presence"] = "present"
+    state["afk_prompt"] = None
 
 
 def _touch(table: dict, pid: str, value: Any) -> None:
@@ -413,13 +463,14 @@ def state_set(
 
     `behaviors` (the resolved config) is consulted only for `--by model` on
     afk/autonomous; `--by user` never needs config, so callers may pass None.
+    `normal` and `present` are the user's own commands (always `by: user`, never gated).
     """
     if target not in SET_TARGETS:
         raise ValueError(f"unknown state set target '{target}'")
     if by not in SET_BYS:
         raise ValueError(f"unknown --by value '{by}'")
     check_session_id(sid)
-    if target == "normal":
+    if target in ("normal", "present"):
         by = "user"
     else:
         if by == "model":
@@ -437,6 +488,10 @@ def state_set(
     def apply(doc: dict) -> None:
         if target == "normal":
             set_normal(doc)
+            return
+        if target == "present":
+            set_present(doc)
+            doc["pending_return"] = None
             return
         enter_afk(doc, stamp)
         if target == "autonomous":

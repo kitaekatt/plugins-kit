@@ -449,6 +449,40 @@ def test_departure_pattern_whole_word_any_case():
     assert pattern.search("unafk") is None
 
 
+@pytest.mark.parametrize("text", [
+    "AFK.", "(afk)", "afk", "going Afk!", "afk, back at 3", '"afk"', "x afk y", "afk\nlater", "I'm afk.",
+])
+def test_departure_pattern_matches_the_word_standing_alone(text):
+    """Boundary: punctuation, parentheses, quotes and line breaks do not hide the word."""
+    assert pc.departure_pattern(["afk"]).search(text) is not None
+
+
+@pytest.mark.parametrize("text", [
+    "afk-on-departure",                          # a behavior id
+    "presence-kit:afk",                          # the skill name
+    "/presence-kit:recap afk-ending prompt-1",   # the recap trigger
+    "`afk`",                                     # a backticked mention
+    "afk_since",                                 # a state field
+    "skills/afk/SKILL.md",                       # a path
+    "my-afk",                                    # hyphen before
+    "afk:",                                      # colon after
+    "afkward", "unafk", "afk2",
+])
+def test_departure_pattern_skips_names_that_contain_the_word(text):
+    """Boundary: the word next to a word character, `-`, `:`, `/` or a backtick is a name, not a departure."""
+    assert pc.departure_pattern(["afk"]).search(text) is None
+
+
+def test_departure_pattern_finds_the_first_standing_word_among_names():
+    match = pc.departure_pattern(["afk"]).search("see afk-on-departure, I am AFK now")
+    assert match.group(0) == "AFK"
+
+
+def test_departure_pattern_escapes_the_words():
+    assert pc.departure_pattern(["a_b"]).search("go a_b now") is not None
+    assert pc.departure_pattern(["a_b"]).search("go axb now") is None
+
+
 def test_departure_pattern_several_words():
     pattern = pc.departure_pattern(["afk", "leaving"])
     assert pattern.search("I'm leaving soon").group(0) == "leaving"
@@ -486,9 +520,27 @@ def test_section_seven_texts_are_exact():
         "the user counts as away since 2026-10-17T09:00:00Z [goal: ship it]. "
         "Apply the away behaviors in references/presence.md that are on."
     )
-    assert pc.P3_DEPARTURE.format(word="afk") == (
-        'the prompt contains the departure word "afk"; if this is the user saying they are '
-        "leaving, invoke `presence-kit:afk`."
+    undo = pc.P3_UNDO.format(sid="s1")
+    assert undo == (
+        '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" '
+        '"${PRESENCE_KIT_ROOT:?presence-kit is not provisioned}/scripts/presence.py" '
+        "state set present --session s1"
+    )
+    assert pc.P3_DEPARTURE.format(word="afk", undo=undo) == (
+        'set the user afk because the prompt contains the departure word "afk". '
+        "If that is wrong (the word is quoted or discussed, or the prompt is not the user's own "
+        f"message), run `{undo}` and tell the user once in one line; "
+        "otherwise invoke `presence-kit:afk` to cover running work."
+    )
+    assert pc.P3_DEPARTURE_KEPT.format(word="afk", undo=undo, return_clause="") == (
+        'kept the user afk because the prompt contains the departure word "afk". '
+        "If that is wrong (the word is quoted or discussed, or the prompt is not the user's own "
+        f"message), run `{undo}` and tell the user once in one line; "
+        "otherwise invoke `presence-kit:afk` to cover running work."
+    )
+    assert pc.P3_KEPT_RETURN_CLAUSE.format(pid="p9") == (
+        " (if it was the user's own message, they are back: also invoke "
+        "`presence-kit:recap return p9`)"
     )
     assert pc.R_RETURN.format(pid="p2") == "the user is back; invoke `presence-kit:recap return p2`."
     assert pc.E_AFK.format(pid="p3") == "invoke `presence-kit:recap afk-ending p3`."

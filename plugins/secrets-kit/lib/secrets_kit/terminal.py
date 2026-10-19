@@ -98,8 +98,10 @@ def _launch_windows(argv: List[str], title: str) -> str:
         "echo.\r\n"
         "pause\r\n"
         # Last line, so the launcher does not accumulate a file per invocation.
-        # cmd tolerates a script deleting itself once it is the final command.
-        'del "%~f0"\r\n'
+        # A bare `del "%~f0"` makes cmd print "The batch file cannot be found."
+        # when it reads on for the next line; `(goto) 2>nul` ends the script
+        # first, and the rest of the parsed line still runs the delete.
+        '(goto) 2>nul & del "%~f0"\r\n'
     )
     fd, path = tempfile.mkstemp(prefix="secrets-kit-", suffix=".cmd", text=True)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:

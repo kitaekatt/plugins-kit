@@ -145,7 +145,12 @@ def _user_returned(
     doc: dict, cfg: pc.Config, pid: str, entry: pt.Entry | None, state_file: str
 ) -> None:
     """Row 4: afk and a human entry newer than afk_since -> present, always; R is
-    pending only with recap-on-return on and no `return` recap for this prompt."""
+    pending only with recap-on-return on and no `return` recap for this prompt.
+
+    The prompt that the prompt hook itself set (or kept) afk on is never a return,
+    whatever the timestamps say: the transcript entry precedes the hook's `afk_since`
+    by milliseconds, and `afk_since` is truncated to the second, so the entry can
+    look newer. The hook records that prompt id as `afk_prompt`."""
     if doc["presence"] != "afk" or entry is None or entry.turn_origin != pt.HUMAN:
         return
     since = ps.parse_timestamp(doc["afk_since"])
@@ -153,7 +158,7 @@ def _user_returned(
         raise ps.StateError(
             "malformed", f"{state_file}: malformed state file -- presence is afk but afk_since is null"
         )
-    if entry.timestamp <= since:
+    if doc["afk_prompt"] == pid or entry.timestamp <= since:
         return
     ps.set_present(doc)
     if cfg.enabled("recap-on-return") and doc["recaps"].get(pid) != "return":
