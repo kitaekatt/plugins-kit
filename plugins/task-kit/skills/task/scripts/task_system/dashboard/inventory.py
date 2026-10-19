@@ -1,19 +1,24 @@
 """A cached, read-only inventory of every configured project's task folders.
 
 Discovery and validation are the task system's own: this module enumerates the
-same folders ``task.py list --scope all`` does (the ``tmp/`` and ``dev/tasks/``
-roots of every project under the configured parent directories), classifies
-each through ``validate_ref``, and reads its items through ``read_task_items``.
-It adds only what a long-lived reader needs:
+``dev/tasks/`` folders ``task.py list --scope all`` does for every project under
+the configured parent directories (``tmp/`` tasks are not shown: the dashboard
+does not support them), classifies each through ``validate_ref``, and reads its
+items through ``read_task_items``. It adds only what a long-lived reader needs:
 
 - A task folder is read once per CONTENT. Each folder carries a fingerprint of
   its ``task.yaml`` and every ``*.md`` (relative path, size, ``mtime_ns``); the
   folder is re-read and re-validated only when the fingerprint changes, on an
   explicit ``force`` refresh, or when the owning project changes. Validation
   shells out to ``git``, so a poll that found nothing changed must not spawn.
-- A physical folder reached through several projects (``dev/tasks`` linked into
-  more than one checkout) is assigned once, to the project the task system's
-  own deduplication prefers (the shortest project name).
+- A physical folder reached through several checkouts (``dev/tasks`` linked into
+  more than one) is assigned once, to the checkout the task system's own
+  deduplication prefers (the shortest directory name). That checkout is the
+  task's working root: the directory runs execute in.
+- A PROJECT is a git repository, not a checkout: every checkout whose ``origin``
+  remote names the same repository is one project (see ``repo_identity``). The
+  checkout stays on each task (``checkout_id``, ``project_root``) because queue
+  and run actions execute in one concrete checkout.
 - The snapshot ``revision`` is a digest of everything shown, so it changes
   exactly when the picture changes.
 
@@ -44,11 +49,11 @@ from ..discovery import (
     read_task_block,
     read_task_updates,
 )
-from ..resolve import ARCHIVED_DIRNAME, KNOWN_ROOTS
+from ..resolve import ARCHIVED_DIRNAME, KNOWN_ROOTS, LOCATION_TMP
 from ..task_items import read_task_items, sort_items
 from ..types import HAND_OFF
 from ..validate import validate_ref
-from . import mutation
+from . import mutation, repo_identity, vcs
 
 # Item state (plan.md vocabulary) -> the state the UI draws.
 ITEM_UI_STATE = {
@@ -58,6 +63,9 @@ ITEM_UI_STATE = {
     "deferred": "deferred",
 }
 UNKNOWN_ITEM_STATE = "unknown"
+
+# The task roots the dashboard reads: the task system's own, without tmp/.
+DASHBOARD_ROOTS = tuple(root for root in KNOWN_ROOTS if root != LOCATION_TMP)
 
 # Classifications whose blocked or invalid condition needs a person.
 NEEDS_CLASSIFICATIONS = ("active", "blocked", "invalid")
@@ -101,10 +109,11 @@ class TaskCore:
 
 @dataclass(frozen=True)
 class TaskEntry:
-    project_id: str
-    project_name: str
-    project_root: str
-    location: str  # tmp | dev/tasks
+    project_id: str  # the repository (see repo_identity.repo_id_for)
+    project_name: str  # the repository name, e.g. plugins-kit
+    project_root: str  # the working root: the checkout this task was read from
+    checkout_id: str  # project_id_for(project_root); runs and item routes key on it
+    location: str  # dev/tasks
     stub: str
     id: str  # project-relative canonical path, e.g. dev/tasks/<stub>
     folder: str
@@ -115,7 +124,7 @@ class TaskEntry:
 class ProjectEntry:
     id: str
     name: str
-    root: str
+    roots: tuple[str, ...]  # every checkout of the repository that holds tasks
     tasks: tuple[TaskEntry, ...]
 
 
@@ -127,18 +136,21 @@ class InventorySnapshot:
     projects: tuple[ProjectEntry, ...]
     errors: tuple[dict, ...] = ()
 
-    def find_task(self, project_id: str, task_id: str) -> TaskEntry | None:
+    def find_task(self, checkout_id: str, task_id: str) -> TaskEntry | None:
+        """The task with this id read from this checkout (``TaskEntry.checkout_id``)."""
         for project in self.projects:
-            if project.id != project_id:
-                continue
             for task in project.tasks:
-                if task.id == task_id:
+                if task.checkout_id == checkout_id and task.id == task_id:
                     return task
         return None
 
 
 def project_id_for(root: Path) -> str:
-    """Project identity: SHA-256 of the canonical project root."""
+    """Checkout identity: SHA-256 of the canonical checkout root.
+
+    Runs, the run queue's per-checkout lease and the item routes key on this.
+    The dashboard's PROJECT (a repository) is ``repo_identity.repo_id_for``.
+    """
     canonical = os.path.normcase(os.path.normpath(os.path.realpath(root)))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -262,6 +274,9 @@ class Inventory:
         self._clock = clock
         self._lock = threading.Lock()
         self._cache: dict[str, _CacheEntry] = {}
+        # checkout root -> (repository name, error to report or None); read once,
+        # re-read on a forced refresh (a remote can change without a file change).
+        self._repos: dict[str, tuple[str, dict | None]] = {}
         self._snapshot: InventorySnapshot | None = None
         self._refreshed_at: float | None = None
         self._generation = 0
@@ -313,7 +328,7 @@ class Inventory:
         stubs_by_base: dict[str, list[str]] = {}
         owners: dict[str, tuple[ProjectRoot, str, str]] = {}
         for project in sorted(roots, key=_preference):
-            for location in KNOWN_ROOTS:
+            for location in DASHBOARD_ROOTS:
                 base = project.root / location
                 if not base.is_dir():
                     continue
@@ -333,7 +348,6 @@ class Inventory:
                     owners.setdefault(key, (project, location, stub))
 
         by_project: dict[str, list[TaskEntry]] = {}
-        project_meta: dict[str, ProjectRoot] = {}
         live_keys = set()
         cores: dict[str, TaskCore] = {}
         pending = []  # (key, project, location, stub, fingerprint) needing a read
@@ -382,15 +396,29 @@ class Inventory:
                     self._cache[key] = _CacheEntry(fingerprint, str(project.root), core)
                     cores[key] = core
 
+        if force:
+            self._repos.clear()
+        repo_names: dict[str, str] = {}
+        for key in cores:
+            repo_names[str(owners[key][0].root)] = ""
+        for root in repo_names:
+            repo_names[root] = self._repo_name(root, errors)
+
+        project_names: dict[str, str] = {}
+        project_roots: dict[str, set[str]] = {}
         for key, core in cores.items():
             project, location, stub = owners[key]
-            pid = project_id_for(project.root)
-            project_meta[pid] = project
+            root = str(project.root)
+            name = repo_names[root]
+            pid = repo_identity.repo_id_for(name)
+            project_names.setdefault(pid, name)
+            project_roots.setdefault(pid, set()).add(root)
             by_project.setdefault(pid, []).append(
                 TaskEntry(
                     project_id=pid,
-                    project_name=project.name,
-                    project_root=str(project.root),
+                    project_name=project_names[pid],
+                    project_root=root,
+                    checkout_id=project_id_for(project.root),
                     location=location,
                     stub=stub,
                     id=f"{location}/{stub}",
@@ -403,12 +431,16 @@ class Inventory:
 
         projects = []
         for pid, tasks in by_project.items():
-            meta = project_meta[pid]
-            tasks.sort(key=lambda t: t.id)
+            tasks.sort(key=lambda t: (t.id, t.project_root))
             projects.append(
-                ProjectEntry(id=pid, name=meta.name, root=str(meta.root), tasks=tuple(tasks))
+                ProjectEntry(
+                    id=pid,
+                    name=project_names[pid],
+                    roots=tuple(sorted(project_roots[pid])),
+                    tasks=tuple(tasks),
+                )
             )
-        projects.sort(key=lambda p: (p.name.casefold(), p.name, p.root))
+        projects.sort(key=lambda p: (p.name.casefold(), p.name, p.roots))
         self._generation += 1
         return InventorySnapshot(
             revision=_revision(projects, errors),
@@ -419,14 +451,37 @@ class Inventory:
         )
 
 
+    def _repo_name(self, root: str, errors: list[dict]) -> str:
+        """The repository name for a checkout, read once; a failure falls back to
+        the directory name and is reported on every snapshot until it clears."""
+        cached = self._repos.get(root)
+        if cached is None:
+            try:
+                cached = (repo_identity.repo_name_for(Path(root)), None)
+            except vcs.GitError as exc:
+                cached = (
+                    Path(root).name,
+                    {
+                        "code": "repo-identity",
+                        "message": f"cannot read the git remote of {root}; "
+                        f"using the directory name: {exc}",
+                    },
+                )
+            self._repos[root] = cached
+        if cached[1] is not None:
+            errors.append(cached[1])
+        return cached[0]
+
+
 def _revision(projects: list[ProjectEntry], errors: list[dict]) -> str:
     digest = hashlib.sha256()
     for project in projects:
-        digest.update(f"P|{project.id}|{project.name}|{project.root}\n".encode("utf-8"))
+        digest.update(f"P|{project.id}|{project.name}|{'|'.join(project.roots)}\n".encode("utf-8"))
         for task in project.tasks:
             core = task.core
             payload = {
                 "id": task.id,
+                "root": task.project_root,
                 "folder": task.folder,
                 "classification": core.classification,
                 "title": core.title,

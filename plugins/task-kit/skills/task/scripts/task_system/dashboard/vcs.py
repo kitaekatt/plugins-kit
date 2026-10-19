@@ -45,6 +45,21 @@ def is_repository(root: Path) -> bool:
     return _git(root, "rev-parse", "--is-inside-work-tree", check=False).stdout.strip() == "true"
 
 
+def remote_url(root: Path, name: str = "origin") -> str | None:
+    """The URL of the named remote in ``root``'s own repository config, or None.
+
+    None means "no such remote" (``git config`` exit 1) or "not a repository".
+    Any other failure, such as a repository git refuses to read, raises
+    :class:`GitError`: the caller decides how loudly to show it.
+    """
+    proc = _git(root, "config", "--local", "--get", f"remote.{name}.url", check=False)
+    if proc.returncode == 0:
+        return proc.stdout.strip() or None
+    if proc.returncode == 1 or not is_repository(root):
+        return None
+    raise GitError(f"git config remote.{name}.url failed in {root}: {proc.stderr.strip()}")
+
+
 def facts(root: Path) -> GitFacts:
     root = Path(root)
     if not is_repository(root):

@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..validate import validate_ref
+from . import findings as findings_mod
 from . import blocker, task_result, vcs
 from .mutation import TaskMutator, raw_items
 
@@ -105,7 +106,7 @@ def judge(spec: dict, answer: str, *, start_head: str | None, start_branch: str 
     # done: the checks target the one item only.
     task_ref = spec["task_ref"]
     validation = validate_ref(task_ref, root)
-    findings = list(validation.errors) + list(validation.warnings)
+    findings = findings_mod.gating_of(validation)  # the uncommitted-folder warning is the worker's own edits
     facts["checks"].append({"check": "validate", "findings": findings})
     if findings:
         return Verdict(EXIT_REJECTED, "rejected", "validation", "; ".join(findings[:3])), facts

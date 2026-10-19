@@ -38,6 +38,7 @@ from typing import Callable
 import yaml
 
 from ..validate import validate_ref
+from . import findings as findings_mod
 from . import floor, proctree, redact
 from .blocker import BlockOutcome, concise, record_block
 from .config import DashboardConfig, DashboardConfigError, load_config
@@ -121,6 +122,36 @@ def _options_from(body: dict) -> dict:
             raise QueueRefused(422, "bad-options", "timeout_s must be a positive number")
         options["timeout_s"] = float(value)
     return options
+
+
+# llm-kit's attempt status for a model call that ran into the job's own per-invocation
+# timeout (the TIMEOUT constant of llm-kit's jobs model; the dashboard does not import llm-kit, so the
+# value is stated here and pinned against the real producer in
+# the dashboard's real-job test module).
+ATTEMPT_TIMEOUT_STATUS = "timeout"
+
+
+def read_job_snapshot(run_dir: Path) -> dict | None:
+    """The final JSON status line ``llm-kit jobs run`` printed, or None when there is none."""
+    try:
+        snapshot = json.loads((Path(run_dir) / "llm.out").read_text(encoding="utf-8").strip().splitlines()[-1])
+    except (OSError, ValueError, IndexError):
+        return None
+    return snapshot if isinstance(snapshot, dict) else None
+
+
+def job_timeout(snapshot: dict | None) -> str | None:
+    """The first line of the error of an attempt that hit the job's timeout, or None.
+
+    Identified structurally: an entry of the snapshot's ``attempts`` whose ``status`` is
+    llm-kit's timeout status. (The job itself then reads ``failed``, with error code
+    ``execution``, which is why it was shown as failed before.)
+    """
+    for attempt in (snapshot or {}).get("attempts") or []:
+        if isinstance(attempt, dict) and attempt.get("status") == ATTEMPT_TIMEOUT_STATUS:
+            message = ((attempt.get("error") or {}).get("message") or "").strip()
+            return message.splitlines()[0] if message else "the attempt timed out"
+    return None
 
 
 class Scheduler:
@@ -256,7 +287,7 @@ class Scheduler:
         if expected_revision is not None and current != expected_revision:
             raise QueueRefused(409, "stale-revision", "the task changed since this page last loaded it", current_revision=current)
         result = validate_ref(task_ref, Path(project_root))
-        findings = list(result.errors) + list(result.warnings)
+        findings = findings_mod.gating_of(result)
         plan = (folder / "plan.md").read_text(encoding="utf-8") if (folder / "plan.md").is_file() else ""
         blocked_items = [i.get("id") for i in (raw_items(plan) or []) if i.get("state") == "blocked-user"]
         problems = [Reason("validation", f) for f in findings] + [
@@ -495,6 +526,12 @@ class Scheduler:
         if outcome == "runner-refused":
             self.db.set_state(run.id, FAILED, code="runner-refused", detail=result.get("detail", ""))
             return
+        limit = job_timeout(read_job_snapshot(run_dir))
+        if limit is not None:
+            self.db.set_state(run.id, TIMEOUT, code="timeout",
+                              detail=f"the model call reached its time limit ({limit}); partial work may be in the shared tree. "
+                                     "Retry starts a fresh run.")
+            return
         if self._acceptance_starved(run_dir):
             detail = "the model used the whole time budget, leaving none for acceptance; inspect the shared tree"
             try:
@@ -508,9 +545,8 @@ class Scheduler:
 
     @staticmethod
     def _acceptance_starved(run_dir: Path) -> bool:
-        try:
-            snapshot = json.loads((run_dir / "llm.out").read_text(encoding="utf-8").strip().splitlines()[-1])
-        except (OSError, ValueError, IndexError):
+        snapshot = read_job_snapshot(run_dir)
+        if snapshot is None:
             return False
 
         def walk(value) -> bool:

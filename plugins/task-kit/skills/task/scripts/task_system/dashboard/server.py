@@ -428,8 +428,8 @@ class _Handler(BaseHTTPRequestHandler):
         expected = self._expected_revision(body)
         if expected is None:
             return
-        project, task_id, item_id, action = route[1], route[2], route[3], route[4]
-        task = self.app.inventory.snapshot().find_task(project, task_id)
+        checkout, task_id, item_id, action = route[1], route[2], route[3], route[4]
+        task = self.app.inventory.snapshot().find_task(checkout, task_id)
         if task is None:
             self._error(404, "unknown_task", "No such task in any configured project.")
             return
@@ -543,8 +543,8 @@ class _Handler(BaseHTTPRequestHandler):
             if method not in ("GET", "HEAD"):
                 self._error(405, "method_not_allowed", "Use GET.")
                 return
-            project, task_id, item_id = route[1], route[2], route[3]
-            task = self.app.inventory.snapshot().find_task(project, task_id)
+            checkout, task_id, item_id = route[1], route[2], route[3]
+            task = self.app.inventory.snapshot().find_task(checkout, task_id)
             if task is None:
                 self._error(404, "unknown_task", "No such task in any configured project.")
                 return

@@ -21,7 +21,7 @@ from dashboard_support import (
     SCRIPTS_DIR,
     FakeEdge,
     Running,
-    agent_world,
+    dashboard_world,
     runner_environment,
 )
 
@@ -85,7 +85,7 @@ def rig(tmp_path, monkeypatch):
     runner_environment(monkeypatch)
     monkeypatch.setattr(scheduler, "RUNNER_SLACK_S", 1.0)
     monkeypatch.setattr(scheduler, "RUNNER_GRACE_S", 2.0)
-    devroot, project, folder = agent_world(tmp_path)
+    devroot, project, folder = dashboard_world(tmp_path)
     edge = FakeEdge()
     srv = Running(tmp_path / "data", (devroot,), edge=edge, config_path=tmp_path / "none.yaml")
     pid = project_id_for(project)
@@ -96,7 +96,7 @@ def rig(tmp_path, monkeypatch):
     r = Rig()
     r.srv, r.edge, r.project, r.folder, r.pid = srv, edge, project, folder, pid
     r.queue = lambda options=None: srv.post(
-        f"/api/v1/items/{pid}/tmp%2Falpha/do-it/queue",
+        f"/api/v1/items/{pid}/dev%2Ftasks%2Falpha/do-it/queue",
         {"expected_revision": folder_revision(folder), "options": options or {"timeout_s": 2}})
     try:
         yield r

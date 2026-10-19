@@ -7,7 +7,7 @@ the agent's answer on stdin, exactly as llm-kit does, and prints a JSON run
 snapshot. No model is called.
 
 Behaviors: done, done-no-removal, blocked, no-result, duplicate-result,
-branch-switch, commit, hang, lingering, exit-1.
+branch-switch, commit, hang, lingering, exit-1, attempt-timeout.
 """
 
 from __future__ import annotations
@@ -100,6 +100,14 @@ if BEHAVIOR == "lingering":
     finish_item()
     code = run_contract(result_block("done"))
     sys.exit(code)  # exits while its grandchild still sleeps
+if BEHAVIOR == "attempt-timeout":
+    # What llm-kit prints when the claude call hits the job's own timeout: the attempt is `timeout`
+    # but the job is `failed` (error code "execution") and the runner exits 1.
+    snapshot = {"attempts": [{"attempt_no": 1, "status": "timeout", "error": {
+        "code": "execution", "message": "claude -p exceeded 30.0s timeout (elapsed 30s; likely rate-limit backoff at the CLI layer).\nstderr tail:\n<empty>"}}],
+        "jobs": [{"id": JOB["id"], "state": "failed", "error": None}]}
+    print(json.dumps(snapshot))
+    sys.exit(1)
 if BEHAVIOR == "exit-1":
     print("model unavailable", file=sys.stderr)
     sys.exit(1)

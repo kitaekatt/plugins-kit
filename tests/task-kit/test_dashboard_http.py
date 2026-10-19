@@ -13,6 +13,7 @@ import urllib.parse
 import pytest
 from dashboard_support import Running, make_task
 
+from task_system.dashboard import snapshot
 from task_system.dashboard import state as dstate
 from task_system.dashboard.server import (
     EXIT_LOCK_HELD,
@@ -41,7 +42,7 @@ def world(tmp_path):
         sections={"has-section": SECTION},
         log="- 2026-10-01 09:00: first entry\n- 2026-10-02 10:30: second entry\n",
     )
-    make_task(devroot / "beta", "tmp", "other", title="Other", items=[
+    make_task(devroot / "beta", "dev/tasks", "other", title="Other", items=[
         {"id": "solo", "title": "Solo", "state": "in-flight", "note": "in the harness"}])
     return devroot
 
@@ -59,6 +60,14 @@ def project_id(srv, name):
     status, _h, body = srv.json("GET", "/api/v1/dashboard")
     assert status == 200
     return next(p["id"] for p in body["projects"] if p["name"] == name)
+
+
+def checkout_id(srv, name, task_id):
+    """The id item routes use: the checkout the task is read from, not the project."""
+    _s, _h, body = srv.json("GET", "/api/v1/dashboard")
+    mine = [t for t in body["tasks"] if t["repo"] == name]
+    # An id no task has still needs a real checkout, so the 404 under test is the task's.
+    return next((t["checkout"] for t in mine if t["id"] == task_id), mine[0]["checkout"])
 
 
 # -- health, token, host ----------------------------------------------------
@@ -213,7 +222,7 @@ def test_dashboard_payload_shape_and_filters(srv):
     assert body["capabilities"]["run"]["state"] == "absent"  # llm-kit is not on the task-kit test path
     assert body["capabilities"]["mutations"]["actions"] == ["queue", "retry", "recheck"]
     assert {p["name"] for p in body["projects"]} == {"alpha", "beta"}
-    assert {t["id"] for t in body["tasks"]} == {"dev/tasks/open-one", "tmp/other"}
+    assert {t["id"] for t in body["tasks"]} == {"dev/tasks/open-one", "dev/tasks/other"}
     assert [n["kind"] for n in body["needs"]] == ["item-blocked"]
     assert body["needs"][0]["detail"] == "pick one"
     assert [x["item"] for x in body["in_flight"]] == ["solo"]
@@ -227,9 +236,32 @@ def test_dashboard_payload_shape_and_filters(srv):
     _s, _h, only_needs = srv.json("GET", "/api/v1/dashboard?needs=1")
     assert [t["id"] for t in only_needs["tasks"]] == ["dev/tasks/open-one"]
     _s, _h, found = srv.json("GET", "/api/v1/dashboard?q=" + urllib.parse.quote("solo"))
-    assert [t["id"] for t in found["tasks"]] == ["tmp/other"]
+    assert [t["id"] for t in found["tasks"]] == ["dev/tasks/other"]
     _s, _h, none = srv.json("GET", "/api/v1/dashboard?q=zzz-nothing")
     assert none["tasks"] == []
+
+
+def test_payload_carries_repo_identity_working_root_and_per_task_needs(srv, world):
+    _s, _h, body = srv.json("GET", "/api/v1/dashboard")
+    task = next(t for t in body["tasks"] if t["id"] == "dev/tasks/open-one")
+    assert task["repo"] == "alpha" and task["stub"] == "open-one" and task["id"] == "dev/tasks/open-one"
+    assert task["project"] == project_id(srv, "alpha")
+    assert task["checkout"] == checkout_id(srv, "alpha", "dev/tasks/open-one") != task["project"]
+    assert task["key"] == f"{task['checkout']}|dev/tasks/open-one"
+    assert task["working_root"] == str(world / "alpha")  # outside the home directory: shown as is
+    assert [n["item"] for n in task["needs"]] == ["needs-me"] and task["needs"][0]["checkout"] == task["checkout"]
+    project = next(p for p in body["projects"] if p["name"] == "alpha")
+    assert project["checkouts"] == [str(world / "alpha")] and "root" not in project
+
+
+def test_display_path_is_home_relative_only_under_the_home_directory(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    assert snapshot.display_path(str(home / "Dev" / "plugins-kit3")) == "~/Dev/plugins-kit3"
+    assert snapshot.display_path(str(home)) == "~"
+    assert snapshot.display_path(str(tmp_path / "home2" / "x")) == str(tmp_path / "home2" / "x")
+    assert snapshot.display_path(str(tmp_path / "elsewhere")) == str(tmp_path / "elsewhere")
 
 
 def test_revision_is_stable_until_a_task_changes(srv, world):
@@ -253,8 +285,8 @@ def test_refresh_param_revalidates_every_folder(srv):
 
 
 def _item_path(srv, project, task, item, suffix=""):
-    pid = project_id(srv, project)
-    return f"/api/v1/items/{pid}/{urllib.parse.quote(task, safe='')}/{item}{suffix}"
+    cid = checkout_id(srv, project, task)
+    return f"/api/v1/items/{cid}/{urllib.parse.quote(task, safe='')}/{item}{suffix}"
 
 
 def test_item_detail_returns_the_plan_section_and_handoff(srv, world):
@@ -264,15 +296,15 @@ def test_item_detail_returns_the_plan_section_and_handoff(srv, world):
     assert body["plan_section"]["status"] == "found"
     assert body["plan_section"]["body"] == SECTION
     root = str(world / "alpha")
-    assert body["handoff"]["commands"] == [
-        f'cd "{root}"' if " " in root else f"cd {root}", "claude", "/task work dev/tasks/open-one"]
+    assert [c["command"] for c in body["handoff"]["commands"]] == [
+        f'cd "{root}" && claude "/task-kit:task work dev/tasks/open-one"', "/task-kit:task work dev/tasks/open-one"]
     _s, _h, missing = srv.json("GET", _item_path(srv, "alpha", "dev/tasks/open-one", "no-section"))
     assert missing["plan_section"]["status"] == "missing"
 
 
 def test_handoff_endpoint_and_unknown_items(srv):
     status, _h, body = srv.json("GET", _item_path(srv, "alpha", "dev/tasks/open-one", "needs-me", "/handoff"))
-    assert status == 200 and body["commands"][1] == "claude"
+    assert status == 200 and len(body["commands"]) == 2 and body["commands"][1]["command"].startswith("/task-kit:task work ")
     for path in (_item_path(srv, "alpha", "dev/tasks/open-one", "nope"),
                  _item_path(srv, "alpha", "dev/tasks/missing", "needs-me"),
                  "/api/v1/items/0000/x/y"):

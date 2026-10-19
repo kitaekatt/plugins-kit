@@ -279,6 +279,18 @@ unconfigurable opinion whose test passes is a finding.
   preference a team can hold two of at once, and a seam here would mean two
   incompatible YAML dialects.
 
+- **task-kit's dashboard lists `dev/tasks` tasks only; `tmp/` tasks are not shown.** The
+  dashboard identifies a project as a git repository (the `origin` remote URL basename,
+  else the directory name) and merges every checkout of one repository into one project,
+  showing a task as `<repo>:<stub>`. A `tmp/` task is per-checkout scratch: two checkouts
+  can each hold an unrelated `tmp/<stub>` with the same name, so it has no repository-level
+  identity to merge on. A team that keeps active work in `tmp/` will reasonably want it
+  shown; we decline a flag because it would reintroduce per-checkout projects beside
+  repository projects in one list. Such a team promotes the task with
+  `task move <ref> dev/tasks`. The task CLI (list, review, work) is unaffected and still
+  sees `tmp/` tasks. User ruling 2026-10-19: "let's say we don't support tmp/ tasks at all
+  in the dashboard I think that's the easiest thing to do".
+
 An opinion that FAILS the test needs neither a register entry nor a seam -- it is simply a
 good default. Opinions that PASS and are still unconfigurable are findings, tracked with
 per-finding verdicts in the reference above; known examples are the task system's durability

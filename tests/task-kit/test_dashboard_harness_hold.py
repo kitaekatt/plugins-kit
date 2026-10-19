@@ -31,7 +31,7 @@ from dashboard_support import (
     SCRIPTS_DIR,
     FakeEdge,
     Running,
-    agent_world,
+    dashboard_world,
     make_task,
     runner_environment,
 )
@@ -61,8 +61,8 @@ def session():
 def rig(tmp_path, monkeypatch):
     runner_environment(monkeypatch)
     monkeypatch.setattr(scheduler, "RUNNER_SLACK_S", 1.0)
-    devroot, project, folder = agent_world(tmp_path)
-    beta = make_task(project, "tmp", "beta", title="Beta",
+    devroot, project, folder = dashboard_world(tmp_path)
+    beta = make_task(project, "dev/tasks", "beta", title="Beta",
                      items=[{"id": "b-item", "title": "B item", "state": "available"}],
                      sections={"b-item": "Do b."}, log="- 2026-10-01 09:00: began\n")
     edge = FakeEdge()
@@ -74,8 +74,8 @@ def rig(tmp_path, monkeypatch):
     r = Rig()
     r.srv, r.edge, r.project, r.alpha, r.beta, r.pid = srv, edge, project, folder, beta, project_id_for(project)
     r.queue = lambda task, item, options=None: srv.post(
-        f"/api/v1/items/{r.pid}/{urllib.parse.quote('tmp/' + task, safe='')}/{item}/queue",
-        {"expected_revision": folder_revision(project / "tmp" / task), "options": options or {"timeout_s": 30}})
+        f"/api/v1/items/{r.pid}/{urllib.parse.quote('dev/tasks/' + task, safe='')}/{item}/queue",
+        {"expected_revision": folder_revision(project / "dev" / "tasks" / task), "options": options or {"timeout_s": 30}})
     r.hold = lambda folder, proc, name="s1": srv.scheduler.db.add_hold(str(folder), name, proctree.ident_of(proc.pid))
     try:
         yield r
@@ -129,7 +129,7 @@ def test_recheck_releases_the_task_hold(rig, session):
     rig.hold(rig.beta, session)
     assert rig.srv.scheduler.hold_for(str(rig.alpha))
     status, _h, body = rig.srv.post(
-        f"/api/v1/items/{rig.pid}/tmp%2Falpha/do-it/recheck", {"expected_revision": folder_revision(rig.alpha)})
+        f"/api/v1/items/{rig.pid}/dev%2Ftasks%2Falpha/do-it/recheck", {"expected_revision": folder_revision(rig.alpha)})
     assert status == 200 and body["holds_released"] == 1
     assert rig.srv.scheduler.hold_for(str(rig.alpha)) is None and rig.srv.scheduler.hold_for(str(rig.beta))
 
@@ -139,7 +139,7 @@ def test_the_handshake_registers_a_hold_keyed_by_session_and_a_live_run_gets_one
     status, _h, body = rig.queue("alpha", "do-it", {"timeout_s": 60})
     live = rig.srv.settle(body["run"]["id"], states=(runtime.RUNNING,))
     err = io.StringIO()
-    assert handshake.run("tmp/alpha", rig.project, session="sess-123", data_dir=rig.srv.data_dir, session_pid=session.pid, err=err) == 0
+    assert handshake.run("dev/tasks/alpha", rig.project, session="sess-123", data_dir=rig.srv.data_dir, session_pid=session.pid, err=err) == 0
     holds = rig.srv.scheduler.db.live_holds(str(rig.alpha))
     assert [h["session"] for h in holds] == ["sess-123"] and holds[0]["pid"] == session.pid
     lines = err.getvalue().splitlines()
@@ -151,7 +151,7 @@ def test_the_handshake_registers_a_hold_keyed_by_session_and_a_live_run_gets_one
 
 def test_the_handshake_is_silent_when_nothing_runs_on_the_task(rig, session):
     err = io.StringIO()
-    handshake.run("tmp/alpha", rig.project, session="s", data_dir=rig.srv.data_dir, session_pid=session.pid, err=err)
+    handshake.run("dev/tasks/alpha", rig.project, session="s", data_dir=rig.srv.data_dir, session_pid=session.pid, err=err)
     assert err.getvalue() == "" and len(rig.srv.scheduler.db.live_holds(str(rig.alpha))) == 1
 
 
@@ -226,16 +226,16 @@ def cli_env():
 def skill_flow(project: Path, data_dir: Path, session_pid: int):
     """What the skill does: the handshake, then the unchanged work verb. Each step's raw outputs."""
     env = cli_env()
-    hold = subprocess.run([sys.executable, str(TASK_HOLD), "tmp/alpha", "--root", str(project), "--data-dir", str(data_dir),
+    hold = subprocess.run([sys.executable, str(TASK_HOLD), "dev/tasks/alpha", "--root", str(project), "--data-dir", str(data_dir),
                            "--session-pid", str(session_pid)], capture_output=True, env=env, cwd=project, timeout=60)
-    work = subprocess.run([sys.executable, str(TASK_CLI), "work", "tmp/alpha", "--root", str(project)],
+    work = subprocess.run([sys.executable, str(TASK_CLI), "work", "dev/tasks/alpha", "--root", str(project)],
                           capture_output=True, env=env, cwd=project, timeout=60)
     return hold, work
 
 
 def test_a_broken_dashboard_leaves_work_output_byte_identical_apart_from_one_notice_line(tmp_path, session):
     """RED CHECK: a corrupt server.json and a non-responding port, each."""
-    _devroot, project, _folder = agent_world(tmp_path, repo=False)
+    _devroot, project, _folder = dashboard_world(tmp_path, repo=False)
     quiet_dir = tmp_path / "data-none"
     quiet_dir.mkdir()
     hold0, work0 = skill_flow(project, quiet_dir, session.pid)
@@ -258,7 +258,7 @@ def test_a_broken_dashboard_leaves_work_output_byte_identical_apart_from_one_not
 
 
 def test_a_hung_server_costs_at_most_the_bounded_wait_and_never_fails_work(tmp_path, session):
-    _devroot, project, _folder = agent_world(tmp_path, repo=False)
+    _devroot, project, _folder = dashboard_world(tmp_path, repo=False)
     data_dir = tmp_path / "data-hung"
     with HungServer() as hung:
         write_record(data_dir, valid_record(hung.port))
@@ -272,13 +272,13 @@ def test_a_hung_server_costs_at_most_the_bounded_wait_and_never_fails_work(tmp_p
 
 
 def test_the_handshake_itself_gives_up_within_its_bounded_wait(tmp_path, session):
-    _devroot, project, _folder = agent_world(tmp_path, repo=False)
+    _devroot, project, _folder = dashboard_world(tmp_path, repo=False)
     data_dir = tmp_path / "data-hung2"
     err = io.StringIO()
     with HungServer() as hung:
         write_record(data_dir, valid_record(hung.port))
         started = time.monotonic()
-        assert handshake.run("tmp/alpha", project, session="s", data_dir=data_dir, session_pid=session.pid, err=err) == 0
+        assert handshake.run("dev/tasks/alpha", project, session="s", data_dir=data_dir, session_pid=session.pid, err=err) == 0
         elapsed = time.monotonic() - started
     assert elapsed < handshake.TOTAL_TIMEOUT_S + 1.5 and len(err.getvalue().splitlines()) == 1
 
@@ -289,13 +289,13 @@ def test_a_server_that_refuses_the_token_is_one_loud_line_not_a_failure(tmp_path
     record["token"] = "wrong"
     write_record(other, json.dumps(record))
     err = io.StringIO()
-    assert handshake.run("tmp/alpha", rig.project, session="s", data_dir=other, session_pid=session.pid, err=err) == 0
+    assert handshake.run("dev/tasks/alpha", rig.project, session="s", data_dir=other, session_pid=session.pid, err=err) == 0
     lines = err.getvalue().splitlines()
     assert len(lines) == 1 and "HTTP 401" in lines[0] and rig.srv.scheduler.db.live_holds(str(rig.alpha)) == []
 
 
 def test_an_unresolvable_ref_is_left_to_the_work_verb(tmp_path, session):
-    _devroot, project, _folder = agent_world(tmp_path, repo=False)
+    _devroot, project, _folder = dashboard_world(tmp_path, repo=False)
     err = io.StringIO()
     assert handshake.run("not a ref at all", project, session="s", data_dir=tmp_path / "x", session_pid=session.pid, err=err) == 0
     assert err.getvalue() == ""

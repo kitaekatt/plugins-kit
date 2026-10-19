@@ -21,7 +21,7 @@ from dashboard_support import (
     SCRIPTS_DIR,
     FakeEdge,
     Running,
-    agent_world,
+    dashboard_world,
     runner_environment,
 )
 
@@ -160,7 +160,7 @@ def test_importing_the_dashboard_never_imports_llm_kit():
 @pytest.fixture
 def rig(tmp_path, monkeypatch):
     runner_environment(monkeypatch)
-    devroot, project, folder = agent_world(tmp_path)
+    devroot, project, folder = dashboard_world(tmp_path)
     edge = FakeEdge(state="absent", detail=jobs_edge.ABSENT_MESSAGE)
     srv = Running(tmp_path / "data", (devroot,), edge=edge, config_path=tmp_path / "none.yaml")
     pid = project_id_for(project)
@@ -170,7 +170,7 @@ def rig(tmp_path, monkeypatch):
 
     r = Rig()
     r.srv, r.edge, r.project, r.folder, r.pid = srv, edge, project, folder, pid
-    r.path = lambda action: f"/api/v1/items/{pid}/{urllib.parse.quote('tmp/alpha', safe='')}/do-it/{action}"
+    r.path = lambda action: f"/api/v1/items/{pid}/{urllib.parse.quote('dev/tasks/alpha', safe='')}/do-it/{action}"
     try:
         yield r
     finally:

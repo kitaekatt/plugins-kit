@@ -32,6 +32,7 @@ from typing import Callable, Mapping
 import yaml
 
 from ..validate import validate_ref
+from . import findings as findings_mod
 from . import floor, plan_sections, vcs
 from .config import DashboardConfig
 from .inventory import project_id_for
@@ -210,7 +211,7 @@ def translate(
 
     # 1. validation, then 2. stored status
     result = validate_ref(task_ref, project_root)
-    findings = list(result.errors) + list(result.warnings)
+    findings = findings_mod.gating_of(result)
     for finding in findings[:MAX_FINDINGS_SHOWN]:
         reasons.append(Reason("validation", finding))
     if len(findings) > MAX_FINDINGS_SHOWN:

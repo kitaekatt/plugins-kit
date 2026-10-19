@@ -18,7 +18,7 @@ import yaml
 from dashboard_support import (
     FakeEdge,
     Running,
-    agent_world,
+    dashboard_world,
     git,
     runner_environment,
 )
@@ -26,14 +26,14 @@ from dashboard_support import (
 from task_system.dashboard import mutation, runtime, scheduler
 from task_system.dashboard.inventory import project_id_for
 
-TASK = "tmp/alpha"
+TASK = "dev/tasks/alpha"
 
 
 @pytest.fixture
 def rig(tmp_path, monkeypatch):
     runner_environment(monkeypatch)
     monkeypatch.setattr(scheduler, "RUNNER_SLACK_S", 1.0)
-    devroot, project, folder = agent_world(tmp_path)
+    devroot, project, folder = dashboard_world(tmp_path)
     edge = FakeEdge()
     srv = Running(tmp_path / "data", (devroot,), edge=edge, config_path=tmp_path / "no-config.yaml")
     rig = Rig(srv, edge, devroot, project, folder, tmp_path)
@@ -213,7 +213,7 @@ def test_a_run_that_ends_without_a_verdict_is_failed_not_blocked_and_retry_is_fr
 def test_a_missing_plan_section_blocks_the_task_and_creates_no_job_run_or_ledger(tmp_path, monkeypatch):
     """RED CHECK: translation fails loudly -> the task is shown blocked, NO job/ledger exists."""
     runner_environment(monkeypatch)
-    devroot, project, folder = agent_world(tmp_path, sections={})  # do-it has no section
+    devroot, project, folder = dashboard_world(tmp_path, sections={})  # do-it has no section
     edge = FakeEdge()
     srv = Running(tmp_path / "data", (devroot,), edge=edge, config_path=tmp_path / "none.yaml")
     try:
@@ -234,7 +234,7 @@ def test_a_missing_plan_section_blocks_the_task_and_creates_no_job_run_or_ledger
 
 def test_a_malformed_item_source_still_blocks_the_task_and_says_the_item_was_not_marked(tmp_path, monkeypatch):
     runner_environment(monkeypatch)
-    devroot, project, folder = agent_world(tmp_path)
+    devroot, project, folder = dashboard_world(tmp_path)
     edge = FakeEdge()
     srv = Running(tmp_path / "data", (devroot,), edge=edge, config_path=tmp_path / "none.yaml")
     try:

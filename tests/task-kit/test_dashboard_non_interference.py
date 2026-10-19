@@ -185,14 +185,16 @@ def test_refreshing_leaves_every_task_folder_byte_identical(tmp_path):
     before = tree_digest(devroot)
     srv = Running(tmp_path / "data", (devroot,))
     try:
-        pid = srv.json("GET", "/api/v1/dashboard")[2]["projects"][0]["id"]
+        body = srv.json("GET", "/api/v1/dashboard")[2]
+        pid = body["projects"][0]["id"]
+        cid = next(t["checkout"] for t in body["tasks"] if t["id"] == "dev/tasks/alpha")
         for path in ("/api/v1/dashboard", "/api/v1/dashboard?refresh=1", "/api/v1/dashboard?needs=1&q=do",
                      f"/api/v1/dashboard?project={pid}"):
             for _ in range(3):
                 assert srv.json("GET", path)[0] == 200
         task = "dev%2Ftasks%2Falpha"
-        assert srv.json("GET", f"/api/v1/items/{pid}/{task}/do-it")[0] == 200
-        assert srv.json("GET", f"/api/v1/items/{pid}/{task}/wait/handoff")[0] == 200
+        assert srv.json("GET", f"/api/v1/items/{cid}/{task}/do-it")[0] == 200
+        assert srv.json("GET", f"/api/v1/items/{cid}/{task}/wait/handoff")[0] == 200
     finally:
         srv.stop()
     assert tree_digest(devroot) == before

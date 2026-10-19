@@ -7,7 +7,7 @@ import urllib.parse
 
 import psutil
 import pytest
-from dashboard_support import FakeEdge, Running, agent_world, runner_environment
+from dashboard_support import FakeEdge, Running, dashboard_world, runner_environment
 
 from task_system.dashboard import runtime, scheduler
 from task_system.dashboard.inventory import project_id_for
@@ -114,12 +114,12 @@ def psutil_ident():
 def test_a_running_run_makes_the_server_busy_and_refuses_an_unforced_stop(tmp_path, monkeypatch):
     runner_environment(monkeypatch)
     monkeypatch.setattr(scheduler, "RUNNER_SLACK_S", 1.0)
-    devroot, project, folder = agent_world(tmp_path)
+    devroot, project, folder = dashboard_world(tmp_path)
     edge = FakeEdge(behavior="hang")
     srv = Running(tmp_path / "data", (devroot,), edge=edge, config_path=tmp_path / "none.yaml")
     try:
         pid = project_id_for(project)
-        status, _h, body = srv.post(f"/api/v1/items/{pid}/{urllib.parse.quote('tmp/alpha', safe='')}/do-it/queue",
+        status, _h, body = srv.post(f"/api/v1/items/{pid}/{urllib.parse.quote('dev/tasks/alpha', safe='')}/do-it/queue",
                                     {"expected_revision": folder_revision(folder), "options": {"timeout_s": 60}})
         run = srv.settle(body["run"]["id"], states=(runtime.RUNNING,))
         assert srv.json("GET", "/api/v1/health")[2]["busy"] == 1
@@ -135,12 +135,12 @@ def test_a_running_run_makes_the_server_busy_and_refuses_an_unforced_stop(tmp_pa
 def test_a_run_survives_a_server_restart_and_is_observed_to_its_end(tmp_path, monkeypatch):
     """The runner is detached: restarting the server over the same data directory re-observes it."""
     runner_environment(monkeypatch)
-    devroot, project, folder = agent_world(tmp_path)
+    devroot, project, folder = dashboard_world(tmp_path)
     edge = FakeEdge(behavior="done")
     cfg = tmp_path / "none.yaml"
     first = Running(tmp_path / "data", (devroot,), edge=edge, config_path=cfg)
     pid = project_id_for(project)
-    status, _h, body = first.post(f"/api/v1/items/{pid}/{urllib.parse.quote('tmp/alpha', safe='')}/do-it/queue",
+    status, _h, body = first.post(f"/api/v1/items/{pid}/{urllib.parse.quote('dev/tasks/alpha', safe='')}/do-it/queue",
                                   {"expected_revision": folder_revision(folder), "options": {"timeout_s": 60}})
     run_id = body["run"]["id"]
     first.settle(run_id, states=(runtime.RUNNING, runtime.ACCEPTED, runtime.BLOCKED))  # at least started

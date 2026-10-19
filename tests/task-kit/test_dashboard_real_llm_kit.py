@@ -19,7 +19,7 @@ from typing import Optional
 
 import pytest
 import yaml
-from dashboard_support import REPO_ROOT, FakeEdge, agent_world, runner_environment
+from dashboard_support import REPO_ROOT, FakeEdge, dashboard_world, runner_environment
 
 from task_system.dashboard import floor
 from task_system.dashboard.config import DashboardConfig
@@ -27,7 +27,7 @@ from task_system.dashboard.mutation import folder_revision, raw_items, stored_st
 from task_system.dashboard.scheduler import ACCEPT_SCRIPT
 from task_system.dashboard.translate import RunOptions, translate
 
-TASK = "tmp/alpha"
+TASK = "dev/tasks/alpha"
 
 ANSWER_DONE = '```task_result\n{"schema": "task_result/v1", "status": "done", "summary": "Did it.", "needs": "", "reason": "", "resume_hint": "", "checks": [], "changed_paths": []}\n```\n'
 ANSWER_BLOCKED = ('```task_result\n{"schema": "task_result/v1", "status": "blocked", "summary": "Stopped.", "needs": "decision", '
@@ -141,7 +141,7 @@ def complete_item(folder):
 
 
 def test_a_done_answer_reaches_acceptance_on_stdin_and_the_ledger_accepts(llm, tmp_path):
-    _devroot, project, folder = agent_world(tmp_path)
+    _devroot, project, folder = dashboard_world(tmp_path)
     run_dir = materialize(tmp_path, project, folder)
     agent = llm.Agent(ANSWER_DONE, work=lambda: complete_item(folder))
     snapshot = llm.jobs_run.run_job_file(run_dir / "job.yaml", store_path=run_dir / "ledger.sqlite3", run_id="r1",
@@ -155,7 +155,7 @@ def test_a_done_answer_reaches_acceptance_on_stdin_and_the_ledger_accepts(llm, t
 
 
 def test_a_blocked_answer_ends_the_ledger_rejected_and_the_task_blocked(llm, tmp_path):
-    _devroot, project, folder = agent_world(tmp_path)
+    _devroot, project, folder = dashboard_world(tmp_path)
     run_dir = materialize(tmp_path, project, folder)
     agent = llm.Agent(ANSWER_BLOCKED)
     snapshot = llm.jobs_run.run_job_file(run_dir / "job.yaml", store_path=run_dir / "ledger.sqlite3", run_id="r1",
@@ -169,9 +169,34 @@ def test_a_blocked_answer_ends_the_ledger_rejected_and_the_task_blocked(llm, tmp
 
 
 def test_an_answer_without_a_result_is_rejected_by_the_real_runner(llm, tmp_path):
-    _devroot, project, folder = agent_world(tmp_path)
+    _devroot, project, folder = dashboard_world(tmp_path)
     run_dir = materialize(tmp_path, project, folder)
     snapshot = llm.jobs_run.run_job_file(run_dir / "job.yaml", store_path=run_dir / "ledger.sqlite3", run_id="r1",
                                          timeout_s=120, backend_factory=llm.Factory(llm.Agent("it went fine")))
     assert [j.state.value for j in snapshot.jobs] == ["rejected"]
     assert json.loads((run_dir / "receipt.json").read_text(encoding="utf-8"))["verdict"]["code"] == "result-missing"
+
+
+def test_a_call_that_hits_the_jobs_own_timeout_is_an_attempt_the_dashboard_reads_as_a_timeout(llm, tmp_path):
+    """PIN against the real producer: llm-kit ends such a job `failed` with a `timeout` attempt.
+
+    If llm-kit renames the attempt status or stops recording it, the dashboard would label a
+    timed-out run "failed" again; this test fails first.
+    """
+    from llm_kit.completion.halt import AgentTimeoutError
+    from llm_kit.jobs import model
+
+    from task_system.dashboard import scheduler as dashboard_scheduler
+
+    def slow() -> None:
+        raise AgentTimeoutError("claude -p exceeded 30.0s timeout (elapsed 30s; likely rate-limit backoff at the CLI layer).",
+                                cmd=["claude", "-p"], elapsed_s=30, stdout="", stderr="")
+
+    _devroot, project, folder = dashboard_world(tmp_path)
+    run_dir = materialize(tmp_path, project, folder)
+    result = llm.jobs_run.run_job_file(run_dir / "job.yaml", store_path=run_dir / "ledger.sqlite3", run_id="r1",
+                                       timeout_s=120, backend_factory=llm.Factory(llm.Agent(ANSWER_DONE, work=slow)))
+    mapping = result.to_mapping()
+    assert [j.state.value for j in result.jobs] == ["failed"]  # why it used to be shown as failed
+    assert [a["status"] for a in mapping["attempts"]] == [model.TIMEOUT] == [dashboard_scheduler.ATTEMPT_TIMEOUT_STATUS]
+    assert "exceeded 30.0s timeout" in dashboard_scheduler.job_timeout(mapping)

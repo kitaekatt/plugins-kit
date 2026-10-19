@@ -20,11 +20,16 @@ The skill's entry point, verb contracts, and design documents are in
 ## The dashboard
 
 Type `task-kit` in any terminal (or `/task dashboard` in Claude Code) to open a
-live browser view over every project's task folders: each task's items as a
-pipeline, what needs you (blocked tasks and items), what is running, and the
-newest log entries. A project dropdown and a search box filter it.
-`Resolve in Claude Code` shows the commands that open a task in Claude Code; it
-does not run them.
+live browser view over every project's task folders: one list of open tasks,
+one line each, with a marker for tasks that need you (blocked tasks and items)
+and for tasks with a job in flight. Click a task to open its items as a
+pipeline (one at a time). A sort control (priority, needs you first, in progress
+first, latest activity), a project dropdown and a search box shape the list;
+closed tasks and recent activity sit below, collapsed. Selecting an item (a stage bubble)
+opens its detail under the stage map; everything stays inline and full width. A project is a git repository: every checkout of one
+repository is one project, and a task is shown as `<repo>:<task>`. The dashboard
+lists `dev/tasks` tasks only. `Resolve in Claude Code` shows the commands that
+open a task in Claude Code; it does not run them.
 
 Queue runs one item as one unattended Claude job and needs the llm-kit plugin;
 without it the autonomous actions refuse with the reason and the rest keeps

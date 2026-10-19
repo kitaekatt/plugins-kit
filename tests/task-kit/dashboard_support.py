@@ -213,14 +213,14 @@ def git(root: Path, *args: str) -> str:
 
 
 def init_repo(root: Path) -> None:
-    """A git repository on branch main with one commit (task folders live under tmp/, ignored)."""
+    """A git repository on branch main with one commit (task folders live under dev/tasks/, ignored)."""
     root.mkdir(parents=True, exist_ok=True)
     git(root, "init", "-q", "-b", "main")
     git(root, "config", "user.email", "test@example.invalid")
     git(root, "config", "user.name", "Test")
     git(root, "config", "commit.gpgsign", "false")
     (root / "README.md").write_text("project\n", encoding="utf-8")
-    (root / ".gitignore").write_text("tmp/\n", encoding="utf-8")
+    (root / ".gitignore").write_text("tmp/\ndev/tasks/\n", encoding="utf-8")
     git(root, "add", "-A")
     git(root, "commit", "-q", "-m", "init")
 
@@ -294,3 +294,9 @@ def agent_world(tmp_path: Path, *, repo: bool = True, items=None, sections=None,
         log="- 2026-10-01 09:00: began\n",
     )
     return devroot, project, folder
+
+
+def dashboard_world(tmp_path: Path, **kw) -> tuple[Path, Path, Path]:
+    """``agent_world`` with the task under dev/tasks, the only root the dashboard reads."""
+    kw.setdefault("task_location", "dev/tasks")
+    return agent_world(tmp_path, **kw)
