@@ -94,10 +94,27 @@ class TestResolveUninstallEntries:
         assert res.uninstalls == () and res.notices == () and res.conflicts == ()
         assert [a.ref for a in res.satisfied] == [OLD]
 
-    def test_a_dormant_record_does_not_count_as_installed(self):
+    def test_a_dormant_local_record_is_ordered_uninstalled_not_satisfied(self):
         res = self.resolve([un(OLD)], [rec(OLD, "local", installed=False)])
-        assert res.uninstalls == ()
+        assert [(a.ref, a.scope) for a in res.uninstalls] == [(OLD, "local")]
+        assert res.satisfied == ()
+
+    def test_a_dormant_project_record_is_a_notice_never_an_uninstall(self):
+        res = self.resolve([un(OLD)], [rec(OLD, "project", installed=False)])
+        assert res.uninstalls == () and res.satisfied == ()
+        assert [(a.ref, a.scope) for a in res.notices] == [(OLD, "project")]
+
+    def test_satisfied_only_when_the_inventory_holds_no_record_at_all(self):
+        res = self.resolve([un(OLD)], [rec("mkt:other", "local", installed=False)])
+        assert res.uninstalls == () and res.notices == ()
         assert [a.ref for a in res.satisfied] == [OLD]
+
+    def test_a_tier_does_not_count_a_dormant_record_as_installed(self):
+        # The tiers keep ignoring dormant records; only uninstall entries count them.
+        res = tiers.resolve_plugin_tiers(
+            [tier_entry(NOREC, "not_recommended")], {},
+            [rec(NOREC, "local", installed=False)], profile_active=True)
+        assert res.questions == () and res.uninstalls == ()
 
     def test_user_and_project_installs_are_a_notice_never_an_uninstall(self):
         res = self.resolve([un(OLD)], [rec(OLD, "user"), rec(OLD, "project")])
@@ -177,6 +194,7 @@ class Calls:
         self.installs = {}           # ref -> [Install] or an Exception to raise
         self.uninstalls = []
         self.results = {}            # (ref, scope) -> [LifecycleResult]
+        self.dormant_asked = []      # include_dormant of each inventory read
 
 
 @pytest.fixture
@@ -184,10 +202,11 @@ def world(monkeypatch):
     calls = Calls()
 
     def fake_installs(ref, project_dir, include_dormant=False):
+        calls.dormant_asked.append(include_dormant)
         found = calls.installs.get(ref, [])
         if isinstance(found, Exception):
             raise found
-        return list(found)
+        return [i for i in found if include_dormant or not i.dormant]
 
     def fake_uninstall(ref, installs, project_dir):
         scope = installs[0].scope if installs else None
@@ -236,6 +255,33 @@ class TestEngineStep:
         assert world.uninstalls == [(OLD, ["local"], PROJ)]
         assert any("uninstalled at local scope (uninstall: true)" in l for l in action)
         assert new["plugins"][0]["install"] == "manual"
+
+    def test_a_dormant_local_record_is_uninstalled_not_reported_satisfied(self, world):
+        world.installs[OLD] = [local_install(dormant=True)]
+
+        _new, failures, action, ok, _q = run({"plugins": [un(OLD)]})
+
+        assert failures == [] and ok == []
+        assert world.dormant_asked == [True]
+        assert world.uninstalls == [(OLD, ["local"], PROJ)]
+        assert any("uninstalled at local scope (uninstall: true)" in l for l in action)
+
+    def test_a_dormant_project_record_gets_a_notice_and_no_uninstall(self, world):
+        world.installs[OLD] = [project_install(dormant=True)]
+
+        _new, failures, action, ok, _q = run({"plugins": [un(OLD)]})
+
+        assert failures == [] and ok == [] and world.uninstalls == []
+        notice = [l for l in action if "cannot remove" in l]
+        assert len(notice) == 1 and "project-scope" in notice[0]
+
+    def test_satisfied_is_reported_only_when_no_record_matches(self, world):
+        world.installs[OLD] = []
+
+        _new, failures, action, ok, _q = run({"plugins": [un(OLD)]})
+
+        assert failures == [] and action == [] and world.uninstalls == []
+        assert len(ok) == 1 and "no registry record for this project" in ok[0]
 
     def test_it_is_idempotent_once_the_install_is_gone(self, world):
         world.installs[OLD] = [local_install()]

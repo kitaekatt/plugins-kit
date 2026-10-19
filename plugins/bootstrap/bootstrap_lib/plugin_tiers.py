@@ -258,7 +258,7 @@ def resolve_plugin_tiers(
 
 UNINSTALL_KEY = "uninstall"
 
-REASON_UNINSTALL_SATISFIED = "no local-scope install; nothing to uninstall"
+REASON_UNINSTALL_SATISFIED = "no registry record for this project; nothing to uninstall"
 REASON_UNINSTALL_OTHER_SCOPE = (
     "bootstrap uninstalls at local scope only; remove it at that scope by hand"
 )
@@ -318,15 +318,17 @@ def resolve_uninstall_entries(
       answered no, or tier ``not_recommended`` kept by a yes answer. Tiers
       count only while a profile is selected (``profile_active``).
     - Otherwise the plugin's LOCAL-scope install for this project is uninstalled.
-      No such install means the entry is satisfied: not a failure, and nothing
-      to fix. User and project installs are never touched; they come back as a
-      ``notice``.
+      A DORMANT record (registered, enabled in no settings file of its scope)
+      counts as an install here: the entry asks for the registry record to go,
+      and an unenabled record still holds it. No record for this project means
+      the entry is satisfied: not a failure, and nothing to fix. User and
+      project records are never touched; they come back as a ``notice``.
 
     ``uninstall`` must be a boolean; ``false`` makes the entry an ordinary
     one. Raises :class:`PluginTierError` for a non-boolean ``uninstall``, an
     ``uninstall: true`` entry with no ref, or a malformed answer or inventory.
     """
-    installed_by_ref = _installed_by_ref(inventory)
+    installed_by_ref = _installed_by_ref(inventory, count_dormant=True)
     answer_by_ref = _validated_answers(answers)
 
     rewritten: List[Dict[str, Any]] = []
@@ -546,11 +548,13 @@ def _validated_answers(answers):
     return out
 
 
-def _installed_by_ref(inventory):
+def _installed_by_ref(inventory, count_dormant=False):
     """Really-installed records, as plain dicts, grouped by ref.
 
-    Dormant records (``installed`` False) do not count: a plugin that is
-    registered but not enabled anywhere is not installed.
+    Dormant records (``installed`` False) do not count by default: a plugin
+    that is registered but not enabled anywhere is not installed, so it is
+    neither asked about nor taken as satisfying a tier. ``count_dormant`` keeps
+    them, for a caller that removes registry records (``uninstall: true``).
     """
     grouped: Dict[str, List[Dict[str, Any]]] = {}
     for record in inventory:
@@ -573,7 +577,7 @@ def _installed_by_ref(inventory):
             raise PluginTierError(
                 "inventory record for %s: 'project_path' must be text or None" % ref
             )
-        if installed:
+        if installed or count_dormant:
             grouped.setdefault(ref, []).append(
                 {"scope": scope, "project_path": path}
             )

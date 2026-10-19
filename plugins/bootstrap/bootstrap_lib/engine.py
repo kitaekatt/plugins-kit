@@ -3093,18 +3093,23 @@ def _with_plugins(manifest, plugins, replacements):
     return out
 
 
-def _plugin_tier_inventory(refs, project_dir):
+def _plugin_tier_inventory(refs, project_dir, include_dormant=False):
     """``({ref: [Install]}, {ref: error text})`` for every ref.
 
     One ref's unreadable inventory (``InventoryError``) is recorded against
     that ref and does not stop the others; nothing else is caught.
+
+    Dormant records (registered, enabled in no settings file of their scope) are
+    left out by default: a tier asks about plugins that load. ``uninstall: true``
+    entries pass ``include_dormant`` because they remove registry records.
     """
     from .marketplace_lifecycle import InventoryError, plugin_installs
 
     installs, errors = {}, {}
     for ref in refs:
         try:
-            installs[ref] = list(plugin_installs(ref, project_dir))
+            installs[ref] = list(plugin_installs(
+                ref, project_dir, include_dormant=include_dormant))
         except InventoryError as exc:
             errors[ref] = str(exc)
     return installs, errors
@@ -3338,10 +3343,12 @@ def _process_plugin_uninstall_entries(manifest, profile_state, project_dir,
     does not depend on a profile being selected: a profile switch writes these
     entries precisely so that they outlive the profile that is gone.
 
-    - The plugin's LOCAL-scope install for this project is uninstalled. None
-      installed means satisfied: one verbose ok line, no failure, no fix-all.
-    - A user- or project-scope install is never touched; it is a one-line
-      notice every pass until the inventory agrees.
+    - The plugin's LOCAL-scope install for this project is uninstalled, a
+      dormant record (registered, enabled nowhere) included. No registry record
+      for this project means satisfied: one verbose ok line, no failure, no
+      fix-all.
+    - A user- or project-scope record (dormant or not) is never touched; it is
+      a one-line notice every pass until the inventory agrees.
     - A plugin the rest of the manifest wants installed is a conflict: nothing
       is uninstalled and a warning names the conflict (see
       ``plugin_tiers.resolve_uninstall_entries``).
@@ -3375,7 +3382,8 @@ def _process_plugin_uninstall_entries(manifest, profile_state, project_dir,
         ref = plugins[i].get("ref")
         if isinstance(ref, str) and ref.strip() and ref.strip() not in refs:
             refs.append(ref.strip())
-    installs_by_ref, inventory_errors = _plugin_tier_inventory(refs, project_dir)
+    installs_by_ref, inventory_errors = _plugin_tier_inventory(
+        refs, project_dir, include_dormant=True)
 
     resolver_index = list(marked)
     replacements = {}
@@ -3435,7 +3443,7 @@ def _process_plugin_uninstall_entries(manifest, profile_state, project_dir,
             display=f"plugin {_short_plugin_name(item.ref)}: uninstall conflict")
     for item in resolution.satisfied:
         ok_entries.append(f"plugin {item.ref}: uninstall: true satisfied "
-                          "(not installed at local scope)")
+                          "(no registry record for this project)")
     for item in resolution.notices:
         _append_detail(
             action_entries,

@@ -481,8 +481,9 @@ reference_skill:
 
         `uninstall: true` on a `plugins[]` entry (valid in any layer) is the
         declarative removal: each pass uninstalls that plugin's LOCAL-scope
-        install for this project, and an absent install satisfies it quietly. It
-        never touches user or project scope (a one-line notice instead), and when
+        record for this project, enabled or dormant, and only having no registry
+        record for the plugin satisfies it quietly. It never touches user or
+        project scope, dormant or not (a one-line notice instead), and when
         the rest of the manifest wants the plugin installed (`install: "auto"`,
         tier `required`, a `recommended` plugin not declined) it does nothing and
         warns about the conflict. `profile apply`, `profile set` and `profile

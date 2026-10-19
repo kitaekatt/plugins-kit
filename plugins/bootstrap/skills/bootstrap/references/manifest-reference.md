@@ -1289,7 +1289,8 @@ plugin private-plugins:claude-admin: updated 0.1.0 -> 0.2.0 (install: manual)
 ### `uninstall`
 
 `uninstall: true` is a declarative order to remove the plugin's **local-scope**
-install for the current project. It is valid in any layered `bootstrap.json` and
+registry record for the current project, whether the plugin is enabled or dormant
+(registered but enabled in no settings file). It is valid in any layered `bootstrap.json` and
 is how a profile switch retires the previous profile's plugins: `bootstrap
 profile apply`, `profile set` and `profile clear --all` write the entries to
 `<project>/.claude/bootstrap.local.json` (see Plugin tiers below). You can also
@@ -1303,14 +1304,17 @@ Entries merge across layers by `ref`, so a local `uninstall` entry and the same
 plugin's tiered or `install` entry are one effective entry. Each engine pass,
 after the plugin tiers have run:
 
-- **Local install present** -- uninstalled through `claude plugin uninstall
+- **Local record present (enabled or dormant)** -- uninstalled through `claude plugin uninstall
   --scope local`, run from the project root. A failed uninstall is a pass
-  failure and recurs next pass while the install remains.
-- **No local install** -- the entry is satisfied: a verbose ok line, no failure,
-  no fix-all item. Nothing is recorded; every pass recomputes from the installed
-  inventory, so the entry is idempotent and can stay in the file indefinitely.
-- **Only a user- or project-scope install** -- never touched. A one-line notice
-  names the scope and says bootstrap uninstalls at local scope only. A project
+  failure and recurs next pass while the record remains.
+- **No registry record matching this project** -- the entry is satisfied: a
+  verbose ok line, no failure, no fix-all item. Nothing is recorded; every pass
+  recomputes from the installed inventory, so the entry is idempotent and can
+  stay in the file indefinitely. Plugin tiers (`want: false` answers) still
+  ignore dormant records.
+- **Only a user- or project-scope record (enabled or dormant)** -- never
+  touched. A one-line notice names the scope and says bootstrap uninstalls at
+  local scope only. A project
   install is the tracked `.claude/settings.json`, which the runtime never writes.
 - **Conflict** -- when the effective entry is also wanted installed, nothing is
   uninstalled and a warning names the conflict, every pass, so a plugin is
