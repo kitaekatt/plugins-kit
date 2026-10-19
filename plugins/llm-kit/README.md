@@ -49,24 +49,20 @@ and 2 when the contract cannot be read.
 
 ## Local model servers and the front door
 
-`scripts/model-server.sh qwen36|qwen38|qwen38l` starts a local model server on its
-measured profile (NInfer for `qwen36` and `qwen38`, llama.cpp for `qwen38l`). It
-asks `llm-kit local swapper guard-launch` before it execs, and only that verb's
-exit `3` blocks the launch. `scripts/qwen-switch.sh start|status` replaces and
-inspects the resident server, freeing the port with
-`llm-kit local swapper terminate-listener`. `scripts/frontdoor.sh` runs
-`llm-kit frontdoor`. The scripts call the sibling `bin/llm-kit` by path, and
-`bin/qwen36-server`, `bin/qwen38-server`, `bin/qwen38l-server` and
-`bin/qwen-switch` are thin adapters for a PATH. A command anchors on the plugin
-directory:
+`scripts/frontdoor.sh` runs `llm-kit frontdoor`; it calls the sibling `bin/llm-kit`
+by path. A command anchors on the plugin directory:
 
 ```
-"${LLM_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/model-server.sh" qwen38 --print-command
+"${LLM_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/frontdoor.sh" --print-command --check
 ```
 
-Paths, ports, hosts and the context keep their legacy environment names, and so
-does the guard opt-out, `LLM_SCRIPTING_KIT_LAUNCH_GUARD=off`.
-`tests/llm-kit/test_local_launchers.py` runs the scripts against fake binaries.
+The plugin ships no model-server launcher. A host script that starts a local
+model server can ask `llm-kit local swapper guard-launch --caller-pid PID` before
+it execs, and only that verb's exit `3` (an explicit refusal) should block the
+launch; every other outcome is the caller's to treat as fail-open. A host script
+that replaces a resident server can free its port with
+`llm-kit local swapper terminate-listener --port PORT --accept-replace`.
+`tests/llm-kit/test_local_launchers.py` runs the front-door script against a stub CLI.
 
 ## Documentation
 

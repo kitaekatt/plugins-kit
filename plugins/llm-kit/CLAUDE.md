@@ -98,8 +98,7 @@ like a leftover is a deliberate compatibility choice
   its own, and its `custom_bootstrap.py` migrates no legacy file. The one
   exception is `llm_kit.registry.constants.CLI_COMMAND`, which names the llm-kit
   venv and executable.
-- **Environment variables** keep their spelling (`LLM_SCRIPTING_KIT_LAUNCH_GUARD`,
-  `LLM_SCRIPTING_KIT_USAGE_SESSION`, `CONTENT_PIPELINE_LLM_MODELS`,
+- **Environment variables** keep their spelling (`LLM_SCRIPTING_KIT_USAGE_SESSION`, `CONTENT_PIPELINE_LLM_MODELS`,
   `CONTENT_PIPELINE_SPEND_LEDGER`, `JOB_KIT_BACKPRESSURE_CAP_S`, the `JOB_KIT_*`
   contract variables).
 - **The usage-verdict cache** is `~/.claude/plugins/data/plugins-kit/llm-scripting-kit/usage-verdicts.json`,
@@ -502,7 +501,8 @@ ancestor -- residency that bypassed the launcher guard below, or survived a swap
 that exited. It detects and refuses; it does not kill anything.
 
 `terminate-listener --port PORT --accept-replace` is the one explicit replacement
-verb (`llm_kit.adapters.swapper.terminate_listener`), used by `qwen-switch start`.
+verb (`llm_kit.adapters.swapper.terminate_listener`), used by host launcher scripts kept
+outside the plugin.
 It is not for a llama-swap child and not automatic reaping: private service
 wrappers own pre-start reaping, `strays` stays detect-only, and clients and probes
 never kill. Rules a reader would otherwise reverse-engineer: records whose KNOWN
@@ -524,21 +524,19 @@ same PID and create time still exist. Success requires the same two-part free te
 IPv6 binds, and an empty listener scan); otherwise it refuses without signalling
 again. Another user's listener is invisible to the scan, so only the bind check
 covers it. Tests never signal a real process: the library tests use a fake
-inspector and an injected `port_free`, and the `qwen-switch` integration tests run
-in a temporary plugin-shaped tree with a stub sibling CLI.
+inspector and an injected `port_free`.
 
-`guard-launch` is the facade `scripts/model-server.sh` calls immediately before
-`exec`, so a manual launch cannot bypass an active same-user swapper. It is
-**fail-open by contract**: only `LaunchRefused` (exit `3`) blocks the launch. Every
-other outcome -- no Python interpreter found, the guard script missing, `psutil`
-unavailable (`InspectionIndeterminate`, exit `5`), any other nonzero exit, or an
-uncaught exception (exit `1`, indistinguishable on purpose from a refusal the guard
-never issued) -- makes `model-server.sh` warn on stderr and proceed with the
-launch. A broken guard must never stop llama-swap's own children from starting; the
-asymmetry is why `LaunchRefused` alone carries exit `3` while every sibling
-`SwapperError` maps to `1` or `2`. `LLM_SCRIPTING_KIT_LAUNCH_GUARD=off` skips the
-guard entirely (no interpreter call, no warning) for a team that wants a manual
-launch beside an active swapper on purpose; default and every other value is on.
+`guard-launch` is the facade a host launcher script calls immediately before `exec`, so a
+manual launch cannot bypass an active same-user swapper; the plugin ships no such launcher,
+and the external launchers depend on this exit-code contract. It is **fail-open by
+contract**: only `LaunchRefused` (exit `3`) blocks the launch. Every other outcome -- no
+Python interpreter found, the guard script missing, `psutil` unavailable
+(`InspectionIndeterminate`, exit `5`), any other nonzero exit, or an uncaught exception (exit
+`1`, indistinguishable on purpose from a refusal the guard never issued) -- makes the
+launcher warn on stderr and proceed with the launch. A broken guard must never stop
+llama-swap's own children from starting; the asymmetry is why `LaunchRefused` alone carries
+exit `3` while every sibling `SwapperError` maps to `1` or `2`. Opt-outs for a deliberate
+manual launch beside an active swapper belong to the launcher, not to this verb.
 
 ## `llm_kit.dispatch`: selection, reachability and pacing
 
@@ -1027,28 +1025,6 @@ each group's module documents its own.
   venv is the only candidate (a missing one exits 2, never the production venv), and under
   `CLAUDE_PLUGIN_TEST` a shim running from the plugin cache refuses.
   `tests/llm-kit/test_launchers.py` covers both platforms.
-- **Local model-server entry points.** `scripts/model-server.sh` is the canonical
-  Claude-first launcher. Invoke it as `"${LLM_KIT_ROOT:?requires a bootstrap engine pass; run
-  bootstrap run}/scripts/model-server.sh" qwen36|qwen38|qwen38l`; this works from the plugin root
-  Claude actually loaded and does not assume a plugin `bin/` directory is on PATH.
-  `bin/qwen36-server`, `bin/qwen38-server` and `bin/qwen38l-server` are thin shell adapters for
-  interactive environments that deliberately put them on PATH.
-- **`scripts/qwen-switch.sh`** (`bin/qwen-switch`): `qwen-switch start qwen36|qwen38|qwen38l`
-  replaces the managed server on the selected profile's port and waits for the profile's exact
-  OpenAI model id; `qwen-switch status` reports the managed resident profile. It composes
-  `model-server.sh`; it does not duplicate any profile arguments. Before launch it runs the
-  plugin-relative sibling `bin/llm-kit local swapper terminate-listener --port PORT
-  --accept-replace` (by path, never from PATH) and aborts the start on a non-zero exit. The
-  script itself sends no signals; `lsof` and `ps` are used only for readiness and `status`.
-- **Profiles.** Each profile preserves its measured GPU settings while keeping paths and ports
-  overridable through environment variables. `qwen36` resolves NInfer from `NINFER_ROOT` or
-  conventional dev roots and uses INT8 KV plus MTP3. `qwen38` serves the same model through
-  NInfer's NVFP4 artifact with FP8 KV and MTP3, the profile the artifact's model card measures
-  for an RTX 5090. `qwen38l` is the llama.cpp GGUF path for the same model, kept as a comparable
-  second backend -- it resolves llama.cpp and its GGUF from their existing environment overrides
-  and uses full GPU offload plus Q8 KV. The trailing `l` is for llama.cpp; an unsuffixed name
-  always means the NInfer path. All bind localhost by default; broader network exposure is an
-  explicit host override. They all default to port 8080, so only one can serve at a time.
 - **`custom_bootstrap.py`** checks the OpenRouter credential at session start and nothing else:
   it resolves the key from the historical locations, validates it against `GET /auth/key` with a
   hash-and-age cache (`last_validated.sha256` in the plugin's own data directory), and records a

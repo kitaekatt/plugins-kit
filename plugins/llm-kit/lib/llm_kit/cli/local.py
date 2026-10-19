@@ -150,8 +150,8 @@ def _cmd_swapper_terminate_listener(args: argparse.Namespace) -> int:
 
 def _cmd_swapper_guard_launch(args: argparse.Namespace) -> int:
     """Quiet on success. A refusal raises ``LaunchRefused`` (exit 3), caught
-    by ``_cmd_swapper``, which is the only exit code its caller
-    (model-server.sh) treats as a refusal."""
+    by ``_cmd_swapper``, which is the only exit code a caller
+    (a host launcher script) treats as a refusal."""
     check_launch_allowed(caller_pid=args.caller_pid)
     return EXIT_OK
 

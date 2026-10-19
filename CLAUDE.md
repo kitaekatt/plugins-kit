@@ -524,7 +524,7 @@ whose path is under `plugins/data/` is refused as well. Only the cache of the ma
 `CLAUDE_PLUGIN_TEST_MARKETPLACE` is refused, and every cache path when it is
 unset, the same scope as `bootstrap_lib.env_var_check.cache_root_refusal`.
 Guard: `tests/repo-scripts/test_launcher_shim_data_root_redirect.py`. The
-`bin/qwen3*-server` scripts are outside this exception -- they invoke
+llm-scripting-kit's `bin/qwen3*-server` scripts are outside this exception -- they invoke
 `model-server.sh`, not Python.
 
 Outside these two exceptions, every other FORCED call site -- bootstrap or

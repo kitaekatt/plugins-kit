@@ -511,7 +511,7 @@
     {
       "path": "tests/llm-scripting-kit/test_model_server_script.py",
       "disposition": "legacy-only",
-      "reason": "Drives the qwen and model-server shell launchers under plugins/llm-scripting-kit/{scripts,bin} and asserts the legacy interpreter overrides and sibling bin/llm-scripting-kit. llm-kit carries the launchers (plugins/llm-kit/{scripts,bin}) re-pointed at bin/llm-kit; they are asserted natively, with a differential run against the frozen scripts, in tests/llm-kit/test_local_launchers.py.",
+      "reason": "Drives the qwen and model-server shell launchers under plugins/llm-scripting-kit/{scripts,bin} and asserts the legacy interpreter overrides and sibling bin/llm-scripting-kit. llm-kit carries no model-server or qwen-switch launcher (host launcher scripts live outside the plugin and call the host-neutral `llm-kit local swapper guard-launch` and `terminate-listener` verbs), so there is nothing to re-point; the front-door script is asserted in tests/llm-kit/test_local_launchers.py.",
       "rewrite_classes": [],
       "collection_count": 27,
       "baseline_failures": []

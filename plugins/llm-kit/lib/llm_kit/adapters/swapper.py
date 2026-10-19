@@ -98,8 +98,8 @@ class LaunchRefused(SafetyRefusal):
 
     A distinct exit code (3), not EXIT_FAILURE's 1: an uncaught Python
     exception also exits 1, so a caller that must fail OPEN on anything but
-    an explicit refusal (model-server.sh) cannot treat exit 1 as meaning
-    "refused" -- see swapper-cli-u3.
+    an explicit refusal (a host launcher script) cannot treat exit 1 as
+    meaning "refused"; launchers block on exit 3 alone and otherwise fail open.
     """
 
     exit_code = 3

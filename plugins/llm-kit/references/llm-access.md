@@ -386,15 +386,6 @@ distinguishable from "the seat above me is spent"; an under-quota seat stays in
   aliases (`qwen`, `gpt-mini`, `gemini-lite`) are deprecated in favour of the
   `or-` entries and keep resolving until they are removed. One project
   override changes the model for every consumer at once.
-- **Local server launch profiles.** The canonical `model-server.sh` script owns
-  the measured NInfer argument sets for Qwen3.6 and Qwen3.8, plus a `qwen38l`
-  llama.cpp profile for the same model as a comparable second backend. Run it as
-  `"${LLM_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/model-server.sh" qwen36|qwen38|qwen38l`;
-  `qwen36-server`, `qwen38-server`,
-  and `qwen38l-server` are thin PATH adapters for interactive shells. Use
-  `qwen-switch start qwen36|qwen38|qwen38l` to replace the resident server (the
-  listener is stopped by `llm-kit local swapper terminate-listener`, never by
-  the script) and wait for its matching model id, or `qwen-switch status` to inspect it.
 
 ## API
 
@@ -924,8 +915,8 @@ requests, so it is never a client action: the CLI requires both `--all` and
 `--accept-no-drain` to run it even once. `strays` reports recognized model
 servers with no swapper ancestor and does not kill them.
 
-`terminate-listener` is the explicit replacement operation `qwen-switch start`
-uses; it is not a llama-swap child action and not automatic reaping. Its
+`terminate-listener` is the explicit replacement operation a host launcher script
+uses to free a model server's port; it is not a llama-swap child action and not automatic reaping. Its
 `--accept-replace` flag is mandatory (a missing flag is a usage error, exit
 `2`). A free port is a successful no-op. Otherwise exactly one same-user
 recognized server (`ninfer-serve`, `llama-server`, or `mlx_lm.server`, not
@@ -944,16 +935,15 @@ refuse as indeterminate (exit `5`). The JSON result carries `protocol`, `port`,
 `escalated`. Private service wrappers own automatic pre-start reaping; this
 library owns only explicit operator replacement.
 
-`guard-launch` is the facade `model-server.sh` calls right before it execs a
+`guard-launch` is the facade a host launcher script calls right before it execs a
 local model server, so a manual launch cannot silently bypass an active
-same-user swapper. It **fails open**: it refuses the launch only on exit `3`
-(an explicit refusal); any other outcome -- including exit `1` from an
-uncaught error, or the guard being unable to run at all -- makes
-`model-server.sh` print a warning and proceed with the launch anyway. A
-broken guard must never be able to stop llama-swap's own children from
-starting. `LLM_SCRIPTING_KIT_LAUNCH_GUARD=off` skips the guard entirely (no
-interpreter call, no warning) for a team that wants a manual launch beside an
-active swapper on purpose; default and every other value is on.
+same-user swapper. The plugin ships no such launcher. The contract a launcher
+relies on: the verb is quiet on success and exits `3` only for an explicit
+refusal, so a launcher blocks the launch on exit `3` alone and fails **open** on
+every other outcome -- including exit `1` from an uncaught error, or the guard
+being unable to run at all -- by warning and proceeding. A broken guard must
+never be able to stop llama-swap's own children from starting. Any opt-out for a
+manual launch beside an active swapper on purpose belongs to the launcher.
 
 ### `local acceptance` -- host-neutral acceptance runs
 
