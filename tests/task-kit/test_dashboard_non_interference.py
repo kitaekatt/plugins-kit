@@ -105,15 +105,25 @@ def test_the_named_llm_kit_site_still_exists_so_the_exception_is_not_stale():
     assert hit in forbidden_imports(path.read_text(encoding="utf-8"), package=("task_system",))
 
 
-def test_the_dashboard_package_and_bin_import_nothing_from_llm_kit():
-    """Increment 1 needs no llm-kit: not an import, and not a string-built one."""
+EDGE_MODULE = "jobs_edge.py"
+
+
+def test_only_the_jobs_edge_touches_llm_kit_and_only_lazily():
+    """The optional llm-kit edge is ONE module: no other dashboard file or launcher
+    imports llm_kit, not even through a string-built import."""
     files = sorted((SYSTEM / "dashboard").rglob("*.py")) + sorted((SCRIPTS_DIR.parents[2] / "bin").glob("*.py"))
     assert len(files) > 8
+    assert any(p.name == EDGE_MODULE for p in files)
     for path in files:
         text = path.read_text(encoding="utf-8")
+        if path.name == EDGE_MODULE:
+            continue
         assert not any(h.startswith(("import llm_kit", "from llm_kit")) for h in
                        forbidden_imports(text, package=("task_system", "dashboard"))), path
-        assert "llm_kit" not in text and "llm-kit" not in text, path
+        assert "llm_kit" not in text, path
+    edge = (SYSTEM / "dashboard" / EDGE_MODULE).read_text(encoding="utf-8")
+    top_level = [n for n in ast.parse(edge).body if isinstance(n, (ast.Import, ast.ImportFrom))]
+    assert not any("llm_kit" in ast.dump(n) for n in top_level), "the edge imports llm_kit only inside functions"
 
 
 def test_the_one_site_exception_does_not_excuse_any_other_llm_kit_import():

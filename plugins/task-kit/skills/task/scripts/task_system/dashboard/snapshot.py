@@ -8,6 +8,8 @@ one task's plan.md on demand.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from pathlib import Path
 
@@ -105,6 +107,7 @@ def task_json(task: TaskEntry) -> dict:
         "project": task.project_id,
         "id": task.id,
         "stub": task.stub,
+        "revision": core.revision,
         "location": task.location,
         "title": core.title or task.stub,
         "classification": core.classification,
@@ -163,6 +166,7 @@ def dashboard_payload(
     query: str = "",
     needs_only: bool = False,
     server: dict | None = None,
+    runtime: dict | None = None,
 ) -> dict:
     """The ``GET /api/v1/dashboard`` body for the given filters."""
     query = query.strip().lower()
@@ -247,13 +251,39 @@ def dashboard_payload(
             closed_seen[task.project_id] = seen + 1
         task_rows.append(row)
 
+    runs_json: list[dict] = []
+    recent_json: list[dict] = []
+    revision = inventory.revision
+    if runtime is not None:
+        names = {p.id: p.name for p in all_projects}
+        shown = {p.id for p in selected}
+        latest: dict[tuple, dict] = {}
+        for run in runtime["runs"]:  # newest first
+            if run.project_id not in shown:
+                continue
+            row = run_json(run, names.get(run.project_id, ""))
+            latest.setdefault((run.project_id, run.task_ref, run.item_id), row)
+            if run.state in LIVE_RUN_STATES:
+                runs_json.append(row)
+            elif len(recent_json) < RECENT_RUNS_LIMIT:
+                recent_json.append(row)
+        runs_json.sort(key=lambda r: r["seq"])
+        for task_row in task_rows:
+            for item_row in task_row["items"]:
+                item_row["run"] = latest.get((task_row["project"], task_row["id"], item_row["id"]))
+        revision = hashlib.sha256(
+            json.dumps([inventory.revision, runtime["capabilities"], runs_json, recent_json], sort_keys=True).encode("utf-8")
+        ).hexdigest()[:16]
+
     return {
         "schema": SCHEMA,
-        "revision": inventory.revision,
+        "revision": revision,
         "generation": inventory.generation,
         "generated_at": inventory.generated_at,
         "server": server or {},
-        "capabilities": CAPABILITIES,
+        "capabilities": runtime["capabilities"] if runtime is not None else CAPABILITIES,
+        "runs": runs_json,
+        "recent_runs": recent_json,
         "filters": {"project": project or "", "q": query, "needs": needs_only},
         "errors": list(inventory.errors),
         "projects": projects,
@@ -330,4 +360,32 @@ def item_detail(task: TaskEntry, item_id: str) -> dict | None:
             "source": os.path.join(task.id, "plan.md").replace(os.sep, "/"),
         },
         "handoff": handoff_commands(task),
+    }
+
+
+LIVE_RUN_STATES = ("queued", "starting", "running")
+RECENT_RUNS_LIMIT = 15
+
+
+def run_json(run, project_name: str) -> dict:
+    """One run as the API serves it (``run`` is a :class:`runtime.Run`)."""
+    options = run.options
+    return {
+        "id": run.id,
+        "seq": run.seq,
+        "project": run.project_id,
+        "project_name": project_name,
+        "task": run.task_ref,
+        "item": run.item_id,
+        "item_title": run.item_title,
+        "state": run.state,
+        "code": run.code,
+        "detail": run.detail,
+        "queued_at": run.queued_at,
+        "started_at": run.started_at,
+        "ended_at": run.ended_at,
+        "worker": options.get("worker"),
+        "entry": options.get("entry"),
+        "retry_of": run.retry_of,
+        "retryable": run.state in ("failed", "timeout"),
     }

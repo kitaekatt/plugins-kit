@@ -69,7 +69,7 @@ capability_skill:
       - "Creating, listing, showing, validating, reviewing, and summarizing file-backed task folders (tmp/<stub>, dev/tasks/<stub>)"
       - "Enumerating a task's open items (plan.md's task_items unit) with their states -- the item-level menu below the task level"
       - "Lifecycle transitions: close, reopen, archive, delete, and move (with task_list reference rewriting)"
-      - "Launching the task dashboard: /task dashboard runs the task-kit launcher (a live, read-only browser view over every configured project)"
+      - "Launching the task dashboard: /task dashboard runs the task-kit launcher (a live browser view over every configured project that can also run queued items)"
       - "Filling in scaffolded task folders per the hand-off template (references/handoff-template.md)"
     excludes:
       - "Native Claude Code task tracking (TaskCreate / TaskUpdate / TodoWrite) -- different system entirely"
@@ -111,11 +111,13 @@ capability_skill:
     - id: work
       keywords: [work on task, start task, dispatch]
       user_objective: "Work an explicitly named task and load its working context."
-      operation: task.py work <ref> [--init] [--root PATH]
+      operation: task.py work <ref> [--init] [--root PATH]  (preceded by the dashboard handshake, task_hold.py <ref> --session "${CLAUDE_SESSION_ID}")
       steps:
         - n: 1
-          action: "Run the work verb. It validates first: ANY error OR warning blocks (exit non-zero, findings on stderr, initialization block not emitted). A remote ref (tmp + other host) cannot be worked locally. If no folder exists at the ref, work ERRORS -- treat that as a mistyped path (run list) rather than a task to create; --init opts into scaffolding the folder and working it, and is for a ref you meant to promote."
+          action: "Run the dashboard handshake first, once: `task_hold.py <ref> --session \"${CLAUDE_SESSION_ID}\"`, invoked exactly like task.py (same venv Python, `scripts/task_hold.py`, same project root). It tells a running task-kit dashboard that this session is working that task folder, so the dashboard stops starting autonomous runs on it while the session lives. With no dashboard running it prints nothing. Otherwise it prints at most ONE line on stderr, never anything on stdout, and always exits 0: relay a printed line to the user in one sentence, then continue to step 2 either way. A hold never gates the work verb, and a dashboard run already live on the same task keeps running (the line names its run id)."
         - n: 2
+          action: "Run the work verb. It validates first: ANY error OR warning blocks (exit non-zero, findings on stderr, initialization block not emitted). A remote ref (tmp + other host) cannot be worked locally. If no folder exists at the ref, work ERRORS -- treat that as a mistyped path (run list) rather than a task to create; --init opts into scaffolding the folder and working it, and is for a ref you meant to promote."
+        - n: 3
           action: "On success the script prints ONE initialization block to stdout: a '== task init ... ==' header, a Skill(skill: \"<name>\") line for every skill the task needs (the always-required baseline the script emits, followed by the task's own skills_to_invoke, deduped), an agent_hint: <type> line when set, and a closing '== then: start ... ==' directive. AGENT BEHAVIOR: invoke EVERY emitted Skill(...) line via the Skill tool now, in the order printed, before any other tool use -- the emitted list is the whole required set, so there is nothing to remember from elsewhere. Then act on the closing directive: START the work in this turn. Route planning and implementation through orchestrate's rendered policy, honoring the agent_hint type when eligible. The script only emits these lines; acting on them is your job."
       gotchas:
         - "Do not skip the emitted Skill(...) invocations -- they are the task's self-documented working context (the self-documenting-task pattern), not decoration."
@@ -217,13 +219,17 @@ capability_skill:
         - "Summary-maintenance log entries do not advance last_update. Later substantive task changes invalidate the stored summary fingerprint and cause the next default review to regenerate it."
     - id: dashboard
       keywords: [task dashboard, dashboard, /task dashboard, open the dashboard, task-kit, browser view of tasks]
-      user_objective: "Open the live, read-only browser dashboard over every configured project's task folders."
+      user_objective: "Open the live browser dashboard over every configured project's task folders."
       operation: "/task dashboard -- agent-side routing; no task.py verb. Runs the task-kit launcher: bash \"${CLAUDE_PLUGIN_ROOT}/bin/task-kit\" [status|stop|restart] [--no-open]"
       steps:
         - n: 1
           action: "Run `bash \"${CLAUDE_PLUGIN_ROOT}/bin/task-kit\"` (what typing `task-kit` in a terminal does once bootstrap has put it on PATH). It starts the dashboard server, or reuses the running one, restarts it when its code changed, and opens the user's browser. Report the command's exit status and its printed URL, or its stderr when it fails."
       gotchas:
-        - "The dashboard reads task folders and never edits one; the task.py verbs and the harness workflow are unchanged whether or not a dashboard is running. In this version Queue, Cancel, Retry, New task and Add item are shown disabled; the dashboard's Resolve in Claude Code only prints commands to copy."
+        - "A refresh never edits a task folder. The dashboard writes one only for its own actions -- recording a block (task status blocked, the item blocked-user with a note, one log.md line) when a run or its translation fails, and Re-check -- each under the folder's expected revision, so a concurrent harness edit is never overwritten. The task.py verbs and the harness workflow are unchanged whether or not a dashboard is running."
+        - "Queue, Retry and Re-check are live. Queue and Retry start ONE unattended Claude run for ONE item in the project checkout and need llm-kit; without it they refuse with the reason shown, and everything else keeps working. Cancel run, Defer, Queue all, New task, Add item, Pause worker and the model/effort controls are shown disabled. The dashboard's Resolve in Claude Code only prints commands to copy."
+        - "An item is queueable only when the task validates clean and is active, the item is available, and plan.md has exactly one non-empty section headed with the item id (`### <id> -- <title>`). Otherwise the task is blocked and the note says what to fix; nothing is guessed. An item may carry `accept:` in its task_items entry, a list of argv lists the dashboard runs from the project root after the worker finishes (never through a shell); without it only structural acceptance applies. A run never commits, branches or pushes; review and commit stay with the user."
+        - "A blocked run is resolved here: `/task work <ref>`, fix or finish the item, then Re-check in the dashboard; the next Queue is a fresh run. Codex workers are refused until a live safety test has passed."
+        - "A run that timed out or ended without a verdict is shown with Retry, which is also a fresh run. Only one run per project is live at a time. Machine settings live under `dashboard:` in `~/.claude/task.local.yaml`: `max_parallel_projects` (projects running at once, default 2), `default_timeout_s` (default 7200), `default_worker` (claude or codex, default claude), `claude_entry` (default opus), `codex_entry` (default sol), `effort` (default unset), `codex_network` (default false)."
         - "The launcher exits 0 ok, 1 error, 3 `status`: not running, 4 server up but the browser could not be opened (the URL is still printed), 5 refused because jobs are running. `--no-open` (or TASK_KIT_NO_OPEN=1) skips the browser."
         - "A corrupt server record, or something else answering on the recorded port, stops the launcher with a message naming the file: relay that message; do not delete the record or kill a process to get past it."
         - "`review` still writes its one-off HTML snapshot; the dashboard is a separate, live view and does not replace it."

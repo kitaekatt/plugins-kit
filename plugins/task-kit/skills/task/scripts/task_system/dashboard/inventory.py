@@ -48,6 +48,7 @@ from ..resolve import ARCHIVED_DIRNAME, KNOWN_ROOTS
 from ..task_items import read_task_items, sort_items
 from ..types import HAND_OFF
 from ..validate import validate_ref
+from . import mutation
 
 # Item state (plan.md vocabulary) -> the state the UI draws.
 ITEM_UI_STATE = {
@@ -91,6 +92,7 @@ class TaskCore:
     errors: tuple[str, ...]
     warnings: tuple[str, ...]
     notes: tuple[str, ...]
+    revision: str = ""
 
     @property
     def last_activity(self) -> str | None:
@@ -179,6 +181,15 @@ def _list_task_stubs(base: Path) -> list[str]:
     return sorted(stubs)
 
 
+def _folder_revision(folder: Path) -> str:
+    """The mutation revision of a task folder; an unreadable file is an OSError here
+    so the refresh reports it through its ``unreadable`` error channel."""
+    try:
+        return mutation.folder_revision(folder)
+    except mutation.MutationError as exc:
+        raise OSError(str(exc)) from exc
+
+
 def _string_list(value: object) -> tuple[str, ...]:
     if not isinstance(value, list):
         return ()
@@ -223,6 +234,7 @@ def load_task_core(canonical: str, project_root: Path) -> TaskCore:
         errors=tuple(result.errors),
         warnings=tuple(result.warnings),
         notes=tuple(result.notes),
+        revision=_folder_revision(folder),
     )
 
 
@@ -428,6 +440,7 @@ def _revision(projects: list[ProjectEntry], errors: list[dict]) -> str:
                 "item_errors": core.item_errors,
                 "errors": core.errors,
                 "warnings": core.warnings,
+                "rev": core.revision,
             }
             digest.update(json.dumps(payload, sort_keys=True).encode("utf-8"))
     digest.update(json.dumps(errors, sort_keys=True).encode("utf-8"))

@@ -33,9 +33,13 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from . import redact, snapshot
+from . import proctree, redact, snapshot
 from .codehash import DASHBOARD_PACKAGE, code_hash
 from .inventory import Inventory
+from .jobs_edge import JobsEdge
+from .mutation import TaskMutator
+from .runtime import DB_FILE, LIVE_STATES, TERMINAL_STATES, RuntimeDB
+from .scheduler import QueueRefused, Scheduler
 from .state import (
     LOCK_FILE,
     LOG_FILE,
@@ -51,6 +55,8 @@ from .state import (
 LOOPBACK = "127.0.0.1"
 TOKEN_HEADER = "X-Task-Kit-Token"
 MAX_BODY_BYTES = 64 * 1024
+MUTATION_LOCK_FILE = "mutation.lock"
+RUNS_IN_SNAPSHOT = 60
 EXIT_LOCK_HELD = 75  # EX_TEMPFAIL: another server already runs; use that one.
 
 CSP = (
@@ -95,14 +101,20 @@ class DashboardServer:
         data_dir: Path,
         scripts_dir: Path,
         inventory: Inventory,
-        busy: Callable[[], int] = lambda: 0,
+        busy: Callable[[], int] | None = None,
         log=None,
+        edge=None,
+        config_path: Path | None = None,
+        scheduler: Scheduler | None = None,
     ) -> None:
         self.data_dir = Path(data_dir)
         self.scripts_dir = Path(scripts_dir)
         self.root = runtime_root(self.data_dir)
         self.inventory = inventory
         self._busy = busy
+        self._edge = edge if edge is not None else JobsEdge()
+        self._config_path = config_path
+        self.scheduler = scheduler
         self.log_stream = log if log is not None else sys.stderr
         self.code_hash = code_hash(self.scripts_dir)
         self.assets = load_static(self.scripts_dir)
@@ -123,7 +135,9 @@ class DashboardServer:
         return self._httpd.server_address[1]
 
     def busy_count(self) -> int:
-        return int(self._busy())
+        if self._busy is not None:
+            return int(self._busy())
+        return self.scheduler.busy_count() if self.scheduler is not None else 0
 
     def start(self) -> ServerState:
         """Take the lock, bind port 0, and publish ownership. Raises LockHeldError."""
@@ -132,6 +146,15 @@ class DashboardServer:
         self.root.mkdir(parents=True, exist_ok=True)
         self._lock.acquire()
         try:
+            if self.scheduler is None:
+                self.scheduler = Scheduler(
+                    root=self.root,
+                    db=RuntimeDB(self.root / DB_FILE),
+                    mutator=TaskMutator(self.root / MUTATION_LOCK_FILE),
+                    edge=self._edge,
+                    config_path=self._config_path,
+                    log=self.log,
+                )
             httpd = ThreadingHTTPServer((LOOPBACK, 0), _Handler)
             httpd.daemon_threads = True
             httpd.dashboard = self  # type: ignore[attr-defined]
@@ -157,6 +180,8 @@ class DashboardServer:
     def serve_forever(self) -> None:
         assert self._httpd is not None, "start() first"
         try:
+            if self.scheduler is not None:
+                self.scheduler.start()
             self._httpd.serve_forever(poll_interval=0.2)
         finally:
             self.close()
@@ -168,6 +193,10 @@ class DashboardServer:
             threading.Thread(target=self._httpd.shutdown, daemon=True).start()
 
     def close(self) -> None:
+        if self.scheduler is not None:
+            self.scheduler.stop()
+            self.scheduler.db.close()
+            self.scheduler = None
         if self._httpd is not None:
             self._httpd.server_close()
             self._httpd = None
@@ -190,6 +219,14 @@ class DashboardServer:
             "port": self.port,
             "busy": self.busy_count(),
         }
+
+    def runtime_view(self) -> dict | None:
+        scheduler = self.scheduler
+        if scheduler is None:
+            return None
+        live = scheduler.db.runs(LIVE_STATES)
+        recent = scheduler.db.runs(TERMINAL_STATES, limit=RUNS_IN_SNAPSHOT, newest_first=True)
+        return {"capabilities": scheduler.capabilities(), "runs": sorted(live + recent, key=lambda r: -r.seq)}
 
     def server_info(self) -> dict:
         return {"instance": self.nonce, "code_hash": self.code_hash[:12]}
@@ -362,6 +399,120 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self._send(200, asset[0], asset[1])
 
+    # -- actions that change shared state --------------------------------------
+
+    def _refused(self, exc: QueueRefused) -> None:
+        payload: dict = {"code": exc.code, "message": str(exc)}
+        if exc.reasons:
+            payload["reasons"] = exc.reasons
+        if exc.blocked:
+            payload["blocked"] = True
+        if exc.current_revision:
+            payload["current_revision"] = exc.current_revision
+        self._json(exc.status, {"error": payload})
+
+    def _expected_revision(self, body: dict) -> str | None:
+        value = body.get("expected_revision")
+        if not isinstance(value, str) or not value:
+            self._error(422, "missing_expected_revision", "Every change names the expected_revision it was based on.")
+            return None
+        return value
+
+    def _item_action(self, method: str, route: list[str]) -> None:
+        if method != "POST":
+            self._error(405, "method_not_allowed", "Use POST.")
+            return
+        body = self._read_json_body()
+        if body is None:
+            return
+        expected = self._expected_revision(body)
+        if expected is None:
+            return
+        project, task_id, item_id, action = route[1], route[2], route[3], route[4]
+        task = self.app.inventory.snapshot().find_task(project, task_id)
+        if task is None:
+            self._error(404, "unknown_task", "No such task in any configured project.")
+            return
+        scheduler = self.app.scheduler
+        try:
+            if action == "queue":
+                options = body.get("options", {})
+                if not isinstance(options, dict):
+                    self._error(422, "bad-options", "options must be an object.")
+                    return
+                run = scheduler.queue(project_root=task.project_root, task_ref=task.id, item_id=item_id,
+                                      body=options, expected_revision=expected)
+                self.app.log(f"queued run {run.id} for {task.id}/{item_id}")
+                self._json(202, {"run": snapshot.run_json(run, task.project_name)})
+            else:
+                outcome = scheduler.recheck(project_root=task.project_root, task_ref=task.id, expected_revision=expected)
+                self.app.inventory.snapshot(force=True)
+                self._json(200, outcome)
+        except QueueRefused as exc:
+            self._refused(exc)
+
+    def _runs(self, method: str, route: list[str], query: dict) -> None:
+        scheduler = self.app.scheduler
+        run = scheduler.db.get(route[1])
+        if run is None:
+            self._error(404, "unknown_run", "No such run.")
+            return
+        if len(route) == 2:
+            if method not in ("GET", "HEAD"):
+                self._error(405, "method_not_allowed", "Use GET.")
+                return
+            self._json(200, {"run": snapshot.run_json(run, ""), "events": scheduler.db.events(run.id)})
+            return
+        if route[2] == "log":
+            if method not in ("GET", "HEAD"):
+                self._error(405, "method_not_allowed", "Use GET.")
+                return
+            after = query.get("after", ["0"])[0]
+            if not after.isdigit():
+                self._error(422, "bad_cursor", "after must be a non-negative integer.")
+                return
+            self._json(200, scheduler.log_tail(run, int(after)))
+            return
+        if route[2] == "retry":
+            if method != "POST":
+                self._error(405, "method_not_allowed", "Use POST.")
+                return
+            body = self._read_json_body()
+            if body is None:
+                return
+            expected = self._expected_revision(body)
+            if expected is None:
+                return
+            try:
+                fresh = scheduler.retry(run.id, expected_revision=expected)
+            except QueueRefused as exc:
+                self._refused(exc)
+                return
+            self.app.log(f"retry of {run.id} queued as {fresh.id}")
+            self._json(202, {"run": snapshot.run_json(fresh, "")})
+            return
+        self._error(404, "not_found", "No such endpoint.")
+
+    def _holds(self, method: str) -> None:
+        """Register an interactive hold: the harness is about to work this task folder."""
+        if method != "POST":
+            self._error(405, "method_not_allowed", "Use POST.")
+            return
+        body = self._read_json_body()
+        if body is None:
+            return
+        folder, session = body.get("folder"), body.get("session")
+        pid, ctime = body.get("pid"), body.get("create_time")
+        if not (isinstance(folder, str) and folder and isinstance(session, str) and session
+                and isinstance(pid, int) and not isinstance(pid, bool) and isinstance(ctime, (int, float))):
+            self._error(422, "bad_hold", "A hold needs folder, session, pid and create_time.")
+            return
+        scheduler = self.app.scheduler
+        scheduler.db.add_hold(folder, session, proctree.ProcIdent(pid, float(ctime)))
+        active = scheduler.db.active_for_folder(folder)
+        self.app.log(f"hold on {Path(folder).name} by session {session[:8]}")
+        self._json(200, {"ok": True, "active_run": snapshot.run_json(active, "") if active else None})
+
     def _api(self, method: str, route: list[str], query: dict) -> None:
         if route == ["dashboard"]:
             if method not in ("GET", "HEAD"):
@@ -375,8 +526,18 @@ class _Handler(BaseHTTPRequestHandler):
                 query=query.get("q", [""])[0],
                 needs_only=query.get("needs", [""])[0] in ("1", "true"),
                 server=self.app.server_info(),
+                runtime=self.app.runtime_view(),
             )
             self._json(200, payload)
+            return
+        if route[:1] == ["items"] and len(route) == 5 and route[4] in ("queue", "recheck"):
+            self._item_action(method, route)
+            return
+        if route[:1] == ["runs"] and len(route) in (2, 3):
+            self._runs(method, route, query)
+            return
+        if route == ["holds"]:
+            self._holds(method)
             return
         if route[:1] == ["items"] and len(route) in (4, 5):
             if method not in ("GET", "HEAD"):

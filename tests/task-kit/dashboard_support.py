@@ -107,15 +107,17 @@ def tree_digest(*roots: Path) -> str:
 class Running:
     """An in-process dashboard server on a thread, plus a raw HTTP client."""
 
-    def __init__(self, data_dir: Path, parents: tuple[Path, ...], busy=lambda: 0) -> None:
+    def __init__(self, data_dir: Path, parents: tuple[Path, ...], busy=None, edge=None,
+                 config_path: Path | None = None) -> None:
         from task_system.dashboard.inventory import Inventory
         from task_system.dashboard.server import DashboardServer
 
+        self.data_dir = Path(data_dir)
         self.log = io.StringIO()
         self.inventory = Inventory(parents=parents, min_interval=0.0)
         self.server = DashboardServer(
             data_dir=data_dir, scripts_dir=SCRIPTS_DIR, inventory=self.inventory,
-            busy=busy, log=self.log,
+            busy=busy, log=self.log, edge=edge, config_path=config_path,
         )
         self.state = self.server.start()
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -155,6 +157,33 @@ class Running:
         status, headers, data = self.request(method, path, **kw)
         return status, headers, json.loads(data.decode("utf-8"))
 
+    @property
+    def scheduler(self):
+        return self.server.scheduler
+
+    def post(self, path: str, body: dict, **kw):
+        """A same-origin JSON mutation: (status, headers, parsed body)."""
+        return self.json(
+            "POST", path, body=json.dumps(body).encode("utf-8"),
+            headers={"Origin": f"http://127.0.0.1:{self.port}", "Content-Type": "application/json"}, **kw)
+
+    def settle(self, run_id: str, *, timeout_s: float = 90.0, states=None):
+        """Tick the scheduler until the run reaches a terminal state; the final Run."""
+        import time
+
+        from task_system.dashboard import runtime
+
+        wanted = tuple(states) if states else runtime.TERMINAL_STATES
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            self.scheduler.tick()
+            run = self.scheduler.db.get(run_id)
+            if run is not None and run.state in wanted:
+                return run
+            time.sleep(0.1)
+        run = self.scheduler.db.get(run_id)
+        raise AssertionError(f"run {run_id} did not settle: {run}")
+
     def stop(self) -> None:
         self.server.request_shutdown()
         self.thread.join(timeout=10)
@@ -169,3 +198,99 @@ def run_task_cli(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
     env[_REEXEC_SKIP_ENV] = "1"
     env["PYTHONPATH"] = str(REPO_ROOT / "plugins" / "skills-kit")
     return subprocess.run([sys.executable, str(TASK_CLI), *args], cwd=cwd, capture_output=True, env=env)
+
+
+# ---------------------------------------------------------------------------
+# autonomous-run fixtures
+# ---------------------------------------------------------------------------
+
+FAKE_LLM = Path(__file__).with_name("fake_llm.py")
+
+
+def git(root: Path, *args: str) -> str:
+    proc = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, check=True)
+    return proc.stdout.strip()
+
+
+def init_repo(root: Path) -> None:
+    """A git repository on branch main with one commit (task folders live under tmp/, ignored)."""
+    root.mkdir(parents=True, exist_ok=True)
+    git(root, "init", "-q", "-b", "main")
+    git(root, "config", "user.email", "test@example.invalid")
+    git(root, "config", "user.name", "Test")
+    git(root, "config", "commit.gpgsign", "false")
+    (root / "README.md").write_text("project\n", encoding="utf-8")
+    (root / ".gitignore").write_text("tmp/\n", encoding="utf-8")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "init")
+
+
+def runner_environment(monkeypatch) -> None:
+    """Child processes the scheduler spawns import the task system from the working copy."""
+    monkeypatch.setenv(
+        "PYTHONPATH",
+        os.pathsep.join([str(REPO_ROOT / "plugins" / "skills-kit"), str(SCRIPTS_DIR)]),
+    )
+
+
+class FakeEdge:
+    """A stand-in for the llm-kit edge whose 'job runner' is tests/task-kit/fake_llm.py.
+
+    ``behavior`` is what the fake agent does when its run starts (see fake_llm.py).
+    """
+
+    def __init__(self, *, state: str = "ok", detail: str = "", behavior: str = "done", entries: dict | None = None,
+                 invalid_job_file: str | None = None) -> None:
+        from task_system.dashboard.jobs_edge import EntryInfo
+
+        self.state = state
+        self.detail = detail or ("llm-kit is available" if state == "ok" else f"llm-kit is {state}")
+        self.behavior = behavior
+        self.invalid_job_file = invalid_job_file
+        self.entries = entries if entries is not None else {
+            "opus": EntryInfo(id="opus", kind="harness", harness="claude", model="opus"),
+            "sonnet": EntryInfo(id="sonnet", kind="harness", harness="claude", model="sonnet"),
+            "sol": EntryInfo(id="sol", kind="harness", harness="codex", model="gpt-5.6-sol"),
+            "or-qwen": EntryInfo(id="or-qwen", kind="transport", harness=None, model="qwen/qwen3-32b"),
+        }
+        self.job_files: list[Path] = []
+
+    def status(self):
+        from task_system.dashboard.jobs_edge import EdgeStatus
+
+        return EdgeStatus(self.state, self.detail)
+
+    def entry(self, name):
+        return self.entries.get(name)
+
+    def validate_job_file(self, path: Path) -> None:
+        from task_system.dashboard.jobs_edge import EdgeError
+
+        self.job_files.append(Path(path))
+        if self.invalid_job_file:
+            raise EdgeError(self.invalid_job_file)
+
+    def runner_argv(self, job_file: Path, store: Path, timeout_s: float, run_id: str) -> list[str]:
+        (Path(job_file).parent / "behavior.json").write_text(json.dumps({"behavior": self.behavior}), encoding="utf-8")
+        return [sys.executable, str(FAKE_LLM), str(job_file), str(store), run_id]
+
+
+def agent_world(tmp_path: Path, *, repo: bool = True, items=None, sections=None, status: str = "active",
+                task_location: str = "tmp", stub: str = "alpha") -> tuple[Path, Path, Path]:
+    """(devroot, project root, task folder) with one runnable item 'do-it' (and a sibling 'later-one')."""
+    devroot = tmp_path / "devroot"
+    project = devroot / "proj"
+    if repo:
+        init_repo(project)
+    else:
+        project.mkdir(parents=True)
+    folder = make_task(
+        project, task_location, stub, title="Alpha", status=status,
+        items=items if items is not None else [
+            {"id": "do-it", "title": "Do it", "state": "available", "priority": "P1"},
+            {"id": "later-one", "title": "Later one", "state": "available", "priority": "P2"}],
+        sections=sections if sections is not None else {
+            "do-it": "Make the thing.\n\nDone when it exists.", "later-one": "Make the other thing."},
+        log="- 2026-10-01 09:00: began\n",
+    )
+    return devroot, project, folder

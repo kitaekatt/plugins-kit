@@ -1,11 +1,14 @@
-/* Task dashboard UI -- Increment 1: read-only.
+/* Task dashboard UI.
  *
  * Plain JavaScript, no framework and no build step. It talks only to the
  * server that served it: every request is a relative /api/v1/ path carrying the
- * per-instance token that arrived in the URL fragment. Nothing here writes
- * shared state; the actions that will (Queue, Cancel run, Retry, Defer,
- * Re-check, New task, Add item, Pause worker) are drawn disabled through
- * laterButton(), so they are visible and cannot be clicked.
+ * per-instance token that arrived in the URL fragment. The only state-changing
+ * calls are Queue, Retry and Re-check, sent by send(), each carrying the
+ * expected_revision the page last saw. The actions the server does not back yet
+ * (Cancel run, Defer, Queue all, New task, Add item, Pause worker, the run
+ * option controls) are drawn disabled through laterButton(), so they are
+ * visible and cannot be clicked. Queue and Retry also stay disabled, with the
+ * server's reason, whenever the server reports autonomous runs unavailable.
  *
  * The page is served under a CSP that forbids inline styles and scripts, so no
  * markup carries a style attribute: dynamic values travel as data-* attributes
@@ -25,7 +28,10 @@ var S = {
   q: '',               // text filter
   sel: null,           // selected item key  "project|task|item"
   selTask: null,       // selected task key  "project|task"
-  mode: 'overview',    // overview | item | task
+  mode: 'overview',    // overview | item | task | run
+  selRun: null,        // selected run id
+  runLog: {},          // run id -> { text, cursor }
+  notice: null,        // { kind, title, text } shown with the banners after an action
   detail: {},          // item key -> detail payload
   open: {},            // <details> open state by data-open key
   resolve: {},         // keys whose command box is expanded
@@ -119,6 +125,36 @@ function laterPill(label, id) {
     esc(label + LATER_NOTE) + '">' + esc(label) + '</button>';
 }
 
+function caps() { return (S.snap && S.snap.capabilities) || {}; }
+function runCap() { return caps().run || { available: false, reason: '' }; }
+function canDo(action) {
+  var m = caps().mutations || {};
+  return !!(m.available && (m.actions || []).indexOf(action) >= 0);
+}
+function liveButton(label, cls, icon, action, key) {
+  return '<button type="button" class="btn ' + cls + '" data-action="' + action + '" data-key="' + esc(key) + '">' +
+    (icon ? ic(icon) : '') + esc(label) + '</button>';
+}
+/* Queue and Retry start unattended work, so they need the llm-kit edge too. */
+function runButton(label, cls, icon, action, key) {
+  if (canDo(action) && runCap().available) return liveButton(label, cls, icon, action, key);
+  var why = runCap().available ? '' : runCap().reason;
+  return '<button type="button" class="btn ' + cls + '" disabled aria-disabled="true" data-later="' + action + '" title="' +
+    esc(why || (label + LATER_NOTE)) + '">' + (icon ? ic(icon) : '') + esc(label) + '</button>';
+}
+function runPill(label, action, key) {
+  if (canDo(action) && runCap().available) {
+    return '<button type="button" class="pill" data-action="' + action + '" data-key="' + esc(key) + '">' + esc(label) + '</button>';
+  }
+  return '<button type="button" class="pill" disabled aria-disabled="true" data-later="' + action + '" title="' +
+    esc(runCap().reason || (label + LATER_NOTE)) + '">' + esc(label) + '</button>';
+}
+
+var RUN_LABEL = {
+  queued: 'Queued', starting: 'Starting', running: 'Running', accepted: 'Accepted', blocked: 'Blocked',
+  failed: 'Failed', timeout: 'Timed out', crashed: 'Crashed', skipped: 'Dropped'
+};
+
 var STATE_LABEL = {
   'available': 'Available', 'in-flight': 'In flight', 'blocked': 'Needs you',
   'deferred': 'Deferred', 'unknown': 'Unknown state'
@@ -149,6 +185,25 @@ function api(path) {
     return res.json();
   });
 }
+function send(path, body) {
+  return fetch(path, {
+    method: 'POST',
+    headers: { 'X-Task-Kit-Token': TOKEN, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    cache: 'no-store'
+  }).then(function (res) {
+    return res.json().then(function (b) { return { status: res.status, body: b }; },
+      function () { return { status: res.status, body: {} }; });
+  });
+}
+function fetchRunLog(id) {
+  var cur = (S.runLog[id] || { cursor: 0 }).cursor;
+  return api('/api/v1/runs/' + encodeURIComponent(id) + '/log?after=' + cur).then(function (r) {
+    var old = S.runLog[id] ? S.runLog[id].text : '';
+    S.runLog[id] = { text: (old + r.text).slice(-20000), cursor: r.cursor };
+    if (S.mode === 'run' && S.selRun === id) renderPanel();
+  }, function (e) { S.runLog[id] = { text: '(log unavailable: ' + e.message + ')', cursor: 0 }; });
+}
 function fetchDetail(k) {
   var p = splitIKey(k);
   return api('/api/v1/items/' + encodeURIComponent(p.project) + '/' + encodeURIComponent(p.task) + '/' + encodeURIComponent(p.item))
@@ -173,6 +228,7 @@ function poll() {
     } else {
       renderStatus();
     }
+    if (S.mode === 'run' && S.selRun) fetchRunLog(S.selRun);
   }, function (e) {
     S.conn = e.auth ? 'auth' : 'offline'; S.connDetail = e.message;
     renderBanners(); renderStatus();
@@ -189,9 +245,18 @@ function pollNow() {
 
 /* ================= rendering ================= */
 function renderBanners() {
-  var h = '<div class="callout info"><strong>Read-only dashboard</strong><p>Queue, Cancel run, Retry, Defer, ' +
-    'Re-check, New task, Add item and Pause worker are shown disabled: they arrive in a later increment. ' +
-    '&ldquo;Resolve in Claude Code&rdquo; works now and only shows commands to copy.</p></div>';
+  var h = '';
+  if (S.snap && runCap().available) {
+    h += '<div class="callout info"><strong>Autonomous runs are on</strong><p>Queue starts one unattended Claude run for one item; ' +
+      'a blocked run waits for you under Needs you. Cancel run, Defer, Queue all, New task, Add item and Pause worker ' +
+      'are shown disabled: they arrive in a later increment. &ldquo;Resolve in Claude Code&rdquo; only shows commands to copy.</p></div>';
+  } else if (S.snap) {
+    h += '<div class="callout info"><strong>Autonomous runs are unavailable</strong><p>' + esc(runCap().reason || 'This server cannot start runs.') +
+      ' Viewing tasks, Re-check and &ldquo;Resolve in Claude Code&rdquo; still work.</p></div>';
+  }
+  if (S.notice) {
+    h += '<div class="callout ' + esc(S.notice.kind) + '"><strong>' + esc(S.notice.title) + '</strong><p>' + esc(S.notice.text) + '</p></div>';
+  }
   if (S.conn === 'auth') {
     h += '<div class="callout bad"><strong>' + (TOKEN ? 'This page no longer matches the server' : 'This page has no access token') + '</strong><p>' +
       (TOKEN ? 'The dashboard server restarted, so this page\'s token is stale. ' : 'The token travels in the address after #. ') +
@@ -248,6 +313,41 @@ function renderInFlight() {
   return h + '</div>';
 }
 
+function elapsed(ts) {
+  var t = parseWhen(ts);
+  if (t == null) return '';
+  var m = Math.max(0, Math.floor((Date.now() - t) / 60000));
+  return m < 1 ? 'under a minute' : m < 60 ? m + ' min' : Math.floor(m / 60) + 'h ' + (m % 60) + 'm';
+}
+function renderRuns() {
+  var list = S.snap.runs || [];
+  if (!list.length) return '';
+  var h = '<div class="sec-title">Now running <span class="count">' + list.length +
+    ' - one unattended run per project; queued runs wait their turn</span></div><div class="run-grid">';
+  list.forEach(function (r) {
+    h += '<div class="run-card"><div class="proj"><span>' + esc(r.project_name) + ' / ' + esc(r.task) + '</span><span class="live">' +
+      esc(RUN_LABEL[r.state] || r.state) + '</span></div><div class="ttl">' + esc(r.item_title) + '</div>' +
+      '<div class="sub">' + esc(r.worker || '') + (r.entry ? ' (' + esc(r.entry) + ')' : '') +
+      (r.started_at ? ' - running for ' + esc(elapsed(r.started_at)) : ' - waiting to start') + '</div>' +
+      '<div class="row"><button type="button" class="btn sm" data-action="selectrun" data-key="' + esc(r.id) + '">' + ic('eye') + 'Log</button>' +
+      laterButton('Cancel run', 'sm danger', 'stop', 'cancel') + '</div></div>';
+  });
+  return h + '</div>';
+}
+function renderRecent() {
+  var rows = S.snap.recent_runs || [];
+  if (!rows.length) return '';
+  var h = '<div class="sec-title">Recent runs <span class="count">newest first; the run log keeps the details</span></div>' +
+    '<table class="runs-table"><thead><tr><th>Ended</th><th>Item</th><th>Result</th><th></th></tr></thead><tbody>';
+  rows.forEach(function (r) {
+    h += '<tr class="click" data-action="selectrun" data-key="' + esc(r.id) + '"><td class="muted when">' + esc(ago(r.ended_at)) + '</td>' +
+      '<td>' + esc(r.item_title) + '<div class="muted mono fs11">' + esc(r.project_name) + ' / ' + esc(r.task) + '</div></td>' +
+      '<td><span class="chip' + (r.state === 'accepted' ? '' : ' warnchip') + '">' + esc(RUN_LABEL[r.state] || r.state) + '</span> ' +
+      '<span class="muted fs12">' + esc(r.code || '') + '</span></td><td></td></tr>';
+  });
+  return h + '</tbody></table>';
+}
+
 function renderNeeds() {
   var list = S.snap.needs;
   if (!list.length) return '';
@@ -260,9 +360,14 @@ function renderNeeds() {
       '<div class="ttl">' + esc(n.title) + '<small>' + esc(n.project_name) + ' / ' + esc(n.task) + '</small></div>' +
       '<div class="why" title="' + esc(n.detail) + '">' + esc(n.detail) + '</div><div class="acts">' +
       '<button type="button" class="btn sm warn" data-action="' + action + '" data-key="' + esc(k) + '">' + ic('term') + 'Resolve in Claude Code</button>' +
-      laterButton('Re-check', 'sm', 'retry', 'recheck') + '</div></div>';
+      recheckButton(n, 'sm') + '</div></div>';
   });
   return h + '</div>';
+}
+function recheckButton(n, size) {
+  var key = n.item ? n.project + '|' + n.task + '|' + n.item : n.project + '|' + n.task;
+  if (canDo('recheck')) return liveButton('Re-check', size, 'retry', 'recheck', key);
+  return laterButton('Re-check', size, 'retry', 'recheck');
 }
 
 function iconFor(item) {
@@ -277,7 +382,15 @@ function iconFor(item) {
 function nodeHtml(task, item) {
   var k = ikey(task, item), sel = S.mode === 'item' && S.sel === k, sub = '';
   switch (item.ui_state) {
-    case 'available': sub = laterPill('Queue', 'queue'); break;
+    case 'available':
+      if (item.run && (item.run.state === 'queued' || item.run.state === 'starting' || item.run.state === 'running')) {
+        sub = '<span class="t-run">' + esc((RUN_LABEL[item.run.state] || item.run.state).toLowerCase()) + '</span>';
+      } else if (item.run && item.run.retryable) {
+        sub = '<span class="t-warn">' + esc((RUN_LABEL[item.run.state] || item.run.state).toLowerCase()) + '</span>';
+      } else {
+        sub = runPill('Queue', 'queue', ikey(task, item));
+      }
+      break;
     case 'in-flight': sub = '<span class="t-run">in flight</span>'; break;
     case 'blocked': sub = '<span class="t-warn">needs you</span>'; break;
     case 'deferred': sub = 'deferred'; break;
@@ -456,9 +569,12 @@ function panelItem() {
   var key = S.sel;
   h += '<div class="acts">';
   h += '<button type="button" class="btn warn" data-action="resolve" data-key="' + esc(key) + '" aria-expanded="' + !!S.resolve[key] + '">' + ic('term') + 'Resolve in Claude Code</button>';
-  if (ui === 'available') h += laterButton('Queue', 'primary', 'play', 'queue') + laterButton('Defer', '', null, 'defer');
+  var live = it.run && (it.run.state === 'queued' || it.run.state === 'starting' || it.run.state === 'running');
+  if (ui === 'available' && !live) h += runButton('Queue', 'primary', 'play', 'queue', key) + laterButton('Defer', '', null, 'defer');
+  if (ui === 'available' && live) h += '<span class="chip">' + esc(RUN_LABEL[it.run.state]) + '</span>';
+  if (ui === 'available' && it.run && it.run.retryable) h += runButton('Retry', '', 'retry', 'retry', it.run.id + '|' + task.project + '|' + task.id);
   if (ui === 'deferred') h += laterButton('Undefer', 'primary', null, 'undefer');
-  if (ui === 'blocked') h += laterButton('Re-check', '', 'retry', 'recheck');
+  if (ui === 'blocked') h += recheckButton({ item: it.id, project: task.project, task: task.id }, '');
   h += '</div>';
   if (S.resolve[key]) {
     h += detail && detail.handoff ? cmdBox(detail.handoff) : (task.handoff ? cmdBox(task.handoff) : '');
@@ -467,8 +583,14 @@ function panelItem() {
     '<dt>Model</dt><dd><span class="seg" role="group" aria-label="Model"><button type="button" disabled aria-disabled="true" data-later="model">Claude</button><button type="button" disabled aria-disabled="true" data-later="model">Codex</button></span></dd>' +
     '<dt>Effort</dt><dd><select disabled aria-label="Effort" data-later="effort"><option>medium</option></select></dd>' +
     '<dt>Runs in</dt><dd class="mono fs12">' + esc(p ? p.root : '') + '</dd></dl>' +
-    '<div class="acts">' + laterButton('Queue', 'sm', 'play', 'queue') + laterButton('Cancel run', 'sm danger', 'stop', 'cancel') + laterButton('Retry', 'sm', 'retry', 'retry') + '</div>' +
-    '<p class="hint">Run controls arrive in a later increment; nothing here starts or stops work.</p></div>';
+    '<div class="acts">' + laterButton('Cancel run', 'sm danger', 'stop', 'cancel') + '</div>' +
+    '<p class="hint">Model, effort and run options arrive in a later increment: a run uses the machine defaults from ' +
+    'task.local.yaml. Cancel run arrives with them; a run ends by itself or at its time limit.</p></div>';
+  if (it.run) {
+    h += '<div class="sec-title">Latest run</div><div class="card"><dl class="kv mb0"><dt>State</dt><dd>' + esc(RUN_LABEL[it.run.state] || it.run.state) +
+      '</dd><dt>Result</dt><dd>' + esc(it.run.code || '') + (it.run.detail ? ' - ' + esc(it.run.detail) : '') + '</dd></dl>' +
+      '<div class="acts"><button type="button" class="btn sm" data-action="selectrun" data-key="' + esc(it.run.id) + '">' + ic('eye') + 'Run log</button></div></div>';
+  }
   h += '<div class="sec-title">plan.md section</div>';
   if (!detail) h += '<p class="muted fs13">Loading...</p>';
   else if (detail.error) h += '<div class="callout bad"><strong>Could not load the item</strong><p>' + esc(detail.error) + '</p></div>';
@@ -480,11 +602,28 @@ function panelItem() {
   }).join('') : '<p class="muted fs13">No dated log entries.</p>';
   return h;
 }
+function panelRun() {
+  var run = null, rows = (S.snap.runs || []).concat(S.snap.recent_runs || []);
+  rows.forEach(function (r) { if (r.id === S.selRun) run = r; });
+  if (!run) return panelOverview();
+  var log = S.runLog[run.id];
+  var h = '<div class="p-head"><div class="crumbs"><span>' + esc(run.project_name) + '</span><span>/</span><span class="mono">' + esc(run.task) + '</span></div>' +
+    '<span class="grow"></span><button type="button" class="btn sm" data-action="closepanel" aria-label="Close panel">' + ic('close') + '</button></div>' +
+    '<h2>' + esc(run.item_title) + '</h2><div class="badges"><span class="badge" data-color="' + (run.state === 'accepted' ? 'good' : run.state === 'running' ? 'run' : 'warn') + '">' +
+    esc(RUN_LABEL[run.state] || run.state) + '</span><span class="chip mono">' + esc(run.id) + '</span></div>';
+  if (run.code || run.detail) h += '<div class="callout"><strong>' + esc(run.code || run.state) + '</strong><p>' + esc(run.detail || '') + '</p></div>';
+  h += '<div class="acts">';
+  if (run.retryable) h += runButton('Retry', '', 'retry', 'retry', run.id + '|' + run.project + '|' + run.task);
+  if (run.state === 'blocked' || run.state === 'crashed') h += '<span class="hint">Resolve it in Claude Code, then Re-check the item.</span>';
+  if (run.state === 'queued' || run.state === 'starting' || run.state === 'running') h += laterButton('Cancel run', 'sm danger', 'stop', 'cancel');
+  h += '</div><div class="sec-title">Run log</div><pre class="logtail">' + esc(log ? log.text : 'Loading...') + '</pre>';
+  return h;
+}
 function renderPanel() {
   var pn = $('panel');
   if (!S.snap) { pn.innerHTML = ''; return; }
   var scroll = pn.scrollTop;
-  pn.innerHTML = S.mode === 'item' ? panelItem() : S.mode === 'task' ? panelTask() : panelOverview();
+  pn.innerHTML = S.mode === 'item' ? panelItem() : S.mode === 'task' ? panelTask() : S.mode === 'run' ? panelRun() : panelOverview();
   pn.scrollTop = scroll;
   pn.classList.toggle('open', S.panelOpen);
   $('scrim').classList.toggle('on', S.panelOpen);
@@ -505,7 +644,8 @@ function render() {
   if (!S.snap) return;
   renderBanners(); renderStatus(); renderProjectSelect();
   var main = $('main');
-  main.innerHTML = '<section>' + renderInFlight() + '</section><section>' + renderNeeds() + '</section><section>' + renderPipelines() + '</section><section>' + renderActivity() + '</section>';
+  main.innerHTML = '<section>' + renderRuns() + '</section><section>' + renderInFlight() + '</section><section>' + renderNeeds() +
+    '</section><section>' + renderPipelines() + '</section><section>' + renderRecent() + '</section><section>' + renderActivity() + '</section>';
   applyDynamic(main);
   $('needsBtn').setAttribute('aria-pressed', S.needs ? 'true' : 'false');
   renderPanel();
@@ -537,13 +677,49 @@ function selectTask(k, withResolve) {
   if (withResolve) S.resolve['T:' + k] = true;
   render();
 }
+function actionResult(label, r) {
+  if (r.status >= 200 && r.status < 300) {
+    S.notice = null;
+    return;
+  }
+  var e = (r.body && r.body.error) || {};
+  var text = e.message || ('HTTP ' + r.status);
+  S.notice = { kind: r.status === 409 ? 'info' : 'bad', title: label + ' was not done' + (e.blocked ? ' - the task is now blocked' : ''), text: text };
+}
+function doQueue(el) {
+  var p = splitIKey(el.getAttribute('data-key')), f = findItem(el.getAttribute('data-key'));
+  if (!f) return;
+  send('/api/v1/items/' + encodeURIComponent(p.project) + '/' + encodeURIComponent(p.task) + '/' + encodeURIComponent(p.item) + '/queue',
+    { expected_revision: f.task.revision }).then(function (r) { actionResult('Queue', r); pollNow(); });
+}
+function doRecheck(el) {
+  var k = el.getAttribute('data-key'), p = splitIKey(k), task = findTask(p.project + '|' + p.task);
+  if (!task) return;
+  send('/api/v1/items/' + encodeURIComponent(p.project) + '/' + encodeURIComponent(p.task) + '/' + encodeURIComponent(p.item || '-') + '/recheck',
+    { expected_revision: task.revision }).then(function (r) { actionResult('Re-check', r); pollNow(); });
+}
+function doRetry(el) {
+  var parts = el.getAttribute('data-key').split('|'), task = findTask(parts[1] + '|' + parts[2]);
+  if (!task) return;
+  send('/api/v1/runs/' + encodeURIComponent(parts[0]) + '/retry', { expected_revision: task.revision })
+    .then(function (r) { actionResult('Retry', r); pollNow(); });
+}
+function selectRun(id) {
+  S.selRun = id; S.mode = 'run'; S.panelOpen = true;
+  render();
+  fetchRunLog(id);
+}
 var ACTIONS = {
+  queue: doQueue,
+  recheck: doRecheck,
+  retry: doRetry,
+  selectrun: function (el) { selectRun(el.getAttribute('data-key')); },
   select: function (el) { selectItem(el.getAttribute('data-key'), false); },
   selecttask: function (el) { selectTask(el.getAttribute('data-key'), false); },
   resolvesel: function (el) { selectItem(el.getAttribute('data-key'), true); },
   resolvetask: function (el) { selectTask(el.getAttribute('data-key'), true); },
   resolve: function (el) { var k = el.getAttribute('data-key'); S.resolve[k] = !S.resolve[k]; renderPanel(); },
-  closepanel: function () { S.sel = null; S.selTask = null; S.mode = 'overview'; S.panelOpen = false; render(); },
+  closepanel: function () { S.sel = null; S.selTask = null; S.selRun = null; S.mode = 'overview'; S.panelOpen = false; render(); },
   copy: function (el) { copyText(el); },
   needsfilter: function () { S.needs = !S.needs; $('needsBtn').setAttribute('aria-pressed', S.needs ? 'true' : 'false'); pollNow(); },
   refresh: function () { S.refreshNext = true; pollNow(); }

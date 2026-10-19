@@ -20,16 +20,23 @@ The skill's entry point, verb contracts, and design documents are in
 ## The dashboard
 
 Type `task-kit` in any terminal (or `/task dashboard` in Claude Code) to open a
-live, read-only browser view over every project's task folders: each task's
-items as a pipeline, what needs you (blocked tasks and items), what is in
-flight, and the newest log entries. A project dropdown and a search box filter
-it. `Resolve in Claude Code` shows the commands that open a task in Claude Code;
-it does not run them. Queue, Cancel, Retry, New task and Add item are drawn but
-disabled in this version.
+live browser view over every project's task folders: each task's items as a
+pipeline, what needs you (blocked tasks and items), what is running, and the
+newest log entries. A project dropdown and a search box filter it.
+`Resolve in Claude Code` shows the commands that open a task in Claude Code; it
+does not run them.
 
-The dashboard runs beside the task system and changes nothing in it: the `task`
-verbs and the Claude Code workflow behave the same whether or not it is running.
-It reads task folders and never edits one.
+Queue runs one item as one unattended Claude job and needs the llm-kit plugin;
+without it the autonomous actions refuse with the reason and the rest keeps
+working. Queue, Retry and Re-check are live; other controls are drawn but
+disabled. The contract (eligibility, blocked-run resolution, holds, the
+`dashboard:` settings in `~/.claude/task.local.yaml`) is owned by the dashboard
+capability in `skills/task/SKILL.md`.
+
+The dashboard runs beside the task system: the `task` verbs and the Claude Code
+workflow behave the same whether or not it is running. A refresh never edits a
+task folder; the dashboard writes one only to record a block or a Re-check, under
+the folder's expected revision.
 
 ```
 task-kit               start (or reuse) the dashboard and open it in your browser

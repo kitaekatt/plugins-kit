@@ -250,3 +250,5 @@ select:focus-visible, textarea:focus-visible, input.f:focus-visible { outline:2p
 .t-warn { color:var(--warn); font-weight:650; }
 .fs11 { font-size:11px; }
 .run-card .sub { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+
+.logtail { background:var(--panel2); border:1px solid var(--line); border-radius:7px; padding:8px 10px; font-size:12px; max-height:340px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; }

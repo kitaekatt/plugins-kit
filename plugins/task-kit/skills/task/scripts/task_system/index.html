@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- index-pages: {"generated_by":"md-domain","source_sha":"bfb555f5dc37f72e2d2c92fc42fa368e877240c8","directory":"plugins/task-kit/skills/task/scripts/task_system","kind":"page"} -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>The task-system implementation: lifecycle verbs for task folders, cross-project discovery and validation, and the local read-only dashboard server.</title>
+<link rel="stylesheet" href="../../../../../../.databench/index-pages.css">
+</head>
+<body>
+<nav data-index-pages-chrome="nav"><ul><li><a href="../../../../../index.html"><span class="hh-nav-label">plugins</span> <span class="hh-nav-identity">The plugins-kit marketplace: independently installable Claude Code plugins for code review, LLM dispatch, job execution, Hue scenes, PDF rendering, secrets, tasks, and Unreal Engine automation, provisioned by the bootstrap engine and linked through shared libraries</span></a></li><li><a href="../task.py"><span class="hh-nav-label">task.py</span> <span class="hh-nav-identity">CLI wrapper.</span></a></li><li><a href="../../SKILL.md"><span class="hh-nav-label">SKILL.md</span> <span class="hh-nav-identity">Skill guidance.</span></a></li><li><a href="../../design"><span class="hh-nav-label">design</span> <span class="hh-nav-identity">Design docs.</span></a></li></ul></nav>
+<main>
+<h1>The task-system implementation: lifecycle verbs for task folders, cross-project discovery and validation, and the local read-only dashboard server.</h1>
+<p class="hh-orientation">Task-system package provides task-folder verbs. It covers validation, discovery, projection, and a local read-only viewer. Its modules cover package entry, operations, schemas, review rendering, and dashboard viewer.</p><section><h2>Start</h2><p>Use <a href="validate.py">plugins/task-kit/skills/task/scripts/task_system/validate.py</a> for task classifications and findings, then <a href="discovery.py">plugins/task-kit/skills/task/scripts/task_system/discovery.py</a> for task discovery.</p></section><section><h2>Modules</h2><ul><li><a href="__init__.py">plugins/task-kit/skills/task/scripts/task_system/__init__.py</a> package entry.</li><li><a href="init.py">plugins/task-kit/skills/task/scripts/task_system/init.py</a> creates task folder; validates; removes on failure.</li><li><a href="state_ops.py">plugins/task-kit/skills/task/scripts/task_system/state_ops.py</a> work, update, close, reopen.</li><li><a href="location_ops.py">plugins/task-kit/skills/task/scripts/task_system/location_ops.py</a> archive, delete, version-control decisions.</li><li><a href="reference_rewrite.py">plugins/task-kit/skills/task/scripts/task_system/reference_rewrite.py</a> move and rewrite refs.</li><li><a href="summary_ops.py">plugins/task-kit/skills/task/scripts/task_system/summary_ops.py</a> optional summaries.</li><li><a href="discovery.py">plugins/task-kit/skills/task/scripts/task_system/discovery.py</a> finds task folders and refs.</li><li><a href="listing.py">plugins/task-kit/skills/task/scripts/task_system/listing.py</a> projects sections and diagnostics.</li><li><a href="review_html.py">plugins/task-kit/skills/task/scripts/task_system/review_html.py</a> renders review document.</li><li><a href="task_items.py">plugins/task-kit/skills/task/scripts/task_system/task_items.py</a> plan item checks.</li><li><a href="schemas.py">plugins/task-kit/skills/task/scripts/task_system/schemas.py</a> YAML schemas.</li><li><a href="types.py">plugins/task-kit/skills/task/scripts/task_system/types.py</a> hand-off type registry.</li><li><a href="resolve.py">plugins/task-kit/skills/task/scripts/task_system/resolve.py</a> canonicalizes refs and stubs.</li><li><a href="validate.py">plugins/task-kit/skills/task/scripts/task_system/validate.py</a> classifies task; emits findings.</li><li><a href="relocate.py">plugins/task-kit/skills/task/scripts/task_system/relocate.py</a> safe move/remove.</li><li><a href="dashboard">plugins/task-kit/skills/task/scripts/task_system/dashboard</a> local viewer: server, inventory, state, hashes, redaction, snapshots, static shell.</li></ul></section>
+</main>
+<script>
+if (window.parent !== window) {
+  window.parent.postMessage({
+    type: "index-pages:announce",
+    version: 1,
+    directory: "plugins/task-kit/skills/task/scripts/task_system",
+    file: "index.html",
+    kind: "page",
+    source_sha: "bfb555f5dc37f72e2d2c92fc42fa368e877240c8"
+  }, "*");
+  document.addEventListener("click", function (event) {
+    if (event.defaultPrevented || event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    var el = event.target;
+    while (el && el.nodeName !== "A") el = el.parentNode;
+    if (!el) return;
+    var href = el.getAttribute("href");
+    if (!href) return;
+    if (href.charAt(0) === "#" || href.charAt(0) === "/") return;
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
+    var target = href.split("#")[0].split("?")[0];
+    if (!target) return;
+    if (/(^|\/)index-page(\.[^/]+)?\.html$/.test(target)) return;
+    var parts = "plugins/task-kit/skills/task/scripts/task_system".split("/");
+    if (parts.length === 1 && parts[0] === ".") parts = [];
+    var segs = target.split("/");
+    for (var i = 0; i < segs.length; i++) {
+      if (segs[i] === "" || segs[i] === ".") continue;
+      if (segs[i] === "..") { parts.pop(); continue; }
+      parts.push(segs[i]);
+    }
+    event.preventDefault();
+    window.parent.postMessage({
+      type: "index-pages:navigate",
+      version: 1,
+      path: parts.join("/")
+    }, "*");
+  });
+}
+</script>
+</body>
+</html>

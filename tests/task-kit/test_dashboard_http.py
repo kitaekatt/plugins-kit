@@ -210,7 +210,8 @@ def test_dashboard_payload_shape_and_filters(srv):
     status, _h, body = srv.json("GET", "/api/v1/dashboard")
     assert status == 200 and body["schema"] == 1
     assert body["capabilities"]["run"]["available"] is False
-    assert body["capabilities"]["mutations"]["available"] is False
+    assert body["capabilities"]["run"]["state"] == "absent"  # llm-kit is not on the task-kit test path
+    assert body["capabilities"]["mutations"]["actions"] == ["queue", "retry", "recheck"]
     assert {p["name"] for p in body["projects"]} == {"alpha", "beta"}
     assert {t["id"] for t in body["tasks"]} == {"dev/tasks/open-one", "tmp/other"}
     assert [n["kind"] for n in body["needs"]] == ["item-blocked"]
