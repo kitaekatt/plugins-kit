@@ -96,8 +96,8 @@
     },
     {
       "name": "awesome-kit",
-      "description": "Provides plugin-ecosystem, orchestrate, debug-context, and verbose-updates skills for plugin browsing, delegated work, answering why-did-you questions from context, and progress communication.",
-      "version": "0.75.0",
+      "description": "Provides plugin-ecosystem, orchestrate, debug-context, verbose-updates, and arewedone skills for plugin browsing, delegated work, answering why-did-you questions from context, progress communication, and auditing whether session work is complete.",
+      "version": "0.76.0",
       "author": {
         "name": "Christina"
       },
@@ -215,7 +215,7 @@
     {
       "name": "task-kit",
       "description": "Provides the task skill (a file-backed task-folder system with a CLI for creating, listing, working, closing, archiving, and moving task folders and task_list references) and the task-kit dashboard, a local browser view over every configured project's tasks that can also run one queued item at a time as an unattended Claude job when llm-kit is available.",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "author": {
         "name": "Christina"
       },

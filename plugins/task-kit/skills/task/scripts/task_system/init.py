@@ -173,6 +173,9 @@ decision for the user -- those checkpoints stand.
 
 - <fill: decisions the user has CLAIMED and the presence pattern to expect;
   all else is granted where the user's CLAUDE.md says so>
+- If presence-kit is installed, `presence-kit:afk` and `presence-kit:autonomous`
+  set the user's presence mode and `presence-kit:recap` reports on it; modes
+  never widen the decisions claimed above.
 
 ### Authorizations
 

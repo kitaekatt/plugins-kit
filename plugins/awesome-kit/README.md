@@ -29,6 +29,8 @@ Also in the box, one line each:
 - `debug-context` -- when a present user asks why the agent did something,
   answer from context immediately with premises marked, then verify in the
   background and reconcile.
+- `arewedone` -- audit this agent's session work for completeness and close
+  outstanding authorized work before reporting what remains.
 
 ## Poster personalization
 

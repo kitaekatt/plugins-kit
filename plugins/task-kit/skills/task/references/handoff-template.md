@@ -218,6 +218,13 @@ template-vs-additional; the consistent seven `##` shape is the contract.
     the grant the user's own CLAUDE.md declares -- typically that the user is
     product and the agent is a trusted implementor who consults an
     independent seat when a wrong answer would propagate.
+    Optional: if presence-kit (a sibling plugin, not a dependency) is
+    installed, the slot may name its modes -- present, afk
+    (`presence-kit:afk`), autonomous (`presence-kit:autonomous`) -- and
+    `presence-kit:recap` for the report. A mode changes how the agent waits
+    and asks. Under the autonomous mode presence-kit asks only what a gate
+    requires (its `references/presence.md`, Modes), so a claimed decision
+    that must still reach the user is named in this slot as a gate.
   - **`### Authorizations`** -- explicit, named pre-authorized actions. The
     point is to enumerate the standing yes-list so the next agent does not
     round-trip for already-authorized work. Distinct from Autonomy status:

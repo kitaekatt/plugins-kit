@@ -126,6 +126,7 @@ Standing principles, rules, and gates that apply continuously regardless of whic
 <One paragraph describing the user's current attention pattern -- at-desk-doing-parallel-work, AFK, reviewing-every-turn -- and what that implies for posture.> Optimize for:
 - <One concrete rule that follows from the attention pattern.>
 - <Another, e.g. "user wants to start auditing <X> as soon as it finishes, while <Y> and <Z> are still running.">
+- If presence-kit is installed, `presence-kit:afk` and `presence-kit:autonomous` set the user's presence mode and `presence-kit:recap` reports on it; modes never widen the decisions claimed above.
 
 ### Authorizations
 
