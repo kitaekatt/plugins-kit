@@ -352,7 +352,7 @@ def resolve_uninstall_entries(
         ref = ref.strip()
         tier = entry.get("tier") or ""
 
-        wanted = _wanted_installed(entry, answer_by_ref.get(ref), profile_active)
+        wanted = wanted_installed(entry, answer_by_ref.get(ref), profile_active)
         if wanted:
             actions.append(PluginAction(
                 ref, tier, ACTION_CONFLICT,
@@ -380,8 +380,13 @@ def resolve_uninstall_entries(
     return UninstallResolution(plugins=tuple(rewritten), actions=tuple(actions))
 
 
-def _wanted_installed(entry, answer, profile_active):
-    """Why the manifest wants the plugin installed, or ``""`` when it does not."""
+def wanted_installed(entry, answer, profile_active):
+    """Why the manifest wants the plugin installed, or ``""`` when it does not.
+
+    Shared by :func:`resolve_uninstall_entries` (a wanted plugin is a conflict)
+    and ``profiles.plan_switch_uninstalls`` (a wanted plugin gets no entry).
+    ``answer`` is the recorded ``{"want": bool, ...}`` for the ref, or ``None``.
+    """
     if entry.get("install") == "auto":
         return "install: auto"
     if not profile_active:

@@ -489,8 +489,9 @@ reference_skill:
         warns about the conflict. `profile apply`, `profile set` and `profile
         clear` (with or without `--all`) write these entries to the project's bootstrap.local.json
         when the selected profile changes: a plugin the old profile's chain
-        tiered `required` or `recommended` that the new selection does not list
-        at all (and the base `plugins[]` does not list) gets one, and an entry for
+        tiered `required` or `recommended` that the new selection (base `plugins[]`
+        included) does not want installed gets one (a bare `install: "manual"`
+        listing is not wanting), and an entry for
         a plugin the new profile tiers `required` or `recommended` is removed.
         There is no hidden record: the entries are the whole state, visible and
         hand-editable.

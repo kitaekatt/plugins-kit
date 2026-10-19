@@ -504,20 +504,59 @@ class TestPlanSwitchUninstalls:
         assert edit.add == (REQ, REC)
         assert edit.remove == ()
 
-    def test_a_plugin_the_new_chain_lists_in_any_tier_is_not_added(self):
+    def test_a_plugin_the_new_chain_requires_or_recommends_is_not_added(self):
         old = [tier_entry(REQ, "required"), tier_entry(REC, "recommended")]
-        new = [tier_entry(REQ, "recommended"), tier_entry(REC, "not_recommended")]
+        new = [tier_entry(REQ, "recommended"), tier_entry(REC, "required")]
         edit = self.plan(state_of("selected", "a"), old, state_of("selected", "b"), new)
         assert edit.add == ()
-        assert edit.remove == (REQ,)
+        assert edit.remove == (REQ, REC)
 
-    def test_a_base_plugin_is_never_added(self):
+    def test_a_not_recommended_plugin_is_left_to_its_own_tier_question(self):
+        # Not "wanted", but an uninstall entry would remove it without the
+        # question the tier asks, so the listing still keeps it out.
+        old = [tier_entry(REC, "recommended")]
+        new = [tier_entry(REC, "not_recommended")]
+        edit = self.plan(state_of("selected", "a"), old, state_of("selected", "b"), new)
+        assert edit.add == ()
+        assert edit.remove == ()
+
+    def test_a_recommended_plugin_the_user_declined_is_added(self):
+        old = [tier_entry(REQ, "required")]
+        new = [tier_entry(REQ, "recommended")]
+        new_state = profiles.ProfileState(
+            status="selected", selected="b",
+            plugin_answers=(profiles.PluginAnswer(ref=REQ, want=False),))
+        edit = self.plan(state_of("selected", "a"), old, new_state, new)
+        assert edit.add == (REQ,)
+
+    def test_a_base_install_auto_plugin_is_never_added(self):
         # The effective manifests both carry the base list, so a base entry the
-        # old profile ALSO tiers is still listed on the new side.
+        # old profile ALSO tiers is still wanted on the new side.
         old = [tier_entry(REQ, "required")]
         new = [{"ref": REQ, "install": "auto"}]
         edit = self.plan(state_of("selected", "a"), old, state_of("selected", "b"), new)
         assert edit.add == ()
+
+    def test_a_recommended_entry_suppresses_the_uninstall_only_with_a_profile_selected(
+            self):
+        old = [tier_entry(REQ, "required")]
+        new = [tier_entry(REQ, "recommended")]
+        edit = self.plan(state_of("selected", "a"), old, state_of("selected", "b"), new)
+        assert edit.add == ()
+        # Tiers count only while a profile is selected (as in the engine).
+        edit = self.plan(state_of("selected", "a"), old, state_of("none"), new)
+        assert edit.add == (REQ,)
+
+    @pytest.mark.parametrize("status", ["none", "unselected", "selected"])
+    def test_a_self_registered_manual_entry_does_not_suppress_the_uninstall(
+            self, status):
+        # bootstrap self-registers every dependent plugin in the user-local
+        # layer as {"ref", "install": "manual"} (no tier). That is a listing,
+        # not a want, so the old profile's plugin is still retired.
+        old = [tier_entry(REQ, "required")]
+        new = [{"ref": REQ, "install": "manual"}]
+        edit = self.plan(state_of("selected", "a"), old, state_of(status, "b"), new)
+        assert edit.add == (REQ,)
 
     @pytest.mark.parametrize("status", ["none", "unselected"])
     def test_leaving_for_none_or_unset_adds_every_old_required_or_recommended(

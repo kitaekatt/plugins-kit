@@ -1053,7 +1053,7 @@ def _switch_edit(project_dir, new_selection, kind):
     `new_selection` is a profile name, `none`, `unset` or `_REMOVE_KEY` (the
     `profile` key is deleted); `kind` is the layer
     that selection is written to. Plugins the old profile required or
-    recommended and the new effective manifest does not list at all get an
+    recommended and the new effective manifest does not want installed get an
     `uninstall: true` entry; entries for plugins the new profile requires or
     recommends are dropped (see `profiles.plan_switch_uninstalls`).
     """

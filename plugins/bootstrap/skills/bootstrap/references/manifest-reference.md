@@ -699,8 +699,13 @@ write as the selection when that file is the target:
 
 - **Written:** every plugin the OLD profile's effective chain (its `extends`
   parents included) tiers `required` or `recommended` that the NEW selection
-  does not list at all, in any tier, and that the base `plugins[]` (outside any
-  profile, local layers included) does not list. The new selection is another
+  (the base `plugins[]` included, local layers too) does not WANT installed.
+  Wanted is the conflict test below: `install: "auto"`, tier `required`, tier
+  `recommended` unless answered no (a `not_recommended` listing also keeps the
+  plugin, see the last bullet). Merely being listed is not wanting: a bare
+  `install: "manual"` entry
+  (what bootstrap self-registers in `~/.claude/bootstrap.local.json` for each
+  dependent plugin) does not keep a plugin. The new selection is another
   profile, `none` or `unset`. Re-selecting the same profile, or choosing a
   profile when none was selected, writes none.
 - **Removed:** an existing `uninstall: true` entry in that file for a plugin the

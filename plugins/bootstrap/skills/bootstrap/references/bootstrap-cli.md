@@ -206,7 +206,8 @@ command exits 1 and says to run `bootstrap run` manually.
 When the selection being applied changes this project's effective profile (another
 profile, or `none`), `set` also writes `uninstall: true` entries into
 `<project>/.claude/bootstrap.local.json` for the plugins the previous profile
-required or recommended that the selection being applied does not list, and drops the
+required or recommended that the selection being applied does not want installed (a
+bare `install: "manual"` listing does not count), and drops the
 entries for plugins the profile being switched to requires or recommends (rules:
 manifest-reference.md, "Switching profiles retires plugins"). The entries share
 the selection's atomic write when that file is the target; with `--user` (or a

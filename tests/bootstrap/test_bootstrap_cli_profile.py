@@ -1226,6 +1226,22 @@ class TestSwitchWritesUninstallEntries:
         for ref in (BASEP, SHARED, SANDBOX, ENG_ADV):
             assert ref not in out.out
 
+    def test_a_self_registered_user_layer_entry_does_not_block_the_uninstall(
+            self, switch, capsys):
+        # bootstrap self-registers each dependent plugin in ~/.claude/
+        # bootstrap.local.json as {"ref", "install": "manual"}; that listing in
+        # the merged base must not suppress the switch's uninstall entry.
+        _write_json(user_local(switch), {"plugins": [
+            {"ref": PARENT_REQ, "install": "manual"},
+            {"ref": DES_REQ, "install": "manual"}]})
+        _write_json(project_local(switch), {"profile": "designer"})
+
+        rc, _out = _apply(switch, capsys, profile="engineer")
+
+        assert rc == 0
+        refs = _uninstall_refs(switch)
+        assert PARENT_REQ in refs and DES_REQ in refs
+
     def test_apply_honors_extends_of_the_new_profile(self, switch, capsys):
         # other extends parent and recommends des-req: parent-req and des-req
         # are listed in the new chain, so only the rest is marked.

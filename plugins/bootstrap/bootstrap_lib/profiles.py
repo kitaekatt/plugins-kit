@@ -1194,16 +1194,33 @@ def plan_switch_uninstalls(old_state, old_manifest, new_state, new_manifest):
     - ``add``: when the old selection is a profile (status ``selected``) and
       the new selection is a different one, or ``none``, or ``unset``: every
       plugin the old effective manifest tiers ``required`` or ``recommended``
-      that the new effective manifest does not list at ALL, in any tier.
-      "Not listed" also keeps out anything in the base ``plugins[]``, because
-      the new effective manifest includes the base. Re-selecting the same
+      that the new effective manifest does not WANT installed. "Wanted" is the
+      engine's own test (``plugin_tiers.wanted_installed``, the one that makes
+      an ``uninstall`` entry a conflict): ``install: "auto"``, tier
+      ``required``, or tier ``recommended`` not declined, so a base entry
+      keeps a plugin out. A bare ``install: "manual"`` entry does not: bootstrap
+      self-registers every dependent plugin that way in the user layer, and
+      counting it would suppress every uninstall. A ``not_recommended`` entry
+      still keeps a plugin out: that tier's own question decides it, and an
+      entry would remove the plugin without asking. Re-selecting the same
       profile adds nothing.
     - ``remove``: whenever the new selection is a profile, every plugin it
       tiers ``required`` or ``recommended``: an earlier switch may have marked
       it, and a plugin the profile wants must not carry an uninstall entry.
     """
+    from . import plugin_tiers  # imports this module at load, so not at the top
+
     new_plugins = _plugin_entries(new_manifest)
-    new_refs = {_entry_ref(e) for e in new_plugins} - {None}
+    new_answers = answers_by_ref(new_state)
+    profile_active = new_state.status == "selected"
+    new_wanted = set()
+    for entry in new_plugins:
+        ref = _entry_ref(entry)
+        if ref and (
+                entry.get("tier") == TIER_NOT_RECOMMENDED
+                or plugin_tiers.wanted_installed(
+                    entry, new_answers.get(ref), profile_active)):
+            new_wanted.add(ref)
 
     add = []
     switched = old_state.status == "selected" and not (
@@ -1212,7 +1229,7 @@ def plan_switch_uninstalls(old_state, old_manifest, new_state, new_manifest):
     if switched:
         for entry in _plugin_entries(old_manifest):
             ref = _entry_ref(entry)
-            if (ref and ref not in new_refs
+            if (ref and ref not in new_wanted
                     and entry.get("tier") in (TIER_REQUIRED, TIER_RECOMMENDED)):
                 add.append(ref)
 
