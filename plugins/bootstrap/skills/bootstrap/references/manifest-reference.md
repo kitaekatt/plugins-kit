@@ -1306,7 +1306,11 @@ after the plugin tiers have run:
 
 - **Local record present (enabled or dormant)** -- uninstalled through `claude plugin uninstall
   --scope local`, run from the project root. A failed uninstall is a pass
-  failure and recurs next pass while the record remains.
+  failure and recurs next pass while the record remains. On Windows only, a
+  local record whose project path differs from this project only in letter case
+  (`D:\Dev\x` for `D:\dev\x`, which Claude Code keys as a separate project) is
+  removed too, each run from the record's own spelling; tiers and every other
+  scope check still match the path exactly.
 - **No registry record matching this project** -- the entry is satisfied: a
   verbose ok line, no failure, no fix-all item. Nothing is recorded; every pass
   recomputes from the installed inventory, so the entry is idempotent and can

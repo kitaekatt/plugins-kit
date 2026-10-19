@@ -195,14 +195,17 @@ class Calls:
         self.uninstalls = []
         self.results = {}            # (ref, scope) -> [LifecycleResult]
         self.dormant_asked = []      # include_dormant of each inventory read
+        self.fold_asked = []         # fold_project_case of each inventory read
 
 
 @pytest.fixture
 def world(monkeypatch):
     calls = Calls()
 
-    def fake_installs(ref, project_dir, include_dormant=False):
+    def fake_installs(ref, project_dir, include_dormant=False,
+                      fold_project_case=False):
         calls.dormant_asked.append(include_dormant)
+        calls.fold_asked.append(fold_project_case)
         found = calls.installs.get(ref, [])
         if isinstance(found, Exception):
             raise found
@@ -240,6 +243,13 @@ def run(manifest, state=NO_PROFILE, project_dir=PROJ):
 
 class TestEngineStep:
 
+    def test_the_tier_inventory_matches_project_paths_exactly_by_default(self, world):
+        world.installs[OLD] = [local_install()]
+
+        engine._plugin_tier_inventory([OLD], PROJ)
+
+        assert world.fold_asked == [False]
+
     def test_a_manifest_without_uninstall_entries_is_returned_untouched(self, world):
         manifest = {"plugins": [{"ref": REQ, "install": "auto"}]}
         new, failures, action, ok, quiet = run(manifest)
@@ -263,6 +273,7 @@ class TestEngineStep:
 
         assert failures == [] and ok == []
         assert world.dormant_asked == [True]
+        assert world.fold_asked == [True]
         assert world.uninstalls == [(OLD, ["local"], PROJ)]
         assert any("uninstalled at local scope (uninstall: true)" in l for l in action)
 

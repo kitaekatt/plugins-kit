@@ -83,7 +83,8 @@ def world(monkeypatch):
     calls.installs = {}          # ref -> [Install] (or an Exception to raise)
     calls.uninstall_results = {}  # (ref, scope) -> [LifecycleResult]
 
-    def fake_installs(ref, project_dir, include_dormant=False):
+    def fake_installs(ref, project_dir, include_dormant=False,
+                      fold_project_case=False):
         calls.inventory.append((ref, project_dir))
         found = calls.installs.get(ref, [])
         if isinstance(found, Exception):

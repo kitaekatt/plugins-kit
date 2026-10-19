@@ -1764,6 +1764,50 @@ class TestPluginInstalls(_InventoryFixture):
         assert [i.version for i in installs] == ["msys", "lower-drive", "slashes"]
         assert {i.project_path for i in installs} == {"D:/dev/x"}
 
+    def _case_registry(self, home):
+        path = self.install_dir(home, "a")
+        self.write_registry(home, {self.CLI_REF: [
+            {"scope": "local", "projectPath": "D:/Dev/x", "installPath": path, "version": "case"},
+            {"scope": "local", "projectPath": "D:\\dev\\x", "installPath": path, "version": "exact"},
+            {"scope": "local", "projectPath": "D:/dev/xy", "installPath": path, "version": "prefix"},
+            {"scope": "local", "projectPath": "D:/dev", "installPath": path, "version": "parent"},
+            {"scope": "local", "projectPath": "D:/other/x", "installPath": path, "version": "other"},
+            {"scope": "project", "projectPath": "D:/Dev/x", "installPath": path, "version": "project"},
+            {"scope": "user", "projectPath": "D:/Dev/x", "installPath": path, "version": "chimera"},
+        ]})
+
+    def test_fold_project_case_keeps_a_case_differing_local_record_on_win32(
+            self, env, monkeypatch):
+        home, _project = env
+        monkeypatch.setattr(sys, "platform", "win32")
+        self._case_registry(home)
+
+        installs = plugin_installs(
+            self.REF, "D:\\dev\\x", include_dormant=True, fold_project_case=True)
+
+        assert [(i.version, i.record_cwd) for i in installs] == [
+            ("case", "D:/Dev/x"), ("exact", "")]
+
+    def test_fold_project_case_is_ignored_off_win32(self, env, monkeypatch):
+        home, _project = env
+        monkeypatch.setattr(sys, "platform", "linux")
+        self._case_registry(home)
+
+        installs = plugin_installs(
+            self.REF, "D:\\dev\\x", include_dormant=True, fold_project_case=True)
+
+        assert [(i.version, i.record_cwd) for i in installs] == [("exact", "")]
+
+    def test_matching_is_exact_on_win32_unless_folding_is_asked_for(
+            self, env, monkeypatch):
+        home, _project = env
+        monkeypatch.setattr(sys, "platform", "win32")
+        self._case_registry(home)
+
+        installs = plugin_installs(self.REF, "D:\\dev\\x", include_dormant=True)
+
+        assert [i.version for i in installs] == ["exact"]
+
     def test_both_registry_key_forms_are_read(self, env):
         home, project = env
         path = self.install_dir(home, "a")
@@ -1900,6 +1944,18 @@ class TestUninstallPlugin(_InventoryFixture):
 
         assert run.call_count == 1
         assert all(r.passed for r in results) and len(results) == 1
+
+    def test_case_differing_local_record_is_uninstalled_from_its_own_spelling(self, env):
+        home, project = env
+        path = self.install_dir(home, "a")
+        installs = [
+            Install("local", "D:/dev/x", path, "registry"),
+            Install("local", "D:/Dev/x", path, "registry", record_cwd="D:/Dev/x"),
+        ]
+        with self._patched() as run:
+            results = uninstall_installs(self.REF, installs, "D:/dev/x")
+        assert [c.kwargs["cwd"] for c in run.call_args_list] == ["D:/dev/x", "D:/Dev/x"]
+        assert len(results) == 2 and all(r.passed for r in results)
 
     def test_user_and_local_installs_are_two_uninstalls(self, env):
         home, project = env

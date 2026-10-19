@@ -844,6 +844,11 @@ class Install:
       version      The record's version ("" when unknown).
       dormant      True for a registry record that no settings file of its own
                    scope enables. plugin_installs omits these unless asked.
+      record_cwd   The record's own projectPath spelling, set only for a local
+                   record that plugin_installs matched case-insensitively
+                   (fold_project_case) and whose spelling differs from the
+                   project's; "" otherwise. It is the directory an uninstall
+                   must run in: see uninstall_installs.
 
     ``mutation_key`` is what an uninstall changes: ``(scope, project_path)``
     for project and local, ``("user", "")`` for user (a user uninstall has no
@@ -856,6 +861,7 @@ class Install:
     source: str
     version: str = ""
     dormant: bool = False
+    record_cwd: str = ""
 
     @property
     def mutation_key(self) -> tuple:
@@ -918,7 +924,8 @@ def _registry_records_for(plugin_ref: str, home: str) -> list:
 
 
 def plugin_installs(
-    plugin_ref: str, project_dir: Optional[str], include_dormant: bool = False
+    plugin_ref: str, project_dir: Optional[str], include_dormant: bool = False,
+    fold_project_case: bool = False,
 ) -> list:
     """Every usable install of a plugin that applies to this project.
 
@@ -933,6 +940,13 @@ def plugin_installs(
       * (unless include_dormant) no settings file of its own scope enables the
         plugin: a registry record nothing enables is "dormant", not installed.
 
+    ``fold_project_case`` is for an uninstall and takes effect on win32 only:
+    a LOCAL record whose projectPath differs from this project only in letter
+    case is then kept, with ``record_cwd`` set to its own spelling. Claude
+    Code keys local installs by exact projectPath text, but on Windows the
+    two spellings name one directory, so the record is this project's
+    leftover. Every other comparison, and every other platform, stays exact.
+
     When the registry holds no record for the ref at all (registry v2 with an
     empty "plugins" map), the plugin cache is scanned instead and one Install
     is returned per settings file that enables the plugin, ordered local,
@@ -944,6 +958,7 @@ def plugin_installs(
     cli_ref = _to_cli_ref(plugin_ref)
     home = _home()
     project = norm_project_path(project_dir) if project_dir else None
+    fold_case = fold_project_case and sys.platform == "win32"
     enabled = _enabling_scopes(cli_ref, home, project_dir)
     records = _registry_records_for(plugin_ref, home)
 
@@ -956,17 +971,22 @@ def plugin_installs(
         if not os.path.isdir(install_path):
             continue
         record_project = norm_project_path(record["projectPath"]) if record.get("projectPath") else ""
+        record_cwd = ""
         if scope == "user":
             if record_project and record_project != project:
                 continue
         elif not record_project or record_project != project:
-            continue
+            if not (fold_case and scope == "local" and project is not None
+                    and record_project.casefold() == project.casefold()):
+                continue
+            record_cwd = record["projectPath"]
         dormant = not enabled.get(scope, False)
         if dormant and not include_dormant:
             continue
         installs.append(Install(
             scope=scope, project_path=record_project, install_path=install_path,
             source="registry", version=str(record.get("version") or ""), dormant=dormant,
+            record_cwd=record_cwd,
         ))
     if records:
         return installs
@@ -1072,7 +1092,10 @@ def uninstall_installs(
 
     Installs sharing a ``mutation_key`` are one uninstall: a chimera user
     record plus a normal user record, or two local records for this project,
-    run a single command. Returns one LifecycleResult per key, in first-seen
+    run a single command. A local Install with ``record_cwd`` runs in that
+    directory instead of ``project_dir``: the CLI finds a local record by the
+    exact text of its working directory, so only the record's own spelling
+    reaches it. Returns one LifecycleResult per key, in first-seen
     order; the plugin is gone when all of them passed. A project-scope Install
     raises ValueError (see uninstall_plugin) -- the caller lists it as
     unsatisfied instead of passing it here.
@@ -1091,7 +1114,8 @@ def uninstall_installs(
         if key in seen:
             continue
         seen.add(key)
-        results.append(uninstall_plugin(plugin_ref, install.scope, project_dir))
+        results.append(uninstall_plugin(
+            plugin_ref, install.scope, install.record_cwd or project_dir))
     return results
 
 

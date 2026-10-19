@@ -3093,7 +3093,8 @@ def _with_plugins(manifest, plugins, replacements):
     return out
 
 
-def _plugin_tier_inventory(refs, project_dir, include_dormant=False):
+def _plugin_tier_inventory(refs, project_dir, include_dormant=False,
+                           fold_project_case=False):
     """``({ref: [Install]}, {ref: error text})`` for every ref.
 
     One ref's unreadable inventory (``InventoryError``) is recorded against
@@ -3101,7 +3102,9 @@ def _plugin_tier_inventory(refs, project_dir, include_dormant=False):
 
     Dormant records (registered, enabled in no settings file of their scope) are
     left out by default: a tier asks about plugins that load. ``uninstall: true``
-    entries pass ``include_dormant`` because they remove registry records.
+    entries pass ``include_dormant`` because they remove registry records, and
+    ``fold_project_case`` so that on win32 a local record spelled with different
+    letter case (a second project key for Claude Code) is removed too.
     """
     from .marketplace_lifecycle import InventoryError, plugin_installs
 
@@ -3109,7 +3112,8 @@ def _plugin_tier_inventory(refs, project_dir, include_dormant=False):
     for ref in refs:
         try:
             installs[ref] = list(plugin_installs(
-                ref, project_dir, include_dormant=include_dormant))
+                ref, project_dir, include_dormant=include_dormant,
+                fold_project_case=fold_project_case))
         except InventoryError as exc:
             errors[ref] = str(exc)
     return installs, errors
@@ -3344,9 +3348,10 @@ def _process_plugin_uninstall_entries(manifest, profile_state, project_dir,
     entries precisely so that they outlive the profile that is gone.
 
     - The plugin's LOCAL-scope install for this project is uninstalled, a
-      dormant record (registered, enabled nowhere) included. No registry record
-      for this project means satisfied: one verbose ok line, no failure, no
-      fix-all.
+      dormant record (registered, enabled nowhere) included; on win32 so is a
+      local record whose projectPath differs only in letter case, run from the
+      record's own spelling. No registry record for this project means
+      satisfied: one verbose ok line, no failure, no fix-all.
     - A user- or project-scope record (dormant or not) is never touched; it is
       a one-line notice every pass until the inventory agrees.
     - A plugin the rest of the manifest wants installed is a conflict: nothing
@@ -3383,7 +3388,7 @@ def _process_plugin_uninstall_entries(manifest, profile_state, project_dir,
         if isinstance(ref, str) and ref.strip() and ref.strip() not in refs:
             refs.append(ref.strip())
     installs_by_ref, inventory_errors = _plugin_tier_inventory(
-        refs, project_dir, include_dormant=True)
+        refs, project_dir, include_dormant=True, fold_project_case=True)
 
     resolver_index = list(marked)
     replacements = {}
