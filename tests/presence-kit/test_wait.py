@@ -4,6 +4,7 @@ The clock is fake: each poll's sleep advances it and may change the file, so eve
 outcome follows from file state, not from wall-clock timing.
 """
 import importlib.util
+import os
 from pathlib import Path
 
 import pytest
@@ -43,10 +44,11 @@ class _Buf:
         pass
 
 
-def run(argv, clock=None):
+def run(argv, clock=None, wall=None):
     clock = clock or FakeClock()
     out, err = _Buf(), _Buf()
-    code = wait.main(argv, now=clock.now, sleep=clock.sleep, stdout=out, stderr=err)
+    kwargs = {} if wall is None else {"wall": wall}
+    code = wait.main(argv, now=clock.now, sleep=clock.sleep, stdout=out, stderr=err, **kwargs)
     return code, out.text, err.text, clock
 
 
@@ -229,3 +231,59 @@ def test_bad_arguments_exit_2_without_polling(argv):
     assert out == ""
     assert err.startswith("bad arguments: ")
     assert clock.sleeps == 0
+
+
+def test_file_pattern_anchors_match_at_line_boundaries(tmp_path):
+    # Defect: the pattern was searched without re.MULTILINE, so ^ and $ only
+    # anchored at the start and end of the whole file.
+    log = tmp_path / "job.log"
+    log.write_text("starting\nworking\nexit 0\n", encoding="utf-8")
+    code, out, _, clock = run(
+        ["--file", str(log), "--pattern", r"^exit [0-9]+$", "--stall-minutes", "10"]
+    )
+    assert code == 0
+    assert out == "exit 0\n"
+    assert clock.sleeps == 0
+
+
+def test_file_pattern_caret_matches_a_middle_line(tmp_path):
+    log = tmp_path / "job.log"
+    log.write_text("boot\nexit 3\ntrailing noise\n", encoding="utf-8")
+    code, out, _, _ = run(["--file", str(log), "--pattern", r"^exit [0-9]+", "--stall-minutes", "10"])
+    assert code == 0
+    assert out == "exit 3\n"
+
+
+@pytest.mark.parametrize("mode", ["output", "file"])
+def test_file_quiet_before_the_slice_stalls_on_the_first_poll(tmp_path, mode):
+    # Defect: staleness was measured from process start, so with the stall window
+    # (10 min) longer than the slice (60 s) a quiet file returned "slice over"
+    # on every invocation and never stalled. Both modes share the loop.
+    job = tmp_path / "job.out"
+    job.write_text("finished, no trailer\n", encoding="utf-8")
+    mtime = 1_000_000.0
+    os.utime(job, (mtime, mtime))
+    wall = lambda: mtime + 3600.0
+    if mode == "output":
+        argv = ["--output", str(job)]
+    else:
+        argv = ["--file", str(job), "--pattern", r"^never$"]
+    argv += ["--stall-minutes", "10", "--slice-seconds", "60", "--poll-seconds", "1"]
+    code, out, _, clock = run(argv, wall=wall)
+    assert code == 3
+    assert out == f"stalled: no change in {job} for 10 minutes\n"
+    assert clock.sleeps == 0
+
+
+def test_recently_written_file_does_not_stall_across_slices(tmp_path):
+    job = tmp_path / "job.out"
+    job.write_text("alive\n", encoding="utf-8")
+    mtime = 1_000_000.0
+    os.utime(job, (mtime, mtime))
+    wall = lambda: mtime + 120.0  # 2 minutes old, window is 10
+    code, out, _, clock = run(
+        ["--output", str(job), "--stall-minutes", "10", "--slice-seconds", "5", "--poll-seconds", "1"],
+        wall=wall,
+    )
+    assert code == 4
+    assert out == f"slice over: {job} still live\n"

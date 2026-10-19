@@ -13,7 +13,7 @@ def _load(rel: str) -> dict:
 def test_plugin_json_shape():
     manifest = _load(".claude-plugin/plugin.json")
     assert manifest["name"] == "presence-kit"
-    assert manifest["version"] == "0.3.2"
+    assert manifest["version"] == "0.3.3"
     assert manifest["dependencies"] == ["bootstrap"]
     assert manifest["description"].strip()
 

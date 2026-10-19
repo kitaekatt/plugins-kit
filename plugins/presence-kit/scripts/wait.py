@@ -6,8 +6,11 @@ Usage:
 
 Exit codes:
   0  done: --output mode, the last non-empty line is "[exited with code N]";
-     --file mode, REGEX matches the file. Prints that line.
-  3  stalled: no size or mtime change for N minutes.
+     --file mode, REGEX matches a line of the file (^ and $ anchor at line ends).
+     Prints that line.
+  3  stalled: no size or mtime change for N minutes. Staleness is measured from the
+     file's own mtime against the wall clock, so a file already quiet for N minutes
+     when a slice starts stalls on the first poll instead of after N more minutes.
   4  slice over: S seconds elapsed, still live. Run again.
   2  bad arguments, or the file never appears within N minutes.
 
@@ -63,7 +66,7 @@ def _parse(argv):
         raise _BadArguments("--pattern goes with --file only")
     if args.pattern is not None:
         try:
-            args.regex = re.compile(args.pattern)
+            args.regex = re.compile(args.pattern, re.MULTILINE)
         except re.error as exc:
             raise _BadArguments(f"invalid --pattern: {exc}")
     return args
@@ -79,14 +82,14 @@ def last_nonempty_line(text):
 
 
 def _snapshot(path):
-    """Return (text, signature) for the file, or None when it does not exist."""
+    """Return (text, signature, mtime) for the file, or None when it does not exist."""
     try:
         st = os.stat(path)
         with open(path, "rb") as handle:
             data = handle.read()
     except FileNotFoundError:
         return None
-    return data.decode("utf-8", errors="replace"), (st.st_size, st.st_mtime_ns)
+    return data.decode("utf-8", errors="replace"), (st.st_size, st.st_mtime_ns), st.st_mtime
 
 
 def _match_line(args, text):
@@ -110,7 +113,7 @@ def _fmt(number):
     return f"{number:g}"
 
 
-def main(argv=None, *, now=time.monotonic, sleep=time.sleep, stdout=None, stderr=None):
+def main(argv=None, *, now=time.monotonic, sleep=time.sleep, wall=time.time, stdout=None, stderr=None):
     out = stdout if stdout is not None else sys.stdout
     err = stderr if stderr is not None else sys.stderr
     try:
@@ -133,14 +136,17 @@ def main(argv=None, *, now=time.monotonic, sleep=time.sleep, stdout=None, stderr
                 print(f"no file {path} within {_fmt(args.stall_minutes)} minutes", file=err)
                 return 2
         else:
-            text, sig = snap
+            text, sig, mtime = snap
             line = _match_line(args, text)
             if line is not None:
                 print(line, file=out)
                 return 0
             if sig != last_sig:
                 last_sig = sig
-                last_change = t
+                # The change happened at the file's mtime, not when this process
+                # first looked: age it by the wall clock so staleness carries
+                # across slices (a future mtime counts as a change just now).
+                last_change = t - max(0.0, wall() - mtime)
             if t - last_change >= window:
                 print(f"stalled: no change in {path} for {_fmt(args.stall_minutes)} minutes", file=out)
                 return 3
