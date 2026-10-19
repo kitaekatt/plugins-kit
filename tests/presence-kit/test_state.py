@@ -201,14 +201,14 @@ def test_default_state_shape_and_key_order():
     doc = ps.default_state()
     assert list(doc) == [
         "version", "presence", "afk_since", "afk_prompt", "goal", "goal_since", "recaps",
-        "nudges", "greeted", "unresolved", "pending_return", "notices",
+        "nudges", "greeted", "unresolved", "pending_return", "notices", "cron_prompts",
     ]
     assert doc == {
-        "version": 2, "presence": "present", "afk_since": None, "afk_prompt": None,
+        "version": 3, "presence": "present", "afk_since": None, "afk_prompt": None,
         "goal": None, "goal_since": None, "recaps": {}, "nudges": {}, "greeted": False,
-        "unresolved": [], "pending_return": None, "notices": [],
+        "unresolved": [], "pending_return": None, "notices": [], "cron_prompts": [],
     }
-    assert ps.SCHEMA_VERSION == 2 and ps.KEEP_PROMPTS == 20
+    assert ps.SCHEMA_VERSION == 3 and ps.KEEP_PROMPTS == 20
     assert ps.default_state() is not ps.default_state()
 
 
@@ -349,7 +349,13 @@ BAD_FILES = {
     "root-null": "null",
     "missing-key": _without("notices"),
     "extra-key": _mut(color="red"),
-    "version-3": _mut(version=3),
+    "version-4": _mut(version=4),
+    "version-2-with-the-v3-keys": _mut(version=2),
+    "v3-missing-cron-prompts": _without("cron_prompts"),
+    "cron-prompts-string": _mut(cron_prompts="a"),
+    "cron-prompts-number-entry": _mut(cron_prompts=[5]),
+    "cron-prompts-empty-entry": _mut(cron_prompts=[""]),
+    "cron-prompts-unstripped-entry": _mut(cron_prompts=[" a "]),
     "version-0": _mut(version=0),
     "version-1-with-the-v2-keys": _mut(version=1),
     "v2-missing-afk-prompt": _without("afk_prompt"),
@@ -414,7 +420,7 @@ def test_valid_document_with_timestamps_and_markers_loads(base, env):
     assert doc["presence"] == "afk" and doc["nudges"] == {"p1": 2}
 
 
-# ----------------------------------------------------- v1 -> v2 upgrade (0.2.x files)
+# --------------------------------------- v1 / v2 -> v3 upgrade (0.2.x and 0.3.0-0.3.1 files)
 
 V1_DOC = {
     "version": 1, "presence": "afk", "afk_since": S0, "goal": "ship", "goal_since": S1,
@@ -430,7 +436,7 @@ def write_raw(base, text, sid=SID):
     return path
 
 
-def test_v1_file_is_upgraded_in_memory_and_written_as_v2_on_disk(base, env, monkeypatch):
+def test_v1_file_is_upgraded_in_memory_and_written_as_v3_on_disk(base, env, monkeypatch):
     path = write_raw(base, json.dumps(V1_DOC))
     seen = []
     real = os.replace
@@ -441,10 +447,10 @@ def test_v1_file_is_upgraded_in_memory_and_written_as_v2_on_disk(base, env, monk
 
     monkeypatch.setattr(os, "replace", spy)
     doc = ps.load(SID, env)
-    expected = dict(V1_DOC, version=2, afk_prompt=None)
+    expected = dict(V1_DOC, version=3, afk_prompt=None, cron_prompts=[])
     assert doc == expected
     assert list(doc) == list(ps.default_state())
-    # the v2 file landed by atomic rename of a complete temp, not by an in-place edit
+    # the v3 file landed by atomic rename of a complete temp, not by an in-place edit
     assert [(src, dst) for src, dst, _ in seen] == [(f"{SID}.json.tmp{os.getpid()}", f"{SID}.json")]
     assert seen[0][2] == expected
     on_disk = json.loads(path.read_text(encoding="utf-8"))
@@ -452,13 +458,13 @@ def test_v1_file_is_upgraded_in_memory_and_written_as_v2_on_disk(base, env, monk
     assert sorted(p.name for p in path.parent.iterdir()) == [f"{SID}.json", f"{SID}.lock"]
 
 
-def test_v1_upgrade_happens_once_and_every_reader_sees_v2(base, env, monkeypatch):
+def test_v1_upgrade_happens_once_and_every_reader_sees_v3(base, env, monkeypatch):
     path = write_raw(base, json.dumps(V1_DOC))
-    assert ps.state_get(SID, env)["state"]["version"] == 2
+    assert ps.state_get(SID, env)["state"]["version"] == 3
     after_first = path.read_bytes()
     writes = count_writes(monkeypatch)
     assert ps.load(SID, env)["afk_prompt"] is None
-    assert ps.update(SID, lambda d: None, env)["version"] == 2
+    assert ps.update(SID, lambda d: None, env)["version"] == 3
     assert writes == [] and path.read_bytes() == after_first
 
 
@@ -466,7 +472,7 @@ def test_v1_file_through_update_applies_the_change_on_top_of_the_upgrade(base, e
     path = write_raw(base, json.dumps(V1_DOC))
     seen = []
     new = ps.update(SID, lambda d: (seen.append(d["version"]), d.update(greeted=False))[0], env)
-    assert seen == [2] and new["greeted"] is False and new["afk_prompt"] is None
+    assert seen == [3] and new["greeted"] is False and new["afk_prompt"] is None
     assert json.loads(path.read_text(encoding="utf-8")) == new
 
 
@@ -482,6 +488,7 @@ V1_BAD = {
     "v2-keys-with-v1-version": dict(V1_DOC, afk_prompt=None),
     "v2-missing-afk-prompt": dict(V1_DOC, version=2),
     "v2-extra-key": dict(V1_DOC, version=2, afk_prompt=None, color="red"),
+    "v3-keys-with-v1-version": dict(V1_DOC, afk_prompt=None, cron_prompts=[]),
 }
 
 
@@ -502,12 +509,64 @@ def test_only_an_exact_valid_v1_file_is_upgraded(name, base, env):
     assert sorted(p.name for p in path.parent.iterdir()) == [f"{SID}.json", f"{SID}.lock"]
 
 
-def test_a_v2_file_is_read_as_is_and_not_rewritten(base, env, monkeypatch):
-    path = write_raw(base, json.dumps(dict(V1_DOC, version=2, afk_prompt="p9")))
+def test_a_v3_file_is_read_as_is_and_not_rewritten(base, env, monkeypatch):
+    path = write_raw(base, json.dumps(dict(V2_DOC, version=3, cron_prompts=["tick"])))
     before = path.read_bytes()
     writes = count_writes(monkeypatch)
-    assert ps.load(SID, env)["afk_prompt"] == "p9"
+    doc = ps.load(SID, env)
+    assert doc["afk_prompt"] == "p9" and doc["cron_prompts"] == ["tick"]
     assert writes == [] and path.read_bytes() == before
+
+
+V2_DOC = dict(V1_DOC, version=2, afk_prompt="p9")
+
+
+def test_v2_file_is_upgraded_to_v3_with_empty_cron_prompts(base, env):
+    path = write_raw(base, json.dumps(V2_DOC))
+    doc = ps.load(SID, env)
+    expected = dict(V2_DOC, version=3, cron_prompts=[])
+    assert doc == expected and list(doc) == list(ps.default_state())
+    assert json.loads(path.read_text(encoding="utf-8")) == expected
+    assert sorted(p.name for p in path.parent.iterdir()) == [f"{SID}.json", f"{SID}.lock"]
+
+
+def test_v2_upgrade_happens_once(base, env, monkeypatch):
+    path = write_raw(base, json.dumps(V2_DOC))
+    ps.load(SID, env)
+    after_first = path.read_bytes()
+    writes = count_writes(monkeypatch)
+    assert ps.update(SID, lambda d: None, env)["version"] == 3
+    assert writes == [] and path.read_bytes() == after_first
+
+
+V2_BAD = {
+    "v2-bad-presence": dict(V2_DOC, presence="asleep"),
+    "v2-bad-afk-prompt": dict(V2_DOC, afk_prompt="a b"),
+    "v2-bool-version": dict(V2_DOC, version=True),
+    "v2-extra-key": dict(V2_DOC, color="red"),
+    "v2-missing-key": {k: v for k, v in V2_DOC.items() if k != "notices"},
+    "v3-keys-with-v2-version": dict(V2_DOC, cron_prompts=[]),
+}
+
+
+@pytest.mark.parametrize("name", sorted(V2_BAD))
+def test_only_an_exact_valid_v2_file_is_upgraded(name, base, env):
+    text = json.dumps(V2_BAD[name])
+    path = write_raw(base, text)
+    with pytest.raises(ps.StateError) as err:
+        ps.load(SID, env)
+    assert err.value.kind == "malformed"
+    assert path.read_text(encoding="utf-8") == text
+
+
+def test_set_cron_prompts_strips_drops_blanks_and_dedups_and_replaces():
+    doc = ps.default_state()
+    ps.set_cron_prompts(doc, ["  a ", "", "b", "a", "   "])
+    assert doc["cron_prompts"] == ["a", "b"]
+    ps.set_cron_prompts(doc, ["c"])
+    assert doc["cron_prompts"] == ["c"]
+    ps.set_cron_prompts(doc, [])
+    assert doc["cron_prompts"] == []
 
 
 # -------------------------------------------------------------------------- locking

@@ -324,6 +324,76 @@ def test_the_prefix_exclusion_applies_only_at_the_start(w):
     assert w.state()["presence"] == "afk"
 
 
+_CRON_BARE = "Check the build and report. I am going afk."
+_CRON_WAKEUP = "/loop " + _CRON_BARE
+
+
+def record_crons(w, *prompts):
+    ps.update(SID, lambda doc: ps.set_cron_prompts(doc, list(prompts)), w.env)
+
+
+@pytest.mark.parametrize("prompt", [
+    _CRON_BARE,                  # fixed-interval firing: the bare cron prompt
+    _CRON_WAKEUP,                # dynamic /loop wakeup
+    "  " + _CRON_BARE + "\n",    # surrounding whitespace
+])
+def test_a_recorded_cron_prompt_is_never_a_departure(w, prompt):
+    """Captured on Claude Code 2.1.304: a firing's payload has no origin field."""
+    record_crons(w, _CRON_BARE, _CRON_WAKEUP)
+    out = w.evaluate(prompt)
+    assert context(out) is None
+    assert w.state()["presence"] == "present"
+    assert w.state()["afk_prompt"] is None
+
+
+@pytest.mark.parametrize("prompt", [
+    "afk",
+    _CRON_BARE + " Also, going afk now.",       # the cron text plus more is not the cron
+    "please " + _CRON_BARE,
+    "/loop 5m " + _CRON_BARE,                    # the user typing the /loop command
+])
+def test_a_departure_prompt_that_is_not_a_cron_prompt_still_departs(w, prompt):
+    record_crons(w, _CRON_BARE, _CRON_WAKEUP)
+    out = w.evaluate(prompt)
+    assert w.state()["presence"] == "afk"
+    assert "set the user afk" in context(out)
+
+
+def test_the_same_text_departs_when_no_cron_is_recorded(w):
+    """The gap is documented: a cron fired before any Stop is not recorded yet."""
+    out = w.evaluate(_CRON_BARE)
+    assert w.state()["presence"] == "afk"
+    assert "set the user afk" in context(out)
+
+
+def test_a_cron_firing_while_afk_neither_keeps_afk_nor_moves_afk_prompt(w):
+    w.go_afk(afk_prompt="old-prompt")
+    record_crons(w, _CRON_BARE)
+    out = w.evaluate(_CRON_BARE)
+    assert w.state()["afk_prompt"] == "old-prompt"
+    assert "kept the user afk" not in context(out)
+    assert line_P1(SINCE) in context(out)
+
+
+def test_a_deleted_cron_stops_being_excluded(w):
+    """End to end: Stop records the crons, then the prompt hook reads them."""
+    import presence_stop as pstop
+
+    stop_payload = {
+        "session_id": SID, "transcript_path": "<none>", "cwd": "<SCRATCH>", "prompt_id": PID,
+        "hook_event_name": "Stop", "stop_hook_active": False, "last_assistant_message": "DONE",
+        "background_tasks": [],
+        "session_crons": [{"id": "c1", "schedule": "*/5 * * * *", "recurring": True,
+                           "prompt": _CRON_BARE}],
+    }
+    pstop.evaluate(stop_payload, w.cfg(), w.env, NOW)
+    assert context(w.evaluate(_CRON_BARE, pid="p-fire")) is None
+    assert w.state()["presence"] == "present"
+    pstop.evaluate(dict(stop_payload, session_crons=[]), w.cfg(), w.env, NOW)
+    w.evaluate(_CRON_BARE, pid="p-after-delete")
+    assert w.state()["presence"] == "afk"
+
+
 # ===================================================== already afk (ruling 19)
 
 def test_departure_word_while_afk_keeps_afk(w):

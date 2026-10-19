@@ -19,7 +19,9 @@ from typing import Any, NamedTuple
 
 import presence_state
 
-KNOWN_ORIGINS = ("human", "task_notification", "peer", "sdk")
+# Every value but `human` is non-human. `scheduled` is a /loop or cron firing
+# (observed on Claude Code 2.1.304: `promptSource: "system"`, `isMeta: true`).
+KNOWN_ORIGINS = ("human", "task_notification", "peer", "sdk", "scheduled")
 HUMAN = "human"
 
 # Row-2 causes (contracts.md section 6).

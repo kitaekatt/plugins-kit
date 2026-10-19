@@ -128,6 +128,27 @@ def _notice_lines(doc: dict, pid: str, causes: list[str]) -> list[str]:
     return lines
 
 
+def _record_cron_prompts(doc: dict, cfg: pc.Config, crons: list | None) -> None:
+    """Record the live session crons' prompts for the prompt hook's exclusion.
+
+    A cron or /loop firing reaches the prompt hook as its bare prompt (a dynamic
+    wakeup as `/loop ...`) with no origin field, so the hook matches the prompt
+    against this list. The list is replaced each Stop, so a deleted cron drops
+    out. An absent or malformed `session_crons` says nothing about the crons
+    (row 2 reports it), so the list is left as it was.
+    """
+    if crons is None or not cfg.enabled("afk-on-departure"):
+        return
+    ps.set_cron_prompts(
+        doc,
+        [
+            cron["prompt"]
+            for cron in crons
+            if isinstance(cron, dict) and isinstance(cron.get("prompt"), str)
+        ],
+    )
+
+
 def _quiet_afk(
     doc: dict, cfg: pc.Config, now: datetime, entry: pt.Entry | None, human: pt.Entry | None
 ) -> None:
@@ -257,6 +278,7 @@ def evaluate(payload: dict, cfg: pc.Config, env: Mapping[str, str], now: datetim
 
     def apply(doc: dict) -> None:
         messages = _notice_lines(doc, pid, causes)
+        _record_cron_prompts(doc, cfg, crons)
         _quiet_afk(doc, cfg, now, entry, human)
         _user_returned(doc, cfg, pid, entry, state_file)
         held = _held_codes(doc, cfg, pid, tasks, crons, last_message)

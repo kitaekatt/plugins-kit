@@ -36,7 +36,9 @@ import presence_state as ps
 # message). The inter-agent envelope may be preceded by the harness's one-line
 # "Another Claude session sent a message:" header (the transcript record has it; the
 # queued prompt does not), so AGENT_MESSAGE_RE accepts both. Where a source has no
-# reliable marker (a /loop or cron prompt), P3's correction clause is the fallback.
+# reliable marker, P3's correction clause is the fallback. A /loop or cron firing has no
+# marker either, so the Stop hook records the live session crons' prompts in the state
+# (`cron_prompts`) and a prompt that exactly equals one is skipped too (`_cron_firing`).
 NOT_THE_USER_PREFIXES = ("/presence-kit:", "<task-notification>")
 AGENT_MESSAGE_RE = re.compile(
     r'(?:Another Claude session sent a message:\s*)?<agent-message from="'
@@ -47,6 +49,13 @@ def _not_the_user(prompt: str) -> bool:
     """True for a prompt that is a known envelope, not the user's own message."""
     text = prompt.lstrip()
     return text.startswith(NOT_THE_USER_PREFIXES) or AGENT_MESSAGE_RE.match(text) is not None
+
+
+def _cron_firing(prompt: str, doc: dict) -> bool:
+    """True when `prompt` (stripped) exactly equals a prompt the Stop hook recorded from
+    the session's crons: a fixed-interval firing is the bare cron prompt, a dynamic
+    /loop wakeup is the cron's own `/loop ...` prompt."""
+    return prompt.strip() in doc["cron_prompts"]
 
 
 @dataclass(frozen=True)
@@ -78,11 +87,11 @@ def config_error_output(err: pc.ConfigError, payload: dict) -> PromptOutput:
     )
 
 
-def _departure_word(cfg: pc.Config, prompt: str) -> str | None:
+def _departure_word(cfg: pc.Config, prompt: str, doc: dict) -> str | None:
     """The matched departure word, or None (off, an excluded prompt kind, or no match)."""
     if not cfg.enabled("afk-on-departure"):
         return None
-    if _not_the_user(prompt):
+    if _not_the_user(prompt) or _cron_firing(prompt, doc):
         return None
     found = pc.departure_pattern(cfg.values["departure_words"]).search(prompt)
     return None if found is None else found.group(0)
@@ -124,13 +133,13 @@ def evaluate(
     prompt = payload.get("prompt")
     if not isinstance(prompt, str):
         prompt = ""
-    word = _departure_word(cfg, prompt)
     state_file = str(ps.state_path(sid, env))
 
     out: list[PromptOutput] = []
 
     def apply(doc: dict) -> None:
         lines: list[str] = []
+        word = _departure_word(cfg, prompt, doc)
         if word is not None:
             kept = doc["presence"] == "afk"
             ps.enter_afk(doc, ps.format_timestamp(now), prompt=pid)

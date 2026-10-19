@@ -47,9 +47,13 @@ The user is `present` or `afk`.
   not the user's own message, run `state set present` (section Commands) and
   tell the user once in one line. The hook skips a prompt that starts with
   `/presence-kit:`, `<task-notification>` or `<agent-message from=` (a subagent
-  report or another session's message); any other automatic prompt (a `/loop`
-  or cron prompt) carries no marker it can read, so your correction is the
-  safeguard there. A skip says nothing about who sent the prompt.
+  report or another session's message). It also skips a prompt that exactly
+  equals (after trimming) the prompt of a live session cron or `/loop`, which
+  the Stop hook records after each turn. Two gaps remain: a cron created and
+  fired before any Stop is not recorded yet, and a user typing a cron's exact
+  prompt is treated as automatic. Any other automatic prompt carries no marker
+  the hook can read, so your correction is the safeguard there. A skip says
+  nothing about who sent the prompt.
 - Already afk, a prompt with a listed word keeps the user afk: the line begins
   "kept the user afk" and no return recap is asked for that prompt. If that is
   wrong, because the user is back and only mentions the word, undo it the same

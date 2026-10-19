@@ -226,8 +226,24 @@ def write_lines(path, lines):
     return str(path)
 
 
-def test_known_origins_are_the_four_contract_values():
-    assert pt.KNOWN_ORIGINS == ("human", "task_notification", "peer", "sdk")
+def test_known_origins_are_the_contract_values_plus_scheduled():
+    assert pt.KNOWN_ORIGINS == ("human", "task_notification", "peer", "sdk", "scheduled")
+
+
+def scheduled_entry(pid, when):
+    """A /loop or cron firing's entry as captured on Claude Code 2.1.304: turnOrigin
+    scheduled, promptSource system, isMeta true, no `origin` key (sanitized content)."""
+    entry = user_entry(pid, "scheduled", when, isMeta=True)
+    entry["promptSource"] = "system"
+    entry["message"] = {"role": "user", "content": "Check the build and report."}
+    return entry
+
+
+def test_find_entry_accepts_a_scheduled_firing(tmp_path):
+    path = write_lines(tmp_path / "t.jsonl", [scheduled_entry("p", mins(1))])
+    entry, cause = pt.find_prompt_entry(path, "p")
+    assert cause is None and entry.turn_origin == "scheduled"
+    assert entry.turn_origin != pt.HUMAN
 
 
 def test_find_entry_reads_a_captured_sdk_entry(tmp_path):
@@ -458,6 +474,21 @@ def test_row2_malformed_entry_notice(s):
     assert s.state()["notices"] == ["entry-malformed"]
 
 
+def test_row2_a_scheduled_firing_is_not_an_unknown_origin(s):
+    s.add(scheduled_entry(PID, NOW))
+    decision = s.stop()
+    assert decision.system_message is None
+    assert s.state()["notices"] == []
+
+
+def test_row4_a_scheduled_firing_does_not_return_an_afk_user(s):
+    s.go_afk(since=mins(60))
+    s.add(scheduled_entry(PID, NOW))
+    s.stop(tasks=[], crons=[])
+    assert s.state()["presence"] == "afk"
+    assert s.state()["pending_return"] is None
+
+
 def test_row2_unknown_origin_notice(s):
     s.entry(PID, "scheduled-task", NOW)
     assert s.stop().system_message == N3
@@ -566,7 +597,7 @@ def test_row3_human_entry_is_not_row3(s):
     assert s.state()["presence"] == "present"
 
 
-@pytest.mark.parametrize("origin", ["task_notification", "peer", "sdk"])
+@pytest.mark.parametrize("origin", ["task_notification", "peer", "sdk", "scheduled"])
 def test_row3_any_known_nonhuman_origin_can_trigger(s, origin):
     quiet_setup(s, 12, origin)
     s.stop(**owned_quiet())
@@ -1226,3 +1257,50 @@ def test_a_later_usable_human_entry_returns_the_user_after_a_missing_one(s):
     decision = s.stop(pid="prompt-3", now=t3 + timedelta(seconds=5), **owned_quiet())
     assert s.state()["presence"] == "present"
     assert decision.held == ("R",) and decision.nudge == line_R("prompt-3")
+
+
+# ================================================= cron prompts for the prompt hook
+
+CRON_BARE = {"id": "c1", "schedule": "*/5 * * * *", "recurring": True,
+             "prompt": "Check the build and report. I am going afk."}
+CRON_WAKEUP = {"id": "c2", "schedule": "9 17 * * *", "recurring": False,
+               "prompt": "/loop Check the build and report. I am going afk."}
+
+
+def test_stop_records_the_session_cron_prompts(s):
+    s.entry(PID, "human", NOW)
+    s.stop(crons=[CRON_BARE, CRON_WAKEUP])
+    assert s.state()["cron_prompts"] == [CRON_BARE["prompt"], CRON_WAKEUP["prompt"]]
+
+
+def test_stop_strips_dedups_and_skips_unusable_cron_entries(s):
+    s.entry(PID, "human", NOW)
+    s.stop(crons=[
+        dict(CRON_BARE, prompt="  tick  "), dict(CRON_BARE, id="c9", prompt="tick"),
+        {"id": "no-prompt"}, {"id": "n", "prompt": 5}, {"id": "blank", "prompt": "  "}, "junk",
+    ])
+    assert s.state()["cron_prompts"] == ["tick"]
+
+
+def test_stop_replaces_the_list_so_a_deleted_cron_drops_out(s):
+    s.entry(PID, "human", NOW)
+    s.stop(crons=[CRON_BARE, CRON_WAKEUP])
+    s.stop(crons=[CRON_WAKEUP])
+    assert s.state()["cron_prompts"] == [CRON_WAKEUP["prompt"]]
+    s.stop(crons=[])
+    assert s.state()["cron_prompts"] == []
+
+
+@pytest.mark.parametrize("crons", [ABSENT, None, "oops"])
+def test_stop_leaves_the_list_alone_when_session_crons_is_absent_or_malformed(s, crons):
+    s.entry(PID, "human", NOW)
+    s.stop(crons=[CRON_BARE])
+    s.stop(crons=crons)
+    assert s.state()["cron_prompts"] == [CRON_BARE["prompt"]]
+
+
+def test_stop_records_nothing_with_afk_on_departure_off(make):
+    sess = make(behaviors={"afk-on-departure": False})
+    sess.entry(PID, "human", NOW)
+    sess.stop(crons=[CRON_BARE])
+    assert sess.state()["cron_prompts"] == []

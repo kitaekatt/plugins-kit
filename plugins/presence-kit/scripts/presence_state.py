@@ -3,8 +3,9 @@
 Leaf module (stdlib only). Contract: dev/tasks/presence-kit/contracts.md
 sections 1-3. Every write is a locked read-modify-write that lands by atomic
 rename; the file is the whole truth (nothing is filled in or repaired on read),
-with one defined exception: a version-1 file (schema of presence-kit 0.2.x) that
-validates exactly is upgraded to version 2 and rewritten (`_migrate_v1`).
+with one defined exception: a version-1 file (schema of presence-kit 0.2.x) or a
+version-2 file (0.3.0-0.3.1) that validates exactly is upgraded to version 3 and
+rewritten (`_migrate`).
 
 Locking: an exclusive lock on a sibling `<sid>.lock` file, polled without
 blocking for up to LOCK_TIMEOUT_SECONDS. Windows uses msvcrt.locking on byte 0
@@ -28,7 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 KEEP_PROMPTS = 20
 LOCK_TIMEOUT_SECONDS = 5.0
 LOCK_POLL_SECONDS = 0.02
@@ -49,13 +50,16 @@ _TS_RE = re.compile(
     r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})"
 )
 
-# Document keys in file order (contracts.md section 3). Version 1 (presence-kit
-# 0.2.x) had every key except `afk_prompt`.
+# Document keys in file order (contracts.md section 3). Version 2 (presence-kit
+# 0.3.0-0.3.1) had every key except `cron_prompts`; version 1 (0.2.x) also lacked
+# `afk_prompt`.
 _KEYS = (
     "version", "presence", "afk_since", "afk_prompt", "goal", "goal_since", "recaps",
-    "nudges", "greeted", "unresolved", "pending_return", "notices",
+    "nudges", "greeted", "unresolved", "pending_return", "notices", "cron_prompts",
 )
-_V1_KEYS = tuple(key for key in _KEYS if key != "afk_prompt")
+_V2_KEYS = tuple(key for key in _KEYS if key != "cron_prompts")
+_V1_KEYS = tuple(key for key in _V2_KEYS if key != "afk_prompt")
+_KEYS_BY_VERSION = {1: _V1_KEYS, 2: _V2_KEYS, SCHEMA_VERSION: _KEYS}
 
 if sys.platform == "win32":
     import msvcrt
@@ -194,6 +198,7 @@ def default_state() -> dict:
         "unresolved": [],
         "pending_return": None,
         "notices": [],
+        "cron_prompts": [],
     }
 
 
@@ -205,7 +210,7 @@ def _validate(doc: Any, version_wanted: int = SCHEMA_VERSION) -> str | None:
     """Return None when `doc` is a valid state document of `version_wanted`, else the problem."""
     if not isinstance(doc, dict):
         return f"root must be an object, got {type(doc).__name__}"
-    keys = _KEYS if version_wanted == SCHEMA_VERSION else _V1_KEYS
+    keys = _KEYS_BY_VERSION[version_wanted]
     missing = [k for k in keys if k not in doc]
     extra = [k for k in doc if k not in keys]
     if missing:
@@ -243,38 +248,50 @@ def _validate(doc: Any, version_wanted: int = SCHEMA_VERSION) -> str | None:
             return f"'{key}' must be a list of strings"
     if doc["pending_return"] is not None and not isinstance(doc["pending_return"], str):
         return "'pending_return' must be null or a prompt id string"
-    if version_wanted == SCHEMA_VERSION:
+    if version_wanted >= 2:
         afk_prompt = doc["afk_prompt"]
         if afk_prompt is not None and (
             not isinstance(afk_prompt, str) or _PID_RE.fullmatch(afk_prompt) is None
         ):
             return "'afk_prompt' must be null or a prompt id string"
+    if version_wanted >= 3:
+        crons = doc["cron_prompts"]
+        if not isinstance(crons, list) or any(
+            not isinstance(v, str) or not v or v != v.strip() for v in crons
+        ):
+            return "'cron_prompts' must be a list of non-empty, stripped strings"
     return None
 
 
-def _migrate_v1(doc: Any) -> dict | None:
-    """The version-2 form of `doc` when it is exactly a valid version-1 document, else None.
+def _migrate(doc: Any) -> dict | None:
+    """The current-version form of `doc` when it is exactly a valid version-1 or version-2
+    document, else None.
 
-    Migrates only a document whose key set is exactly the version-1 keys, whose
-    version is the integer 1 and which validates whole as version 1; anything
-    else (malformed v1, version 0 or 3, a version-2 file with missing or extra
-    keys) is left for `_validate` to refuse. `afk_prompt` starts null.
+    Migrates only a document whose key set is exactly that version's keys, whose
+    version is that integer and which validates whole as that version; anything
+    else (malformed v1 or v2, version 0 or 4, a document with missing or extra
+    keys) is left for `_validate` to refuse. New keys start empty: `afk_prompt`
+    null, `cron_prompts` an empty list.
     """
-    if not isinstance(doc, dict) or set(doc) != set(_V1_KEYS):
+    if not isinstance(doc, dict):
         return None
-    version = doc["version"]
-    if isinstance(version, bool) or version != 1 or _validate(doc, 1) is not None:
+    version = doc.get("version")
+    if isinstance(version, bool) or version not in (1, 2):
+        return None
+    if set(doc) != set(_KEYS_BY_VERSION[version]) or _validate(doc, version) is not None:
         return None
     upgraded = {key: doc.get(key) for key in _KEYS}
     upgraded["version"] = SCHEMA_VERSION
-    upgraded["afk_prompt"] = None
+    if version == 1:
+        upgraded["afk_prompt"] = None
+    upgraded["cron_prompts"] = []
     return upgraded
 
 
 def _read(path: Path) -> dict:
     """Read and validate one state file (caller holds the lock). Absent -> defaults.
 
-    An exact version-1 file is upgraded and rewritten as version 2 on disk
+    An exact version-1 or version-2 file is upgraded and rewritten as version 3 on disk
     (atomic rename) before it is returned.
     """
     try:
@@ -287,7 +304,7 @@ def _read(path: Path) -> dict:
         doc = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, ValueError) as exc:
         raise StateError("malformed", f"{path}: malformed state file -- {exc}")
-    upgraded = _migrate_v1(doc)
+    upgraded = _migrate(doc)
     if upgraded is not None:
         _write_atomic(path, upgraded)
         return upgraded
@@ -399,6 +416,21 @@ def set_normal(state: dict) -> None:
     """Revoke authority: clear goal and goal_since; presence is left alone."""
     state["goal"] = None
     state["goal_since"] = None
+
+
+def set_cron_prompts(state: dict, prompts: list[str]) -> None:
+    """Replace `cron_prompts` with `prompts` stripped, blanks dropped, duplicates removed.
+
+    The prompt hook skips a prompt that exactly equals one of these (a cron or
+    /loop firing is not the user's own message); replacing the whole list each
+    Stop lets a deleted cron drop out.
+    """
+    kept: list[str] = []
+    for prompt in prompts:
+        text = prompt.strip()
+        if text and text not in kept:
+            kept.append(text)
+    state["cron_prompts"] = kept
 
 
 def set_present(state: dict) -> None:
