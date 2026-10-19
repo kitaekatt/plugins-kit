@@ -26,9 +26,16 @@ file, bound to the profile they were recorded under, and handed to
 ``profile_prompt: false`` turns the built-in profile prompt off for that one
 project.
 
+A profile switch also retires the previous profile's plugins declaratively:
+``plan_switch_uninstalls`` computes which ``uninstall: true`` plugin entries to
+add and drop, and the writers below merge them into the project-local file in
+the same write as the selection. The engine carries the entries out
+(``plugin_tiers.resolve_uninstall_entries``); no record of what a profile
+installed is kept.
+
 Everything here is pure with named exceptions -- ``write_selection``,
-``write_selection_with_answers``, ``clear_selection`` and ``mark_prompted``
-write, and ``ensure_vcs_excluded`` shells out to Git. Message
+``write_selection_with_answers``, ``clear_selection``, ``write_uninstall_entries``
+and ``mark_prompted`` write, and ``ensure_vcs_excluded`` shells out to Git. Message
 TEXT for the engine's log lines stays in the engine, as elsewhere in
 ``bootstrap_lib``; what this module returns are structured outcomes plus the
 two agent-facing strings (the question and the prompt directive) that have to
@@ -901,8 +908,9 @@ def prompt_directive(state, run_cmd):
         'prompt. On "Not now", do nothing further and do not ask again this '
         "session; bootstrap asks again on a later pass. Tell the user they can "
         "change the selection at any time with /bootstrap profile -- switching "
-        "changes what bootstrap provisions from the next pass on and uninstalls "
-        "nothing."
+        "changes what bootstrap provisions from the next pass on, and "
+        "uninstalls, at local scope for this project, the plugins the previous "
+        "profile required or recommended that the new selection does not list."
         % (listing_step, json.dumps(question, sort_keys=True), run_cmd, run_cmd)
     )
 
@@ -1010,7 +1018,7 @@ def _prune_markers(marker_dir):
 # ---------------------------------------------------------------------------
 
 
-def write_selection(path, value):
+def write_selection(path, value, uninstall_edit=None):
     """Set (or with ``value=None`` remove) the ``profile`` key in ``path``.
 
     Every other key is preserved and the file is replaced atomically, because
@@ -1021,6 +1029,11 @@ def write_selection(path, value):
     selection (or removes it) drops ``plugin_choices`` in the same write, so
     switching away and back never revives answers given for the earlier
     choice. Re-writing the profile the answers are bound to keeps them.
+
+    ``uninstall_edit`` (an :class:`UninstallEdit`) is applied to ``path``'s
+    ``plugins`` list in the same atomic write; pass it only when ``path`` is
+    the project-local file (see :func:`write_uninstall_entries` otherwise).
+    Returns the :class:`UninstallChange` actually made.
 
     Raises :class:`ProfileWriteError` WITHOUT writing when the file cannot be
     read, is not valid JSON, or is not a JSON object.
@@ -1042,12 +1055,18 @@ def write_selection(path, value):
         existing.pop("plugin_choices")
         changed = True
 
+    change = apply_uninstall_edit(existing, uninstall_edit, path)
+    if change:
+        changed = True
+
     if not changed:
-        return
+        return change
     write_atomic(path, json.dumps(existing, indent=2) + "\n")
+    return change
 
 
-def write_selection_with_answers(path, profile, answers, decided=None):
+def write_selection_with_answers(path, profile, answers, decided=None,
+                                 uninstall_edit=None):
     """Record ``profile`` and its plugin ``answers`` in ONE atomic write.
 
     ``answers`` maps a plugin ref to ``{"want": bool}`` plus, for a ``want``
@@ -1060,6 +1079,9 @@ def write_selection_with_answers(path, profile, answers, decided=None):
 
     Profile and answers share one ``os.replace``: a convergence pass started
     afterwards sees both or neither, never a new profile with the old answers.
+    ``uninstall_edit`` (an :class:`UninstallEdit`) rides in the same write, so
+    the pass never sees the new profile without the uninstall entries that
+    retire the old one. Returns the :class:`UninstallChange` made.
 
     Raises :class:`ProfileWriteError` WITHOUT writing when ``profile`` is not
     a selectable profile name (``none`` and ``unset`` are not -- see
@@ -1092,23 +1114,183 @@ def write_selection_with_answers(path, profile, answers, decided=None):
     existing.pop("plugin_choices", None)
     if recorded:
         existing["plugin_choices"] = {"profile": profile, "answers": recorded}
+    change = apply_uninstall_edit(existing, uninstall_edit, path)
     write_atomic(path, json.dumps(existing, indent=2) + "\n")
+    return change
 
 
-def clear_selection(path):
+def clear_selection(path, uninstall_edit=None):
     """Clear the choice: ``profile`` becomes ``"unset"``, answers are removed.
 
     One atomic write that always happens, even when no file or key existed,
     because ``"unset"`` in the project-local file is what stops a ``profile``
     left in the user-local file from selecting again (see
     :data:`UNSET_SELECTION`). Every other key is preserved.
+    ``uninstall_edit`` rides in the same write; returns the
+    :class:`UninstallChange` made.
 
     Raises :class:`ProfileWriteError` WITHOUT writing when the file is unusable.
     """
     existing = _read_json_object(path)
     existing["profile"] = UNSET_SELECTION
     existing.pop("plugin_choices", None)
+    change = apply_uninstall_edit(existing, uninstall_edit, path)
     write_atomic(path, json.dumps(existing, indent=2) + "\n")
+    return change
+
+
+# ---------------------------------------------------------------------------
+# Uninstall entries a profile switch writes
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class UninstallEdit:
+    """Which ``uninstall: true`` entries a profile switch adds and drops.
+
+    ``add`` are plugin refs to mark ``uninstall: true``; ``remove`` are refs
+    whose ``uninstall: true`` mark is dropped. The two never overlap.
+    """
+
+    add: Tuple[str, ...] = ()
+    remove: Tuple[str, ...] = ()
+
+    def __bool__(self):
+        return bool(self.add or self.remove)
+
+
+@dataclass(frozen=True)
+class UninstallChange:
+    """What an :class:`UninstallEdit` actually changed in a file.
+
+    An entry already in the requested state is in neither list: the edit is
+    idempotent.
+    """
+
+    written: Tuple[str, ...] = ()
+    removed: Tuple[str, ...] = ()
+    path: Optional[str] = None
+
+    def __bool__(self):
+        return bool(self.written or self.removed)
+
+
+def _entry_ref(entry):
+    ref = entry.get("ref") if isinstance(entry, dict) else None
+    return ref.strip() if isinstance(ref, str) and ref.strip() else None
+
+
+def _unique(items):
+    return list(dict.fromkeys(items))
+
+
+def plan_switch_uninstalls(old_state, old_manifest, new_state, new_manifest):
+    """The uninstall entries a switch from ``old_state`` to ``new_state`` needs.
+
+    ``*_manifest`` are the EFFECTIVE manifests (``resolve_layers`` output) for
+    the old and the new selection, so each already holds its profile chain
+    merged over the base layers.
+
+    - ``add``: when the old selection is a profile (status ``selected``) and
+      the new selection is a different one, or ``none``, or ``unset``: every
+      plugin the old effective manifest tiers ``required`` or ``recommended``
+      that the new effective manifest does not list at ALL, in any tier.
+      "Not listed" also keeps out anything in the base ``plugins[]``, because
+      the new effective manifest includes the base. Re-selecting the same
+      profile adds nothing.
+    - ``remove``: whenever the new selection is a profile, every plugin it
+      tiers ``required`` or ``recommended``: an earlier switch may have marked
+      it, and a plugin the profile wants must not carry an uninstall entry.
+    """
+    new_plugins = _plugin_entries(new_manifest)
+    new_refs = {_entry_ref(e) for e in new_plugins} - {None}
+
+    add = []
+    switched = old_state.status == "selected" and not (
+        new_state.status == "selected" and new_state.selected == old_state.selected
+    )
+    if switched:
+        for entry in _plugin_entries(old_manifest):
+            ref = _entry_ref(entry)
+            if (ref and ref not in new_refs
+                    and entry.get("tier") in (TIER_REQUIRED, TIER_RECOMMENDED)):
+                add.append(ref)
+
+    remove = []
+    if new_state.status == "selected":
+        for entry in new_plugins:
+            ref = _entry_ref(entry)
+            if ref and entry.get("tier") in (TIER_REQUIRED, TIER_RECOMMENDED):
+                remove.append(ref)
+
+    return UninstallEdit(add=tuple(_unique(add)), remove=tuple(_unique(remove)))
+
+
+def _plugin_entries(manifest):
+    plugins = manifest.get("plugins") if isinstance(manifest, dict) else None
+    return [e for e in plugins if isinstance(e, dict)] if isinstance(plugins, list) else []
+
+
+def apply_uninstall_edit(existing, edit, path=None):
+    """Apply ``edit`` to the parsed manifest ``existing`` in place.
+
+    Returns the :class:`UninstallChange`. An entry that carries only ``ref``
+    and ``uninstall`` is removed outright; one with other keys loses just its
+    ``uninstall`` mark, so a hand-written entry is never clobbered. Every
+    other key and entry is preserved, and ``plugins`` is not created when
+    nothing needs writing. Raises :class:`ProfileWriteError` when ``plugins``
+    exists but is not a list, before ``existing`` is touched.
+    """
+    if not edit:
+        return UninstallChange(path=path)
+    plugins = existing.get("plugins")
+    if plugins is None:
+        plugins = []
+    elif not isinstance(plugins, list):
+        raise ProfileWriteError(
+            "%s: 'plugins' is not a list; nothing was written"
+            % (path or "the manifest")
+        )
+
+    drop = set(edit.remove)
+    removed, kept = [], []
+    for item in plugins:
+        ref = _entry_ref(item)
+        if ref in drop and item.get("uninstall") is True:
+            removed.append(ref)
+            if set(item) - {"ref", "uninstall"}:
+                kept.append({k: v for k, v in item.items() if k != "uninstall"})
+            continue
+        kept.append(item)
+
+    written = []
+    for ref in edit.add:
+        entry = next((i for i in kept if _entry_ref(i) == ref), None)
+        if entry is None:
+            kept.append({"ref": ref, "uninstall": True})
+            written.append(ref)
+        elif entry.get("uninstall") is not True:
+            entry["uninstall"] = True
+            written.append(ref)
+
+    if written or removed:
+        existing["plugins"] = kept
+    return UninstallChange(
+        written=tuple(written), removed=tuple(_unique(removed)), path=path)
+
+
+def write_uninstall_entries(path, edit):
+    """Apply ``edit`` to ``path`` in its own atomic write (no selection change).
+
+    For the case where the selection goes to a different file than the
+    project-local one that holds the entries. Returns the
+    :class:`UninstallChange`; writes nothing when it is empty.
+    """
+    existing = _read_json_object(path)
+    change = apply_uninstall_edit(existing, edit, path)
+    if change:
+        write_atomic(path, json.dumps(existing, indent=2) + "\n")
+    return change
 
 
 def _read_json_object(path):

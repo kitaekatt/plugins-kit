@@ -1039,8 +1039,12 @@ class TestClearAll:
         rc = cli.main(["profile", "clear", "--all", "--project-dir", str(tiered.project)])
 
         assert rc == 0
+        # The designer profile's recommended plugin is not listed by the base,
+        # so clearing it marks that plugin for uninstall; the base plugin and
+        # the not-recommended one (still asked about, never installed) stay out.
         assert json.loads(project_local(tiered).read_text()) == {
-            "profile": "unset", "tools": [{"name": "uv"}]}
+            "profile": "unset", "tools": [{"name": "uv"}],
+            "plugins": [{"ref": PROTOTYPING, "uninstall": True}]}
 
     def test_creates_the_file_when_none_existed(self, tiered, capsys):
         rc = cli.main(["profile", "clear", "--all", "--project-dir", str(tiered.project)])
@@ -1134,3 +1138,291 @@ class TestLayerReaderParity:
         assert problems == []
         assert mine[0] == theirs[0]
         assert mine[1] == theirs[2]
+
+
+# --------------------------------------------------------------------------
+# Switching profiles writes `uninstall: true` entries to the project-local file
+# --------------------------------------------------------------------------
+
+BASEP = "mkt:basep"
+PARENT_REQ = "mkt:parent-req"
+DES_REQ = "mkt:des-req"
+DES_REC = "mkt:des-rec"
+SHARED = "mkt:shared"
+ENG_REQ = "mkt:eng-req"
+
+# parent <- designer, other; engineer is standalone. basep is in the BASE list
+# (install auto) AND tiered by designer; shared is recommended by designer and
+# only not_recommended by engineer (listed, so never marked); sandbox is a
+# base not-recommended plugin.
+SWITCH_MANIFEST = {
+    "plugins": [
+        {"ref": BASEP, "install": "auto"},
+        _tiered(SANDBOX, "not_recommended", "Sandboxes agent shells.", "Rarely needed."),
+    ],
+    "profiles": {
+        "parent": {"plugins": [_tiered(PARENT_REQ, "required", "Core.", "Core missing.")]},
+        "designer": {
+            "extends": ["parent"],
+            "plugins": [
+                _tiered(DES_REQ, "required", "Design core.", "Design missing."),
+                _tiered(DES_REC, "recommended", "Mock up fast.", "Extra commands."),
+                _tiered(SHARED, "recommended", "Shared tool.", "Not needed."),
+                _tiered(BASEP, "recommended", "Base tool.", "Not needed."),
+                _tiered(ENG_ADV, "not_recommended", "Deep tooling.", "Engineering only."),
+            ],
+        },
+        "engineer": {
+            "plugins": [
+                _tiered(ENG_REQ, "required", "Engineering core.", "Missing."),
+                _tiered(SHARED, "not_recommended", "Shared tool.", "Not part of it."),
+            ],
+        },
+        "other": {
+            "extends": ["parent"],
+            "plugins": [_tiered(DES_REQ, "recommended", "Design core.", "Not needed.")],
+        },
+    },
+}
+
+
+@pytest.fixture
+def switch(env, passes):
+    _write_json(project_manifest(env), SWITCH_MANIFEST)
+    return env
+
+
+def _uninstall_refs(env):
+    data = json.loads(project_local(env).read_text())
+    return [e["ref"] for e in data.get("plugins", []) if e.get("uninstall") is True]
+
+
+class TestSwitchWritesUninstallEntries:
+
+    def test_apply_marks_what_the_old_chain_required_or_recommended(
+            self, switch, capsys):
+        _write_json(project_local(switch), {
+            "profile": "designer", "tools": [{"name": "uv"}],
+            "plugins": [{"ref": "mkt:keep", "install": "manual"}]})
+
+        rc, out = _apply(switch, capsys, profile="engineer")
+
+        assert rc == 0
+        written = json.loads(project_local(switch).read_text())
+        assert written["profile"] == "engineer"
+        assert written["tools"] == [{"name": "uv"}]
+        # Parent first (extends), then designer; the base plugin, the plugin
+        # engineer still lists (as not_recommended) and the not-recommended
+        # ones are all left alone.
+        assert written["plugins"] == [
+            {"ref": "mkt:keep", "install": "manual"},
+            {"ref": PARENT_REQ, "uninstall": True},
+            {"ref": DES_REQ, "uninstall": True},
+            {"ref": DES_REC, "uninstall": True},
+        ]
+        assert "uninstall entries written to" in out.out
+        for ref in (PARENT_REQ, DES_REQ, DES_REC):
+            assert ref in out.out
+        for ref in (BASEP, SHARED, SANDBOX, ENG_ADV):
+            assert ref not in out.out
+
+    def test_apply_honors_extends_of_the_new_profile(self, switch, capsys):
+        # other extends parent and recommends des-req: parent-req and des-req
+        # are listed in the new chain, so only the rest is marked.
+        _write_json(project_local(switch), {"profile": "designer"})
+        rc, _out = _apply(switch, capsys, profile="other")
+        assert rc == 0
+        assert _uninstall_refs(switch) == [DES_REC, SHARED]
+
+    def test_apply_drops_entries_for_what_the_new_profile_wants(self, switch, capsys):
+        _write_json(project_local(switch), {
+            "profile": "engineer",
+            "plugins": [
+                {"ref": DES_REQ, "uninstall": True},
+                {"ref": DES_REC, "uninstall": True},
+                {"ref": "mkt:keep", "uninstall": True},
+                {"ref": PARENT_REQ, "uninstall": True, "min_version": "1.0"},
+            ]})
+
+        rc, out = _apply(switch, capsys, profile="designer")
+
+        assert rc == 0
+        written = json.loads(project_local(switch).read_text())
+        # Wanted plugins lose their entry; a hand-written entry with other keys
+        # loses only the mark; an unrelated uninstall entry stays; and the
+        # engineer profile just left is retired in the same write.
+        assert written["plugins"] == [
+            {"ref": "mkt:keep", "uninstall": True},
+            {"ref": PARENT_REQ, "min_version": "1.0"},
+            {"ref": ENG_REQ, "uninstall": True},
+        ]
+        assert "uninstall entries removed from" in out.out
+        assert DES_REQ in out.out and DES_REC in out.out
+
+    def test_reapplying_the_same_profile_writes_no_entries(self, switch, capsys):
+        _write_json(project_local(switch), {"profile": "designer"})
+        rc, out = _apply(switch, capsys, profile="designer")
+        assert rc == 0
+        assert "plugins" not in json.loads(project_local(switch).read_text())
+        assert "uninstall entries" not in out.out
+
+    def test_first_selection_marks_nothing(self, switch, capsys):
+        rc, out = _apply(switch, capsys, profile="designer")
+        assert rc == 0
+        assert "plugins" not in json.loads(project_local(switch).read_text())
+        assert "uninstall entries" not in out.out
+
+    def test_switching_back_and_forth_does_not_pile_up_entries(self, switch, capsys):
+        _write_json(project_local(switch), {"profile": "designer"})
+        _apply(switch, capsys, profile="engineer")
+        assert _uninstall_refs(switch) == [PARENT_REQ, DES_REQ, DES_REC]
+        _apply(switch, capsys, profile="designer")
+        # Back on designer: its own plugins lose their entries, engineer's get one.
+        assert _uninstall_refs(switch) == [ENG_REQ]
+        _apply(switch, capsys, profile="engineer")
+        assert _uninstall_refs(switch) == [PARENT_REQ, DES_REQ, DES_REC]
+
+    def test_set_to_another_profile_writes_the_entries_in_the_same_file(
+            self, switch, capsys):
+        _write_json(project_local(switch), {"profile": "designer"})
+
+        rc = cli.main(["profile", "set", "engineer", "--project-dir", str(switch.project)])
+
+        assert rc == 0
+        written = json.loads(project_local(switch).read_text())
+        assert written["profile"] == "engineer"
+        assert _uninstall_refs(switch) == [PARENT_REQ, DES_REQ, DES_REC]
+        assert "uninstall entries written to" in capsys.readouterr().out
+
+    def test_set_none_marks_everything_the_base_does_not_list(self, switch, capsys):
+        _write_json(project_local(switch), {"profile": "designer"})
+        rc = cli.main(["profile", "set", "none", "--project-dir", str(switch.project)])
+        assert rc == 0
+        # shared is no longer listed at all once no profile is applied.
+        assert _uninstall_refs(switch) == [PARENT_REQ, DES_REQ, DES_REC, SHARED]
+        assert json.loads(project_local(switch).read_text())["profile"] == "none"
+
+    def test_set_drops_entries_the_new_profile_wants(self, switch, capsys):
+        _write_json(project_local(switch), {
+            "profile": "engineer",
+            "plugins": [{"ref": ENG_REQ, "uninstall": True}]})
+        rc = cli.main(["profile", "set", "engineer", "--project-dir", str(switch.project)])
+        assert rc == 0
+        assert _uninstall_refs(switch) == []
+
+    def test_set_with_user_target_still_writes_entries_to_the_project_file(
+            self, switch, capsys):
+        _write_json(user_local(switch), {"profile": "designer"})
+
+        rc = cli.main(["profile", "set", "engineer", "--user",
+                       "--project-dir", str(switch.project)])
+
+        assert rc == 0
+        assert json.loads(user_local(switch).read_text()) == {"profile": "engineer"}
+        assert _uninstall_refs(switch) == [PARENT_REQ, DES_REQ, DES_REC]
+        assert "profile" not in json.loads(project_local(switch).read_text())
+
+    def test_set_user_target_masked_by_a_project_selection_marks_nothing(
+            self, switch, capsys):
+        # The project-local selection wins, so this project's profile is
+        # unchanged by a user-level switch.
+        _write_json(project_local(switch), {"profile": "designer"})
+        _write_json(user_local(switch), {"profile": "designer"})
+        rc = cli.main(["profile", "set", "engineer", "--user",
+                       "--project-dir", str(switch.project)])
+        assert rc == 0
+        assert _uninstall_refs(switch) == []
+
+    def test_clear_all_marks_what_the_base_does_not_list_and_runs_no_pass(
+            self, switch, monkeypatch, capsys):
+        def boom(*a, **k):
+            raise AssertionError("clear --all must not launch a pass")
+
+        monkeypatch.setattr(cli, "_launch_pass", boom)
+        _write_json(project_local(switch), {
+            "profile": "designer",
+            "plugins": [{"ref": "mkt:keep", "install": "manual"}]})
+
+        rc = cli.main(["profile", "clear", "--all", "--project-dir", str(switch.project)])
+
+        assert rc == 0
+        written = json.loads(project_local(switch).read_text())
+        assert written["profile"] == "unset"
+        assert written["plugins"][0] == {"ref": "mkt:keep", "install": "manual"}
+        assert _uninstall_refs(switch) == [PARENT_REQ, DES_REQ, DES_REC, SHARED]
+        out = capsys.readouterr().out
+        assert "uninstall entries written to" in out
+        assert "none runs now" in out
+
+    def test_clear_all_with_nothing_selected_marks_nothing(self, switch, capsys):
+        rc = cli.main(["profile", "clear", "--all", "--project-dir", str(switch.project)])
+        assert rc == 0
+        assert json.loads(project_local(switch).read_text()) == {"profile": "unset"}
+
+    def test_the_tracked_manifest_and_settings_are_never_written(self, switch, capsys):
+        _write_json(project_local(switch), {"profile": "designer"})
+        manifest_before = project_manifest(switch).read_bytes()
+
+        _apply(switch, capsys, profile="engineer")
+        cli.main(["profile", "clear", "--all", "--project-dir", str(switch.project)])
+
+        assert project_manifest(switch).read_bytes() == manifest_before
+        assert not (switch.project / ".claude" / "settings.json").exists()
+
+    def test_a_malformed_plugins_value_refuses_without_writing(self, switch, capsys):
+        local = project_local(switch)
+        _write_json(local, {"profile": "designer", "plugins": {}})
+        before = local.read_bytes()
+
+        rc, out = _apply(switch, capsys, profile="engineer")
+
+        assert rc == 1
+        assert "'plugins' is not a list" in out.err
+        assert local.read_bytes() == before
+
+    def test_plain_clear_marks_what_the_base_does_not_list_and_runs_no_pass(
+            self, switch, monkeypatch, capsys):
+        def boom(*a, **k):
+            raise AssertionError("clear must not launch a pass")
+
+        monkeypatch.setattr(cli, "_launch_pass", boom)
+        _write_json(project_local(switch), {
+            "profile": "designer",
+            "plugins": [{"ref": "mkt:keep", "install": "manual"}]})
+
+        rc = cli.main(["profile", "clear", "--project-dir", str(switch.project)])
+
+        assert rc == 0
+        written = json.loads(project_local(switch).read_text())
+        assert "profile" not in written
+        assert written["plugins"][0] == {"ref": "mkt:keep", "install": "manual"}
+        # No profile is selected afterwards, so shared (also recommended by
+        # designer) is no longer listed either.
+        assert _uninstall_refs(switch) == [PARENT_REQ, DES_REQ, DES_REC, SHARED]
+        assert "uninstall entries written to" in capsys.readouterr().out
+
+    def test_plain_clear_with_a_user_level_selection_underneath_marks_nothing(
+            self, switch, capsys):
+        # Removing the project's key re-exposes the user-level selection, which
+        # is the same profile, so this project's effective profile is unchanged.
+        _write_json(project_local(switch), {"profile": "designer"})
+        _write_json(user_local(switch), {"profile": "designer"})
+        rc = cli.main(["profile", "clear", "--project", "--project-dir", str(switch.project)])
+        assert rc == 0
+        assert "plugins" not in json.loads(project_local(switch).read_text())
+
+    def test_plain_clear_to_a_different_user_level_profile_marks_the_difference(
+            self, switch, capsys):
+        _write_json(project_local(switch), {"profile": "designer"})
+        _write_json(user_local(switch), {"profile": "engineer"})
+        rc = cli.main(["profile", "clear", "--project", "--project-dir", str(switch.project)])
+        assert rc == 0
+        assert _uninstall_refs(switch) == [PARENT_REQ, DES_REQ, DES_REC]
+
+    def test_plain_clear_user_target_writes_entries_to_the_project_file(
+            self, switch, capsys):
+        _write_json(user_local(switch), {"profile": "designer"})
+        rc = cli.main(["profile", "clear", "--user", "--project-dir", str(switch.project)])
+        assert rc == 0
+        assert "profile" not in json.loads(user_local(switch).read_text())
+        assert _uninstall_refs(switch) == [PARENT_REQ, DES_REQ, DES_REC, SHARED]

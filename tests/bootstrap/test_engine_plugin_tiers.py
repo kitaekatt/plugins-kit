@@ -685,3 +685,78 @@ class TestEnginePassWiring:
         assert "still installed" in completed.stdout
         assert not any(c[:2] == ["plugin", "uninstall"] for c in _claude_calls(world))
         assert settings.read_bytes() == before
+
+
+class TestUninstallEntryWiring:
+    """`uninstall: true` entries through a real engine pass (fake `claude`)."""
+
+    def _add_local_entries(self, world, *entries, profile=None):
+        path = world.project / ".claude" / "bootstrap.local.json"
+        data = json.loads(path.read_text())
+        data["plugins"] = list(entries)
+        if profile is not None:
+            data["profile"] = profile
+            data.pop("plugin_choices", None)
+        path.write_text(json.dumps(data))
+
+    def test_a_pass_uninstalls_the_local_install_of_a_marked_plugin(self, tmp_path):
+        world = _pass_world(tmp_path, answers={}, installs=[("mkt:gone", "local")])
+        self._add_local_entries(world, {"ref": "mkt:gone", "uninstall": True})
+
+        completed = _engine_pass(world)
+
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        assert ["plugin", "uninstall", "gone@mkt", "--scope", "local"] in _claude_calls(world)
+        assert not any(c[:2] == ["plugin", "install"] for c in _claude_calls(world))
+        assert "gone" in completed.stdout and "uninstalled" in completed.stdout
+
+    def test_a_marked_plugin_with_no_install_runs_nothing_and_stays_quiet(self, tmp_path):
+        world = _pass_world(tmp_path, answers={}, installs=[])
+        self._add_local_entries(world, {"ref": "mkt:gone", "uninstall": True})
+
+        completed = _engine_pass(world)
+
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        assert _claude_calls(world) == []
+        assert "gone" not in completed.stdout
+
+    def test_a_marked_plugin_installed_only_at_user_scope_gets_a_notice(self, tmp_path):
+        world = _pass_world(tmp_path, answers={}, installs=[("mkt:gone", "user")])
+        (world.home / ".claude" / "settings.json").write_text(
+            json.dumps({"enabledPlugins": {"gone@mkt": True}}))
+        self._add_local_entries(world, {"ref": "mkt:gone", "uninstall": True})
+
+        completed = _engine_pass(world)
+
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        assert not any(c[:2] == ["plugin", "uninstall"] for c in _claude_calls(world))
+        assert "gone: still installed" in completed.stdout
+
+    def test_a_marked_plugin_the_profile_requires_is_a_warning_not_an_uninstall(
+            self, tmp_path):
+        world = _pass_world(tmp_path, answers={}, installs=[(REQ, "local")])
+        project_manifest = world.project / ".claude" / "bootstrap.json"
+        manifest = json.loads(project_manifest.read_text())
+        manifest["plugins"].append(tier_entry(REQ, "required"))
+        project_manifest.write_text(json.dumps(manifest))
+        self._add_local_entries(world, {"ref": REQ, "uninstall": True})
+
+        completed = _engine_pass(world)
+
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        assert not any(c[:2] == ["plugin", "uninstall"] for c in _claude_calls(world))
+        assert "req: uninstall conflict" in completed.stdout
+
+
+class TestPhasePluginsUninstallEntry:
+    def test_an_uninstall_entry_is_never_installed_by_the_plugin_phase(self, phase):
+        log, state = phase
+        state["installed"] = False
+        ctx = _Ctx({"plugins": [{"ref": "mkt:gone", "install": "manual",
+                                 "uninstall": True}]})
+
+        engine._phase_plugins(ctx)
+
+        assert log["install"] == [] and log["other"] == []
+        assert ctx.failures == []
+        assert any("uninstall: true" in line for line in ctx.oks)

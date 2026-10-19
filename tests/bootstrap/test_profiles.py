@@ -482,7 +482,7 @@ class TestPromptDirective:
         assert embedded in directive
         assert "AskUserQuestion" in directive
         assert "/bootstrap profile" in directive
-        assert "uninstalls nothing" in directive
+        assert "uninstalls, at local scope" in directive
 
     def test_it_is_empty_under_no_profiles(self):
         state = profiles.ProfileState(status="no_profiles")

@@ -1026,6 +1026,18 @@ def _main_pass():
     bootstrap_quiet_entries.extend(_reprefix(e, "config: ") for e in tier_quiet)
     all_failures.extend(tier_failures)
 
+    # Step 3c-uninstall: plugins[] entries marked `uninstall: true` (written by
+    # a profile switch, or by hand). After the tiers, so an entry for a plugin
+    # the selected profile still wants installed is seen as the conflict it is.
+    un_action, un_ok, un_quiet = [], [], []
+    layered_manifest, un_failures = _process_plugin_uninstall_entries(
+        layered_manifest, profile_state, args.project_dir,
+        un_action, un_ok, un_quiet)
+    bootstrap_action_entries.extend(_reprefix(e, "config: ") for e in un_action)
+    bootstrap_ok_entries.extend(_reprefix(e, "config: ") for e in un_ok)
+    bootstrap_quiet_entries.extend(_reprefix(e, "config: ") for e in un_quiet)
+    all_failures.extend(un_failures)
+
     # Plugin discovery inputs, shared by Step 3c-mkt and Step 4.
     registry_path = os.path.join(plugins_dir, "installed_plugins.json")
 
@@ -3232,8 +3244,23 @@ def _process_plugin_tiers(manifest, profile_state, project_dir,
     return _with_plugins(manifest, plugins, replacements), failures
 
 
+_TIER_UNINSTALL_WHY = "recorded answer: not wanted"
+_TIER_UNINSTALL_CAUSE = (
+    "The project's tracked .claude/bootstrap.json declares {ref} as tier "
+    "not_recommended, and the want:false entry that triggers the removal "
+    "lives in plugin_choices in .claude/bootstrap.local.json (per-user, not "
+    "version controlled).")
+_ENTRY_UNINSTALL_WHY = "uninstall: true"
+_ENTRY_UNINSTALL_CAUSE = (
+    "A plugins[] entry with uninstall: true for {ref} triggers the removal; "
+    "it lives in a layered bootstrap.json (a profile switch writes it to "
+    ".claude/bootstrap.local.json).")
+
+
 def _run_plugin_uninstalls(resolution, installs_by_ref, project_dir,
-                           action_entries, quiet_entries):
+                           action_entries, quiet_entries, *,
+                           why=_TIER_UNINSTALL_WHY,
+                           cause=_TIER_UNINSTALL_CAUSE):
     """Uninstall what the resolver ordered removed; return the failures.
 
     One ``uninstall_installs`` call per (ref, scope): it runs one command per
@@ -3241,6 +3268,8 @@ def _run_plugin_uninstalls(resolution, installs_by_ref, project_dir,
     records for this project, are a single command. Project-scope installs
     never reach it (the resolver lists them unsatisfied); if one ever did,
     ``uninstall_installs`` raises ``ValueError`` and the pass fails loudly.
+    ``why`` is the parenthesised reason on the success line and ``cause``
+    names, in the failure's agent message, what ordered the removal.
     """
     from .marketplace_lifecycle import resolve_claude_cli, uninstall_installs
 
@@ -3276,7 +3305,7 @@ def _run_plugin_uninstalls(resolution, installs_by_ref, project_dir,
             _append_detail(
                 action_entries,
                 f"plugin {order.ref}: uninstalled at {order.scope} scope "
-                "(recorded answer: not wanted)",
+                f"({why})",
                 display=f"plugin {_short_plugin_name(order.ref)}: uninstalled")
             continue
         for result in bad:
@@ -3292,14 +3321,132 @@ def _run_plugin_uninstalls(resolution, installs_by_ref, project_dir,
             failures.append(_plugin_tier_failure(
                 order.ref, message,
                 f"`claude plugin uninstall {_cli_ref_of(order.ref)} --scope "
-                f"{order.scope}` failed ({result.message}). The project's "
-                f"tracked .claude/bootstrap.json declares {order.ref} as tier "
-                "not_recommended, and the want:false entry that triggers the "
-                "removal lives in plugin_choices in .claude/bootstrap.local.json "
-                "(per-user, not version controlled). Show the user the error; "
+                f"{order.scope}` failed ({result.message}). "
+                f"{cause.format(ref=order.ref)} Show the user the error; "
                 "run the command from the project root only if they agree, then "
                 "ask them to type 'fix-all' to re-run bootstrap."))
     return failures
+
+
+def _process_plugin_uninstall_entries(manifest, profile_state, project_dir,
+                                      action_entries, ok_entries, quiet_entries):
+    """Carry out the layered manifest's ``uninstall: true`` plugin entries.
+
+    Returns ``(manifest, failures)``. Runs AFTER :func:`_process_plugin_tiers`
+    (layers merge ``plugins[]`` by ``ref``, so a profile's tiered entry and a
+    local ``uninstall`` entry for one plugin arrive here as a single entry) and
+    does not depend on a profile being selected: a profile switch writes these
+    entries precisely so that they outlive the profile that is gone.
+
+    - The plugin's LOCAL-scope install for this project is uninstalled. None
+      installed means satisfied: one verbose ok line, no failure, no fix-all.
+    - A user- or project-scope install is never touched; it is a one-line
+      notice every pass until the inventory agrees.
+    - A plugin the rest of the manifest wants installed is a conflict: nothing
+      is uninstalled and a warning names the conflict (see
+      ``plugin_tiers.resolve_uninstall_entries``).
+    - Every entry the step acts on or is satisfied by is rewritten
+      ``install: manual`` so the plugin phase cannot install it (an entry that
+      omits ``install`` defaults to ``auto``). A malformed entry is a failure
+      and every ``uninstall`` entry is forced ``manual``; an unreadable
+      inventory is a failure for that plugin and its entry is forced ``manual``.
+    - Never writes the tracked ``.claude/settings.json`` or any project-scope
+      state, and never records satisfaction: each pass recomputes it.
+    """
+    from . import plugin_tiers as _tiers
+    from . import profiles as _profiles
+
+    plugins = manifest.get("plugins") if manifest else None
+    if not isinstance(plugins, list):
+        return manifest, []
+    marked = [i for i, e in enumerate(plugins)
+              if isinstance(e, dict) and e.get(_tiers.UNINSTALL_KEY) is not None
+              and e.get(_tiers.UNINSTALL_KEY) is not False]
+    if not marked:
+        return manifest, []
+
+    def _all_manual():
+        return _with_plugins(
+            manifest, plugins, {i: _manual_entry(plugins[i]) for i in marked})
+
+    failures = []
+    refs = []
+    for i in marked:
+        ref = plugins[i].get("ref")
+        if isinstance(ref, str) and ref.strip() and ref.strip() not in refs:
+            refs.append(ref.strip())
+    installs_by_ref, inventory_errors = _plugin_tier_inventory(refs, project_dir)
+
+    resolver_index = list(marked)
+    replacements = {}
+    for i in marked:
+        ref = plugins[i].get("ref")
+        ref = ref.strip() if isinstance(ref, str) else ref
+        error = inventory_errors.get(ref)
+        if error is None:
+            continue
+        resolver_index.remove(i)
+        replacements[i] = _manual_entry(plugins[i])
+        message = f"plugin {ref}: installed state unreadable - {error}"
+        _append_detail(
+            action_entries, message,
+            display=f"plugin {_short_plugin_name(ref)}: state unreadable")
+        failures.append(_plugin_tier_failure(
+            ref, message,
+            f"Bootstrap could not read the installed state of plugin {ref} "
+            f"({error}), so it does not carry out the uninstall: true entry for "
+            "it. Repair the file named in the error, then ask the user to type "
+            "'fix-all' to re-run bootstrap."))
+
+    inventory = [
+        {"ref": ref, "scope": inst.scope,
+         "project_path": inst.project_path or None,
+         "installed": not inst.dormant}
+        for ref, found in installs_by_ref.items() for inst in found
+    ]
+    try:
+        resolution = _tiers.resolve_uninstall_entries(
+            [plugins[i] for i in resolver_index],
+            _profiles.answers_by_ref(profile_state),
+            inventory,
+            profile_active=profile_state.status == "selected",
+        )
+    except _tiers.PluginTierError as exc:
+        message = f"plugin uninstall entries: {exc}"
+        _append_detail(action_entries, message,
+                       display="plugin uninstall: invalid entry")
+        failures.append(_plugin_tier_failure(
+            "plugin uninstall entries", message,
+            f"A plugins[] entry with uninstall is malformed ({exc}). Fix it in "
+            "the bootstrap.json (or bootstrap.local.json) that holds it, then "
+            "ask the user to type 'fix-all' to re-run bootstrap. No plugin was "
+            "uninstalled this pass."))
+        return _all_manual(), failures
+
+    for index, entry in zip(resolver_index, resolution.plugins):
+        replacements[index] = entry
+
+    for item in resolution.conflicts:
+        _append_detail(
+            action_entries,
+            f"plugin {item.ref}: uninstall: true conflicts with the rest of "
+            f"the manifest - {item.reason}. Remove the uninstall entry from "
+            "your bootstrap.local.json, or stop wanting the plugin",
+            display=f"plugin {_short_plugin_name(item.ref)}: uninstall conflict")
+    for item in resolution.satisfied:
+        ok_entries.append(f"plugin {item.ref}: uninstall: true satisfied "
+                          "(not installed at local scope)")
+    for item in resolution.notices:
+        _append_detail(
+            action_entries,
+            f"plugin {item.ref}: uninstall: true cannot remove its "
+            f"{item.scope}-scope install - {item.reason}",
+            display=f"plugin {_short_plugin_name(item.ref)}: still installed")
+
+    failures.extend(_run_plugin_uninstalls(
+        resolution, installs_by_ref, project_dir, action_entries, quiet_entries,
+        why=_ENTRY_UNINSTALL_WHY, cause=_ENTRY_UNINSTALL_CAUSE))
+    return _with_plugins(manifest, plugins, replacements), failures
 
 
 def _retire_superseded_pending(data_dir, pass_started_at):
@@ -6908,6 +7055,9 @@ def _phase_plugins(ctx):
             if install_mode == "manual":
                 # User is expected to install via `claude plugin install ...`;
                 # we only manage updates once they do. Don't surface a failure.
+                if plugin_def.get("uninstall") is True:
+                    ctx.ok(f"plugin {plugin_ref}: not installed (uninstall: true)")
+                    continue
                 ctx.ok(f"plugin {plugin_ref}: not installed (install: manual; run `claude plugin install {cli_ref}` to enable)")
                 continue
             if not enabled:

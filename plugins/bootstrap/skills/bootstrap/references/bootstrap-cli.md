@@ -203,11 +203,26 @@ Without `--user`/`--project`, the target is the state's own `write_target`
 the converging pass, the selection is still written and reported, but the
 command exits 1 and says to run `bootstrap run` manually.
 
+When the selection being applied changes this project's effective profile (another
+profile, or `none`), `set` also writes `uninstall: true` entries into
+`<project>/.claude/bootstrap.local.json` for the plugins the previous profile
+required or recommended that the selection being applied does not list, and drops the
+entries for plugins the profile being switched to requires or recommends (rules:
+manifest-reference.md, "Switching profiles retires plugins"). The entries share
+the selection's atomic write when that file is the target; with `--user` (or a
+user-level `write_target`) they go to the project file in their own write. The
+converging pass then uninstalls them at local scope. Each change prints a line,
+for example `uninstall entries written to <path>: mkt:a, mkt:b` or `uninstall
+entries removed from <path>: mkt:c`.
+
 **`bootstrap profile clear`.** Same lock refusal (exit 2) as `set`. Removes
 the `profile` key from the resolved target file (or does nothing, exit 0, if
 the file does not declare one) and does **not** converge -- it prints that
 bootstrap asks again on the next bootstrap pass, which a skipped cooldown may
-defer to a later session.
+defer to a later session. When a profile was selected for this project and the
+removal changes that, it writes the same `uninstall: true` entries as `clear
+--all` (project-local file, same write when that is the target) and prints
+them; the next pass uninstalls them.
 
 | Form | Exit code |
 |---|---|
@@ -253,8 +268,11 @@ writes the selection and the answers in ONE atomic replace of
 `<project>/.claude/bootstrap.local.json` (excluded from Git), releases the
 lock, then runs the same pass `bootstrap run` runs, streaming its output. The
 pass acts on the recorded answers: it installs wanted recommended plugins and
-uninstalls unwanted not-recommended ones. `--answers` is a JSON object or the
-path of a file holding one:
+uninstalls unwanted not-recommended ones. The same write also adds the
+`uninstall: true` entries a profile switch needs and drops the ones the profile being
+switched to wants (see `set` above); the pass carries them out and the CLI prints
+which entries it wrote or removed. `--answers` is a JSON object or the path of a
+file holding one:
 
 ```json
 {"mkt:plugin": {"want": false, "scope": "user"}}
@@ -270,8 +288,11 @@ stays unanswered and is asked again. Re-applying replaces earlier answers.
 project-local `profile` to the reserved `"unset"` and removes
 `plugin_choices`. It always writes, even when no file or key existed, because
 `"unset"` masks a `profile` left in `~/.claude/bootstrap.local.json`; it warns
-when that user-level file still selects a profile. It does **not** run a pass
-and uninstalls nothing. `apply` runs a pass; `clear --all` does not.
+when that user-level file still selects a profile. When a profile was selected,
+the same write adds an `uninstall: true` entry for every plugin it required or
+recommended (the base `plugins[]` excepted), and the CLI prints them. It does
+**not** run a pass, so the next bootstrap pass carries the uninstalls out.
+`apply` runs a pass; `clear --all` does not.
 
 **Refusal output (exit 3).** `choices` and `apply` print one JSON object on
 stdout (and the message on stderr): `{"refused": CODE, "message": TEXT,

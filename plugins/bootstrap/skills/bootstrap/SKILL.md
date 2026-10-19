@@ -425,7 +425,7 @@ reference_skill:
         A profile is a named bundle of manifest content under a `profiles` object;
         `profile` selects one, honored only from the two bootstrap.local.json layers.
         Plugin entries may carry a tier whose recorded answers bootstrap acts on.
-      keywords: [plugin tier, tier, recommended, not_recommended, required, why_install, why_skip, plugin_choices, profile apply, profile choices, profile clear --all, unset, profile_prompt, capabilities, uninstall plugin, profile, bootstrap profile, engineer profile, designer profile, extends, profile inheritance, profile chain, profile selection, no_profiles, unselected, none profile, unknown profile, invalid profile, profile prompt, AskUserQuestion profile, switch profile, bootstrap profile set, bootstrap profile clear, attended session, once per session, profile status, needs_typed_choice, profile_listing, typed choice, too many profiles]
+      keywords: [plugin tier, tier, recommended, not_recommended, required, why_install, why_skip, plugin_choices, profile apply, profile choices, profile clear --all, unset, profile_prompt, capabilities, uninstall plugin, profile, bootstrap profile, engineer profile, designer profile, extends, profile inheritance, profile chain, profile selection, no_profiles, unselected, none profile, unknown profile, invalid profile, profile prompt, AskUserQuestion profile, switch profile, bootstrap profile set, bootstrap profile clear, attended session, once per session, profile status, needs_typed_choice, profile_listing, typed choice, too many profiles, uninstall true, uninstall entry, switch profile uninstall, previous profile plugins]
       detail: |
         `profiles` (an object keyed by profile name) may be declared in any of the
         four layered bootstrap.json files and deep-merges across them like every
@@ -459,9 +459,9 @@ reference_skill:
         nothing and bootstrap asks again on a later pass. With more than three
         declared profiles, the question names none of them and instead offers a
         typed-choice option; the full list is printed to the user beforehand.
-        Switching a profile, at any time, changes only what a FUTURE bootstrap
-        pass provisions. Nothing a previous profile set up is removed, except
-        a plugin the user answered no to (below).
+        Switching a profile, at any time, changes what a FUTURE bootstrap pass
+        provisions, and retires the previous profile's plugins (below). Tools,
+        PATH entries and config the previous profile added are not removed.
 
         Plugin tiers: a `plugins[]` entry may declare `tier` (`required`,
         `recommended`, `not_recommended`) with `why_install` and `why_skip`
@@ -478,16 +478,36 @@ reference_skill:
         profile prompt off for that project. Details: references/bootstrap-cli.md
         (verbs, JSON, exit codes) and references/manifest-reference.md (fields,
         uninstall scopes).
+
+        `uninstall: true` on a `plugins[]` entry (valid in any layer) is the
+        declarative removal: each pass uninstalls that plugin's LOCAL-scope
+        install for this project, and an absent install satisfies it quietly. It
+        never touches user or project scope (a one-line notice instead), and when
+        the rest of the manifest wants the plugin installed (`install: "auto"`,
+        tier `required`, a `recommended` plugin not declined) it does nothing and
+        warns about the conflict. `profile apply`, `profile set` and `profile
+        clear` (with or without `--all`) write these entries to the project's bootstrap.local.json
+        when the selected profile changes: a plugin the old profile's chain
+        tiered `required` or `recommended` that the new selection does not list
+        at all (and the base `plugins[]` does not list) gets one, and an entry for
+        a plugin the new profile tiers `required` or `recommended` is removed.
+        There is no hidden record: the entries are the whole state, visible and
+        hand-editable.
       gotchas:
         - A `profiles` declaration error (a bad name, a self/unknown/cyclic
           `extends`) must be fixed in the manifest that declares it, but never
           blocks the base manifest from provisioning.
-        - Switching profiles is additive going forward, not a reset -- tools, PATH
-          entries, and config a previous profile added stay in place even after a
-          different profile (or `none`) is selected. The one removal is that bootstrap
-          uninstalls an installed `not_recommended` plugin the user answered no
-          to (local scope; user scope only with a confirmed answer; project scope
-          is reported, never removed).
+        - Switching profiles is not a reset. `profile apply`, `profile set` and
+          `profile clear` (with or without `--all`) retire the old profile's plugins by writing
+          `uninstall` entries (project bootstrap.local.json) for the plugins it
+          required or recommended that the new selection does not list, and the
+          next pass uninstalls them at local scope only (a user or project
+          install gets a notice). A `not_recommended` plugin the user answered no
+          to is a separate path, where user scope needs a confirmed answer and
+          project scope is reported, never removed. Tools, PATH entries and
+          config a previous profile added stay in place even after a different
+          profile (or `none`) is selected. A hand-edited `profile` key
+          writes no entries.
     - id: python_interpreter
       summary: >-
         Invoke Python through BOOTSTRAP_PYTHON / BOOTSTRAP_PROJECT_PYTHON, never bare

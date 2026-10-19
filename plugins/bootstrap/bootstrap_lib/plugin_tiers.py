@@ -20,6 +20,10 @@ The rules, from the user's rulings:
   user-scope confirmation. Both come back as ``unsatisfied`` every pass until
   the inventory agrees.
 - Satisfaction is never recorded: each call recomputes from the inventory.
+- An entry may also carry ``uninstall: true`` (see
+  :func:`resolve_uninstall_entries`): a declarative order to remove the
+  plugin's LOCAL-scope install for this project, independent of any tier. It
+  is how a profile switch removes what the previous profile added.
 
 The authored ``install`` value on a tiered entry is ignored (it is always
 ``manual`` for legacy safety, see :func:`profiles.validate_plugin_entries`);
@@ -49,6 +53,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Protocol, Tuple
 from .profiles import (
     ANSWER_SCOPE_USER,
     QUESTIONED_TIERS,
+    TIER_NOT_RECOMMENDED,
     TIER_RECOMMENDED,
     TIER_REQUIRED,
     TIERS,
@@ -66,6 +71,8 @@ ACTION_UNINSTALL = "uninstall"
 ACTION_ASK = "ask"
 ACTION_NONE = "none"
 ACTION_UNSATISFIED = "unsatisfied"
+ACTION_NOTICE = "notice"
+ACTION_CONFLICT = "conflict"
 
 #: Scope an install the resolver orders is made at. Runtime never writes the
 #: tracked project settings, so a wanted plugin is installed per user, per
@@ -243,6 +250,162 @@ def resolve_plugin_tiers(
         actions=tuple(actions),
         questions=tuple(recommended_questions + skip_questions),
     )
+
+
+# ---------------------------------------------------------------------------
+# Uninstall entries (``uninstall: true``)
+# ---------------------------------------------------------------------------
+
+UNINSTALL_KEY = "uninstall"
+
+REASON_UNINSTALL_SATISFIED = "no local-scope install; nothing to uninstall"
+REASON_UNINSTALL_OTHER_SCOPE = (
+    "bootstrap uninstalls at local scope only; remove it at that scope by hand"
+)
+
+
+@dataclass(frozen=True)
+class UninstallResolution:
+    """What :func:`resolve_uninstall_entries` decided.
+
+    ``plugins`` is the entry list in its input positions. An entry whose
+    uninstall is carried out or satisfied is rewritten ``install: manual`` so
+    the plugin phase never installs a plugin the manifest asks to remove (an
+    entry that omits ``install`` would otherwise default to ``auto``); an entry
+    in conflict keeps whatever the rest of the manifest says. ``actions`` holds
+    ``uninstall`` (a local install to remove), ``none`` (satisfied), ``notice``
+    (user/project installs bootstrap will not touch) and ``conflict``.
+    """
+
+    plugins: Tuple[Dict[str, Any], ...]
+    actions: Tuple[PluginAction, ...]
+
+    @property
+    def uninstalls(self) -> Tuple[PluginAction, ...]:
+        return tuple(a for a in self.actions if a.action == ACTION_UNINSTALL)
+
+    @property
+    def conflicts(self) -> Tuple[PluginAction, ...]:
+        return tuple(a for a in self.actions if a.action == ACTION_CONFLICT)
+
+    @property
+    def notices(self) -> Tuple[PluginAction, ...]:
+        return tuple(a for a in self.actions if a.action == ACTION_NOTICE)
+
+    @property
+    def satisfied(self) -> Tuple[PluginAction, ...]:
+        return tuple(a for a in self.actions if a.action == ACTION_NONE)
+
+
+def resolve_uninstall_entries(
+    entries: Iterable[Mapping[str, Any]],
+    answers: Mapping[str, Mapping[str, Any]],
+    inventory: Iterable[Any],
+    *,
+    profile_active: bool = True,
+) -> UninstallResolution:
+    """Decide the action for every ``uninstall: true`` entry in ``entries``.
+
+    ``entries`` is the effective ``plugins`` list AFTER :func:`resolve_plugin_tiers`
+    ran over it (layers merge entries by ``ref``, so a local ``uninstall`` entry
+    and a profile's tiered entry for the same plugin are one entry). ``answers``,
+    ``inventory`` and ``profile_active`` are as for :func:`resolve_plugin_tiers`.
+
+    - A plugin the rest of the manifest wants installed is a CONFLICT: nothing
+      is uninstalled and the entry says so every pass, so a plugin is never
+      installed and removed in turn. Wanted means ``install: "auto"`` written
+      on the entry, tier ``required``, tier ``recommended`` unless the user
+      answered no, or tier ``not_recommended`` kept by a yes answer. Tiers
+      count only while a profile is selected (``profile_active``).
+    - Otherwise the plugin's LOCAL-scope install for this project is uninstalled.
+      No such install means the entry is satisfied: not a failure, and nothing
+      to fix. User and project installs are never touched; they come back as a
+      ``notice``.
+
+    ``uninstall`` must be a boolean; ``false`` makes the entry an ordinary
+    one. Raises :class:`PluginTierError` for a non-boolean ``uninstall``, an
+    ``uninstall: true`` entry with no ref, or a malformed answer or inventory.
+    """
+    installed_by_ref = _installed_by_ref(inventory)
+    answer_by_ref = _validated_answers(answers)
+
+    rewritten: List[Dict[str, Any]] = []
+    actions: List[PluginAction] = []
+    for entry in entries:
+        entry = dict(entry)
+        flag = entry.get(UNINSTALL_KEY)
+        if flag is None or flag is False:
+            rewritten.append(entry)
+            continue
+        if flag is not True:
+            raise PluginTierError(
+                "plugin %r: '%s' must be true or false, not %r"
+                % (entry.get("ref"), UNINSTALL_KEY, flag)
+            )
+        ref = entry.get("ref")
+        if not isinstance(ref, str) or not ref.strip():
+            raise PluginTierError(
+                "an '%s' entry has no ref: %r" % (UNINSTALL_KEY, entry)
+            )
+        ref = ref.strip()
+        tier = entry.get("tier") or ""
+
+        wanted = _wanted_installed(entry, answer_by_ref.get(ref), profile_active)
+        if wanted:
+            actions.append(PluginAction(
+                ref, tier, ACTION_CONFLICT,
+                reason="also wanted installed (%s); not uninstalled" % wanted))
+            rewritten.append(entry)
+            continue
+
+        entry["install"] = "manual"
+        rewritten.append(entry)
+        installs = installed_by_ref.get(ref, [])
+        local = _local_targets(installs)
+        for path in local:
+            actions.append(PluginAction(
+                ref, tier, ACTION_UNINSTALL, scope=SCOPE_LOCAL, project_path=path))
+        others = tuple(dict.fromkeys(
+            r["scope"] for r in installs if r["scope"] != SCOPE_LOCAL))
+        if others:
+            actions.append(PluginAction(
+                ref, tier, ACTION_NOTICE, scope=",".join(others),
+                reason=REASON_UNINSTALL_OTHER_SCOPE))
+        if not installs:
+            actions.append(PluginAction(
+                ref, tier, ACTION_NONE, reason=REASON_UNINSTALL_SATISFIED))
+
+    return UninstallResolution(plugins=tuple(rewritten), actions=tuple(actions))
+
+
+def _wanted_installed(entry, answer, profile_active):
+    """Why the manifest wants the plugin installed, or ``""`` when it does not."""
+    if entry.get("install") == "auto":
+        return "install: auto"
+    if not profile_active:
+        return ""
+    tier = entry.get("tier")
+    if tier == TIER_REQUIRED:
+        return "tier required"
+    if tier == TIER_RECOMMENDED:
+        if answer is None:
+            return "tier recommended, not answered"
+        return "tier recommended, answered yes" if answer["want"] else ""
+    if tier == TIER_NOT_RECOMMENDED and answer is not None and answer["want"]:
+        return "tier not_recommended, kept by answer"
+    return ""
+
+
+def _local_targets(installs):
+    """Distinct normalized project paths of the local installs."""
+    paths = []
+    for record in installs:
+        if record["scope"] != SCOPE_LOCAL:
+            continue
+        path = _normalize_path(record["project_path"])
+        if path not in paths:
+            paths.append(path)
+    return paths
 
 
 # ---------------------------------------------------------------------------

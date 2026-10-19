@@ -691,6 +691,30 @@ same write, so switching away and back never revives earlier answers;
 re-writing the same profile keeps them. A malformed record is ignored with a
 warning, and the user is asked again.
 
+**Switching profiles retires plugins.** When `bootstrap profile apply`, `profile
+set` or `profile clear` (with or without `--all`) changes the selection, the project's
+`.claude/bootstrap.local.json` gets `uninstall: true` entries (see
+[`uninstall`](#uninstall)) merged into its `plugins` list, in the same atomic
+write as the selection when that file is the target:
+
+- **Written:** every plugin the OLD profile's effective chain (its `extends`
+  parents included) tiers `required` or `recommended` that the NEW selection
+  does not list at all, in any tier, and that the base `plugins[]` (outside any
+  profile, local layers included) does not list. The new selection is another
+  profile, `none` or `unset`. Re-selecting the same profile, or choosing a
+  profile when none was selected, writes none.
+- **Removed:** an existing `uninstall: true` entry in that file for a plugin the
+  NEW profile tiers `required` or `recommended`. An entry that carries other keys
+  only loses its `uninstall` mark.
+- Other entries and keys in the file are preserved. Tracked `bootstrap.json`
+  and `settings.json` are never written, and project scope is never touched.
+- `apply` and `set` then run their pass, which carries the entries out; `clear`
+  runs no pass, so the next pass does. A plain `clear` that merely re-exposes
+  the same profile from the user-level file writes none. A hand-edited
+  `profile` key writes no entries.
+- A plugin the new profile lists as `not_recommended` gets no entry: the tier's
+  own question and answer decide it.
+
 **Uninstall semantics.** A `want: false` answer on an installed
 `not_recommended` plugin is acted on every pass without further confirmation:
 - `local` scope installs for this project are uninstalled.
@@ -1226,6 +1250,7 @@ Each entry in the `plugins` array declares a plugin the engine should ensure is 
 | `scope` | No (default `"user"`) | Installation scope (`user` or `project`) |
 | `min_version` | No | Minimum required installed version — see below |
 | `install` | No (default `"auto"`) | `"auto"` (default) or `"manual"` — see below |
+| `uninstall` | No | `true` uninstalls the plugin's local-scope install for this project -- see [`uninstall`](#uninstall) |
 
 ### `install`
 
@@ -1260,6 +1285,44 @@ plugin private-plugins:claude-admin: updated 0.1.0 -> 0.2.0 (install: manual)
 
 - `enabled` and `scope` are ignored when `install: "manual"` — the user owns those decisions.
 - `min_version` is currently honored only for `install: "auto"` entries. If you need a minimum version on a manual plugin, that constraint has to be communicated to the user out-of-band; the engine does not force-update a manual plugin to satisfy it (would defeat the purpose of "user owns install").
+
+### `uninstall`
+
+`uninstall: true` is a declarative order to remove the plugin's **local-scope**
+install for the current project. It is valid in any layered `bootstrap.json` and
+is how a profile switch retires the previous profile's plugins: `bootstrap
+profile apply`, `profile set` and `profile clear --all` write the entries to
+`<project>/.claude/bootstrap.local.json` (see Plugin tiers below). You can also
+write one by hand:
+
+```json
+{"plugins": [{"ref": "spryfox-plugins:designer", "uninstall": true}]}
+```
+
+Entries merge across layers by `ref`, so a local `uninstall` entry and the same
+plugin's tiered or `install` entry are one effective entry. Each engine pass,
+after the plugin tiers have run:
+
+- **Local install present** -- uninstalled through `claude plugin uninstall
+  --scope local`, run from the project root. A failed uninstall is a pass
+  failure and recurs next pass while the install remains.
+- **No local install** -- the entry is satisfied: a verbose ok line, no failure,
+  no fix-all item. Nothing is recorded; every pass recomputes from the installed
+  inventory, so the entry is idempotent and can stay in the file indefinitely.
+- **Only a user- or project-scope install** -- never touched. A one-line notice
+  names the scope and says bootstrap uninstalls at local scope only. A project
+  install is the tracked `.claude/settings.json`, which the runtime never writes.
+- **Conflict** -- when the effective entry is also wanted installed, nothing is
+  uninstalled and a warning names the conflict, every pass, so a plugin is
+  never installed and removed in turn. Wanted means: `install: "auto"` written
+  on the entry, tier `required`, tier `recommended` unless the recorded answer is
+  no, or tier `not_recommended` with a yes answer. Tiers count only while a
+  profile is selected. An entry that omits `install` is not "wanted".
+
+The plugin phase never installs a plugin whose `uninstall: true` entry is acting
+(the engine rewrites it to `install: "manual"`). `uninstall` must be a boolean;
+anything else is a failure naming the entry. To undo an entry, delete it (or set
+`uninstall` to `false`).
 
 ### Self-registration (automatic `install: "manual"` entries)
 

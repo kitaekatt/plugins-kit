@@ -28,6 +28,9 @@ ensure-bootstrap SessionStart hook into a project (install_bootstrap_hook.py):
                      questions; `apply` records a profile and its answers under
                      the engine lock and runs a pass; `clear --all` resets the
                      project's selection and answers under the same lock.
+                     `apply`, `set` and `clear` also write the
+                     `uninstall: true` plugin entries that retire the previous
+                     profile into the project's bootstrap.local.json.
 
 Why the status probe is not "try to acquire and release": acquiring clears a
 stale lock and holds the mutex for an instant, so a mere status check could
@@ -1010,6 +1013,71 @@ def cmd_profile_status(args) -> int:
     return 0
 
 
+_REMOVE_KEY = object()
+
+
+def _resolve_selection(project_dir, selection=None, kind="project_local"):
+    """`(effective_manifest, ProfileState)` for the layers on disk, nothing written.
+
+    With `selection` the `profile` key of the `kind` layer (`project_local` or
+    `user_local`) is replaced by it in memory, adding the layer when the file
+    does not exist; `selection=None` resolves what is selected now, and
+    `selection=_REMOVE_KEY` deletes the `profile` key (plain `clear`). A layer
+    that could not be parsed stays unparsed, so its state reads `invalid`.
+    """
+    layers, _problems = _read_layers(project_dir)
+    if selection is not None:
+        by_kind = {k: (path, k, data) for path, k, data in layers}
+        if kind in by_kind:
+            path, _k, data = by_kind[kind]
+            if isinstance(data, dict):
+                new_data = {k: v for k, v in data.items() if k != "profile"}
+                if selection is not _REMOVE_KEY:
+                    new_data["profile"] = selection
+                by_kind[kind] = (path, kind, new_data)
+        elif selection is _REMOVE_KEY:
+            pass
+        else:
+            path = (_project_local_profile_path(project_dir)
+                    if kind == "project_local" else _user_local_profile_path())
+            by_kind[kind] = (path, kind, {"profile": selection})
+        layers = [by_kind[k] for k in bootstrap_profiles.LAYER_KINDS if k in by_kind]
+    home = os.environ.get("HOME") or os.path.expanduser("~")
+    return bootstrap_profiles.resolve_layers(
+        layers, project_dir=str(project_dir), home=home)
+
+
+def _switch_edit(project_dir, new_selection, kind):
+    """The uninstall entries moving to `new_selection` writes and drops.
+
+    `new_selection` is a profile name, `none`, `unset` or `_REMOVE_KEY` (the
+    `profile` key is deleted); `kind` is the layer
+    that selection is written to. Plugins the old profile required or
+    recommended and the new effective manifest does not list at all get an
+    `uninstall: true` entry; entries for plugins the new profile requires or
+    recommends are dropped (see `profiles.plan_switch_uninstalls`).
+    """
+    old_effective, old_state = _resolve_selection(project_dir)
+    new_effective, new_state = _resolve_selection(project_dir, new_selection, kind)
+    return bootstrap_profiles.plan_switch_uninstalls(
+        old_state, old_effective, new_state, new_effective)
+
+
+def _print_uninstall_change(change, path, pass_runs=True):
+    """Report the `uninstall: true` entries a profile write added or removed."""
+    if not change:
+        return
+    if change.written:
+        print("uninstall entries written to %s: %s"
+              % (path, ", ".join(change.written)))
+        print("  %s uninstalls them at local scope for this project"
+              % ("the converging pass" if pass_runs
+                 else "the next bootstrap pass (none runs now)"))
+    if change.removed:
+        print("uninstall entries removed from %s: %s"
+              % (path, ", ".join(change.removed)))
+
+
 def cmd_profile_set(args) -> int:
     resolved = _profile_context(args)
     if resolved is None:
@@ -1048,22 +1116,29 @@ def cmd_profile_set(args) -> int:
     else:
         target_path = state.write_target
 
+    project_local = _project_local_profile_path(project_dir)
+    in_project = target_path == project_local
+    edit = _switch_edit(
+        project_dir, name, "project_local" if in_project else "user_local")
     try:
-        bootstrap_profiles.write_selection(target_path, name)
+        if in_project:
+            change = bootstrap_profiles.write_selection(
+                target_path, name, uninstall_edit=edit)
+        else:
+            # The entries live in the project's own local file; the selection
+            # goes to the user-level one. Entries first: until the selection
+            # lands the old profile still wants them, so they only warn.
+            change = bootstrap_profiles.write_uninstall_entries(project_local, edit)
+            bootstrap_profiles.write_selection(target_path, name)
     except bootstrap_profiles.ProfileWriteError as exc:
         sys.stderr.write("bootstrap profile set: %s\n" % exc)
         return 1
 
-    if target_path == _project_local_profile_path(project_dir):
-        try:
-            detail = bootstrap_profiles.ensure_vcs_excluded(project_dir)
-        except bootstrap_profiles.ProfileWriteError as exc:
-            sys.stderr.write("bootstrap profile set: warning: %s\n" % exc)
-        else:
-            if detail:
-                print("git: %s" % detail)
+    if in_project or change:
+        _exclude_from_vcs(project_dir, "set")
 
     print("profile selection written to %s" % target_path)
+    _print_uninstall_change(change, project_local)
 
     if not plugin_root:
         sys.stderr.write(
@@ -1103,13 +1178,25 @@ def cmd_profile_clear(args) -> int:
             return 1
         target_path = state.write_target
 
+    project_local = _project_local_profile_path(project_dir)
+    in_project = target_path == project_local
+    edit = _switch_edit(
+        project_dir, _REMOVE_KEY, "project_local" if in_project else "user_local")
     try:
-        bootstrap_profiles.write_selection(target_path, None)
+        if in_project:
+            change = bootstrap_profiles.write_selection(
+                target_path, None, uninstall_edit=edit)
+        else:
+            change = bootstrap_profiles.write_uninstall_entries(project_local, edit)
+            bootstrap_profiles.write_selection(target_path, None)
     except bootstrap_profiles.ProfileWriteError as exc:
         sys.stderr.write("bootstrap profile clear: %s\n" % exc)
         return 1
 
+    if change and not in_project:
+        _exclude_from_vcs(project_dir, "clear")
     print("profile selection removed from %s" % target_path)
+    _print_uninstall_change(change, project_local, pass_runs=False)
     print("bootstrap asks again on the next bootstrap pass (a skipped cooldown "
           "may defer that to a later session).")
     return 0
@@ -1481,10 +1568,12 @@ def cmd_profile_apply(args) -> int:
             # Everything the write depends on is read HERE, under the lock: a
             # writer that changed a layer or the registry since the caller
             # last looked is seen, and nothing it wrote is lost.
-            _state, resolution, entries = _resolve_candidate(project_dir, args.profile)
+            _state, resolution, entries = _resolve_candidate(
+                project_dir, args.profile)
             _check_answers(answers, entries, resolution)
-            bootstrap_profiles.write_selection_with_answers(
-                target, args.profile, answers)
+            edit = _switch_edit(project_dir, args.profile, "project_local")
+            change = bootstrap_profiles.write_selection_with_answers(
+                target, args.profile, answers, uninstall_edit=edit)
     except _Refusal as refusal:
         return _report_refusal("apply", refusal)
     except (ProfileEngineMissing, ProfileInventoryError,
@@ -1495,6 +1584,7 @@ def cmd_profile_apply(args) -> int:
     _exclude_from_vcs(project_dir, "apply")
     print("profile '%s' and %d plugin answer(s) written to %s"
           % (args.profile, len(answers), target))
+    _print_uninstall_change(change, target)
     if not plugin_root:
         sys.stderr.write(
             "bootstrap profile apply: selection written, but no bootstrap plugin "
@@ -1534,13 +1624,17 @@ def cmd_profile_clear_all(args) -> int:
                     "%s); nothing was written. Retry after it finishes.\n"
                     % info.get("pid"))
                 return 2
-            bootstrap_profiles.clear_selection(target)
+            edit = _switch_edit(
+                project_dir, bootstrap_profiles.UNSET_SELECTION, "project_local")
+            change = bootstrap_profiles.clear_selection(
+                target, uninstall_edit=edit)
     except bootstrap_profiles.ProfileWriteError as exc:
         sys.stderr.write("bootstrap profile clear: %s\n" % exc)
         return 1
 
     _exclude_from_vcs(project_dir, "clear")
     print("profile selection and plugin answers cleared in %s" % target)
+    _print_uninstall_change(change, target, pass_runs=False)
     _warn_user_level_profile()
     return 0
 
