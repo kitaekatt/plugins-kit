@@ -32,7 +32,12 @@ BEHAVIOR_IDS: tuple[str, ...] = (
     "park-questions",
     "notify-for-input",
 )
-VALUE_NAMES: tuple[str, ...] = ("afk_quiet_minutes", "departure_words", "waiter_model")
+VALUE_NAMES: tuple[str, ...] = (
+    "afk_quiet_minutes",
+    "departure_words",
+    "waiter_model",
+    "progress_minutes",
+)
 
 _TOP_KEYS = ("behaviors", "values")
 _PLUGIN_DIR = Path(__file__).resolve().parent.parent
@@ -43,6 +48,7 @@ _VALUE_EXPECT = {
     "afk_quiet_minutes": "a positive integer",
     "departure_words": "a non-empty list of words (letters, digits, underscore)",
     "waiter_model": "a non-empty model name without spaces",
+    "progress_minutes": "a positive integer",
 }
 
 
@@ -150,7 +156,7 @@ def _check_value(path: Path, key: str, value: Any) -> Any:
             key,
             f"unknown value '{key}'; valid names: {', '.join(VALUE_NAMES)}",
         )
-    if key == "afk_quiet_minutes":
+    if key in ("afk_quiet_minutes", "progress_minutes"):
         ok = isinstance(value, int) and not isinstance(value, bool) and value > 0
     elif key == "departure_words":
         ok = (

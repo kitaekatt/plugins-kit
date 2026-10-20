@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Presence: how it works</title>
-<!-- presence.md sha256: 098537f797907913bbd4311a4263466f96dc11bf93cf49612f9134c859ec0365 -->
+<!-- presence.md sha256: 383953b17b27d8740134481bb18b45f5a9ecf1eb6abcd1371e7c93e75af9cf9a -->
 <style>
   :root {
     --bg: #f6f7f9; --card: #ffffff; --ink: #1d2330; --muted: #5d6677; --line: #e2e6ec;
@@ -196,7 +196,7 @@
   <div class="waits">
     <div class="wcard"><b>An agent or workflow is running</b><p>Nothing extra needed. The terminal shows working by itself.</p>
       <div class="flow"><span class="chip">Agent</span><span class="op">&rarr;</span><span class="chip">Terminal shows working</span></div></div>
-    <div class="wcard"><b>A shell, Codex CLI, or external job is running</b><p>Claude adds a Monitor for progress. It also adds a waiter agent.</p>
+    <div class="wcard"><b>A shell, Codex CLI, or external job is running</b><p>Claude adds a Monitor on the plugin's watcher, which reports progress every <code>progress_minutes</code> and a stall after 20 quiet minutes. It also adds a waiter agent.</p>
       <div class="flow"><span class="chip">Job</span><span class="op">+</span><span class="chip">Monitor</span><span class="op">+</span><span class="chip">Waiter agent</span></div></div>
   </div>
   <div class="promise">
@@ -253,7 +253,7 @@
 
 <section>
   <h2>Configuration</h2>
-  <p class="sub">A small JSON file. Turn behaviors off, or change three values. Nothing else is configurable.</p>
+  <p class="sub">A small JSON file. Turn behaviors off, or change four values. Nothing else is configurable.</p>
   <div class="quote">{"behaviors": {"recap-on-return": false}, "values": {"afk_quiet_minutes": 15}}</div>
   <table style="margin-top:16px">
     <thead><tr><th>Behavior</th><th>What it does (all on by default)</th></tr></thead>
@@ -273,6 +273,7 @@
       <tr><td><code>afk_quiet_minutes</code></td><td>10</td><td>Minutes of quiet before afk</td></tr>
       <tr><td><code>departure_words</code></td><td>["afk"]</td><td>Words that set you afk when they stand alone in your message, in any case (not inside a longer name such as <code>afk-on-departure</code>); the list is replaced, not extended</td></tr>
       <tr><td><code>waiter_model</code></td><td>"haiku"</td><td>Model for the waiter agent</td></tr>
+      <tr><td><code>progress_minutes</code></td><td>20</td><td>Minutes between the watcher's progress lines</td></tr>
     </tbody>
   </table>
   <p class="sub" style="margin-top:16px">Files, lowest to highest. A later file wins, key by key; lists and single values replace. An absent file is skipped.</p>

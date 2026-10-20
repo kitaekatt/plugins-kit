@@ -62,6 +62,25 @@ def _find_bash() -> str | None:
 
 _BASH = _find_bash()
 
+
+def _find_bash32() -> str | None:
+    """``/bin/bash`` when it is GNU bash 3.x (a stock macOS), else None.
+
+    The default ``bash`` on a developer Mac is usually a newer Homebrew bash, so
+    the shim would never run under the bash that ``#!/usr/bin/env bash`` finds on
+    an unmodified Mac. This lane runs it there.
+    """
+    if _IS_WINDOWS or not Path("/bin/bash").exists():
+        return None
+    probe = subprocess.run(
+        ["/bin/bash", "-c", 'printf %s "${BASH_VERSINFO[0]}"'],
+        capture_output=True, text=True, timeout=30,
+    )
+    return "/bin/bash" if probe.stdout.strip() == "3" else None
+
+
+_BASH32 = _find_bash32()
+
 # (plugin, shim file stem, entrypoint relative to the plugin root)
 _VENV_SHIMS = [
     ("job-kit", "job-kit", "lib/job_kit_entrypoint.py"),
@@ -89,11 +108,17 @@ _KINDS = [
         "posix",
         marks=pytest.mark.skipif(_BASH is None, reason="bash not available"),
     ),
+    # Bash 3.2 lane: task-kit only (the other shims are outside this increment).
+    pytest.param(
+        "posix32",
+        marks=pytest.mark.skipif(_BASH32 is None, reason="/bin/bash is not bash 3.x here"),
+    ),
     pytest.param(
         "cmd",
         marks=pytest.mark.skipif(not _IS_WINDOWS, reason=".cmd shims run only on Windows"),
     ),
 ]
+_POSIX_KINDS = ("posix", "posix32")
 
 
 @pytest.fixture(scope="session")
@@ -125,6 +150,8 @@ class _Launch:
     def __init__(self, tmp_path: Path, template: Path, plugin: str, stem: str,
                  entrypoint: str, kind: str, cache_marketplace: str | None = None,
                  data_bundle_marketplace: str | None = None) -> None:
+        if kind == "posix32" and plugin != "task-kit":
+            pytest.skip("the bash 3.2 lane covers task-kit's shim only")
         self.template = template
         self.plugin = plugin
         self.kind = kind
@@ -162,19 +189,28 @@ class _Launch:
         )
 
     def run(self, *, redirect: bool, claudx: bool = False,
-            marketplace: str | None = None) -> subprocess.CompletedProcess:
+            marketplace: str | None = None, path: str | None = None,
+            extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
         env = dict(os.environ)
         for name in _SCRUBBED_ENV:
             env.pop(name, None)
         env["HOME"] = str(self.home)
         env["USERPROFILE"] = str(self.home)
+        if path is not None:
+            env["PATH"] = path
+        env.update(extra_env or {})
         if redirect:
             env["CLAUDE_BOOTSTRAP_DATA_ROOT"] = str(self.redirect_root)
         if claudx:
             env["CLAUDE_PLUGIN_TEST"] = "1"
         if marketplace is not None:
             env["CLAUDE_PLUGIN_TEST_MARKETPLACE"] = marketplace
-        command = [_BASH, str(self.shim)] if self.kind == "posix" else ["cmd.exe", "/c", str(self.shim)]
+        if self.kind == "posix":
+            command = [_BASH, str(self.shim)]
+        elif self.kind == "posix32":
+            command = [_BASH32, str(self.shim)]
+        else:
+            command = ["cmd.exe", "/c", str(self.shim)]
         return subprocess.run(
             command, env=env, capture_output=True, text=True, timeout=60,
         )
@@ -355,3 +391,131 @@ def test_data_dir_launcher_copy_never_reads_the_production_venv_in_a_redirected_
     result = launch.run(redirect=True)
     assert result.returncode == 2
     assert "refusing to fall back to the production venv" in result.stderr
+
+
+# --- BOOTSTRAP_PYTHON validation (task-kit's POSIX shim) -------------------------
+#
+# Root CLAUDE.md: the variable counts only when its OWN realpath resolves inside
+# the standalone directory; a stranger's BOOTSTRAP_PYTHON must never substitute.
+# Every case runs with no plugin venv, a fakebin ``python3`` that prints PATHPY
+# first on PATH, and a tools directory holding only the utilities the shim calls.
+
+_STANDALONE_REL = Path(".local") / "share" / "python-standalone"
+_TOOLS = ("dirname", "uname", "tr", "readlink")
+
+
+def _script(path: Path, marker: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"#!/bin/sh\necho {marker}\n", encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+class _BootstrapPython:
+    """task-kit's shim with no plugin venv, run against a controlled PATH."""
+
+    def __init__(self, tmp_path: Path, venv_template: Path, kind: str) -> None:
+        self.launch = _Launch(tmp_path, venv_template, "task-kit", "task-kit",
+                              "bin/task_kit_entrypoint.py", kind)
+        self.home = self.launch.home
+        self.standalone = self.home / _STANDALONE_REL
+        self.tools = tmp_path / "tools"
+        self.tools.mkdir()
+        for name in _TOOLS:
+            found = shutil.which(name)
+            assert found, f"{name} not found on PATH"
+            (self.tools / name).symlink_to(found)
+        self.fakebin = tmp_path / "fakebin"
+        _script(self.fakebin / "python3", "PATHPY")
+        self.stranger = _script(tmp_path / "stranger" / "python", "STRANGER")
+
+    def inside(self, *parts: str, marker: str = "STANDALONE") -> Path:
+        return _script(self.standalone.joinpath(*parts), marker)
+
+    def run(self, bootstrap_python: Path | None, *, with_path_python: bool = True):
+        path = (f"{self.fakebin}:{self.tools}" if with_path_python else str(self.tools))
+        extra = {"BOOTSTRAP_PYTHON": str(bootstrap_python)} if bootstrap_python else {}
+        return self.launch.run(redirect=False, path=path, extra_env=extra)
+
+
+@pytest.fixture(params=[k for k in _KINDS if k.values[0] in _POSIX_KINDS],
+                ids=lambda p: p)
+def posix_kind(request):
+    return request.param
+
+
+@pytest.fixture
+def bp(tmp_path, venv_template, posix_kind) -> _BootstrapPython:
+    return _BootstrapPython(tmp_path, venv_template, posix_kind)
+
+
+def _marker(result: subprocess.CompletedProcess) -> str:
+    assert result.returncode == 0, (result.returncode, result.stdout, result.stderr)
+    return result.stdout.strip().splitlines()[-1]
+
+
+def test_a_stranger_bootstrap_python_is_refused_when_the_standalone_dir_is_absent(bp):
+    """(b) With no standalone directory the old pattern collapsed to ``/*`` and
+    accepted ANY absolute interpreter.
+
+    Shown to fail: restore the previous case pattern; the stranger runs.
+    """
+    assert not bp.standalone.exists()
+    assert _marker(bp.run(bp.stranger)) == "PATHPY"
+
+
+def test_a_real_file_inside_the_standalone_tree_is_accepted(bp):
+    """(c) The variable names a real file in the standalone tree."""
+    real = bp.inside("python", "bin", "python3.12")
+    assert _marker(bp.run(real)) == "STANDALONE"
+
+
+def test_a_symlink_outside_the_tree_pointing_into_it_is_accepted(bp):
+    """(c2) This machine's real layout: ~/.local/bin/python3 -> standalone .../python3
+    -> python3.12. The old directory-only check rejected it.
+
+    Shown to fail: resolve ``dirname "$BOOTSTRAP_PYTHON"`` instead of the followed
+    link; the variable is rejected and PATHPY runs.
+    """
+    bp.inside("python", "bin", "python3.12")
+    (bp.standalone / "python" / "bin" / "python3").symlink_to("python3.12")
+    outer = bp.home / ".local" / "bin" / "python3"
+    outer.parent.mkdir(parents=True, exist_ok=True)
+    outer.symlink_to(bp.standalone / "python" / "bin" / "python3")
+    assert _marker(bp.run(outer)) == "STANDALONE"
+
+
+def test_a_relative_symlink_with_dotdot_that_stays_inside_is_accepted(bp):
+    """(c3) A relative link target is resolved against the link's own directory."""
+    bp.inside("python", "lib", "real-python")
+    link = bp.standalone / "python" / "bin" / "py"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to("../lib/real-python")
+    assert _marker(bp.run(link)) == "STANDALONE"
+
+
+def test_a_bootstrap_python_outside_the_tree_is_refused(bp):
+    """(d) The standalone directory exists; the variable is a stranger."""
+    bp.inside("python", "bin", "python3.12")
+    assert _marker(bp.run(bp.stranger)) == "PATHPY"
+
+
+def test_a_symlink_inside_the_tree_pointing_out_is_refused(bp):
+    """(d2) The old check resolved only the directory and accepted this.
+
+    Shown to fail: resolve ``dirname "$BOOTSTRAP_PYTHON"`` instead of the followed
+    link; the stranger runs.
+    """
+    link = bp.standalone / "python" / "bin" / "python3"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(bp.stranger)
+    assert _marker(bp.run(link)) == "PATHPY"
+
+
+def test_a_relative_symlink_inside_the_tree_escaping_by_dotdot_is_refused(bp):
+    """(d3) The relative branch of the link-following loop."""
+    link = bp.standalone / "python" / "bin" / "escape"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    relative = os.path.relpath(bp.stranger, link.parent)
+    link.symlink_to(relative)
+    assert _marker(bp.run(link)) == "PATHPY"

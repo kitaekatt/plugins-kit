@@ -12,7 +12,12 @@ sys.path.insert(0, str(SCRIPTS))
 import presence_config as pc  # noqa: E402
 from presence_config import BEHAVIOR_IDS, ConfigError  # noqa: E402
 
-DEFAULT_VALUES = {"afk_quiet_minutes": 10, "departure_words": ["afk"], "waiter_model": "haiku"}
+DEFAULT_VALUES = {
+    "afk_quiet_minutes": 10,
+    "departure_words": ["afk"],
+    "waiter_model": "haiku",
+    "progress_minutes": 20,
+}
 
 
 def write(path: Path, content) -> Path:
@@ -245,6 +250,7 @@ def test_comment_only_file_is_valid(tmp_path, home, defaults):
         ("afk_quiet_minutes", 1),
         ("departure_words", ["afk", "Leave_now", "quit2"]),
         ("waiter_model", "claude-haiku-5-5"),
+        ("progress_minutes", 1),
     ],
 )
 def test_valid_values_are_accepted(user_file, name, value):
@@ -342,7 +348,8 @@ def test_unknown_value_name(user_file):
     err = _error_for_user(user_file, {"values": {"nope": 1}})
     assert err.kind == "unknown-value"
     assert err.text == (
-        f"{user_file}: unknown value 'nope'; valid names: afk_quiet_minutes, departure_words, waiter_model"
+        f"{user_file}: unknown value 'nope'; valid names: afk_quiet_minutes, departure_words, waiter_model, "
+        "progress_minutes"
     )
 
 
@@ -352,6 +359,15 @@ def test_afk_quiet_minutes_must_be_positive_int(user_file, bad):
     assert err.kind == "bad-value-type"
     assert err.text == (
         f"{user_file}: value 'afk_quiet_minutes' must be a positive integer; got {json.dumps(bad)}"
+    )
+
+
+@pytest.mark.parametrize("bad", [0, -1, 1.5, "20", True, None])
+def test_progress_minutes_must_be_positive_int(user_file, bad):
+    err = _error_for_user(user_file, {"values": {"progress_minutes": bad}})
+    assert err.kind == "bad-value-type"
+    assert err.text == (
+        f"{user_file}: value 'progress_minutes' must be a positive integer; got {json.dumps(bad)}"
     )
 
 
@@ -385,12 +401,20 @@ def test_defaults_missing_a_behavior_is_loud(tmp_path):
 
 
 def test_defaults_missing_a_value_is_loud(tmp_path):
-    values = {"afk_quiet_minutes": 10, "departure_words": ["afk"]}
+    values = {"afk_quiet_minutes": 10, "departure_words": ["afk"], "progress_minutes": 20}
     path = write(tmp_path / "shipped.json", full_defaults(values=values))
     with pytest.raises(ConfigError) as info:
         pc.load_layer(path, "defaults")
     assert info.value.kind == "defaults-incomplete"
     assert info.value.text == f"{path}: shipped defaults must define value 'waiter_model'"
+
+
+def test_defaults_missing_progress_minutes_is_loud(tmp_path):
+    values = {k: v for k, v in DEFAULT_VALUES.items() if k != "progress_minutes"}
+    path = write(tmp_path / "shipped.json", full_defaults(values=values))
+    with pytest.raises(ConfigError) as info:
+        pc.load_layer(path, "defaults")
+    assert info.value.text == f"{path}: shipped defaults must define value 'progress_minutes'"
 
 
 def test_absent_defaults_file_is_loud(tmp_path):

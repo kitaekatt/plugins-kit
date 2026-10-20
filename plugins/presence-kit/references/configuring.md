@@ -1,7 +1,7 @@
 # Configuring presence-kit
 
 Every presence-kit behavior has an id and is on by default. You can switch any
-behavior off, and change three values, in a small JSON file. Nothing else is
+behavior off, and change four values, in a small JSON file. Nothing else is
 configurable. The model these settings control is in `presence.md` (same
 directory).
 
@@ -72,6 +72,7 @@ All default to `true`. Off means the behavior does not apply.
 | `afk_quiet_minutes` | integer | `10` | a positive integer (not a boolean) |
 | `departure_words` | list of strings | `["afk"]` | a non-empty list; each entry letters, digits or underscore only; read by the prompt hook, which matches an entry on its own in any case: "AFK." and "(afk)" match; a longer name such as `afk-on-departure` or `afk_since`, `presence-kit:afk`, a backticked `afk`, and a message starting with `/presence-kit:` or `<task-notification>` do not |
 | `waiter_model` | string | `"haiku"` | a non-empty model name without spaces, passed to the Agent tool; not checked against a list |
+| `progress_minutes` | integer | `20` | a positive integer (not a boolean); the interval of the watcher's `PROGRESS` lines (`presence.md`, section Watcher); the watcher's `--progress-minutes` flag overrides it |
 
 `departure_words` replaces the whole list: `["afk", "brb"]` keeps `afk`;
 `["brb"]` drops it.
@@ -111,7 +112,7 @@ A value name not in the Values table. Detail: `unknown value '<key>'; valid name
 
 ### bad-value-type
 A value that fails its check. Detail: `value '<key>' must be <expected>; got <value>`, where
-expected is `a positive integer` (`afk_quiet_minutes`), `a non-empty list of
+expected is `a positive integer` (`afk_quiet_minutes`, `progress_minutes`), `a non-empty list of
 words (letters, digits, underscore)` (`departure_words`) or `a non-empty model
 name without spaces` (`waiter_model`).
 

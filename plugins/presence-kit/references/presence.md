@@ -10,7 +10,7 @@ catalog, defaults and file format are in `configuring.md` (same directory).
 
 Run this first, in the same turn. It prints the resolved configuration as JSON
 (`behaviors`: id to bool; `values`: `afk_quiet_minutes`, `departure_words`,
-`waiter_model`):
+`waiter_model`, `progress_minutes`):
 
     "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${PRESENCE_KIT_ROOT:?presence-kit is not provisioned}/scripts/presence.py" config
 
@@ -106,7 +106,8 @@ seat routing for a load-bearing call; this plugin does not change that policy.
 
 `waiting-guard`, all modes. Agent and workflow work shows "working" by itself.
 Non-agent work (a shell job, a Codex CLI job, an external job) needs a waiter
-agent (section Waiter agent) plus a Monitor for progress. While owned work runs
+agent (section Waiter agent) plus a Monitor on the shipped watcher (section
+Watcher) for progress. While owned work runs
 or a session cron is pending, end the turn with the last line
 `Waiting on <what>`, where `<what>` names the work. Never hold the main session
 with a foreground wait. The Stop hook checks this and nudges at most three
@@ -145,6 +146,32 @@ pattern in a file. `--slice-seconds <s>` defaults to 540.
 | 3 | stalled: no size or mtime change for n minutes |
 | 4 | slice over, job still live: run the command again |
 | 2 | bad arguments, or no file within the stall window |
+
+## Watcher
+
+`scripts/watch.py` is the Monitor's command for a non-agent job. Arm a Monitor
+on it instead of writing a watcher script of your own: its cadence is fixed, so
+the user is not flooded with progress lines. It prints one line per event and
+runs until its done condition holds or it is killed:
+
+    "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${PRESENCE_KIT_ROOT:?presence-kit is not provisioned}/scripts/watch.py" --path <file-or-dir> [--path ...] [--done-output <task output file> | --done-file <path> --done-pattern <regex>]
+
+Every `--poll-seconds` (default 300) it takes the newest modification time
+across the `--path` values: a file's own mtime, or the newest mtime of any file
+under a directory (`.git` directories are skipped). A missing path counts for
+nothing. The done file is watched too. `--stall-minutes` (default 20) and
+`--progress-minutes` (default: the `progress_minutes` value, 20) change the
+cadence for one run. It never writes a file.
+
+| Line | Meaning |
+|---|---|
+| `PROGRESS <elapsed>m: last change <age>m ago in <path>` | every `--progress-minutes`, changed or not; `no watched path exists yet` replaces the tail while no watched path exists |
+| `STALL: no change in watched paths for <N>m` | the newest mtime is at least `--stall-minutes` old; printed once per quiet episode, re-armed by any newer mtime; the watcher keeps running |
+| `DONE: <line>` | `--done-output`: the last non-empty line is `[exited with code N]`; `--done-file`: the pattern matches a line; the watcher then exits 0 |
+
+A `STALL` line reports a fact and prescribes nothing: what to do about the job
+is your decision. An invalid configuration or bad arguments print to stderr and
+exit 2.
 
 ## Commands
 

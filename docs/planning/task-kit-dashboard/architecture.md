@@ -98,10 +98,30 @@ Use `http.server.ThreadingHTTPServer`, `sqlite3`, `json`, and other standard lib
   `dashboard/server.log`; the launcher retains its own stderr crash path.
 - POSIX uses a new session. Windows includes `CREATE_NO_WINDOW` in its hidden,
   detached process flags so console grandchildren cannot flash windows.
+- `dashboard/procspawn.py` is the one platform fact for process creation
+  (`WINDOWS`) and the one builder of spawn keywords: `detached` for the server
+  and the runner, `hidden` for the runner's command. The Windows flags are
+  `CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP`, never `DETACHED_PROCESS`, and
+  the constants are read directly, with no silent default. `child_exec.become`
+  replaces the wrapper by `execvp` on POSIX and runs the command as a waited
+  child on Windows, so the command stays a descendant of the PID recorded in
+  `child.json`. On POSIX the detached server survives the death of the
+  launcher's process group (a live test kills the group).
 - Readiness is the health API, polled for at most 30 seconds; timeout reports the
   log path and exits nonzero.
-- Windows opens the URL with `os.startfile`; macOS runs `open`; Linux runs
-  `xdg-open`. Spawn errors, nonzero exit, and timeout are distinct failures.
+- Browser opening follows the repository's acceptor rule: wait on the process
+  that ACCEPTS the request and classify what it reports.
+  - Windows opens the URL with `os.startfile`; an `OSError` is a spawn failure.
+  - macOS runs `open` to completion. A spawn error, a nonzero exit (with its
+    stderr) and the 10 second deadline are distinct failures.
+  - Linux starts `xdg-open` in its own session with stdout and stderr appended
+    to `dashboard/browser.log`, then waits at most 10 seconds. Exit 0 is
+    accepted; a nonzero exit is a failure that prints the tail of `browser.log`;
+    a spawn error is a failure; still running at the deadline is accepted and
+    left running, because the opener may be the browser itself.
+  - The printed line states what was confirmed ("asked xdg-open to open the
+    URL"), never that a window opened. Exit 4 means the server is up and the
+    browser could not be opened.
 - The launcher always prints the URL. `TASK_KIT_NO_OPEN=1` and `--no-open`
   suppress browser opening without changing server behavior.
 - `/task dashboard` is a skill-level capability that runs `task-kit`; it is not
@@ -116,6 +136,21 @@ Use `http.server.ThreadingHTTPServer`, `sqlite3`, `json`, and other standard lib
 - Serve a restrictive CSP: self scripts/styles, no objects, frames, or remotes.
 - Logs redact tokens, common credential shapes, and prompt bodies by default.
 - Health reveals only instance, code hash, port, and busy count; no task data.
+- The runtime root is created `0700`, and an existing root is tightened to `0700`
+  on POSIX (the server logs one line when it does). `server.json` is written
+  `0600`: the temporary file is `fchmod`ed before the atomic replace. Run
+  directories, prompts, receipts, the database, `server.log` and `browser.log`
+  are covered by the root's mode. Windows creates the root and asserts no ACL;
+  its privacy comes from the profile.
+- Every non-GET `/api/v1` route is listed in `server.MUTATION_ROUTES`, and
+  `_dispatch` answers 405 for a mutation the table omits before any handler
+  runs. The security sweep (token, Origin, content type, body cap, Host) runs
+  over exactly that table. Every producer (the page's `send(` call sites, the
+  handshake, the launcher's shutdown and the helper CLI) must appear in it, and
+  an enforcement test removes an entry and requires the route to refuse.
+- Each connection's socket reads and writes time out after 30 seconds
+  (`IDLE_TIMEOUT_S`), so an idle or slow client is closed. The bound is on
+  socket activity, not on request processing.
 ## State and source of truth
 ### Semantic state
 - `task.yaml` remains the task-level source of truth.
@@ -158,7 +193,8 @@ and explicit Retry remain hard requirements rather than preferences.
   itself while another entry can start. An attempt that leaves its entry queued
   does not end the tick, so one stuck head cannot starve the others. Bound:
   Cancel and Remove wait on the tick lock for one start (translation plus the
-  runner handshake), not for the whole queue.
+  runner handshake), not for the whole queue; the full bound, including
+  recovery, is the "Under `_tick_lock`" bullet below.
 - A queued entry that cannot start carries a waiting reason shown beside its
   place: `config`, `llm-kit-unavailable`, `held`, `checkout-busy`, `queued-behind`
   (an earlier entry of its checkout goes first), `no-slot`, or `cli-check`
@@ -189,7 +225,35 @@ and explicit Retry remain hard requirements rather than preferences.
   `try_lease`, and hold registration. Nothing under the gate waits on a lock or
   runs a process, so hold registration, which takes only the gate and never
   `_tick_lock` or the file lock, fits the 2 second handshake budget even while a
-  tick runs for 20 seconds or another process holds the file lock.
+  tick runs for 20 seconds or another process holds the file lock. The
+  recovery claim set (below) has its own small lock, taken inside `_tick_lock`
+  or alone; finishing a claimed run takes only the mutator file lock and
+  `_hold_gate`, as the runner process does.
+- Under `_tick_lock` a reconcile only classifies. A run whose runner process is
+  gone is claimed in an in-memory `_recovering` set, either because it wrote
+  `result.json` (rows 1-10 of the recovery table in `scheduler.py`) or because it
+  vanished (rows 15-22), and it is finished after the lock is released:
+  stopping what it left, closing its ledger with the cancel verb (up to 120
+  seconds), settling it, or writing the run-boundary block. Rows 0 and 11-14
+  stay under the lock: a requeue, adopting a live runner, and a runner that has
+  not recorded itself yet. Cancel, Remove, Save run options and authoring wait
+  on `_tick_lock` for at most one start (translation plus the 20 second runner
+  handshake) and the reconcile pass's file reads and cheap transitions.
+  Process stops, ledger commands and run-boundary block writes happen in
+  finishing, outside it.
+- A claimed run keeps its lease and its active state until its terminal state is
+  written, so no start lands on its checkout and authoring on its folder is
+  still refused 409 (`run-active`, `item-has-live-run`). A Cancel during
+  finishing is accepted, and the finishing run's terminal state decides the end
+  state. Every later pass skips a claimed run, and a pass that finished
+  anything wakes the loop so a freed checkout starts on the next tick.
+- An exception while finishing a claimed run becomes a `reconcile-error`
+  inspection block and releases the claim. If recording that block fails too,
+  the claim is kept, so this server never retries the run; the pass still
+  attempts every other claimed run, and then asks the server to shut down. The
+  claim lives in memory only, so the next server's adoption considers the run
+  again, and a finish is idempotent: the stop finds nothing and the cancel verb
+  answers `already-terminal` or `cancelled`.
 - Every server-process writer is gated: Re-check, the three translation blocks,
   crash inspection and acceptance-starved blocks, and every authoring write. Only
   the runner process's acceptance block cannot (another process; it takes the file
@@ -623,17 +687,22 @@ before dashboard code reaches `dev`. No root `CLAUDE.md` hold is added.
   autonomous Run/Queue controls and endpoints REFUSE loudly unless a compatible
   llm-kit is installed.
 - Add `psutil` to `pyproject.toml` and bootstrap `check_imports`; add `llm_kit` to
-  `shared_lib_imports`. Add no `install: "manual"` llm-kit plugin
-  entry: llm-kit is `published: false`, so bootstrap's `claude plugin install`
-  hint cannot succeed and must not reach consumers. Do not add llm-kit to
-  task-kit's plugin.json dependencies.
+  `shared_lib_imports`. llm-kit is published (0.3.0) but stays an optional REFUSE
+  edge: without it task-kit still lists and manages tasks, and only the
+  autonomous run actions refuse. So there is no `install: "auto"` edge, no
+  `install: "manual"` plugin entry and no llm-kit entry in task-kit's
+  plugin.json dependencies. The refusal message is the discoverability.
 - Job-backed actions are REFUSE units. A run action's refusal (503) names llm-kit
-  as not yet published or too old, with no install command; the dashboard still
-  renders a truthful read-only/task-management view with an unavailable banner.
+  and the minimum version, and says `claude plugin install llm-kit@plugins-kit`
+  when it is absent or `claude plugin update llm-kit@plugins-kit` when it is too
+  old; the dashboard still renders a truthful read-only/task-management view with
+  an unavailable banner.
 - Probe the newest llm-kit cancelled-state frontier symbol and distinguish absent
   from too-old/stale. llm-kit owns only the generic cancelled-state change, no task
-  semantics, UI, or task-kit paths, and stays `published: false` until the user
-  declares it stable and separately authorizes publication.
+  semantics, UI, or task-kit paths.
+- The package test keeps `plugin.json` and `pyproject.toml` at one version. That a
+  change is version-bumped past the last publish is checked by its producer,
+  `scripts/pre-commit-version-check.sh`, the submit gate.
 - The data-dir `bin/` PATH bundle is a thin launcher: no dashboard code; it locates
   the installed task-kit version at run time.
 - The POSIX and Windows shims follow the repository's venv-first order, redirected
@@ -735,14 +804,49 @@ optional-edge diagnoses, packaging, bootstrap declarations, and publication choi
 Tests: `test_dashboard_launcher_windows.py`, `test_dashboard_launcher_posix.py`,
 `test_dashboard_security.py`, existing launcher-shim/dependency guards, and a
 targeted claudx smoke test.
-Add task-kit as the sixth Python launcher in root `CLAUDE.md` and
-`test_launcher_shim_data_root_redirect.py`; test external PATH reachability on
-Windows, macOS, and Linux.
+Done in bfb555f5: task-kit is the sixth Python launcher in root `CLAUDE.md` and
+`test_launcher_shim_data_root_redirect.py`. External PATH reachability is a
+manual check on Windows and Linux (below).
 Red check: delete the redirected task-kit venv and assert both shims exit 2 without
 falling back to the production venv or reading production `server.json`; a claudx
 session that runs the PATH launcher copy from the production data-dir `bin/` exits 2.
 Each check is first observed failing against the defect it claims to prevent,
 then restored and run targeted. Full-suite work waits for the release gate.
+
+As built (task-kit 0.12.0):
+- The POSIX shim accepts `BOOTSTRAP_PYTHON` only when the standalone directory
+  exists and the variable's own realpath (every symlink followed) lies under it.
+  The guard gains a bash 3.2 lane (`/bin/bash` when it is 3.x) and
+  task-kit's `BOOTSTRAP_PYTHON` cases, narrowed to task-kit's shim. The same
+  lines remain in the hue-kit, llm-kit and secrets-kit shims and in the frozen
+  job-kit and llm-scripting-kit shims; they are recorded as a finding, not
+  changed here.
+- Private runtime root and owner-only `server.json`; the mutation-route table
+  and idle timeout (see "Local HTTP security").
+- One spawn seam, the Linux acceptor rule and `browser.log` (see "Detached
+  launch and browser open"); the launcher end-to-end tests run the real shim.
+- The Claude CLI probe keeps its stderr: the observation detail and the
+  characterize check carry the last redacted stderr line.
+- The `/task work` handshake notice names Cancel run. SKILL.md carries a short
+  handshake step and a pointer to the launcher exit codes; both live in
+  `references/dashboard.md`. Size verdict: the remaining SKILL.md overage
+  predates the dashboard and belongs to a task-skill restructure, filed as
+  `task-skill-size`.
+- The ledger-bytes test waits causally for the stand-in's last write and runs
+  with and without a write delay.
+- Finishing a run whose runner is gone runs outside `_tick_lock` (see
+  "Concurrency and crash recovery"). Tests: `test_dashboard_crash_recovery.py`
+  holds a finish open at the process stop and at the ledger close (a vanished
+  runner, a settled run whose ledger is still open, and a restarted server's adoption)
+  and requires Cancel, a second tick and health to complete meanwhile; it also
+  pins the conversion, the kept claim, the re-adoption and the drain of every
+  claimed run.
+- Proof: macOS is exercised live, under bash 3.2 and a newer bash. Windows and
+  Linux code paths run under faked platform facts only. Untested here: the `.cmd`
+  shim, the kill-on-close Job Object, `msvcrt` locks, the visible effect of
+  `CREATE_NO_WINDOW`, a real `os.startfile`, real `xdg-open`, and the server
+  outliving a Claude Code session on Windows. A claudx smoke session starts,
+  reports and stops the dashboard from the working copy.
 ## Rejected alternatives
 - Copy Afterplay's journal: rejected because task folders already hold intent.
 - Fixed port plus `lsof`/`ps`: rejected as non-Windows and unnecessary.
@@ -789,6 +893,24 @@ None open. New task defaults to `dev/tasks`; endpoint-helper consent is per repo
 - CONFIRMED - published task-kit can host the dashboard behind an optional
   llm-kit REFUSE edge: bootstrap soft-links optional shared libraries, supports
   manual discovery, and existing task modules do not import llm-kit.
+- CONFIRMED (Increment 6) - the build host is an arm64 Mac with two bashes: the
+  stock bash 3.2 and a newer Homebrew bash. The dashboard reads no CPU-architecture
+  fact; the platform axes it reads (`os.name`, `sys.platform`, the Windows
+  `subprocess` constants, `os.startfile`, the venv layout, `uname -s`, the bash
+  version) are faked only where the code takes the platform as an input, and
+  `procspawn` makes spawn flags such an input.
+- CONFIRMED with a limit (Increment 6) - Windows and Linux are covered by fakes
+  only; the list of what stays untested is in "Increment 6".
+- REFUTED then fixed (Increment 6) - the task-kit POSIX shim followed the
+  launcher-shim order and redirect refusals, but its interpreter check accepted
+  any absolute `BOOTSTRAP_PYTHON` when the standalone directory was absent,
+  accepted a symlink inside the tree that points out, and rejected the real
+  symlinked interpreter on a Mac.
+- CONFIRMED with conditions (Increment 6) - a claudx smoke runs non-interactively:
+  call `scripts/claude_plugin_test.py` directly (the alias is not visible to the
+  Bash tool), clear `CLAUDECODE` for the nested child, pass `--allowedTools`
+  because `-p` has no approval channel, set `TASK_KIT_NO_OPEN=1`, and converge
+  the redirected data root first.
 - CONFIRMED - Afterplay's launcher is macOS/Linux only. Its source uses `lsof`,
   `ps`, POSIX process groups, no Windows browser command, and Windows bootstrap
   skip; this design replaces those mechanics rather than copying them.
@@ -833,3 +955,9 @@ None open. New task defaults to `dev/tasks`; endpoint-helper consent is per repo
 - 32 fixed - fair start order, one start per tick, waiting reasons; a translation block is refused while a run works the folder; sub-work is explicitly denied (Agent, Workflow, EnterWorktree, RemoteTrigger, CronCreate, ScheduleWakeup) with the exact emitted argument observed per CLI binary off the tick lock; the launcher refuses inside a run (marker and ancestry); guards are tripwires, not confinement.
 - 33 fixed - endpoint helpers are brokered by the server: consent by repository identity, offers and per-helper budgets in two additive runtime tables, a run-scoped token revoked in the transaction that ends the run, atomic authorize-and-reserve, size counted over input plus system, and a text-only call made through llm-kit; the run's directory decides nothing.
 - 34 fixed - native sub-agents turn ON only under a current characterization record (`task-kit characterize`): bound to the binary's digest and version, expiring after `recheck_days`, judged from CLI-authored telemetry only, bounded by the documented depth and at-once variables, with the resume, no-total-limit and server-flag residuals disclosed and the 6-launches-per-job limit dropped (no CLI control since 2.1.224); a missing, stale or failed record never refuses a run.
+- 35 fixed - the POSIX shim accepts `BOOTSTRAP_PYTHON` only by its own realpath inside an existing standalone tree; the guard runs task-kit under bash 3.2.
+- 36 fixed - the runtime root is `0700` and `server.json` `0600`; an existing root is tightened.
+- 37 fixed - one spawn seam (`procspawn`); Linux browser opening follows the acceptor rule with `browser.log`; Windows flags and `child_exec.become` run under fakes.
+- 38 fixed - every server mutation route is in `MUTATION_ROUTES`, enforced by dispatch; the security sweep runs over exactly that table; producers must be in it; idle connections close after 30 seconds.
+- 39 fixed - the Claude CLI probe keeps its stderr; the handshake notice names Cancel run; the package test no longer re-types the version-bump gate; SKILL.md dashboard text moves to the reference, with the size verdict recorded.
+- 40 fixed - finishing a run whose runner is gone (process stops and every ledger close, `_settle`'s row 10 included) runs outside `_tick_lock`; a failure to record a failed finish keeps the claim and stops the server so the next one re-adopts the run.

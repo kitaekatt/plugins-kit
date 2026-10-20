@@ -20,7 +20,9 @@ opt-in by installation. Every behavior has an id and can be switched off.
   nothing running, and when an autonomous goal is done, you get a recap shaped
   for that trigger.
 - **Guards waiting.** While background work runs, non-agent jobs get a waiter
-  agent so the terminal shows work, and the turn ends with `Waiting on <what>`.
+  agent so the terminal shows work, a watcher (`scripts/watch.py`) reports
+  progress every 20 minutes and a stall after 20 quiet minutes (both by
+  default), and the turn ends with `Waiting on <what>`.
 - **Keeps away turns quiet.** Short interim messages, questions parked for the
   recap, and a push notification only when your input is needed.
 
@@ -48,7 +50,7 @@ install. The hooks act only in an attended, interactive session.
 
 ## Configure
 
-Every behavior is on by default. Turn any off, and change three values, in
+Every behavior is on by default. Turn any off, and change four values, in
 `~/.claude/config/presence-kit.json` or `<project>/.claude/presence-kit.json`.
 The layers, file format, every behavior id and value, the error messages and
 the hook messages are in [references/configuring.md](references/configuring.md).

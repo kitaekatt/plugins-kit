@@ -14,6 +14,7 @@
   "values": {
     "afk_quiet_minutes": 10,
     "departure_words": ["afk"],
-    "waiter_model": "haiku"
+    "waiter_model": "haiku",
+    "progress_minutes": 20
   }
 }

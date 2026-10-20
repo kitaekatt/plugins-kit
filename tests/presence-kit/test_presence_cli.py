@@ -131,7 +131,12 @@ def test_config_defaults(world):
     assert list(obj) == ["behaviors", "values", "layers"]
     assert tuple(obj["behaviors"]) == BEHAVIOR_IDS
     assert all(v is True for v in obj["behaviors"].values())
-    assert obj["values"] == {"afk_quiet_minutes": 10, "departure_words": ["afk"], "waiter_model": "haiku"}
+    assert obj["values"] == {
+        "afk_quiet_minutes": 10,
+        "departure_words": ["afk"],
+        "waiter_model": "haiku",
+        "progress_minutes": 20,
+    }
     assert [layer["name"] for layer in obj["layers"]] == ["defaults", "user", "project"]
     assert [layer["present"] for layer in obj["layers"]] == [True, False, False]
     assert obj["layers"][1]["path"] == str(world.root / "cfg" / "config" / "presence-kit.json")
