@@ -293,20 +293,26 @@ def dashboard_payload(
         names = {t.checkout_id: t.project_name for p in all_projects for t in p.tasks}
         shown = {t.checkout_id for p in selected for t in p.tasks}
         latest: dict[tuple, dict] = {}
-        # "Queued #n": the run's place among ALL queued entries, in the order the scheduler walks them (seq).
-        queue_order = {r.id: n for n, r in enumerate(sorted((r for r in runtime["runs"] if r.state == "queued"),
-                                                            key=lambda r: r.seq), start=1)}
+        # "Queued #n": the run's place among ALL queued entries, in the order the scheduler starts them
+        # (``Scheduler.queue_view``), with the reason it is not starting now. Without a view (no scheduler) the
+        # place falls back to queue order and carries no reason.
+        queue_view = runtime.get("queue_view")
+        if queue_view is None:
+            queue_view = {r.id: (n, None) for n, r in enumerate(sorted((r for r in runtime["runs"] if r.state == "queued"),
+                                                                       key=lambda r: r.seq), start=1)}
         for run in runtime["runs"]:  # newest first
             if run.project_id not in shown:
                 continue
             row = run_json(run, names.get(run.project_id, ""), (runtime.get("phases") or {}).get(run.id),
-                           queue_position=queue_order.get(run.id))
+                           queue_position=(queue_view.get(run.id) or (None, None))[0],
+                           waiting=(queue_view.get(run.id) or (None, None))[1])
             latest.setdefault((run.project_id, run.task_ref, run.item_id), row)
             if run.state in LIVE_RUN_STATES:
                 runs_json.append(row)
             elif len(recent_json) < RECENT_RUNS_LIMIT:
                 recent_json.append(row)
-        runs_json.sort(key=lambda r: r["seq"])
+        # Running first (oldest first); queued entries follow in the order the scheduler will start them.
+        runs_json.sort(key=lambda r: (1, r["queue_position"] or 0, r["seq"]) if r["state"] == "queued" else (0, 0, r["seq"]))
         for task_row in task_rows:
             for item_row in task_row["items"]:
                 item_row["run"] = latest.get((task_row["checkout"], task_row["id"], item_row["id"]))
@@ -432,12 +438,14 @@ RETRYABLE_RUN_STATES = ("failed", "timeout", "cancelled")
 RECENT_RUNS_LIMIT = 15
 
 
-def run_json(run, project_name: str, phase: str | None = None, queue_position: int | None = None) -> dict:
+def run_json(run, project_name: str, phase: str | None = None, queue_position: int | None = None,
+             waiting: dict | None = None) -> dict:
     """One run as the API serves it (``run`` is a :class:`runtime.Run`).
 
     ``phase`` is the live ledger's state word for an active run (read-only; None when the run has no
     ledger yet or is not active). ``cancellable`` is whether a cancel request would be accepted now;
-    a run that is already ``cancelling`` accepts one too but has nothing left to ask for.
+    a run that is already ``cancelling`` accepts one too but has nothing left to ask for. ``waiting`` is
+    ``{"code", "detail"}`` for a queued run that cannot start now (and why), else None.
     """
     options = run.options
     return {
@@ -460,6 +468,7 @@ def run_json(run, project_name: str, phase: str | None = None, queue_position: i
         "effort": options.get("effort"),
         "timeout_s": options.get("timeout_s"),
         "queue_position": queue_position,
+        "waiting": waiting,
         "retry_of": run.retry_of,
         "retryable": run.state in RETRYABLE_RUN_STATES,
         "cancellable": run.state in CANCELLABLE_RUN_STATES,

@@ -60,6 +60,14 @@ class EdgeError(RuntimeError):
     """llm-kit is present but a call into it failed (a registry that will not load, say)."""
 
 
+class _ArgvCaptured(Exception):
+    """Raised by the capturing runner of :meth:`JobsEdge.claude_worker_argv`: nothing was launched."""
+
+    def __init__(self, argv: list[str]) -> None:
+        super().__init__("argv captured")
+        self.argv = argv
+
+
 @dataclass(frozen=True)
 class EdgeStatus:
     state: str
@@ -245,6 +253,43 @@ class JobsEdge:
             raise EdgeError(f"llm-kit could not resolve the effort menu of {entry!r}: {type(exc).__name__}: {exc}") from exc
         self._menus[entry] = (now, menu)
         return menu
+
+    def claude_worker_argv(self, entry: str, *, effort: str | None, disallowed_tools: str, cwd: Path) -> list[str]:
+        """The argv llm-kit would launch for a Claude worker whose job options carry exactly ``disallowed_tools``.
+
+        Built by llm-kit's own factory and backend, with the backend's public ``runner`` field replaced by a
+        capture that records the argv and aborts, so nothing is launched. llm-kit passes a job's
+        ``disallowed_tools`` unchanged when no run floor is set and emits it as ONE argument, so the value
+        in the returned argv is byte-identical to what a run emits. The prompt is not in the argv (llm-kit
+        sends it on stdin).
+        """
+        import dataclasses
+
+        try:
+            factory = importlib.import_module("llm_kit.dispatch.factory")
+            types = importlib.import_module("llm_kit.completion.types")
+            selection = factory.create_backend(entry, project_root=str(cwd))
+            backend = selection.backend
+            if getattr(backend, "name", None) != "claude-cli" or not hasattr(backend, "runner"):
+                raise EdgeError(f"model entry {entry!r} does not run on the claude-cli backend")
+
+            def capture(cmd, user, run_cwd, *, log_prefix, timeout_s):  # noqa: ARG001 -- the runner's own signature
+                raise _ArgvCaptured(list(cmd))
+
+            options = types.BackendOptions(
+                timeout_s=60.0, cwd=Path(cwd), max_tokens=4096,
+                effort=effort if effort is not None else selection.effort,
+                allowed_tools=None, disallowed_tools=disallowed_tools, system_prompt_mode="append",
+                client_id="task-kit:cli-check", log_prefix="[cli-check]",
+            )
+            dataclasses.replace(backend, runner=capture).complete("probe", "probe", model=selection.model, options=options)
+        except _ArgvCaptured as captured:
+            return captured.argv
+        except EdgeError:
+            raise
+        except Exception as exc:  # noqa: BLE001 -- llm-kit raises several error types (registry, executable lookup)
+            raise EdgeError(f"llm-kit could not build the worker argv for {entry!r}: {type(exc).__name__}: {exc}") from exc
+        raise EdgeError("llm-kit's Claude backend did not reach its runner")
 
     def validate_job_file(self, path: Path) -> None:
         """Load ``path`` through llm-kit's own loader; raises on anything it refuses."""

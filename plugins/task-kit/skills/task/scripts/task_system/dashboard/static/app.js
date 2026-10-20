@@ -227,6 +227,22 @@ var RUN_LABEL = {
 function runLabel(r) {
   return r.state === 'queued' && r.queue_position ? 'Queued #' + r.queue_position : (RUN_LABEL[r.state] || r.state);
 }
+/* Why a queued entry is not starting now ("waiting: <detail>"), or '' when nothing holds it back. */
+function waitingText(r) {
+  return r.state === 'queued' && r.waiting && r.waiting.detail ? 'waiting: ' + r.waiting.detail : '';
+}
+/* The sub-agent line of the run controls: sub-work is off (denied) in every run, and the per-binary check says whether the
+ * installed Claude Code was seen to honor that. Only an `ignored` check refuses runs. */
+function subagentsHtml() {
+  var sub = (caps().subagents || {}).claude;
+  if (!sub) return '';
+  var chk = sub.cli_check || {}, extra = '';
+  if (chk.state === 'ignored') extra = ' Claude runs are refused: the installed Claude Code does not honor the denials (' + (chk.detail || '') + ').';
+  else if (chk.state === 'observed') extra = ' Checked on this Claude Code: the denials take effect.';
+  else if (chk.state === 'checking') extra = ' Checking the installed Claude Code...';
+  else if (chk.state === 'unobserved' || chk.state === 'vacuous') extra = ' Not observed: ' + (chk.detail || 'the check did not conclude') + '.';
+  return '<p class="hint" data-subagents="' + esc(sub.state || 'off') + '">Native sub-agents: ' + esc(sub.state || 'off') + ' (denied).' + esc(extra) + '</p>';
+}
 function isLiveRun(r) { return !!r && (r.state === 'queued' || r.state === 'starting' || r.state === 'running' || r.state === 'cancelling'); }
 /* Cancel run: live whenever the server backs it and the run can still be cancelled; a run already
  * cancelling shows a disabled "Cancelling" so a second click cannot be mistaken for progress. With no
@@ -443,7 +459,7 @@ function renderRuns() {
     h += '<div class="run-card"><div class="proj"><span>' + esc(identOf(r.project_name, r.task)) + '</span><span class="live">' +
       esc(runLabel(r)) + '</span></div><div class="ttl">' + esc(r.item_title) + '</div>' +
       '<div class="sub">' + esc(r.worker || '') + (r.entry ? ' (' + esc(r.entry) + ')' : '') +
-      (r.started_at ? ' - running for ' + esc(elapsed(r.started_at)) : ' - waiting to start') +
+      (r.started_at ? ' - running for ' + esc(elapsed(r.started_at)) : ' - ' + esc(waitingText(r) || 'waiting to start')) +
       (r.phase ? ' - ledger ' + esc(r.phase) : '') + '</div>' +
       '<div class="row"><button type="button" class="btn sm" data-action="togglerun" data-key="' + esc(r.id) + '" aria-expanded="' + !!S.runOpen[r.id] + '">' + ic('eye') + (S.runOpen[r.id] ? 'Hide log' : 'Log') + '</button>' +
       cancelControl(r, 'sm danger') + '</div>' + (S.runOpen[r.id] ? runDetailHtml(r) : '') + '</div>';
@@ -774,7 +790,7 @@ function itemDetailHtml(task, it) {
   if (ui === 'blocked') left += recheckButton({ item: it.id, project: task.project, checkout: task.checkout, task: task.id }, '');
   left += '</div>';
   if (S.resolve[key]) left += detail && detail.handoff ? cmdBox(detail.handoff) : (task.handoff ? cmdBox(task.handoff) : '');
-  left += '<div class="sec-title">Run controls</div><div class="card">' + runOptionsHtml(task, it, live) +
+  left += '<div class="sec-title">Run controls</div><div class="card">' + runOptionsHtml(task, it, live) + subagentsHtml() +
     '<div class="acts">' + cancelControl(live ? it.run : null, 'sm danger') + '</div>' +
     '<p class="hint">' + (canDo('runoptions')
       ? 'Worker, effort and time limit belong to one queue entry; what you leave empty uses the machine defaults from task.local.yaml. '
@@ -783,6 +799,7 @@ function itemDetailHtml(task, it) {
   var right = '';
   if (it.run) {
     right += '<div class="sec-title">Latest run</div><div class="card"><dl class="kv mb0"><dt>State</dt><dd>' + esc(RUN_LABEL[it.run.state] || it.run.state) +
+      esc(waitingText(it.run) ? ' -- ' + waitingText(it.run) : '') +
       '</dd><dt>Result</dt><dd>' + esc(it.run.code || '') + (it.run.detail ? ' - ' + esc(it.run.detail) : '') + '</dd></dl>' +
       '<div class="acts"><button type="button" class="btn sm" data-action="togglerun" data-key="' + esc(it.run.id) + '" aria-expanded="' + !!S.runOpen[it.run.id] + '">' + ic('eye') +
       (S.runOpen[it.run.id] ? 'Hide run log' : 'Run log') + '</button></div>' + (S.runOpen[it.run.id] ? logPre(it.run.id) : '') + '</div>';

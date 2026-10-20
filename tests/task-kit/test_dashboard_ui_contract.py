@@ -604,6 +604,8 @@ AUTHORING_CAPABILITIES = {
             "codex": {"available": False, "entry": "sol", "efforts": [], "reason": "Codex workers are refused until a live test shows the floor"},
         },
     },
+    "subagents": {"claude": {"state": "off", "reason": "denied by the dashboard floor",
+                             "cli_check": {"state": "unobserved", "detail": "no init event in the baseline run (timeout)"}}},
 }
 
 
@@ -615,7 +617,9 @@ def authoring(tmp_path_factory):
     snap = Inventory(parents=(devroot,), min_interval=0).snapshot()
     cid = _checkout(snap, "open-one")
     queued = _run_row(7, "run-q", cid, "queued", "go-too")
-    payload = snapshot.dashboard_payload(snap, runtime={"capabilities": AUTHORING_CAPABILITIES, "runs": [queued], "held": set(), "run_active": set()})
+    waiting = {"code": "no-slot", "detail": "2 of 2 checkouts are running"}
+    payload = snapshot.dashboard_payload(snap, runtime={"capabilities": AUTHORING_CAPABILITIES, "runs": [queued], "held": set(), "run_active": set(),
+                                                         "queue_view": {"run-q": (1, waiting)}})
     task = snap.find_task(cid, "dev/tasks/open-one")
     scenario = {
         "taskKey": f"{cid}|dev/tasks/open-one", "availItem": f"{cid}|dev/tasks/open-one|go",
@@ -731,6 +735,15 @@ def test_run_options_of_an_available_item_ride_on_queue(authoring):
     (queue,) = authoring["queueSent"]
     assert json.loads(queue["body"]) == {"expected_revision": authoring["revision"], "options": {"effort": "high", "timeout_s": 900}}
     assert "The time limit must be a positive number of minutes." in authoring["badMinutes"] and authoring["badMinutesSent"] == []
+
+
+@needs_node
+def test_a_queued_entry_says_why_it_waits_and_the_run_controls_say_sub_agents_are_off(authoring):
+    queued = authoring["optionsQueued"]
+    assert "Queued #1" in queued and "waiting: 2 of 2 checkouts are running" in queued
+    assert authoring["payload"]["runs"][0]["waiting"] == {"code": "no-slot", "detail": "2 of 2 checkouts are running"}
+    assert 'data-subagents="off"' in queued and "Native sub-agents: off (denied)." in queued
+    assert "Not observed: no init event in the baseline run (timeout)." in queued  # the check did not conclude: said so
 
 
 @needs_node

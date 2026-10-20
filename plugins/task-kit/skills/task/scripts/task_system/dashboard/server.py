@@ -33,8 +33,9 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from . import proctree, redact, snapshot
+from . import cli_check, proctree, redact, snapshot
 from .codehash import DASHBOARD_PACKAGE, code_hash
+from .config import load_config
 from .inventory import Inventory, project_id_for, target_root
 from .jobs_edge import EdgeError, JobsEdge
 from .mutation import TaskMutator
@@ -106,7 +107,10 @@ class DashboardServer:
         edge=None,
         config_path: Path | None = None,
         scheduler: Scheduler | None = None,
+        cli_observer: "cli_check.CliObserver | bool" = True,
     ) -> None:
+        """``cli_observer``: True builds the real per-binary observer (production); False runs without one (no
+        Claude binary is observed or waited for); an instance is used as given."""
         self.data_dir = Path(data_dir)
         self.scripts_dir = Path(scripts_dir)
         self.root = runtime_root(self.data_dir)
@@ -114,6 +118,7 @@ class DashboardServer:
         self._busy = busy
         self._edge = edge if edge is not None else JobsEdge()
         self._config_path = config_path
+        self._cli_observer = cli_observer
         self.scheduler = scheduler
         self.log_stream = log if log is not None else sys.stderr
         self.code_hash = code_hash(self.scripts_dir)
@@ -147,6 +152,13 @@ class DashboardServer:
         self._lock.acquire()
         try:
             if self.scheduler is None:
+                # The server owns the observer thread that checks each Claude binary once, off every scheduler lock.
+                observer = self._cli_observer
+                if observer is True:
+                    observer = cli_check.CliObserver(
+                        root=self.root, edge=self._edge, load_config=lambda: load_config(self._config_path), log=self.log)
+                elif observer is False:
+                    observer = None
                 self.scheduler = Scheduler(
                     root=self.root,
                     db=RuntimeDB(self.root / DB_FILE),
@@ -154,6 +166,7 @@ class DashboardServer:
                     edge=self._edge,
                     config_path=self._config_path,
                     log=self.log,
+                    observer=observer,
                 )
             httpd = ThreadingHTTPServer((LOOPBACK, 0), _Handler)
             httpd.daemon_threads = True
@@ -229,7 +242,7 @@ class DashboardServer:
         phases = {r.id: p for r in live if (p := scheduler.ledger_phase(r)) is not None}
         active = {folder_key(r.folder) for r in scheduler.db.runs(ACTIVE_STATES)}
         return {"capabilities": scheduler.capabilities(), "runs": sorted(live + recent, key=lambda r: -r.seq), "phases": phases,
-                "held": scheduler.db.held_folders(), "run_active": active}
+                "held": scheduler.db.held_folders(), "run_active": active, "queue_view": scheduler.queue_view()}
 
     def server_info(self) -> dict:
         return {"instance": self.nonce, "code_hash": self.code_hash[:12]}

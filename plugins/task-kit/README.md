@@ -42,7 +42,14 @@ restarts, the running work is adopted again from its run directory, and a runner
 that vanished leaves the task blocked for inspection (the recovery table is at
 the top of `skills/task/scripts/task_system/dashboard/scheduler.py`). The contract (eligibility, blocked-run resolution, holds, the
 `dashboard:` settings in `~/.claude/task.local.yaml`) is owned by the dashboard
-capability in `skills/task/SKILL.md`.
+capability in `skills/task/SKILL.md` and `skills/task/references/dashboard.md`.
+
+Several checkouts run at once (`max_parallel_projects`, default 2). Queued entries start in a fair order:
+the checkout that started a run least recently goes first, and "Queued #n" is that order, with the reason an entry
+is still waiting beside it. A run works alone: the sub-agent, workflow, worktree, remote-agent and scheduling tools
+are denied in its Claude command, and `task-kit` itself refuses inside a run (exit 6). The first Claude run on each
+Claude Code binary waits for a one-time check that the binary honors those denials; a binary seen to ignore them
+refuses Claude runs. These are tripwires against a careless worker, not confinement.
 
 The dashboard runs beside the task system: the `task` verbs and the Claude Code
 workflow behave the same whether or not it is running. A refresh never edits a
@@ -57,6 +64,8 @@ task-kit stop          stop it
 task-kit restart       stop it and start it again
 task-kit --no-open     do not open the browser (also TASK_KIT_NO_OPEN=1)
 ```
+
+Exit codes: 0 ok, 1 error, 3 `status`: not running, 4 browser could not be opened, 5 jobs are running, 6 refused inside a dashboard run.
 
 One server runs per machine on `127.0.0.1`, on a port the operating system
 chooses; the page is served with a per-run token and a restrictive CSP. If the

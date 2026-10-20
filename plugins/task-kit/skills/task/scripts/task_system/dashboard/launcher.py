@@ -13,7 +13,15 @@ that answers on the recorded port as foreign. A record it cannot parse stops
 the launcher; it never licenses starting a second server or stopping a stranger.
 
 Exit codes: 0 ok; 1 error; 2 usage; 3 ``status``: not running; 4 the server is
-up but the browser could not be opened; 5 refused because jobs are running.
+up but the browser could not be opened; 5 refused because jobs are running;
+6 refused inside a dashboard run.
+
+Inside a dashboard run every command is refused (exit 6), ``status`` and ``serve``
+included. Two tripwires, checked before anything else is read or written: the
+``TASK_KIT_AGENT_DEPTH`` marker the run's command inherits, and the process
+ancestry (``proctree.dashboard_runner_ancestor``): a live runner of the dashboard
+this launcher targets, verified by its own ``runner.json``. An isolated dashboard
+(``--data-dir``) is a different root and is not refused. Neither is confinement.
 """
 
 from __future__ import annotations
@@ -29,6 +37,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from . import proctree
 from .codehash import code_hash
 from .server import EXIT_LOCK_HELD, TOKEN_HEADER
 from .server import run as run_server
@@ -47,6 +56,12 @@ EXIT_USAGE = 2
 EXIT_NOT_RUNNING = 3
 EXIT_BROWSER = 4
 EXIT_BUSY = 5
+EXIT_NESTED = 6
+AGENT_DEPTH_ENV = "TASK_KIT_AGENT_DEPTH"
+NESTED_MESSAGE = (
+    "task-kit: refused inside a dashboard run: a run may not start, stop or restart its dashboard, "
+    "start another run, or characterize the CLI"
+)
 
 READY_TIMEOUT_S = 30.0
 READY_POLL_S = 0.2
@@ -488,7 +503,8 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "With no command, task-kit starts the dashboard (or reuses the running one, restarting "
             "it if its code changed) and opens it in your browser. Exit codes: 0 ok, 1 error, "
-            "2 usage, 3 status: not running, 4 browser could not be opened, 5 jobs are running."
+            "2 usage, 3 status: not running, 4 browser could not be opened, 5 jobs are running, "
+            "6 refused inside a dashboard run."
         ),
     )
     parser.add_argument(
@@ -511,11 +527,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None, *, scripts_dir: Path, entrypoint: Path) -> int:
     args = build_parser().parse_args(argv)
+    if AGENT_DEPTH_ENV in os.environ:  # tripwire 1: the marker every run's command inherits
+        print(NESTED_MESSAGE, file=sys.stderr)
+        return EXIT_NESTED
     try:
         data_dir = args.data_dir if args.data_dir is not None else resolve_data_dir()
     except DashboardStateError as exc:
         print(f"task-kit: {exc}", file=sys.stderr)
         return EXIT_ERROR
+    if proctree.dashboard_runner_ancestor(runtime_root(data_dir)) is not None:  # tripwire 2: the ancestry
+        print(NESTED_MESSAGE, file=sys.stderr)
+        return EXIT_NESTED
     if args.command == "serve":
         return run_server(data_dir, scripts_dir)
     launcher = Launcher(data_dir=data_dir, scripts_dir=scripts_dir, entrypoint=entrypoint)

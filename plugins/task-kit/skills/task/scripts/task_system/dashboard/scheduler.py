@@ -11,6 +11,12 @@ Rules it enforces:
 - A run starts only when its project holds no other lease, a global slot is
   free, and no interactive hold covers the task folder. A hold is one-way: it
   makes the scheduler yield, and the harness never waits for the dashboard.
+- Start order is fair across checkouts: the checkout that started a run least recently goes first
+  (``start_order``), first-come first-served within one. A tick starts at most ONE run (one
+  translation and one runner wait, never the whole queue), then asks for another tick. A queued
+  entry that cannot start says why (``wait_reason``), and the UI shows it.
+- A Claude run needs its binary observed once (``cli_check``): the observation runs on its own thread,
+  never under the tick lock, and the entry waits with reason ``cli-check`` until it ends.
 - Every start translates the item again from the current folder. A changed but
   still job-ready item runs with fresh text; an item that disappeared or is no
   longer available is dropped (``skipped``), not blocked, because someone else
@@ -120,7 +126,7 @@ from ..types import HAND_OFF
 from ..validate import validate_ref
 from . import authoring
 from . import findings as findings_mod
-from . import floor, proctree, redact, runfiles
+from . import cli_check, floor, proctree, redact, runfiles
 from .blocker import BlockOutcome, concise, record_block, record_blocks
 from .config import DashboardConfig, DashboardConfigError, load_config
 from .inventory import project_id_for
@@ -312,6 +318,7 @@ class Scheduler:
         python: str | None = None,
         spawn: Callable[[list[str], Path], None] | None = None,
         log: Callable[[str], None] = lambda message: None,
+        observer: "cli_check.CliObserver | None" = None,
     ) -> None:
         self.root = Path(root)
         self.db = db
@@ -321,6 +328,7 @@ class Scheduler:
         self._python = python or sys.executable
         self._spawn = spawn or self._default_spawn
         self._log = log
+        self.observer = observer
         self._tick_lock = threading.Lock()
         self._queue_lock = threading.Lock()
         self._hold_gate = threading.Lock()
@@ -352,7 +360,23 @@ class Scheduler:
                           "Pause worker arrives in a later increment.",
             },
             "run_options": self._run_options_capabilities(status),
+            "subagents": {"claude": {"state": "off", "reason": "denied by the dashboard floor",
+                                     "cli_check": self.cli_check_summary()}},
         }
+
+    def cli_check_summary(self) -> dict:
+        """What the per-binary denial observation knows right now, as JSON (``state`` is never missing)."""
+        if self.observer is None:
+            return {"state": "unchecked", "detail": "no observer is attached"}
+        key = cli_check.claude_key()
+        if key is None:
+            return {"state": cli_check.UNOBSERVED, "detail": "no claude executable is on PATH"}
+        found = self.observer.state_for(key)
+        if found is not None:
+            return found.summary()
+        if self.observer.in_flight(key):
+            return {"state": "checking", "detail": f"checking Claude Code at {key.realpath}"}
+        return {"state": "unchecked", "detail": "this Claude Code binary has not been checked yet"}
 
     def _run_options_capabilities(self, status) -> dict:
         """What the run-options controls offer: defaults, and per worker whether it can run and its effort menu."""
@@ -418,6 +442,18 @@ class Scheduler:
         if self.db.live_holds(str(folder)):
             raise QueueRefused(409, "held", HELD_MESSAGE)
 
+    def _refuse_if_live(self, folder: Path, *, except_run: str | None = None) -> None:
+        """Refuse (inside the gate) while a Claude Code session holds the folder or a dashboard run works it.
+
+        A block writes the task folder, so it must not land under a live run. ``except_run`` names a run that
+        is itself the writer's subject (a run that was just leased and is STARTING: its own run-active state
+        is not a reason to refuse the block of its own job-file failure); any OTHER active run still refuses.
+        """
+        self._refuse_if_held(folder)
+        key = folder_key(folder)
+        if any(r.id != except_run and folder_key(r.folder) == key for r in self.db.runs(ACTIVE_STATES)):
+            raise QueueRefused(409, "run-active", RUN_ACTIVE_MESSAGE)
+
     def _authoring_precommit(self, folder: Path, *, project_root: Path, task_ref: str, item_id: str | None = None) -> Callable[[], None]:
         """The checks made inside the hold gate immediately before the first replace of an authoring write."""
         def check() -> None:
@@ -463,10 +499,24 @@ class Scheduler:
             except DashboardConfigError as exc:
                 raise QueueRefused(422, "config", str(exc)) from exc
         reasons = option_reasons(RunOptions(**options), config, self.edge)
+        if not reasons:
+            ignored = self._cli_ignored_reason(RunOptions(**options).resolved(config))
+            if ignored is not None:
+                reasons = [ignored]
         if reasons:
             raise QueueRefused(422, "bad-options", "the run options are not usable: " + "; ".join(r.line() for r in reasons),
                                reasons=_reasons_json(reasons))
         return options
+
+    def _cli_ignored_reason(self, options: RunOptions) -> Reason | None:
+        """The refusal for a Claude run when the installed CLI was observed to ignore a listed denial (else None)."""
+        if options.worker != "claude" or self.observer is None:
+            return None
+        key = cli_check.claude_key()
+        found = self.observer.state_for(key) if key is not None else None
+        if found is None or found.state != cli_check.IGNORED:
+            return None
+        return Reason("cli-deny-ignored", f"the installed Claude Code does not honor the run's denials, so a Claude run is refused: {found.detail}")
 
     def _require_edge(self) -> None:
         status = self.edge.status()
@@ -528,26 +578,28 @@ class Scheduler:
         """Queue (single or all) found a translation problem with the item(s): block the task, then refuse. Never returns.
 
         The block carries the revision the translation read, so a harness fix that landed meanwhile is a
-        409 and not a block on stale text. A task a Claude Code session holds is not blocked at all.
+        409 and not a block on stale text. A task a Claude Code session holds, or a dashboard run works, is
+        not blocked at all.
         """
         flat = [r for _id, rs in hard_by_item for r in rs]
         summary = "; ".join(r.line() for r in flat)
         try:
             if len(hard_by_item) == 1:
                 item_id, rs = hard_by_item[0]
-                self._block_for(folder, item_id, rs, source, revision=revision, refuse_held=True)
+                self._block_for(folder, item_id, rs, source, revision=revision, refuse_live=True)
             else:
                 record_blocks(
                     self.mutator, folder,
                     items=[(i, f"{rs[0].code}: {rs[0].detail}") for i, rs in hard_by_item],
                     log_detail=f"{source}: not translated into jobs: " + concise("; ".join(f"{i}: {rs[0].line()}" for i, rs in hard_by_item)),
-                    expected_revision=revision, gate=self._hold_gate, precommit=lambda: self._refuse_if_held(folder))
-        except QueueRefused as held:  # (the hold arrived: the fix happens in the session that holds the task)
-            if held.code != "held":
+                    expected_revision=revision, gate=self._hold_gate, precommit=lambda: self._refuse_if_live(folder))
+        except QueueRefused as live:  # (a session or a run works the task: the fix happens there, not in a block)
+            who = {"held": "a Claude Code session is working it", "run-active": "a dashboard run is working it"}.get(live.code)
+            if who is None:
                 raise
-            raise QueueRefused(422, "translation-failed", "the item could not be translated into a job; the task was not "
-                               "blocked because a Claude Code session is working it: " + summary,
-                               reasons=_reasons_json(reasons)) from held
+            raise QueueRefused(422, "translation-failed", f"the item could not be translated into a job; the task was not "
+                               f"blocked because {who}: " + summary,
+                               reasons=_reasons_json(reasons)) from live
         except MutationError as exc:
             raise refusal_from_mutation(exc, folder) from exc
         raise QueueRefused(422, "translation-failed", "the item could not be translated into a job, so the task is now blocked: "
@@ -861,6 +913,8 @@ class Scheduler:
         self._wake.set()
         if self._thread is not None:
             self._thread.join(timeout=10)
+        if self.observer is not None:
+            self.observer.close()
 
     def wake(self) -> None:
         self._wake.set()
@@ -911,7 +965,109 @@ class Scheduler:
 
     # -- starting -------------------------------------------------------------
 
+    def start_order(self, queued: list[Run]) -> list[Run]:
+        """``queued`` in the order the scheduler walks it: least-recently-started checkout first, FIFO within one.
+
+        The key is ``(newest started_at of the run's checkout or "", the checkout's oldest queued seq, seq)``: a
+        checkout that never started comes before one that did, and checkouts that tie keep first-come order, so one
+        checkout queuing many items cannot starve another that queued one.
+        """
+        last = self.db.last_started_by_checkout()
+        first_seq: dict[str, int] = {}
+        for run in queued:
+            first_seq[run.project_id] = min(first_seq.get(run.project_id, run.seq), run.seq)
+        return sorted(queued, key=lambda r: (last.get(r.project_id, ""), first_seq[r.project_id], r.seq))
+
+    def wait_reason(self, run: Run, *, busy: set[str], ahead: bool, held: bool, config: DashboardConfig | None,
+                    config_error: str | None, edge_status, cli_state: str | None) -> dict | None:
+        """Why the queued ``run`` cannot start now, as ``{"code", "detail"}``, or None when nothing holds it back.
+
+        Shared by the start loop's pre-check and the UI. Codes: ``config``, ``llm-kit-unavailable``, ``held``,
+        ``checkout-busy``, ``queued-behind`` (an earlier entry of the same checkout goes first), ``no-slot`` and
+        ``cli-check`` (an observation of a new Claude binary is in flight).
+        """
+        if config is None:
+            return {"code": "config", "detail": config_error or "the dashboard configuration cannot be read"}
+        if not edge_status.available:
+            return {"code": "llm-kit-unavailable", "detail": edge_status.detail}
+        if held:
+            return {"code": "held", "detail": "a Claude Code session is working this task; the dashboard yields"}
+        if run.project_id in busy:
+            return {"code": "checkout-busy", "detail": "another run is working in this checkout"}
+        if ahead:
+            return {"code": "queued-behind", "detail": "an earlier entry of this checkout starts first"}
+        if len(busy) >= config.max_parallel_projects:
+            return {"code": "no-slot", "detail": f"{len(busy)} of {config.max_parallel_projects} checkouts are running"}
+        if cli_state == "wait":
+            return {"code": "cli-check", "detail": "checking the installed Claude Code before the first Claude run"}
+        return None
+
+    def queue_view(self) -> dict[str, tuple[int, dict | None]]:
+        """``{run_id: (position, waiting)}`` for every queued run, positions in start order (1 = next)."""
+        queued = self.db.runs((QUEUED,))
+        if not queued:
+            return {}
+        try:
+            config, config_error = self.config(), None
+        except DashboardConfigError as exc:
+            config, config_error = None, str(exc)
+        status = self.edge.status()
+        active = self.db.runs(ACTIVE_STATES)
+        busy = {r.project_id for r in active}
+        held = self.db.held_folders()
+        view: dict[str, tuple[int, dict | None]] = {}
+        seen_unheld: set[str] = set()
+        key = cli_check.claude_key() if self.observer is not None else None
+        for position, run in enumerate(self.start_order(queued), start=1):
+            is_held = folder_key(run.folder) in held
+            cli_state = None
+            if config is not None and self._resolved_worker(run, config) == "claude":
+                cli_state = self._cli_gate(run, config, request=False, key=key)[0]
+            view[run.id] = (position, self.wait_reason(
+                run, busy=busy, ahead=run.project_id in seen_unheld, held=is_held, config=config, config_error=config_error,
+                edge_status=status, cli_state=cli_state))
+            if not is_held:
+                seen_unheld.add(run.project_id)
+        return view
+
+    @staticmethod
+    def _resolved_worker(run: Run, config: DashboardConfig) -> str | None:
+        return RunOptions(**run.options).resolved(config).worker
+
+    def _cli_gate(self, run: Run, config: DashboardConfig, *, request: bool = True,
+                  key: "cli_check.ClaudeKey | None | str" = "resolve") -> tuple[str, Reason | None]:
+        """``("go" | "wait" | "refuse", reason)`` for a run's Claude binary. Never blocks, never spawns.
+
+        ``key`` is the binary's identity when the caller already resolved it once for many runs (``None``: no
+        claude on PATH); the default resolves it here (a which, a realpath, a stat).
+
+        ``wait``: the binary is unknown and its observation was asked for (or is running). ``refuse``: it was
+        observed to ignore a listed denial. Anything else (observed, vacuous, unobserved, no observer, no binary,
+        a Codex run) is ``go``: the documented denials ride along either way.
+        """
+        if self.observer is None or self._resolved_worker(run, config) != "claude":
+            return "go", None
+        if key == "resolve":
+            key = cli_check.claude_key()
+        if key is None:
+            return "go", None
+        found = self.observer.state_for(key)  # type: ignore[arg-type]
+        if found is None:
+            if request:
+                self.observer.request(key)  # type: ignore[arg-type]
+            return "wait", Reason("cli-check", "checking the installed Claude Code before the first Claude run", blocking=False)
+        if found.state == cli_check.IGNORED:
+            return "refuse", self._cli_ignored_reason(RunOptions(**run.options).resolved(config))
+        return "go", None
+
     def _start_queued(self) -> None:
+        """Start AT MOST ONE queued run, then ask for another tick if more can start.
+
+        A tick used to start every startable entry under the tick lock, each translating and waiting up to 20 s
+        for its runner, so a Cancel could wait minutes. Now one entry that changes state (starts, fails, is
+        skipped or blocked) ends the tick; an entry that is attempted but stays queued does not, so one stuck
+        head cannot starve the others.
+        """
         try:
             config = self.config()
         except DashboardConfigError as exc:
@@ -919,20 +1075,42 @@ class Scheduler:
             return
         if not self.edge.status().available:
             return
-        for run in self.db.runs((QUEUED,)):
+        queued = self.db.runs((QUEUED,))
+        key = cli_check.claude_key() if self.observer is not None else None
+        for run in queued:  # ask for the observation of a new Claude binary early; it runs on its own thread
+            self._cli_gate(run, config, key=key)
+        progressed = False
+        for run in self.start_order(queued):
             # Cheap pre-checks BEFORE translating (translation runs git): a checkout that already holds a
-            # lease, no free slot, or a held folder cannot start this run now, and none of that needs the
-            # item translated. The entry stays queued in its place, so a later entry may still pass it.
+            # lease, no free slot, a held folder or a Claude binary still being observed cannot start this run
+            # now, and none of that needs the item translated. The entry stays queued in its place.
             busy = {r.project_id for r in self.db.runs(ACTIVE_STATES)}
             if run.project_id in busy or len(busy) >= config.max_parallel_projects:
                 continue
             if self.db.live_holds(run.folder):
+                continue
+            if self._cli_gate(run, config, key=key)[0] == "wait":
                 continue
             try:
                 self._try_start(run, config)
             except Exception:  # noqa: BLE001 -- one run that cannot start must not keep the others from starting
                 self._log(f"starting run {run.id} failed:\n" + traceback.format_exc())
                 self.db.set_state(run.id, FAILED, code="dispatch-failed", detail=f"{traceback.format_exc().strip().splitlines()[-1]}")
+            after = self.db.get(run.id)
+            if after is None or after.state != QUEUED:
+                progressed = True
+                break
+        if progressed and self._any_startable(config):
+            self.wake()
+
+    def _any_startable(self, config: DashboardConfig) -> bool:
+        """True when some queued entry passes the cheap pre-checks right now (so another tick is worth asking for)."""
+        busy = {r.project_id for r in self.db.runs(ACTIVE_STATES)}
+        if len(busy) >= config.max_parallel_projects:
+            return False
+        return any(
+            run.project_id not in busy and not self.db.live_holds(run.folder) and self._cli_gate(run, config)[0] != "wait"
+            for run in self.db.runs((QUEUED,)))
 
     def _report_once(self, key: str, message: str) -> None:
         if self._reported.get(key) != message:
@@ -945,6 +1123,10 @@ class Scheduler:
             revision = folder_revision(folder)
         except MutationError as exc:
             self.db.set_state(run.id, SKIPPED, code="unreadable", detail=str(exc))
+            return
+        gate, refusal = self._cli_gate(run, config)
+        if gate == "refuse":  # the installed CLI ignores a denial: the run's options are refused, the task is untouched
+            self.db.set_state(run.id, FAILED, code="bad-options", detail=refusal.line())  # type: ignore[union-attr]
             return
         run_dir = self.run_dir_for(run.project_id, run.id)
         result = self._translate(Path(run.project_root), run.task_ref, run.item_id, RunOptions(**run.options), config,
@@ -962,9 +1144,9 @@ class Scheduler:
                 return
             if hard:
                 try:
-                    self._block_for(folder, run.item_id, hard, f"dashboard run {run.id}", revision=revision, refuse_held=True)
+                    self._block_for(folder, run.item_id, hard, f"dashboard run {run.id}", revision=revision, refuse_live=True)
                     self.db.set_state(run.id, BLOCKED, code=hard[0].code, detail="; ".join(r.line() for r in hard))
-                except QueueRefused:  # a hold registered meanwhile: the run yields and stays queued
+                except QueueRefused:  # a hold registered, or a run works the folder: the run yields and stays queued
                     return
                 except StaleRevision as exc:  # the task changed during translation: never block on stale text
                     self.db.add_event(run.id, "task-source-changed", f"re-translating next tick: {exc}")
@@ -1003,18 +1185,21 @@ class Scheduler:
         )
 
     def _block_for(self, folder: Path, item_id: str, reasons: list[Reason], source: str, *, revision: str | None,
-                   refuse_held: bool = False) -> BlockOutcome:
+                   refuse_live: bool = False, except_run: str | None = None) -> BlockOutcome:
         """Record a translation block. ``revision`` is the one the translation read (a harness fix that landed
-        since is StaleRevision, never a block on stale text); ``refuse_held`` raises QueueRefused ``held`` from
-        inside the gate when a Claude Code session holds the folder."""
+        since is StaleRevision, never a block on stale text); ``refuse_live`` raises QueueRefused ``held`` or
+        ``run-active`` from inside the gate when a Claude Code session holds the folder or a dashboard run works
+        it. ``except_run`` is the run the block is ABOUT (leased and STARTING): its own activity never refuses."""
         detail = "; ".join(r.line() for r in reasons)
         return record_block(self.mutator, folder, item_id=item_id, note=f"{reasons[0].code}: {reasons[0].detail}",
                             log_detail=f"{source}: not translated into a job: {concise(detail)}", expected_revision=revision,
-                            gate=self._hold_gate, precommit=(lambda: self._refuse_if_held(folder)) if refuse_held else None)
+                            gate=self._hold_gate,
+                            precommit=(lambda: self._refuse_if_live(folder, except_run=except_run)) if refuse_live else None)
 
     def _dispatch(self, run: Run, spec: JobSpec, run_dir: Path, revision: str, stage: "_Stage") -> None:
         if spec.worker == "claude":
-            floor.check_job_document(spec.document)
+            floor.check_job_document(spec.document, deny_tools=spec.deny_tools)
+        floor.check_worker_models(spec.document, self._entry_kind)
         run_dir.mkdir(parents=True, exist_ok=False)  # exist_ok=False: a directory that is already there is not ours
         stage.created = True
         job_file = run_dir / "job.yaml"
@@ -1024,8 +1209,9 @@ class Scheduler:
         except EdgeError as exc:
             shutil.rmtree(run_dir, ignore_errors=True)  # created above, nothing has seen it
             try:
+                # The run was leased above, so it is itself active on this folder: only a hold or ANOTHER run refuses.
                 self._block_for(Path(spec.folder), spec.item_id, [Reason("job-file-invalid", str(exc))], f"dashboard run {run.id}",
-                                revision=spec.start.revision, refuse_held=True)
+                                revision=spec.start.revision, refuse_live=True, except_run=run.id)
             except (QueueRefused, StaleRevision) as why:  # a hold, or the task changed: the run fails, the task is left alone
                 self.db.set_state(run.id, FAILED, code="job-file-invalid",
                                   detail=f"{exc}. The task was not blocked: {why}")
@@ -1045,8 +1231,10 @@ class Scheduler:
                 "argv": self.edge.runner_argv(job_file, store, spec.timeout_s, run.id),
                 "cancel_argv": self.edge.cancel_argv(store, run.id, runfiles.REASON_PLACEHOLDER),
                 "deadline_s": spec.timeout_s + RUNNER_SLACK_S, "grace_s": RUNNER_GRACE_S,
-                "env": {"TASK_KIT_AGENT_DEPTH": "0"},
+                "env": dict(floor.RUN_ENV),
             },
+            "subagents": {"state": "off", "reason": "denied by the dashboard floor", "deny_tools": list(spec.deny_tools)},
+            "cli_check": self.cli_check_summary() if spec.worker == "claude" else None,
         }
         runfiles.write_json(run_dir / runfiles.SPEC_FILE, runner_spec)
         self.db.set_state(run.id, STARTING, run_dir=str(run_dir))
@@ -1054,6 +1242,11 @@ class Scheduler:
         stage.spawned = True
         ident = self._await_runner(run_dir)
         self.db.set_state(run.id, RUNNING, runner=ident, detail=f"{spec.worker}:{spec.entry}")
+
+    def _entry_kind(self, name: str) -> str | None:
+        """``harness``, ``transport`` or None for a registry entry name (through the edge)."""
+        found = self.edge.entry(name)
+        return None if found is None else found.kind
 
     @staticmethod
     def _await_runner(run_dir: Path, timeout_s: float = 20.0) -> proctree.ProcIdent:

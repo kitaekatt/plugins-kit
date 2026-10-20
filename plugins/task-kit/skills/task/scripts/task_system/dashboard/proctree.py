@@ -16,9 +16,11 @@ the runner itself is killed) ends them all.
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import psutil
 
@@ -75,6 +77,52 @@ def descendants(pid: int) -> list[ProcIdent]:
         except psutil.NoSuchProcess:
             continue
     return found
+
+
+RUNNER_SCRIPT_NAME = "runner_cli.py"
+
+
+def dashboard_runner_ancestor(root: Path) -> ProcIdent | None:
+    """The live dashboard runner this process descends from, or None.
+
+    ``root`` is a dashboard's runtime root. An ancestor counts only when ALL of these hold: its command
+    line names ``runner_cli.py`` followed by a run directory under ``<root>/projects/``, and that
+    directory's ``runner.json`` records this very process (PID and creation time). A look-alike command
+    line, or a run directory of another dashboard (another ``--data-dir``), never matches.
+
+    This is an executable-level guard, not confinement: ``env -u``, absolute paths and shell wrappers keep
+    the ancestry, but a double fork that reparents before the check, or a direct call to the dashboard's
+    HTTP API, does not.
+    """
+    projects = os.path.normcase(os.path.realpath(str(Path(root) / "projects")))
+    try:
+        ancestors = psutil.Process().parents()
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return None
+    for proc in ancestors:
+        try:
+            cmdline = proc.cmdline()
+            created = proc.create_time()
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue
+        run_dir = None
+        for index, arg in enumerate(cmdline[:-1]):
+            if os.path.basename(arg) == RUNNER_SCRIPT_NAME:
+                run_dir = cmdline[index + 1]
+                break
+        if run_dir is None:
+            continue
+        resolved = os.path.normcase(os.path.realpath(run_dir))
+        if not resolved.startswith(projects + os.sep):
+            continue
+        try:
+            record = json.loads((Path(resolved) / "runner.json").read_text(encoding="utf-8"))
+            recorded = ProcIdent(int(record["pid"]), float(record["create_time"]))
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if recorded.pid == proc.pid and abs(recorded.create_time - created) <= CREATE_TIME_TOLERANCE_S:
+            return recorded
+    return None
 
 
 def session_members(leader: ProcIdent) -> list[ProcIdent]:

@@ -230,6 +230,17 @@ class RuntimeDB:
             ).fetchone()
         return _run(row) if row else None
 
+    def last_started_by_checkout(self) -> dict[str, str]:
+        """``{project_id: newest started_at}`` over every run that ever started (no schema change).
+
+        The scheduler orders checkouts by this: the one that started least recently goes first.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT project_id, MAX(started_at) FROM runs WHERE started_at IS NOT NULL GROUP BY project_id"
+            ).fetchall()
+        return {project_id: started for project_id, started in rows}
+
     def active_for_folder(self, folder: str) -> Run | None:
         key = folder_key(folder)
         for run in self.runs(ACTIVE_STATES):

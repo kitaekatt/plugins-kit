@@ -51,3 +51,15 @@ def symlinked_root(tmp_path: Path) -> tuple[Path, Path]:
     link_target.mkdir()
     os.symlink(link_target, project_root / "dev" / "tasks", target_is_directory=True)
     return project_root, link_target
+
+
+@pytest.fixture
+def outside_a_run(monkeypatch):
+    """A test that calls the task-kit launcher in-process runs as if outside any dashboard run.
+
+    A worker that runs these very tests inherits ``TASK_KIT_AGENT_DEPTH`` from its dashboard run, and the launcher
+    refuses on it. The variables are removed for THIS test only; nothing is deleted globally. A test that builds a
+    subprocess environment uses ``dashboard_support.clean_env`` instead.
+    """
+    for name in ("TASK_KIT_AGENT_DEPTH", "TASK_KIT_RUN_TOKEN"):
+        monkeypatch.delenv(name, raising=False)

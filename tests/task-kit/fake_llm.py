@@ -9,7 +9,9 @@ snapshot. No model is called.
 Behaviors: done, done-no-removal, blocked, no-result, duplicate-result,
 branch-switch, commit, hang, lingering, exit-1, attempt-timeout, slow-done
 (sleeps ``sleep_s`` from behavior.json, then behaves as ``done``), hang-after-done
-(finishes the item and writes the acceptance receipt, then hangs).
+(finishes the item and writes the acceptance receipt, then hangs), env-dump (records the
+environment variables the dashboard sets for a run and the job's options in ``env-dump.json``
+beside the job file, then behaves as ``done``).
 
 ``fake_llm.py --cancel <store> <run-id> <reason>`` plays ``llm-kit jobs cancel``
 against the stand-in ledger ``fake-ledger.json`` beside the store: exit 0 and a
@@ -115,6 +117,14 @@ def grandchild() -> subprocess.Popen:
     return child
 
 
+if BEHAVIOR == "env-dump":
+    import os
+
+    (RUN_DIR / "env-dump.json").write_text(json.dumps({
+        "env": {name: os.environ.get(name) for name in ("TASK_KIT_AGENT_DEPTH", "CLAUDE_CODE_DISABLE_WORKFLOWS")},
+        "options": JOB["options"]}), encoding="utf-8")
+    finish_item()
+    sys.exit(run_contract("All done.\n" + result_block("done")))
 if BEHAVIOR == "done":
     finish_item()
     sys.exit(run_contract("All done.\n" + result_block("done")))

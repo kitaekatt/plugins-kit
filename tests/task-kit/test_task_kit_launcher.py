@@ -21,7 +21,7 @@ from pathlib import Path
 
 import psutil
 import pytest
-from dashboard_support import ENTRYPOINT, PLUGIN_ROOT, REPO_ROOT, SCRIPTS_DIR, make_task
+from dashboard_support import ENTRYPOINT, PLUGIN_ROOT, REPO_ROOT, SCRIPTS_DIR, clean_env, make_task
 
 from task_system.dashboard import launcher as L
 from task_system.dashboard import state as dstate
@@ -405,7 +405,7 @@ def test_posix_open_failures_are_three_distinct_kinds():
     assert kinds == ["spawn", "timeout", "exit"]
 
 
-def test_no_open_flag_and_environment_variable_suppress_the_browser(tmp_path, monkeypatch):
+def test_no_open_flag_and_environment_variable_suppress_the_browser(tmp_path, monkeypatch, outside_a_run):
     opened = []
 
     class StubLauncher:
@@ -552,7 +552,7 @@ def test_bundle_without_an_installed_version_fails_loudly(tmp_path):
 
 
 def _env(extra=None):
-    env = dict(os.environ)
+    env = clean_env()  # a worker running these tests inherits the run markers; the launcher under test must not
     env["_BOOTSTRAP_GUARD_SKIP_REEXEC"] = "1"
     env["PYTHONPATH"] = str(REPO_ROOT / "plugins" / "skills-kit")
     for name in ("CLAUDE_BOOTSTRAP_DATA_ROOT", "CLAUDE_PLUGIN_TEST", "TASK_KIT_NO_OPEN"):
@@ -701,3 +701,13 @@ def test_the_thin_bundle_runs_the_installed_copys_real_launcher(plugin, tmp_path
         assert state.code_hash == code_hash(cache_copy / "skills" / "task" / "scripts")
     finally:
         run("stop", "--force")
+
+
+def test_the_launcher_refuses_inside_a_dashboard_run_with_exit_six_and_says_so_in_its_help(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("TASK_KIT_AGENT_DEPTH", "0")
+    assert L.EXIT_NESTED == 6
+    for command in ([], ["status"], ["stop"], ["restart"], ["serve"]):
+        assert L.main([*command, "--data-dir", str(tmp_path)], scripts_dir=SCRIPTS_DIR, entrypoint=ENTRYPOINT) == 6
+    assert "refused inside a dashboard run" in capsys.readouterr().err
+    assert not (tmp_path / "dashboard").exists()  # refused before anything was read or created
+    assert "6 refused inside a dashboard run" in L.build_parser().format_help().replace("\n", " ").replace("  ", " ")

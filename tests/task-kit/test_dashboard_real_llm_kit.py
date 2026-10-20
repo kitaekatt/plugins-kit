@@ -149,7 +149,7 @@ def test_a_done_answer_reaches_acceptance_on_stdin_and_the_ledger_accepts(llm, t
     assert [j.state.value for j in snapshot.jobs] == ["accepted"]
     (call,) = agent.calls
     assert call[2] == "opus" and "Make the thing." in call[1] and "task_result" in call[0]
-    assert call[3].disallowed_tools == floor.CLAUDE_DISALLOWED_TOOLS  # the floor reached the backend options
+    assert call[3].disallowed_tools == floor.disallowed_tools_value(floor.deny_tools())  # the floor reached the backend options
     assert json.loads((run_dir / "receipt.json").read_text(encoding="utf-8"))["verdict"]["outcome"] == "accepted"
     assert "do-it" not in {i["id"] for i in raw_items((folder / "plan.md").read_text(encoding="utf-8"))}
 

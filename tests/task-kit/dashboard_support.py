@@ -108,7 +108,7 @@ class Running:
     """An in-process dashboard server on a thread, plus a raw HTTP client."""
 
     def __init__(self, data_dir: Path, parents: tuple[Path, ...], busy=None, edge=None,
-                 config_path: Path | None = None, min_interval: float = 0.0) -> None:
+                 config_path: Path | None = None, min_interval: float = 0.0, cli_observer=False) -> None:
         from task_system.dashboard.inventory import Inventory
         from task_system.dashboard.server import DashboardServer
 
@@ -117,7 +117,7 @@ class Running:
         self.inventory = Inventory(parents=parents, min_interval=min_interval)
         self.server = DashboardServer(
             data_dir=data_dir, scripts_dir=SCRIPTS_DIR, inventory=self.inventory,
-            busy=busy, log=self.log, edge=edge, config_path=config_path,
+            busy=busy, log=self.log, edge=edge, config_path=config_path, cli_observer=cli_observer,
         )
         self.state = self.server.start()
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -196,6 +196,20 @@ class Running:
         assert not self.thread.is_alive(), "server thread did not stop"
 
 
+# The variables a dashboard run's command inherits. A subprocess a test builds for the task-kit launcher must not
+# carry them (a worker running these very tests has them set), so such environments are built through clean_env().
+RUN_MARKERS = ("TASK_KIT_AGENT_DEPTH", "TASK_KIT_RUN_TOKEN")
+
+
+def clean_env(extra: dict | None = None, *, base: dict | None = None) -> dict:
+    """An environment for a subprocess the test builds: ``base`` (default: this process's) without the run markers."""
+    env = dict(os.environ if base is None else base)
+    for name in RUN_MARKERS:
+        env.pop(name, None)
+    env.update(extra or {})
+    return env
+
+
 def run_task_cli(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
     """task.py in a subprocess, hermetically; stdout/stderr as BYTES."""
     from bootstrap_guard import _REEXEC_SKIP_ENV
@@ -261,6 +275,8 @@ class FakeEdge:
             "or-qwen": EntryInfo(id="or-qwen", kind="transport", harness=None, model="qwen/qwen3-32b"),
         }
         self.job_files: list[Path] = []
+        self.worker_argv = None
+        self.argv_calls: list[str] = []
 
     def status(self):
         from task_system.dashboard.jobs_edge import EdgeStatus
@@ -279,6 +295,19 @@ class FakeEdge:
 
             raise EdgeError(f"no entry {entry!r}")
         return self.EFFORTS if found.harness in ("claude", "codex") else ()
+
+    def claude_worker_argv(self, entry, *, effort, disallowed_tools, cwd):
+        """The argv a Claude worker would launch; ``worker_argv`` (a callable) supplies it, else the edge cannot build one.
+
+        With no ``worker_argv`` the dashboard's per-binary observation ends ``unobserved`` at once, without
+        spawning anything, which keeps every end-to-end test off the real ``claude`` binary.
+        """
+        from task_system.dashboard.jobs_edge import EdgeError
+
+        if self.worker_argv is None:
+            raise EdgeError("the fake edge builds no worker argv")
+        self.argv_calls.append(disallowed_tools)
+        return self.worker_argv(entry, effort=effort, disallowed_tools=disallowed_tools, cwd=cwd)
 
     def validate_job_file(self, path: Path) -> None:
         from task_system.dashboard.jobs_edge import EdgeError
@@ -334,3 +363,27 @@ def dashboard_world(tmp_path: Path, **kw) -> tuple[Path, Path, Path]:
     """``agent_world`` with the task under dev/tasks, the only root the dashboard reads."""
     kw.setdefault("task_location", "dev/tasks")
     return agent_world(tmp_path, **kw)
+
+
+def make_checkouts(tmp_path: Path, names: tuple[str, ...] = ("proj-a", "proj-b"), *, items=None, sections=None,
+                   stub: str = "alpha") -> tuple[Path, dict[str, tuple[Path, Path]]]:
+    """(devroot, {name: (project root, task folder)}): git checkouts that each hold the same-shaped task.
+
+    Every checkout is its own project to the scheduler (its lease and its slot). Items default to three
+    available ones (``do-it``, ``later-one``, ``third``) with a plan.md section each.
+    """
+    devroot = tmp_path / "devroot"
+    ids = ("do-it", "later-one", "third")
+    made = {}
+    for name in names:
+        project = devroot / name
+        init_repo(project)
+        folder = make_task(
+            project, "dev/tasks", stub, title=f"Task in {name}", status="active",
+            items=items if items is not None else [
+                {"id": i, "title": i.replace("-", " ").title(), "state": "available", "priority": "P2"} for i in ids],
+            sections=sections if sections is not None else {i: f"Do {i}.\n\nDone when {i} exists." for i in ids},
+            log="- 2026-10-01 09:00: began\n",
+        )
+        made[name] = (project, folder)
+    return devroot, made

@@ -15,11 +15,20 @@ Patterns use Claude Code's ``Bash(<prefix>:*)`` rule syntax and are joined with
 commas into the single string the job option carries. A delete cannot be
 expressed as "only outside the checkout", so the whole delete command family is
 denied.
+
+Tool-level denials (``TOOLS_DENIED_ALWAYS``, ``TOOLS_DENIED_WHEN_OFF``) ride in
+the same comma-joined argument after the Bash patterns. They stop the tools the
+Bash patterns cannot see: dynamic workflows, worktrees, remote and scheduled
+agents, and (while native sub-agents are off) the sub-agent tool itself.
+
+Every guard here is a TRIPWIRE against a cooperating or careless worker, the same
+class as the deny floor under ``bypassPermissions``: none of it is confinement.
 """
 
 from __future__ import annotations
 
-from typing import Mapping
+import os
+from typing import Callable, Mapping
 
 # git operations that move HEAD, the index, a branch or the history.
 _GIT_DENIED = (
@@ -32,7 +41,7 @@ _DELETE_DENIED = ("rm", "rmdir", "del", "erase", "rd", "Remove-Item", "unlink", 
 # Publication and nested-driver commands.
 _OTHER_DENIED = (
     "python scripts/publish.py", "uv run python scripts/publish.py", "gh", "claude -p",
-    "claude --print", "codex exec", "task-kit", "llm-kit jobs", "llm-kit pipeline",
+    "claude --print", "codex exec", "task-kit", "llm-kit jobs", "llm-kit pipeline", "llm-kit completion",
 )
 
 
@@ -46,19 +55,57 @@ PATTERNS: tuple[str, ...] = (
     + tuple(_bash(command) for command in _OTHER_DENIED)
 )
 
-#: The value of ``Job.options.disallowed_tools``.
-CLAUDE_DISALLOWED_TOOLS = ",".join(PATTERNS)
+#: Tools denied in every run: workflow fan-out outside the sub-agent limits, worktrees (the shared write
+#: policy forbids them, but this tool is invisible to the Bash patterns), and remote or scheduled agents
+#: that outlive the run's process tree. Claude Code's deny rule syntax takes a bare tool name.
+TOOLS_DENIED_ALWAYS: tuple[str, ...] = ("Workflow", "EnterWorktree", "RemoteTrigger", "CronCreate", "ScheduleWakeup")
+#: Denied while native sub-agents are off (sub-agents stay off until a characterization record turns them on). Claude Code's init event lists
+#: the sub-agent tool as ``Task`` on some builds; the deny rule name ``Agent`` covers both (``Task(...)`` is an alias).
+TOOLS_DENIED_WHEN_OFF: tuple[str, ...] = ("Agent",)
+#: The names the sub-agent tool carries in a CLI-authored tool list.
+SUBAGENT_TOOL_NAMES: tuple[str, ...] = ("Agent", "Task")
+
+#: Environment every run's command gets. ``TASK_KIT_AGENT_DEPTH`` marks a dashboard run's process tree (the
+#: launcher refuses when it sees it); ``CLAUDE_CODE_DISABLE_WORKFLOWS`` is Claude Code's documented switch
+#: for dynamic workflows, and turning workflows off also makes ultracode unavailable.
+RUN_ENV: dict[str, str] = {"TASK_KIT_AGENT_DEPTH": "0", "CLAUDE_CODE_DISABLE_WORKFLOWS": "1"}
+#: Variables a dashboard-built subprocess environment never inherits from the server's own environment.
+RUN_ENV_STRIPPED: tuple[str, ...] = ("TASK_KIT_AGENT_DEPTH", "TASK_KIT_RUN_TOKEN")
+
+
+def deny_tools(*, sub_agents_on: bool = False) -> tuple[str, ...]:
+    """The tool-level denials of one run: every run's list, plus the sub-agent tool while sub-agents are off."""
+    return TOOLS_DENIED_ALWAYS if sub_agents_on else TOOLS_DENIED_ALWAYS + TOOLS_DENIED_WHEN_OFF
+
+
+def disallowed_tools_value(tools: tuple[str, ...] | list[str] = ()) -> str:
+    """The ONE comma-joined ``--disallowedTools`` value: the Bash floor, then the tool-level denials."""
+    return ",".join(PATTERNS + tuple(tools))
+
+
+def run_environment(base: Mapping[str, str] | None = None) -> dict[str, str]:
+    """The environment a dashboard-built subprocess gets: ``base`` (default: this process's) without the
+    run markers, plus the run environment. Built here, never inherited blindly."""
+    env = dict(os.environ if base is None else base)
+    for name in RUN_ENV_STRIPPED:
+        env.pop(name, None)
+    env.update(RUN_ENV)
+    return env
+
+
+#: The value of ``Job.options.disallowed_tools`` with no tool-level denial (the Bash floor alone).
+CLAUDE_DISALLOWED_TOOLS = disallowed_tools_value()
 
 
 class FloorPlacementError(ValueError):
     """The job document puts the deny floor where it must not be, or omits it."""
 
 
-def check_job_document(document: Mapping) -> None:
+def check_job_document(document: Mapping, *, deny_tools: tuple[str, ...] | list[str] = ()) -> None:
     """Raise unless ``document`` (a job file mapping) carries the floor correctly.
 
     - no run-level ``disallowed_tools`` (it would change routing);
-    - every job's ``options.disallowed_tools`` names every floor pattern.
+    - every job's ``options.disallowed_tools`` names every floor pattern and every tool in ``deny_tools``.
     """
     if document.get("disallowed_tools") not in (None, ""):
         raise FloorPlacementError(
@@ -74,6 +121,28 @@ def check_job_document(document: Mapping) -> None:
         if not isinstance(value, str):
             raise FloorPlacementError(f"job {job.get('id')!r} has no options.disallowed_tools floor")
         present = {part.strip() for part in value.split(",")}
-        missing = [p for p in PATTERNS if p not in present]
+        missing = [p for p in (*PATTERNS, *deny_tools) if p not in present]
         if missing:
             raise FloorPlacementError(f"job {job.get('id')!r} is missing deny patterns: {missing}")
+
+
+def check_worker_models(document: Mapping, entry_kind: Callable[[str], str | None]) -> None:
+    """Raise unless every model a job names is a HARNESS entry (a second gate behind translation).
+
+    ``entry_kind(name)`` answers ``"harness"``, ``"transport"`` or None (unknown). A transport entry is a
+    text-only endpoint: it cannot be a top-level worker, so a job naming one is refused before any file exists.
+    """
+    jobs = document.get("jobs")
+    if not isinstance(jobs, list) or not jobs:
+        raise FloorPlacementError("the job document has no jobs")
+    for job in jobs:
+        models = job.get("models") if isinstance(job, Mapping) else None
+        if not isinstance(models, list) or not models:
+            raise FloorPlacementError(f"job {job.get('id')!r} names no model entry")
+        for name in models:
+            kind = entry_kind(name)
+            if kind != "harness":
+                raise FloorPlacementError(
+                    f"job {job.get('id')!r} names model entry {name!r}, which is "
+                    f"{'not in the model registry' if kind is None else f'a {kind} entry'}; only harness entries can be workers"
+                )

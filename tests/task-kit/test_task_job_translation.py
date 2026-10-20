@@ -78,7 +78,7 @@ def test_a_ready_item_becomes_one_immutable_job_specification(world):
         spec.item_id = "other"  # frozen
     system, user = job["prompt"]["system"], job["prompt"]["user"]
     assert str(project) in system and TASK in system and "do-it" in system and "Do not start sibling items" in system
-    assert "task_result" in system and "Native sub-agents are not available" in system
+    assert "task_result" in system and "the Agent and Workflow tools are denied in this run" in system
     assert "Make the thing." in user and "id: do-it" in user and "Later one" not in user  # only this item
     assert "task work" not in user and "Skill(" not in user
 
@@ -226,7 +226,7 @@ def test_the_floor_names_every_family_the_design_denies():
         "checkout": "Bash(git checkout:*)", "switch": "Bash(git switch:*)", "branch": "Bash(git branch:*)",
         "worktree": "Bash(git worktree:*)", "add": "Bash(git add:*)", "publish": "Bash(python scripts/publish.py:*)",
         "rm": "Bash(rm:*)", "claude": "Bash(claude -p:*)", "codex": "Bash(codex exec:*)", "task-kit": "Bash(task-kit:*)",
-        "llm-kit": "Bash(llm-kit jobs:*)",
+        "llm-kit": "Bash(llm-kit jobs:*)", "llm-kit completion": "Bash(llm-kit completion:*)",
     }
     present = floor.CLAUDE_DISALLOWED_TOOLS.split(",")
     for name, pattern in families.items():
@@ -291,7 +291,9 @@ def test_the_emitted_job_document_loads_through_llm_kit_with_the_floor_on_the_jo
     job_file = real_llm_kit.load_job_file(write_job_file(tmp_path, spec.document))
     assert job_file.disallowed_tools is None  # the run-level floor is NOT used
     (job,) = job_file.jobs
-    assert job.options["disallowed_tools"] == floor.CLAUDE_DISALLOWED_TOOLS
+    assert job.options["disallowed_tools"] == floor.disallowed_tools_value(floor.deny_tools())
+    assert job.options["disallowed_tools"].split(",")[-6:] == ["Workflow", "EnterWorktree", "RemoteTrigger", "CronCreate",
+                                                               "ScheduleWakeup", "Agent"]
     assert job.models == ("opus",) and job.max_attempts == 1 and job.workspace.isolate is False
     assert tuple(job.contract.command) == tuple(spec.contract_argv) and job.contract.directory == project.resolve()
 
@@ -330,7 +332,7 @@ def test_the_emitted_claude_argv_carries_bypass_permissions_and_every_floor_patt
     cmd = seen["cmd"]
     assert cmd[cmd.index("--permission-mode") + 1] == "bypassPermissions"
     denied = cmd[cmd.index("--disallowedTools") + 1].split(",")
-    assert denied == list(floor.PATTERNS)
+    assert denied == [*floor.PATTERNS, *floor.deny_tools()]  # the Bash floor, then the tool-level denials, in ONE argument
     assert "--append-system-prompt" in cmd and "--system-prompt" not in cmd
     assert seen["cwd"] == project and seen["user"] == job.prompt.user
     # With the floor removed from the job the flag disappears: the test above could fail.

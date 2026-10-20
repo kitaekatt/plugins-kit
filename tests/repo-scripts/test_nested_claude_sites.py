@@ -86,6 +86,11 @@ SITES = {
         "exempt", 'shutil.which("claude")',
         "runs `claude plugin ...` management commands, which start no session",
     ),
+    ("plugins/task-kit/skills/task/scripts/task_system/dashboard/cli_check.py", "claude_key", "WHICH"): (
+        "exempt", 'shutil.which("claude")',
+        "identifies the binary (real path and stat) and starts nothing; the observation's argv comes from llm-kit's "
+        "ClaudeCliBackend, which applies the claudx flags",
+    ),
     (_AGEFILE, "wrap_identity", "LIST"): (
         "exempt", "def wrap_identity",
         "the `age -p` passphrase flag; the executable is age, not claude",

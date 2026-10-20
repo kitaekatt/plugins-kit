@@ -105,6 +105,7 @@ class JobSpec:
     start: StartSnapshot
     contract_argv: tuple[str, ...]
     network: bool = False
+    deny_tools: tuple[str, ...] = ()  # the tool-level denials this run's disallowed_tools value carries
 
 
 @dataclass(frozen=True)
@@ -140,7 +141,7 @@ def _system_prompt(*, root: str, folder: str, task_ref: str, item_id: str, revis
         "- Never rewrite or discard work in the tree that you did not make.",
         "",
         "Working rules:",
-        "- Work alone. Native sub-agents are not available in this release.",
+        "- Work alone: the Agent and Workflow tools are denied in this run.",
         "- Do exactly the one item described below. Do not start sibling items.",
         "- When the item is complete, remove it from the task_items block in plan.md, add an Accomplished line",
         "  to plan.md, and append a dated log.md entry that names the item id, using the task folder's own conventions.",
@@ -287,11 +288,8 @@ def translate(
         py, str(Path(accept_script).resolve()), task_ref, item_id, run_id, revision,
         start.head or "-", start.branch or "-", str(Path(run_dir)),
     )
-    job_options: dict = {"system_prompt_mode": "append"}
-    if adapter == "claude-cli":
-        job_options["disallowed_tools"] = floor.CLAUDE_DISALLOWED_TOOLS
-    if options.effort:
-        job_options["effort"] = options.effort
+    deny_tools = floor.deny_tools()
+    job_options = worker_job_options(adapter, options.effort, deny_tools)
     job = {
         "id": f"{_slug(task_ref)}--{item_id}--{run_id}",
         "prompt": {
@@ -311,13 +309,29 @@ def translate(
         task_ref=task_ref, folder=str(folder), item_id=item_id, item_title=str(item.get("title", item_id)),
         worker=options.worker, entry=options.entry or "", timeout_s=float(options.timeout_s),
         document=document, accept=accept, start=start, contract_argv=contract, network=options.network,
+        deny_tools=deny_tools,
     )
     return Translation(reasons=(), spec=spec)
 
 
+def worker_job_options(adapter: str | None, effort: str | None, deny_tools: tuple[str, ...] | list[str]) -> dict:
+    """The one builder of a job's ``options``: the Claude floor plus ``deny_tools`` as ONE comma-joined string.
+
+    The cli observation (cli_check.py) builds its probe argv from this same function, so what it observes is
+    byte-identical to what a run emits.
+    """
+    options: dict = {"system_prompt_mode": "append"}
+    if adapter == "claude-cli":
+        options["disallowed_tools"] = floor.disallowed_tools_value(tuple(deny_tools))
+    if effort:
+        options["effort"] = effort
+    return options
+
+
 # Reason codes that describe a RUN's options, not the task: a run whose options are refused ends
 # `failed` (bad-options) and the task is left alone; they never block the task.
-OPTION_REASON_CODES = frozenset({"bad-worker", "codex-floor-unproved", "model-entry", "bad-effort", "timeout"})
+OPTION_REASON_CODES = frozenset({"bad-worker", "codex-floor-unproved", "model-entry", "bad-effort", "timeout",
+                                 "cli-deny-ignored"})
 
 
 def _effort_reasons(options: RunOptions, edge, reasons: list[Reason], adapter: str | None) -> None:
