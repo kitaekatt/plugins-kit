@@ -91,7 +91,7 @@ def finish_item(remove: bool = True) -> None:
         match, data = mutation._items_block(plan)
         data["task_items"]["items"] = [i for i in data["task_items"]["items"] if i.get("id") != ITEM]
         body = yaml.safe_dump(data, sort_keys=False, default_flow_style=False)
-        plan = plan[: match.start(2)] + body + plan[match.end(2):]
+        plan = plan[: match.start(1)] + body + plan[match.end(1):]
     (FOLDER / "plan.md").write_text(plan + f"\nAccomplished: {ITEM}.\n", encoding="utf-8")
     with open(FOLDER / "log.md", "a", encoding="utf-8") as handle:
         handle.write(f"- 2026-10-02 10:00: completed {ITEM}\n")

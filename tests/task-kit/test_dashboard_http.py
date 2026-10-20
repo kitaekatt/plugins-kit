@@ -220,7 +220,7 @@ def test_dashboard_payload_shape_and_filters(srv):
     assert status == 200 and body["schema"] == 1
     assert body["capabilities"]["run"]["available"] is False
     assert body["capabilities"]["run"]["state"] == "absent"  # llm-kit is not on the task-kit test path
-    assert body["capabilities"]["mutations"]["actions"] == ["queue", "retry", "recheck", "cancel"]
+    assert body["capabilities"]["mutations"]["actions"] == ["queue", "retry", "recheck", "cancel", "newtask", "additem", "defer", "undefer", "queueall", "remove", "runoptions"]
     assert {p["name"] for p in body["projects"]} == {"alpha", "beta"}
     assert {t["id"] for t in body["tasks"]} == {"dev/tasks/open-one", "dev/tasks/other"}
     assert [n["kind"] for n in body["needs"]] == ["item-blocked"]
@@ -369,3 +369,53 @@ def test_static_assets_survive_the_source_directory_disappearing(tmp_path, world
     assets = server_module.load_static(scripts)
     shutil.rmtree(scripts)
     assert b"<!doctype html>" in assets["index.html"][0]
+
+
+# -- the authoring routes obey the same gates ------------------------------------------------------------------------
+
+
+def authoring_routes(srv):
+    """(method, path) of every authoring mutation, and the one verb each answers to."""
+    status, _h, body = srv.json("GET", "/api/v1/dashboard")
+    task = next(t for t in body["tasks"] if t["stub"] == "open-one")
+    prefix = f"{task['checkout']}/{urllib.parse.quote(task['id'], safe='')}"
+    return [
+        ("POST", f"/api/v1/tasks/{prefix}/items"),
+        ("POST", f"/api/v1/tasks/{prefix}/queue"),
+        ("PATCH", f"/api/v1/items/{prefix}/has-section"),
+        ("PUT", f"/api/v1/items/{prefix}/has-section/run-options"),
+        ("DELETE", "/api/v1/queue/nope"),
+        ("POST", f"/api/v1/projects/{body['projects'][0]['id']}/tasks"),
+    ]
+
+
+def test_every_authoring_route_needs_the_token_a_same_origin_and_a_json_body(srv):
+    for method, path in authoring_routes(srv):
+        assert srv.request(method, path, token=False, headers={"Origin": f"http://127.0.0.1:{srv.port}",
+                                                                 "Content-Type": "application/json"})[0] == 401, (method, path)
+        got = srv.json(method, path, headers={"Content-Type": "application/json"}, body=b"{}")
+        assert (got[0], got[2]["error"]["code"]) == (403, "bad_origin"), (method, path)
+        got = srv.json(method, path, headers={"Origin": f"http://127.0.0.1:{srv.port}", "Content-Type": "text/plain"}, body=b"{}")
+        assert (got[0], got[2]["error"]["code"]) == (415, "bad_content_type"), (method, path)
+        got = srv.json(method, path, headers={"Origin": f"http://127.0.0.1:{srv.port}", "Content-Type": "application/json"}, body=b"nope")
+        assert (got[0], got[2]["error"]["code"]) == (400, "bad_json"), (method, path)
+
+
+def test_every_authoring_route_refuses_the_other_verbs(srv):
+    for method, path in authoring_routes(srv):
+        reads = {"GET"} if (method == "PATCH") else set()  # (an item's detail is a GET on the same path)
+        for other in {"GET", "POST", "PATCH", "PUT", "DELETE"} - {method} - reads:
+            status, _h, _b = srv.request(other, path, headers={"Origin": f"http://127.0.0.1:{srv.port}",
+                                                                "Content-Type": "application/json", "Content-Length": "2"}, body=b"{}")
+            assert status in (404, 405), (other, path, status)
+            assert status != 200
+
+
+def test_a_write_names_its_expected_revision_but_new_task_and_runtime_records_do_not(srv):
+    routes = dict(((m, p.rsplit("/", 1)[-1]), p) for m, p in authoring_routes(srv))
+    for method, key in (("POST", "items"), ("POST", "queue"), ("PATCH", "has-section")):
+        got = srv.send(method, routes[(method, key)], {})
+        assert (got[0], got[2]["error"]["code"]) == (422, "missing_expected_revision"), (method, key)
+    got = srv.send("POST", routes[("POST", "tasks")], {"title": ""})
+    assert got[0] == 422 and got[2]["error"]["code"] == "bad-title"  # New task is judged on its input, not on a revision
+    assert srv.send("DELETE", routes[("DELETE", "nope")], {})[0] == 404  # a run id, no revision

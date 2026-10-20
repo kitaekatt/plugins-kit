@@ -189,3 +189,104 @@ def test_record_block_that_cannot_write_task_yaml_fails_rather_than_pretending(f
     (folder / "task.yaml").write_text("not: [valid", encoding="utf-8")
     with pytest.raises(MutationError, match="task.yaml"):
         blocker.record_block(mutator, folder, item_id="do-it", note="x", log_detail="y")
+
+
+# -- the two-phase mutate: gate, precommit, `written` -------------------------------------------------
+
+
+def test_the_gate_is_entered_after_the_process_lock_and_only_for_the_commit(folder, tmp_path):
+    """RED CHECK: enter the gate before the process lock and a gate holder waits for the lock with the gate held."""
+    import threading
+
+    events = []
+
+    class Gate:
+        def __enter__(self):
+            events.append("gate-in")
+
+        def __exit__(self, *exc):
+            events.append("gate-out")
+
+    lock_path = tmp_path / "mutation.lock"
+    mutator = TaskMutator(lock_path, lock_timeout_s=1.0)
+
+    def edit(texts):
+        events.append("edit")
+        return {LOG: texts.log + "- x: y\n"}
+
+    mutator.mutate(folder, edit, gate=Gate(), precommit=lambda: events.append("precommit"))
+    assert events == ["edit", "gate-in", "precommit", "gate-out"]  # the edit (and the temp writes) are outside the gate
+    # a writer waiting on the process lock does not hold the gate
+    held = threading.Event()
+    done = threading.Event()
+    with ProcessLock(lock_path, timeout_s=1.0):
+        events.clear()
+        thread = threading.Thread(target=lambda: (held.set(), pytest.raises(MutationError, TaskMutator(lock_path, lock_timeout_s=0.3).mutate, folder, edit, gate=Gate()), done.set()))
+        thread.start()
+        held.wait(5)
+        done.wait(5)
+        thread.join(5)
+    assert "gate-in" not in events
+
+
+def test_precommit_runs_even_when_the_edit_changes_nothing_and_a_refusal_writes_nothing(folder, mutator):
+    seen = []
+    mutator.mutate(folder, lambda t: {}, precommit=lambda: seen.append("ran"))
+    assert seen == ["ran"]
+
+    class Refuse(Exception):
+        pass
+
+    def refuse():
+        raise Refuse()
+
+    before = {n: (folder / n).read_bytes() for n in ("plan.md", "task.yaml", "log.md")}
+    with pytest.raises(Refuse):
+        mutator.mutate(folder, lambda t: {LOG: t.log + "- x: y\n", "plan.md": t.plan + "\nmore\n"}, precommit=refuse)
+    assert before == {n: (folder / n).read_bytes() for n in before}  # nothing replaced
+    assert not list(folder.glob("*.dash.tmp"))  # and the temps are gone
+
+
+def test_every_mutation_error_says_which_files_were_already_replaced(folder, mutator, monkeypatch):
+    """RED CHECK: stop recording `written` and a part-way failure looks like no failure at all."""
+    real = os.replace
+
+    def fail_on_log(src, dst):
+        if str(dst).endswith("log.md"):
+            raise PermissionError("locked")
+        return real(src, dst)
+
+    monkeypatch.setattr(mutation.os, "replace", fail_on_log)
+    with pytest.raises(MutationError) as raised:
+        mutator.mutate(folder, lambda t: {"plan.md": t.plan + "\nmore\n", LOG: t.log + "- x: y\n"})
+    assert raised.value.code == "replace-failed" and raised.value.written == ("plan.md",)
+    assert raised.value.intended == ("plan.md", "log.md") and raised.value.path.name == "log.md"
+    monkeypatch.setattr(mutation.os, "replace", real)
+    with pytest.raises(StaleRevision) as stale:
+        mutator.mutate(folder, lambda t: {}, expected_revision="0" * 24)
+    assert stale.value.written == ()
+
+
+def test_the_new_text_helpers_edit_only_what_they_name(folder):
+    plan = (folder / "plan.md").read_text(encoding="utf-8")
+    appended = mutation.append_item(plan, {"id": "fresh", "title": "A fresh one", "state": "available"})
+    assert [i["id"] for i in raw_items(appended)] == ["do-it", "later-one", "fresh"]
+    assert appended.split("### do-it")[1] == plan.split("### do-it")[1]
+    with pytest.raises(MutationError, match="already has an item"):
+        mutation.append_item(plan, {"id": "do-it", "title": "dup", "state": "available"})
+    deferred = mutation.set_item_state(set_item(plan, "do-it", state="available", note="kept"), "do-it", "deferred")
+    assert {i["id"]: i for i in raw_items(deferred)}["do-it"] == {"id": "do-it", "title": "Do it", "state": "deferred", "priority": "P1", "note": "kept"}
+    task_yaml = (folder / "task.yaml").read_text(encoding="utf-8")
+    assert yaml_priority(mutation.set_task_fields(task_yaml, priority="P3")) == "P3"
+
+
+def yaml_priority(text: str):
+    import yaml
+
+    return yaml.safe_load(text)["task"]["priority"]
+
+
+def test_the_block_finder_is_the_readers(folder):
+    """RED CHECK: restore the writer's private fence pattern and it edits a block the reader does not recognise."""
+    plan = (folder / "plan.md").read_text(encoding="utf-8").replace("```yaml\n", "```yaml extra words\n", 1)
+    assert mutation._items_block(plan) is None and raw_items(plan) is None

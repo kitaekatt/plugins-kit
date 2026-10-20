@@ -150,3 +150,57 @@ def test_a_run_survives_a_server_restart_and_is_observed_to_its_end(tmp_path, mo
         assert second.settle(run_id).state == runtime.ACCEPTED
     finally:
         second.stop()
+
+
+# -- authoring: removed, options, batches, holds ------------------------------------------------------------------
+
+
+def test_removed_is_a_terminal_non_retryable_state_outside_the_history(db):
+    enqueue(db, "a")
+    assert db.transition("a", (runtime.QUEUED,), runtime.REMOVED, code="removed", detail="gone")
+    run = db.get("a")
+    assert run.state == runtime.REMOVED and run.ended_at is not None
+    assert runtime.REMOVED in runtime.TERMINAL_STATES and runtime.REMOVED not in runtime.HISTORY_STATES
+    assert runtime.REMOVED not in runtime.RETRYABLE_STATES and runtime.REMOVED not in runtime.LIVE_STATES
+    assert db.live_for("p1", "tmp/t", "i") is None  # the item is free to be queued again
+    assert db.try_lease("a", "p1", max_projects=5) is False
+    assert not db.transition("a", (runtime.QUEUED,), runtime.CANCELLED)  # only a queued entry can be removed
+
+
+def test_options_change_only_while_the_entry_is_queued(db):
+    enqueue(db, "a")
+    assert db.set_options("a", {"effort": "low"}) is True and db.get("a").options == {"effort": "low"}
+    assert db.try_lease("a", "p1", max_projects=5)
+    assert db.set_options("a", {"effort": "high"}) is False and db.get("a").options == {"effort": "low"}
+    assert db.set_options("ghost", {}) is False
+
+
+def test_enqueue_many_is_all_or_nothing(db):
+    entry = lambda run_id: dict(run_id=run_id, project_id="p1", project_root="/x", task_ref="tmp/t", item_id=run_id,  # noqa: E731
+                                item_title=run_id, options={}, source_revision="r")
+    runs = db.enqueue_many([entry("a"), entry("b")])
+    assert [r.id for r in runs] == ["a", "b"] and [r.id for r in db.runs((runtime.QUEUED,))] == ["a", "b"]
+    with pytest.raises(sqlite3.IntegrityError):
+        db.enqueue_many([entry("c"), entry("a")])  # the second collides with an existing run id
+    assert [r.id for r in db.runs()] == ["a", "b"]  # "c" was rolled back with it
+
+
+def test_held_folders_lists_live_holds_once_and_drops_dead_ones(tmp_path, db):
+    import subprocess
+    import sys
+
+    from task_system.dashboard import proctree
+
+    live = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
+    try:
+        mine, other = tmp_path / "mine", tmp_path / "other"
+        mine.mkdir()
+        other.mkdir()
+        db.add_hold(str(mine), "s1", proctree.ident_of(live.pid))
+        db.add_hold(str(other), "s2", proctree.ProcIdent(live.pid, proctree.ident_of(live.pid).create_time + 3600))  # recycled pid
+        assert db.held_folders() == {runtime.folder_key(mine)}
+        assert db.live_holds(str(other)) == []  # the dead one is gone for good
+    finally:
+        live.kill()
+        live.wait()
+    assert db.held_folders() == set()

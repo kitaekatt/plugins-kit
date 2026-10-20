@@ -97,6 +97,8 @@ def test_hash_is_stable_and_equal_for_equal_trees(copy):
     "task_system/dashboard/static/index.html",
     "task_system/validate.py",
     "task_system/discovery.py",
+    "task_system/init.py",
+    "task_system/relocate.py",
 ])
 def test_a_change_to_covered_code_changes_the_hash(copy, rel):
     before = codehash.code_hash(copy)
@@ -105,7 +107,7 @@ def test_a_change_to_covered_code_changes_the_hash(copy, rel):
     assert codehash.code_hash(copy) != before
 
 
-@pytest.mark.parametrize("rel", ["task_system/init.py", "task_system/review_html.py", "task.py", "bootstrap_guard.py"])
+@pytest.mark.parametrize("rel", ["task_system/review_html.py", "task.py", "bootstrap_guard.py"])
 def test_a_change_to_uncovered_files_does_not_restart_the_server(copy, rel):
     before = codehash.code_hash(copy)
     target = copy / rel

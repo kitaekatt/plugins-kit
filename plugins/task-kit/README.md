@@ -33,8 +33,9 @@ open a task in Claude Code; it does not run them.
 
 Queue runs one item as one unattended Claude job and needs the llm-kit plugin;
 without it the autonomous actions refuse with the reason and the rest keeps
-working. Queue, Retry, Re-check and Cancel run are live; other controls are drawn but
-disabled. Cancel run stops the run's whole process tree and closes its ledger as
+working. Queue, Queue all, Retry, Re-check, Cancel run, Remove from queue, New task,
+Add item, Defer/Undefer and the run options (worker, effort, time limit per queue entry)
+are live; Pause worker is drawn but disabled. Cancel run stops the run's whole process tree and closes its ledger as
 cancelled; the run is then retryable, and its partial work stays in the shared tree
 for you to look at. A run is never retried by itself: if the dashboard server
 restarts, the running work is adopted again from its run directory, and a runner
@@ -45,8 +46,9 @@ capability in `skills/task/SKILL.md`.
 
 The dashboard runs beside the task system: the `task` verbs and the Claude Code
 workflow behave the same whether or not it is running. A refresh never edits a
-task folder; the dashboard writes one only to record a block or a Re-check, under
-the folder's expected revision.
+task folder; the dashboard writes one only to record a block, a Re-check, a New task,
+an Add item or a Defer/Undefer, under the folder's expected revision and never while a
+`/task work` session holds the task or a run works it.
 
 ```
 task-kit               start (or reuse) the dashboard and open it in your browser

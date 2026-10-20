@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable, ContextManager
 
 from .mutation import (
     LOG,
@@ -46,6 +47,45 @@ def concise(text: str, limit: int = NOTE_LIMIT) -> str:
     return flat if len(flat) <= limit else flat[: limit - 3].rstrip() + "..."
 
 
+def record_blocks(
+    mutator: TaskMutator,
+    folder: Path,
+    *,
+    items: list[tuple[str, str]],
+    log_detail: str,
+    expected_revision: str | None = None,
+    gate: ContextManager | None = None,
+    precommit: Callable[[], None] | None = None,
+) -> BlockOutcome:
+    """Block the task and several items (``(item id, note)``) in ONE mutation and one log line.
+
+    ``item_mutated`` is true only when every item could be marked; ``item_error`` joins the reasons of
+    the ones that could not (the task is blocked regardless).
+    """
+    errors: list[str] = []
+
+    def edit(texts: TaskTexts) -> dict[str, str]:
+        changes: dict[str, str] = {}
+        detail = log_detail
+        plan = texts.plan
+        marked = False
+        for item_id, note in items:
+            try:
+                plan = set_item(plan, item_id, state="blocked-user", note=concise(note))
+                marked = True
+            except MutationError as exc:
+                errors.append(str(exc) if len(items) == 1 else f"{item_id}: {exc}")
+                detail += f" (item {item_id} could not be marked blocked because its source was invalid: {exc})"
+        if marked:
+            changes[PLAN] = plan
+        changes[TASK_YAML] = set_task_status(texts.task_yaml, "blocked")
+        changes[LOG] = append_log(texts.log, detail)
+        return changes
+
+    revision = mutator.mutate(Path(folder), edit, expected_revision=expected_revision, gate=gate, precommit=precommit)
+    return BlockOutcome(item_mutated=bool(items) and not errors, item_error="; ".join(errors) or None, revision=revision)
+
+
 def record_block(
     mutator: TaskMutator,
     folder: Path,
@@ -54,23 +94,9 @@ def record_block(
     note: str,
     log_detail: str,
     expected_revision: str | None = None,
+    gate: ContextManager | None = None,
+    precommit: Callable[[], None] | None = None,
 ) -> BlockOutcome:
     """Block the task (and the item, when it can be edited). See module docstring."""
-    state = {"item_error": None}
-
-    def edit(texts: TaskTexts) -> dict[str, str]:
-        changes: dict[str, str] = {}
-        detail = log_detail
-        if item_id is not None:
-            try:
-                changes[PLAN] = set_item(texts.plan, item_id, state="blocked-user", note=concise(note))
-            except MutationError as exc:
-                state["item_error"] = str(exc)
-                detail += f" (the item could not be marked blocked because its source was invalid: {exc})"
-        changes[TASK_YAML] = set_task_status(texts.task_yaml, "blocked")
-        changes[LOG] = append_log(texts.log, detail)
-        return changes
-
-    revision = mutator.mutate(Path(folder), edit, expected_revision=expected_revision)
-    return BlockOutcome(item_mutated=state["item_error"] is None and item_id is not None,
-                        item_error=state["item_error"], revision=revision)
+    return record_blocks(mutator, folder, items=[(item_id, note)] if item_id is not None else [], log_detail=log_detail,
+                         expected_revision=expected_revision, gate=gate, precommit=precommit)

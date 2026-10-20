@@ -154,6 +154,32 @@ and explicit Retry remain hard requirements rather than preferences.
 - Physically duplicated task folders reached through links are assigned once by
   existing discovery deduplication, so two project queues cannot own one item.
 - Queue/start re-read the task under a task mutation lock and compare revision.
+  A block the dashboard records for a translation failure carries the revision
+  that translation read: a harness fix that landed meanwhile is a 409 at Queue
+  and leaves the run queued at start, never a block on stale text.
+- Lock order, outermost first: `Scheduler._queue_lock` (Queue, Queue all, every
+  authoring write), `_tick_lock` (a tick, Cancel, Remove, Save run options, every
+  authoring write, so no run starts between an authoring check and its write),
+  the mutator's cross-process file lock (waits up to 10 seconds), then
+  `_hold_gate`. The gate is a plain lock held only for a short check-and-commit:
+  a write's `precommit` checks (live hold, active run, the item's live run) plus
+  its per-file compare and `os.replace`, the start's hold re-check plus
+  `try_lease`, and hold registration. Nothing under the gate waits on a lock or
+  runs a process, so hold registration, which takes only the gate and never
+  `_tick_lock` or the file lock, fits the 2 second handshake budget even while a
+  tick runs for 20 seconds or another process holds the file lock.
+- Every server-process writer is gated: Re-check, the three translation blocks,
+  crash inspection and acceptance-starved blocks, and every authoring write. Only
+  the runner process's acceptance block cannot (another process; it takes the file
+  lock) and `init` for a brand-new folder needs none. An AST guard keeps new
+  writers gated. Re-check releases only the holds that predate it: registration
+  bumps a per-folder epoch and Re-check's `precommit` refuses (409 `held`) when
+  it moved since the request began.
+- A queued run starts through a cheap pre-check (the checkout holds a lease, no
+  slot is free, or the folder is held: skipped without translating, since
+  translation runs git), then translation outside the gate, then the gated hold
+  re-check and lease. A hold that registers between translation and the lease
+  stops the start; one that registers after it sees the active run.
 - A changed but still job-ready item is translated again; stale prompt text is
   never run. A no-longer-ready item follows the blocking path.
 - Runners record PID plus creation time in dashboard state before dispatch.
@@ -325,11 +351,32 @@ token-by-token motion is not justified.
 - `/task dashboard` is additive; direct task usage never imports dashboard code.
 - Discovery and browser refresh write nothing.
 - Dashboard writes task folders only for explicit New/Add/Defer/Queue/Re-check
-  actions and run-boundary state transitions, all under expected revisions.
-- Dashboard writers serialize on a cross-process lock; harness writers do not.
-  Each dashboard mutation re-reads source, compares revision immediately before
-  `os.replace`, writes/fsyncs a sibling, and replaces atomically. A replace error
-  is a loud 409-class response with no retry; harness changes are never overwritten.
+  actions and run-boundary state transitions, all under expected revisions
+  (New task: the target folder must be absent).
+- Dashboard writers serialize on a cross-process lock; harness writers do not,
+  and cannot without changing the task system (Claude Code's Edit and Write and
+  hand edits take no lock either). The guarantee is therefore narrower than
+  "harness changes are never overwritten":
+  - a dashboard authoring, translation-block or Re-check write is refused (409
+    `held`) while a `/task work` hold that the write did not account for is live;
+    run-boundary writes (crash inspection, acceptance) record what a live run did
+    and do not refuse a hold, because the session was told a run was live;
+  - each mutation writes and fsyncs every sibling temp first, then, file by file,
+    re-reads the target and compares it with the bytes the edit was built from
+    immediately before `os.replace`; a harness change that landed before that
+    compare is never overwritten (409 `stale-revision`, nothing of that file
+    written); a replace error is a loud 409-class response with no retry;
+  - the files are replaced one at a time (plan.md, task.yaml, log.md), so a
+    failure part-way is not folder-atomic: the response is 409 `partial-write`
+    naming the failed file, the files written and the files not written, with
+    no rollback;
+  - residual, stated so no document claims more: a harness write WITHOUT a hold
+    (a task.py verb outside `/task work`, an editor, an agent not using the
+    skill) that lands between a file's final compare and its `os.replace`, or an
+    append through a handle opened before the replace (an `open("a")` log
+    append), is lost and not detected. The window is one read, one digest compare
+    and one rename. `test_residual_race_a_harness_write_landing_inside_the_replace_is_lost_and_is_documented_as_such`
+    pins that this window exists.
 - Runtime/ledger writes stay in plugin data, never beside plugin code or tasks.
 - The optional llm-kit import is lazy. Absent, too-old, and stale copies produce
   distinct install/update diagnoses and disable only autonomous run controls.
@@ -395,9 +442,13 @@ Server-backed actions map as follows:
 | Add item / add and queue | `POST /api/v1/tasks/<project>/<task>/items` |
 | Create task | `POST /api/v1/projects/<project>/tasks` |
 | Poll log tail | `GET /api/v1/runs/<run-id>/log?after=` |
-Every mutation carries `expected_revision`, except Cancel run: it is process control on an immutable run id
-and the task revision moves while a worker runs, so the server validates the run's own state under the
-scheduler lock instead (409 `not-cancellable`). v1 has no redundant idempotency key. Stale input is
+Every task-folder write carries `expected_revision`. Three kinds of action do not. New task has no folder
+yet, so its precondition is the ABSENCE of the target folder (409 `task-exists`). Cancel run, Remove from
+queue and Save run options act on a runtime record only (the task revision moves while a worker runs), so
+the server validates the record's own state under the scheduler lock instead (409 `not-cancellable`,
+`not-queued`). Authoring is also refused while a session holds the task or a run works it (409 `held`,
+`run-active`, `item-has-live-run`). A block carries the revision its translation read. Remove from queue
+ends the entry `removed` (not retryable, outside the run history; runtime schema stays 1). v1 has no redundant idempotency key. Stale input is
 409 with current revision; validation/translation refusal is 422 with typed
 reasons; unavailable llm-kit is 503 with the exact remedy. Selection, drawer
 close, copy, disclosure expansion, and form cancel are client-only and have no
@@ -432,6 +483,18 @@ Add New task, Add item, Defer, Queue all, and run options while preserving task.
 Tests: `test_dashboard_task_mutations.py`, `test_dashboard_optimistic_lock.py`,
 `test_task_skill_dashboard.py`.
 Red check: same-task Queue yields to `/task work`; work on task B proceeds while task A runs.
+As built: New task (dev/tasks only, the task system's own `init`, priority and a first item
+in one follow-up write), Add item and add-and-queue (plan.md block entry plus a
+`### <id> -- <title>` section at the end of the region holding the block, verified in
+memory before any write), Defer/Undefer, Queue all available (one combined block when any
+item fails translation, otherwise all-or-nothing enqueue), Remove from queue (`removed`),
+and run options (worker, effort, time limit per queue entry; an option problem is a 422 on the
+request, never a block on the task). The forms render inline in the redesigned layout; what a
+person has typed survives the poll's re-render. Run next is deferred: it needs the only
+runtime-schema change of this increment (a queue-rank column, schema 2, which an older
+task-kit would refuse), so it is not built. A start walks queued entries in order but skips,
+without translating, any whose checkout holds a lease, whose slot is not free, or whose
+folder is held.
 ### Increment 5 - parallel projects and orchestrated sub-work
 Add bounded cross-project scheduling, native sub-agent characterization gates,
 recursion limits, and configured endpoint helpers for sub-work only.
@@ -520,3 +583,4 @@ None open. New task defaults to `dev/tasks`; endpoint-helper consent is per proj
 - 28 fixed (N5) - claudx refusal and guard test cover the data-dir PATH launcher copy.
 - 29 fixed (nit) - Increment 2 red checks include the `disallowed_tools` argv test.
 - 30 resolved - New task defaults to `dev/tasks`; endpoint-helper consent is given per project.
+- 31 fixed - "harness changes are never overwritten" narrowed: hold refusal, per-file compare, no folder atomicity, the stated residual race.

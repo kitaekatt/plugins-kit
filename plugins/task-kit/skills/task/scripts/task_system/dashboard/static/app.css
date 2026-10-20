@@ -261,3 +261,8 @@ select:focus-visible, textarea:focus-visible, input.f:focus-visible { outline:2p
 @media (max-width:900px) { .cols2 { grid-template-columns:minmax(0,1fr); } }
 .run-detail td { background:var(--panel2); }
 .run-inline .logtail { max-height:260px; }
+
+/* ---------- inline forms (New task, Add item) ---------- */
+.formcard { border:1px solid color-mix(in srgb,var(--accent) 45%,var(--line)); border-radius:7px; background:var(--panel); padding:8px 14px 12px; margin:10px 0 4px; }
+.formcard .field { margin:7px 0; }
+input.f.narrow { width:7em; }

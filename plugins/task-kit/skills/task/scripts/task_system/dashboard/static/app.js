@@ -2,15 +2,22 @@
  *
  * Plain JavaScript, no framework and no build step. It talks only to the
  * server that served it: every request is a relative /api/v1/ path carrying the
- * per-instance token that arrived in the URL fragment. The only state-changing
- * calls are Queue, Retry, Re-check and Cancel run, sent by send(); the first
- * three carry the expected_revision the page last saw, Cancel run does not (it
- * is process control on a run id, and the task revision moves while a run
- * works). The actions the server does not back yet (Defer, Queue all, New
- * task, Add item, Pause worker, the run option controls) are drawn disabled
- * through laterButton(), so they are visible and cannot be clicked. Queue and
- * Retry also stay disabled, with the server's reason, whenever the server
- * reports autonomous runs unavailable; Cancel run does not depend on llm-kit.
+ * per-instance token that arrived in the URL fragment. State-changing calls go
+ * through send(method, path, body). Every write to a task folder (Queue, Retry,
+ * Re-check, Queue all, Add item, Defer, Undefer) carries the expected_revision
+ * the page last saw; New task is judged on its input alone, and Cancel run,
+ * Remove from queue and Save run options act on a run record, not on the task
+ * (the task revision moves while a run works). An action the server does not
+ * back (Pause worker, or any action an older server lacks) is drawn disabled
+ * through laterButton(), so it is visible and cannot be clicked. Queue, Retry,
+ * Queue all and Add and queue also stay disabled, with the server's reason,
+ * whenever the server reports autonomous runs unavailable; Cancel run does not
+ * depend on llm-kit. Authoring (Add item, Defer, Undefer) is disabled with the
+ * reason while a Claude Code session holds the task or a run works it.
+ *
+ * Forms render inline. What a person has typed lives in S.drafts, outside the
+ * markup, so the poll's re-render never loses it; the focused field and its
+ * selection are restored by data-fk after each render.
  *
  * One flat task list across projects: a row per task (priority, title,
  * <repo>:<task>, item count, age) with a needs-you marker and an in-flight
@@ -43,6 +50,11 @@ var S = {
   detail: {},          // item key -> detail payload
   open: {},            // <details> open state by data-open key (all start closed)
   resolve: {},         // keys whose command box is expanded
+  drafts: { nt: {}, ai: {}, opt: {} },  // what a person has typed: New task, Add item (by task), run options (by item)
+  newOpen: false,      // the New task form is open
+  addOpen: null,       // the task key whose Add item form is open
+  formErr: {},         // form key -> the last refusal shown inside that form
+  busy: {},            // action key -> true while its request is in flight
   conn: 'connecting',  // connecting | ok | offline | auth
   connDetail: '',
   renderedRev: null,
@@ -162,15 +174,65 @@ function runPill(label, action, key) {
     esc(runCap().reason || (label + LATER_NOTE)) + '">' + esc(label) + '</button>';
 }
 
+/* Why authoring (Add item, Defer, Undefer) is off for a task right now, or '' when it is not. */
+function authoringBlock(task) {
+  if (task.held) return 'A Claude Code session is working this task; make the change there, or Re-check when it is done.';
+  if (task.run_active) return 'A dashboard run is working this task; wait for it to finish, or cancel it.';
+  return '';
+}
+/* A task-folder authoring control: live when the server backs it and nothing works the task, otherwise
+ * drawn disabled with the reason (idle) or the later-increment note (not backed). */
+function authControl(label, cls, icon, action, key, block) {
+  if (!canDo(action)) return laterButton(label, cls, icon, action);
+  if (block) {
+    return '<button type="button" class="btn ' + cls + '" disabled aria-disabled="true" data-idle="' + action + '" title="' + esc(block) + '">' +
+      (icon ? ic(icon) : '') + esc(label) + '</button>';
+  }
+  return liveButton(label, cls, icon, action, key);
+}
+function draftOf(scope, id) {
+  var bucket = S.drafts[scope] || (S.drafts[scope] = {});
+  return bucket[id] || (bucket[id] = {});
+}
+function dval(scope, id, field, fallback) {
+  var d = (S.drafts[scope] || {})[id];
+  return d && d[field] !== undefined ? d[field] : (fallback === undefined ? '' : fallback);
+}
+function fieldId(scope, id, field) { return 'f_' + [scope, id, field].join('_').replace(/[^A-Za-z0-9_-]/g, '_'); }
+function dataAttrs(scope, id, field) {
+  return 'id="' + esc(fieldId(scope, id, field)) + '" data-draft="' + scope + '" data-id="' + esc(id) + '" data-field="' + field +
+    '" data-fk="' + esc(scope + ':' + id + ':' + field) + '"';
+}
+function textField(scope, id, field, label, extra) {
+  return '<div class="field"><label for="' + esc(fieldId(scope, id, field)) + '">' + esc(label) + '</label><input class="f" type="text" ' +
+    dataAttrs(scope, id, field) + ' value="' + esc(dval(scope, id, field)) + '" autocomplete="off"' + (extra || '') + '></div>';
+}
+function areaField(scope, id, field, label) {
+  return '<div class="field"><label for="' + esc(fieldId(scope, id, field)) + '">' + esc(label) + '</label><textarea ' +
+    dataAttrs(scope, id, field) + '>' + esc(dval(scope, id, field)) + '</textarea></div>';
+}
+function selectField(scope, id, field, label, options, fallback, extra) {
+  var cur = dval(scope, id, field, fallback);
+  return '<div class="field"><label for="' + esc(fieldId(scope, id, field)) + '">' + esc(label) + '</label><select ' + dataAttrs(scope, id, field) + (extra || '') + '>' +
+    options.map(function (o) { return '<option value="' + esc(o[0]) + '"' + (o[0] === cur ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join('') +
+    '</select></div>';
+}
+var PRIORITIES = [['P1', 'P1'], ['P2', 'P2'], ['P3', 'P3']];
+
 var RUN_LABEL = {
   queued: 'Queued', starting: 'Starting', running: 'Running', cancelling: 'Cancelling', accepted: 'Accepted', blocked: 'Blocked',
-  failed: 'Failed', timeout: 'Timed out', cancelled: 'Cancelled', crashed: 'Crashed', skipped: 'Dropped'
+  failed: 'Failed', timeout: 'Timed out', cancelled: 'Cancelled', crashed: 'Crashed', skipped: 'Dropped', removed: 'Removed'
 };
+/* "Queued #n": the entry's place in the queue, in the order the scheduler walks it. */
+function runLabel(r) {
+  return r.state === 'queued' && r.queue_position ? 'Queued #' + r.queue_position : (RUN_LABEL[r.state] || r.state);
+}
 function isLiveRun(r) { return !!r && (r.state === 'queued' || r.state === 'starting' || r.state === 'running' || r.state === 'cancelling'); }
 /* Cancel run: live whenever the server backs it and the run can still be cancelled; a run already
  * cancelling shows a disabled "Cancelling" so a second click cannot be mistaken for progress. With no
  * run (or a server that does not back it) the button is drawn disabled. */
 function cancelControl(run, cls) {
+  if (run && run.state === 'queued' && canDo('remove')) return liveButton('Remove from queue', cls, 'close', 'remove', run.id);
   if (run && run.state === 'cancelling') {
     return '<button type="button" class="btn ' + cls + '" disabled aria-disabled="true" data-idle="cancel" title="The run is being stopped">' +
       ic('stop') + 'Cancelling</button>';
@@ -212,9 +274,9 @@ function api(path) {
     return res.json();
   });
 }
-function send(path, body) {
+function send(method, path, body) {
   return fetch(path, {
-    method: 'POST',
+    method: method,
     headers: { 'X-Task-Kit-Token': TOKEN, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
     cache: 'no-store'
@@ -275,11 +337,12 @@ function renderBanners() {
   var h = '';
   if (S.snap && runCap().available) {
     h += '<div class="callout info"><strong>Autonomous runs are on</strong><p>Queue starts one unattended Claude run for one item; ' +
-      'a blocked run marks its task as needing you, and Cancel run stops it and everything it started. Defer, Queue all, New task, ' +
-      'Add item and Pause worker are shown disabled: they arrive in a later increment. &ldquo;Resolve in Claude Code&rdquo; only shows commands to copy.</p></div>';
+      'a blocked run marks its task as needing you, and Cancel run stops it and everything it started. New task, Add item and Defer ' +
+      'change the task folder only while no Claude Code session works that task and no run does. Pause worker is shown disabled: it ' +
+      'arrives in a later increment. &ldquo;Resolve in Claude Code&rdquo; only shows commands to copy.</p></div>';
   } else if (S.snap) {
     h += '<div class="callout info"><strong>Autonomous runs are unavailable</strong><p>' + esc(runCap().reason || 'This server cannot start runs.') +
-      ' Viewing tasks, Re-check and &ldquo;Resolve in Claude Code&rdquo; still work.</p></div>';
+      ' Viewing tasks, New task, Add item, Defer, Re-check and &ldquo;Resolve in Claude Code&rdquo; still work.</p></div>';
   }
   if (S.notice) {
     h += '<div class="callout ' + esc(S.notice.kind) + '"><strong>' + esc(S.notice.title) + '</strong><p>' + esc(S.notice.text) + '</p></div>';
@@ -297,6 +360,16 @@ function renderBanners() {
     h += '<div class="callout bad"><strong>Discovery problem (' + esc(e.code) + ')</strong><p>' + esc(e.message) + '</p></div>';
   });
   $('banners').innerHTML = h;
+}
+function renderNewTaskButton() {
+  var b = $('newTaskBtn');
+  if (!b || !S.snap) return;
+  var live = canDo('newtask');
+  if (live) {
+    b.removeAttribute('disabled'); b.removeAttribute('aria-disabled'); b.removeAttribute('data-later');
+    b.setAttribute('data-action', 'newtask'); b.setAttribute('aria-expanded', String(S.newOpen));
+    b.setAttribute('title', 'Create a task in dev/tasks of a project');
+  }
 }
 function renderStatus() {
   var chip = $('serverChip');
@@ -368,7 +441,7 @@ function renderRuns() {
     ' - one unattended run per checkout; queued runs wait their turn</span></div><div class="run-grid">';
   list.forEach(function (r) {
     h += '<div class="run-card"><div class="proj"><span>' + esc(identOf(r.project_name, r.task)) + '</span><span class="live">' +
-      esc(RUN_LABEL[r.state] || r.state) + '</span></div><div class="ttl">' + esc(r.item_title) + '</div>' +
+      esc(runLabel(r)) + '</span></div><div class="ttl">' + esc(r.item_title) + '</div>' +
       '<div class="sub">' + esc(r.worker || '') + (r.entry ? ' (' + esc(r.entry) + ')' : '') +
       (r.started_at ? ' - running for ' + esc(elapsed(r.started_at)) : ' - waiting to start') +
       (r.phase ? ' - ledger ' + esc(r.phase) : '') + '</div>' +
@@ -427,7 +500,7 @@ function nodeHtml(task, item) {
   switch (item.ui_state) {
     case 'available':
       if (isLiveRun(item.run)) {
-        sub = '<span class="t-run">' + esc((RUN_LABEL[item.run.state] || item.run.state).toLowerCase()) + '</span>';
+        sub = '<span class="t-run">' + esc(runLabel(item.run).toLowerCase()) + '</span>';
       } else if (item.run && item.run.retryable) {
         sub = '<span class="t-warn">' + esc((RUN_LABEL[item.run.state] || item.run.state).toLowerCase()) + '</span>';
       } else {
@@ -463,13 +536,10 @@ function markersHtml(task) {
   return h;
 }
 function taskBody(task) {
-  var avail = task.items.filter(function (i) { return i.ui_state === 'available'; }).length;
+  var avail = task.items.filter(function (i) { return i.ui_state === 'available' && !isLiveRun(i.run); }).length;
   var open = task.section === 'open';
   var nodes = task.items.map(function (it) { return nodeHtml(task, it); }).join('');
-  if (open) {
-    nodes += '<div class="node addnode"><button type="button" class="bubble" disabled aria-disabled="true" data-later="additem" title="Add item' + LATER_NOTE +
-      '" aria-label="Add an item to ' + esc(task.title) + ' (' + 'arrives in a later increment)">' + ic('plus') + '</button><div class="nlabel muted">Add item</div><div class="nsub"></div></div>';
-  }
+  if (open) nodes += addNodeHtml(task);
   var empty = task.items.length ? '' :
     '<p class="muted fs12 mb0">' + (task.has_items_block ? 'No open items.' : 'No task_items block in plan.md (a pre-contract folder).') + '</p>';
   var ident = task.repo + ':' + task.stub;
@@ -478,11 +548,57 @@ function taskBody(task) {
     '<dl class="idl"><dt>Identifier</dt><dd><button type="button" class="task-id-copy" data-action="copy" data-text="' + esc(ident) + '" title="Copy identifier">' + esc(ident) + '</button></dd>' +
     '<dt>Task path</dt><dd><button type="button" class="task-id-copy" data-action="copy" data-text="' + esc(task.id) + '" title="Copy task path">' + esc(task.id) + '</button></dd>' +
     '<dt>Working in</dt><dd class="mono">' + esc(task.working_root) + '</dd></dl>' +
-    '<div class="tacts">' + (open && avail > 1 ? laterButton('Queue all available (' + avail + ')', 'sm', null, 'queueall') : '') + '</div></div>' +
+    '<div class="tacts">' + (open && avail > 1 ? runButton('Queue all available (' + avail + ')', 'sm', null, 'queueall', tkey(task)) : '') + '</div></div>' +
     needsHtml(task) +
     (nodes ? '<div class="pipeline" role="list">' + nodes + '</div>' : '') + empty +
+    (S.addOpen === tkey(task) ? addItemFormHtml(task) : '') +
     (sel && tkey(sel.task) === tkey(task) ? itemDetailHtml(sel.task, sel.item) : '') +
     taskDetailsHtml(task) + '</div>';
+}
+function addNodeHtml(task) {
+  var block = authoringBlock(task), label = 'Add an item to ' + task.title;
+  if (!canDo('additem')) {
+    return '<div class="node addnode"><button type="button" class="bubble" disabled aria-disabled="true" data-later="additem" title="Add item' + LATER_NOTE +
+      '" aria-label="' + esc(label + ' (arrives in a later increment)') + '">' + ic('plus') + '</button><div class="nlabel muted">Add item</div><div class="nsub"></div></div>';
+  }
+  if (block) {
+    return '<div class="node addnode"><button type="button" class="bubble" disabled aria-disabled="true" data-idle="additem" title="' + esc(block) +
+      '" aria-label="' + esc(label + ' (' + block + ')') + '">' + ic('plus') + '</button><div class="nlabel muted">Add item</div><div class="nsub"></div></div>';
+  }
+  return '<div class="node addnode"><button type="button" class="bubble" data-action="additem" data-key="' + esc(tkey(task)) + '" data-fk="add:' + esc(tkey(task)) +
+    '" aria-expanded="' + (S.addOpen === tkey(task)) + '" aria-label="' + esc(label) + '" title="Add an item">' + ic('plus') +
+    '</button><div class="nlabel muted">Add item</div><div class="nsub"></div></div>';
+}
+/* The Add item form: inline under the stage map, in the same slot an item's detail uses. */
+function addItemFormHtml(task) {
+  var tk = tkey(task), err = S.formErr['ai:' + tk];
+  var canQueue = canDo('queue') && runCap().available;
+  var queueBtn = canQueue
+    ? '<button type="button" class="btn primary" data-action="addsubmit" data-key="' + esc(tk) + '" data-queue="1">' + ic('play') + 'Add and queue</button>'
+    : '<button type="button" class="btn primary" disabled aria-disabled="true" data-idle="addqueue" title="' + esc(runCap().reason || 'Queue is not available') + '">' + ic('play') + 'Add and queue</button>';
+  return '<div class="formcard" data-form="additem"><div class="idhead"><h3>Add an item to ' + esc(task.title) + '</h3></div>' +
+    '<div class="cols2"><div>' + textField('ai', tk, 'title', 'Title', ' aria-required="true"') +
+    selectField('ai', tk, 'priority', 'Priority', PRIORITIES, 'P2') + '</div><div>' +
+    areaField('ai', tk, 'details', 'Details (the worker\'s instructions)') + '</div></div>' +
+    '<p class="hint">Details are written to plan.md under a heading for the item. Add and queue needs them: they are what the run is told to do.</p>' +
+    '<div class="err-msg" role="alert">' + esc(err || '') + '</div>' +
+    '<div class="acts">' + queueBtn +
+    '<button type="button" class="btn" data-action="addsubmit" data-key="' + esc(tk) + '" data-queue="0">Add only</button>' +
+    '<button type="button" class="btn" data-action="additem" data-key="' + esc(tk) + '">Cancel</button></div></div>';
+}
+/* The New task form: inline above the task list. */
+function newTaskFormHtml() {
+  var err = S.formErr.nt, projects = (S.snap && S.snap.projects) || [];
+  var fallback = S.project || (projects[0] && projects[0].id) || '';
+  var opts = projects.map(function (p) { return [p.id, p.name]; });
+  return '<div class="formcard" data-form="newtask"><div class="idhead"><h3>New task</h3>' +
+    '<span class="hint">Created in dev/tasks of the project\'s working checkout, as <span class="mono">task init</span> would.</span></div>' +
+    '<div class="cols2"><div>' + selectField('nt', '', 'project', 'Project', opts, fallback) +
+    textField('nt', '', 'title', 'Title', ' aria-required="true"') + selectField('nt', '', 'priority', 'Priority', PRIORITIES, 'P2') + '</div><div>' +
+    textField('nt', '', 'itemtitle', 'First item (optional)') + areaField('nt', '', 'details', 'First item details') + '</div></div>' +
+    '<div class="err-msg" role="alert">' + esc(err || '') + '</div>' +
+    '<div class="acts"><button type="button" class="btn primary" data-action="createtask">' + ic('plus') + 'Create task</button>' +
+    '<button type="button" class="btn" data-action="newtask">Cancel</button></div></div>';
 }
 function rowHtml(task) {
   var k = tkey(task), open = S.openTask === k, need = needN(task), run = runN(task);
@@ -593,6 +709,45 @@ function taskDetailsHtml(task) {
   return '<div class="tdetails"><div class="sec-title">Task details</div><div class="cols2"><div>' + left + '</div><div><div class="sec-title">Recent log entries</div>' +
     updatesHtml(task) + '</div></div></div>';
 }
+/* The run options of one item. An available item keeps them as a draft that rides on Queue; a queued item shows its
+ * entry's options and saves a change at once; once a run has started they are fixed and drawn disabled. */
+function runOptionsHtml(task, it, live) {
+  var key = ikey(task, it), run = it.run, queued = !!run && run.state === 'queued';
+  var kv = '<dl class="kv mb0">';
+  if (!canDo('runoptions')) {
+    return kv + '<dt>Worker</dt><dd><span class="seg" role="group" aria-label="Worker"><button type="button" disabled aria-disabled="true" data-later="runoptions">Claude</button>' +
+      '<button type="button" disabled aria-disabled="true" data-later="runoptions">Codex</button></span></dd>' +
+      '<dt>Effort</dt><dd><select disabled aria-label="Effort" data-later="runoptions"><option>Default</option></select></dd>' +
+      '<dt>Runs in</dt><dd class="mono fs12">' + esc(task.working_root) + '</dd></dl>';
+  }
+  var ro = caps().run_options || {}, workers = ro.workers || {}, defaults = ro.defaults || {};
+  var editable = (it.ui_state === 'available' && !live) || queued;
+  var d = (S.drafts.opt || {})[key] || {};
+  var shown = (queued || live) && run ? run : {};
+  var worker = d.worker || shown.worker || defaults.worker || 'claude';
+  var effort = d.effort !== undefined ? d.effort : (shown.effort || '');
+  var minutes = d.minutes !== undefined ? d.minutes : (shown.timeout_s ? String(Math.round(shown.timeout_s / 6) / 10) : '');
+  var save = queued ? ' data-optsave="1"' : '', off = editable ? '' : ' disabled aria-disabled="true"';
+  var claude = workers.claude || { available: false, efforts: [], reason: 'No run options from the server.' };
+  var codex = workers.codex || { available: false, efforts: [], reason: 'No run options from the server.' };
+  function seg(name, info) {
+    var usable = editable && info.available, pressed = worker === name;
+    return '<button type="button" ' + (usable ? 'data-action="optworker" data-v="' + name + '" data-key="' + esc(key) + '"' :
+      'disabled aria-disabled="true" data-idle="optworker"') + ' aria-pressed="' + pressed + '"' +
+      (info.available ? '' : ' title="' + esc(info.reason || 'Not available') + '"') + '>' + (name === 'claude' ? 'Claude' : 'Codex') + '</button>';
+  }
+  var efforts = ((workers[worker] || claude).efforts || []);
+  var effortOpts = '<option value="">Default' + (defaults.effort ? ' (' + esc(defaults.effort) + ')' : '') + '</option>' +
+    efforts.map(function (e) { return '<option value="' + esc(e) + '"' + (e === effort ? ' selected' : '') + '>' + esc(e) + '</option>'; }).join('');
+  var timeoutHint = defaults.timeout_s ? String(Math.round(defaults.timeout_s / 60)) : '';
+  return kv + '<dt>Worker</dt><dd><span class="seg" role="group" aria-label="Worker">' + seg('claude', claude) + seg('codex', codex) + '</span></dd>' +
+    '<dt>Effort</dt><dd><select ' + dataAttrs('opt', key, 'effort') + save + off + ' aria-label="Effort">' + effortOpts + '</select></dd>' +
+    '<dt>Time limit</dt><dd><input class="f narrow" type="number" min="1" step="1" ' + dataAttrs('opt', key, 'minutes') + save + off +
+    ' aria-label="Time limit in minutes" placeholder="' + esc(timeoutHint) + '" value="' + esc(minutes) + '"> minutes</dd>' +
+    '<dt>Runs in</dt><dd class="mono fs12">' + esc(task.working_root) + '</dd></dl>' +
+    '<div class="err-msg" role="alert">' + esc(S.formErr['opt:' + key] || '') + '</div>' +
+    '<p class="hint">' + (queued ? 'Saved to the queued entry as you change it.' : editable ? 'Used when you press Queue.' : 'Fixed once a run has started.') + '</p>';
+}
 /* Item detail: shown under the stage map of the task that holds the selected item. */
 function itemDetailHtml(task, it) {
   var key = ikey(task, it), detail = S.detail[key], ui = it.ui_state;
@@ -611,20 +766,20 @@ function itemDetailHtml(task, it) {
   }
   left += '<div class="acts"><button type="button" class="btn warn" data-action="resolve" data-key="' + esc(key) + '" aria-expanded="' + !!S.resolve[key] + '">' + ic('term') + 'Resolve in Claude Code</button>';
   var live = isLiveRun(it.run);
-  if (ui === 'available' && !live) left += runButton('Queue', 'primary', 'play', 'queue', key) + laterButton('Defer', '', null, 'defer');
-  if (ui === 'available' && live) left += '<span class="chip">' + esc(RUN_LABEL[it.run.state]) + '</span>';
+  var block = authoringBlock(task);
+  if (ui === 'available' && !live) left += runButton('Queue', 'primary', 'play', 'queue', key) + authControl('Defer', '', null, 'defer', key, block);
+  if (ui === 'available' && live) left += '<span class="chip">' + esc(runLabel(it.run)) + '</span>';
   if (ui === 'available' && it.run && it.run.retryable) left += runButton('Retry', '', 'retry', 'retry', it.run.id + '|' + task.checkout + '|' + task.id);
-  if (ui === 'deferred') left += laterButton('Undefer', 'primary', null, 'undefer');
+  if (ui === 'deferred') left += authControl('Undefer', 'primary', null, 'undefer', key, block);
   if (ui === 'blocked') left += recheckButton({ item: it.id, project: task.project, checkout: task.checkout, task: task.id }, '');
   left += '</div>';
   if (S.resolve[key]) left += detail && detail.handoff ? cmdBox(detail.handoff) : (task.handoff ? cmdBox(task.handoff) : '');
-  left += '<div class="sec-title">Run controls</div><div class="card"><dl class="kv mb0">' +
-    '<dt>Model</dt><dd><span class="seg" role="group" aria-label="Model"><button type="button" disabled aria-disabled="true" data-later="model">Claude</button><button type="button" disabled aria-disabled="true" data-later="model">Codex</button></span></dd>' +
-    '<dt>Effort</dt><dd><select disabled aria-label="Effort" data-later="effort"><option>medium</option></select></dd>' +
-    '<dt>Runs in</dt><dd class="mono fs12">' + esc(task.working_root) + '</dd></dl>' +
+  left += '<div class="sec-title">Run controls</div><div class="card">' + runOptionsHtml(task, it, live) +
     '<div class="acts">' + cancelControl(live ? it.run : null, 'sm danger') + '</div>' +
-    '<p class="hint">Model, effort and run options arrive in a later increment: a run uses the machine defaults from ' +
-    'task.local.yaml. Cancel run stops the run and everything it started; a run also ends by itself or at its time limit.</p></div>';
+    '<p class="hint">' + (canDo('runoptions')
+      ? 'Worker, effort and time limit belong to one queue entry; what you leave empty uses the machine defaults from task.local.yaml. '
+      : 'Worker, effort and time limit arrive in a later increment: a run uses the machine defaults from task.local.yaml. ') +
+    'Cancel run stops the run and everything it started; a run also ends by itself or at its time limit.</p></div>';
   var right = '';
   if (it.run) {
     right += '<div class="sec-title">Latest run</div><div class="card"><dl class="kv mb0"><dt>State</dt><dd>' + esc(RUN_LABEL[it.run.state] || it.run.state) +
@@ -652,13 +807,17 @@ function applyDynamic(root) {
 function render(opts) {
   if (!S.snap) return;
   var ae = document.activeElement, fk = ae && ae.getAttribute ? ae.getAttribute('data-fk') : null;
-  renderBanners(); renderStatus(); renderProjectSelect(); renderSort();
+  var caret = fk && typeof ae.selectionStart === 'number' ? [ae.selectionStart, ae.selectionEnd] : null;
+  renderBanners(); renderStatus(); renderProjectSelect(); renderSort(); renderNewTaskButton();
   var main = $('main');
-  main.innerHTML = renderTaskList() + renderActivity();
+  main.innerHTML = (S.newOpen ? newTaskFormHtml() : '') + renderTaskList() + renderActivity();
   applyDynamic(main);
   if (fk) {
     var again = document.querySelector('[data-fk="' + fk.replace(/"/g, '\\"') + '"]');
-    if (again) again.focus({ preventScroll: true });
+    if (again) {
+      again.focus({ preventScroll: true });
+      if (caret && typeof again.setSelectionRange === 'function') again.setSelectionRange(caret[0], caret[1]);
+    }
   }
   if (opts && opts.scrollTo) {
     var row = document.querySelector('[data-row="' + opts.scrollTo.replace(/"/g, '\\"') + '"]');
@@ -703,36 +862,173 @@ function openTaskInList(k, withResolve) {
   if (withResolve) S.resolve['T:' + k] = true;
   render({ scrollTo: k });
 }
+function errorText(r) {
+  var e = (r.body && r.body.error) || {};
+  var text = e.message || ('HTTP ' + r.status);
+  if (e.code === 'partial-write' && e.written) text += ' Changed: ' + e.written.join(', ') + '. Not changed: ' + (e.not_written || []).join(', ') + '.';
+  return text;
+}
 function actionResult(label, r) {
   if (r.status >= 200 && r.status < 300) {
     S.notice = null;
     return;
   }
   var e = (r.body && r.body.error) || {};
-  var text = e.message || ('HTTP ' + r.status);
-  S.notice = { kind: r.status === 409 ? 'info' : 'bad', title: label + ' was not done' + (e.blocked ? ' - the task is now blocked' : ''), text: text };
+  S.notice = { kind: r.status === 409 ? 'info' : 'bad', title: label + ' was not done' + (e.blocked ? ' - the task is now blocked' : ''), text: errorText(r) };
+}
+function enc(x) { return encodeURIComponent(x); }
+/* The run options of an item as the server wants them: only what the person set. Null (with a message) when one is unusable. */
+function optionsOf(key) {
+  var d = (S.drafts.opt || {})[key] || {}, out = {};
+  if (d.worker) out.worker = d.worker;
+  if (d.effort) out.effort = d.effort;
+  if (d.minutes !== undefined && String(d.minutes).trim() !== '') {
+    var m = Number(d.minutes);
+    if (!(m > 0)) return null;
+    out.timeout_s = Math.round(m * 60);
+  }
+  return out;
 }
 function doQueue(el) {
-  var p = splitIKey(el.getAttribute('data-key')), f = findItem(el.getAttribute('data-key'));
+  var key = el.getAttribute('data-key'), p = splitIKey(key), f = findItem(key);
   if (!f) return;
-  send('/api/v1/items/' + encodeURIComponent(p.project) + '/' + encodeURIComponent(p.task) + '/' + encodeURIComponent(p.item) + '/queue',
-    { expected_revision: f.task.revision }).then(function (r) { actionResult('Queue', r); pollNow(); });
+  var options = optionsOf(key), body = { expected_revision: f.task.revision };
+  if (options === null) { S.formErr['opt:' + key] = 'The time limit must be a positive number of minutes.'; render(); return; }
+  S.formErr['opt:' + key] = null;
+  if (Object.keys(options).length) body.options = options;
+  send('POST', '/api/v1/items/' + enc(p.project) + '/' + enc(p.task) + '/' + enc(p.item) + '/queue', body)
+    .then(function (r) {
+      actionResult('Queue', r);
+      if (r.status >= 200 && r.status < 300) delete S.drafts.opt[key];
+      pollNow();
+    });
 }
 function doRecheck(el) {
   var k = el.getAttribute('data-key'), p = splitIKey(k), task = findTask(p.project + '|' + p.task);
   if (!task) return;
-  send('/api/v1/items/' + encodeURIComponent(p.project) + '/' + encodeURIComponent(p.task) + '/' + encodeURIComponent(p.item || '-') + '/recheck',
+  send('POST', '/api/v1/items/' + enc(p.project) + '/' + enc(p.task) + '/' + enc(p.item || '-') + '/recheck',
     { expected_revision: task.revision }).then(function (r) { actionResult('Re-check', r); pollNow(); });
 }
 function doRetry(el) {
   var parts = el.getAttribute('data-key').split('|'), task = findTask(parts[1] + '|' + parts[2]);
   if (!task) return;
-  send('/api/v1/runs/' + encodeURIComponent(parts[0]) + '/retry', { expected_revision: task.revision })
+  send('POST', '/api/v1/runs/' + enc(parts[0]) + '/retry', { expected_revision: task.revision })
     .then(function (r) { actionResult('Retry', r); pollNow(); });
 }
 function doCancel(el) {
-  send('/api/v1/runs/' + encodeURIComponent(el.getAttribute('data-key')) + '/cancel', {})
+  send('POST', '/api/v1/runs/' + enc(el.getAttribute('data-key')) + '/cancel', {})
     .then(function (r) { actionResult('Cancel', r); pollNow(); });
+}
+function doRemove(el) {
+  send('DELETE', '/api/v1/queue/' + enc(el.getAttribute('data-key')), {})
+    .then(function (r) { actionResult('Remove from queue', r); pollNow(); });
+}
+function doQueueAll(el) {
+  var task = findTask(el.getAttribute('data-key'));
+  if (!task) return;
+  send('POST', '/api/v1/tasks/' + enc(task.checkout) + '/' + enc(task.id) + '/queue', { expected_revision: task.revision })
+    .then(function (r) { actionResult('Queue all', r); pollNow(); });
+}
+function doItemState(el, state) {
+  var key = el.getAttribute('data-key'), p = splitIKey(key), f = findItem(key);
+  if (!f) return;
+  send('PATCH', '/api/v1/items/' + enc(p.project) + '/' + enc(p.task) + '/' + enc(p.item), { expected_revision: f.task.revision, state: state })
+    .then(function (r) { actionResult(state === 'deferred' ? 'Defer' : 'Undefer', r); pollNow(); });
+}
+/* New task: open or close the inline form. */
+function toggleNewTask() {
+  S.newOpen = !S.newOpen;
+  S.formErr.nt = null;
+  render();
+  if (S.newOpen) { var first = document.querySelector('[data-fk="nt::title"]'); if (first) first.focus({ preventScroll: false }); }
+}
+function doCreateTask() {
+  var d = draftOf('nt', ''), title = (d.title || '').trim(), itemTitle = (d.itemtitle || '').trim(), details = (d.details || '').trim();
+  var projects = (S.snap && S.snap.projects) || [];
+  var project = d.project || S.project || (projects[0] && projects[0].id) || '';
+  var fail = function (m) { S.formErr.nt = m; render(); };
+  if (!title) return fail('Give the task a title.');
+  if (!project) return fail('There is no project to create the task in.');
+  if (details && !itemTitle) return fail('Give the first item a title, or clear its details.');
+  var body = { title: title, priority: d.priority || 'P2' };
+  if (itemTitle) body.first_item = { title: itemTitle, details: details };
+  if (S.busy.nt) return;
+  S.busy.nt = true;
+  send('POST', '/api/v1/projects/' + enc(project) + '/tasks', body).then(function (r) {
+    S.busy.nt = false;
+    if (r.status === 201) {
+      S.drafts.nt = {}; S.newOpen = false; S.formErr.nt = null;
+      if (r.body.task) { S.openTask = tkey(r.body.task); S.open.open = true; S.sel = null; }
+      S.notice = r.body.followup_error
+        ? { kind: 'info', title: 'The task was created, but its priority or first item was not added', text: r.body.followup_error.message }
+        : null;
+    } else {
+      S.formErr.nt = errorText(r);
+    }
+    pollNow();
+    render();
+  });
+}
+function toggleAddItem(el) {
+  var key = el.getAttribute('data-key');
+  S.addOpen = S.addOpen === key ? null : key;
+  S.formErr['ai:' + key] = null;
+  S.openTask = key;
+  render();
+  if (S.addOpen) { var first = document.querySelector('[data-fk="ai:' + key + ':title"]'); if (first) first.focus({ preventScroll: true }); }
+}
+function doAddItem(el) {
+  var key = el.getAttribute('data-key'), queue = el.getAttribute('data-queue') === '1', task = findTask(key);
+  if (!task || S.busy['ai:' + key]) return;
+  var d = draftOf('ai', key), details = (d.details || '').trim();
+  if (!(d.title || '').trim()) { S.formErr['ai:' + key] = 'Give the item a title.'; render(); return; }
+  if (queue && !details) { S.formErr['ai:' + key] = 'Add and queue needs details: they are the worker\'s instructions.'; render(); return; }
+  S.formErr['ai:' + key] = null;
+  S.busy['ai:' + key] = true;
+  send('POST', '/api/v1/tasks/' + enc(task.checkout) + '/' + enc(task.id) + '/items',
+    { expected_revision: task.revision, title: d.title.trim(), priority: d.priority || 'P2', details: details, queue: queue })
+    .then(function (r) {
+      S.busy['ai:' + key] = false;
+      if (r.status >= 200 && r.status < 300) {
+        delete S.drafts.ai[key]; S.addOpen = null; S.formErr['ai:' + key] = null;
+        S.notice = r.body.queue_error
+          ? { kind: 'info', title: 'The item was added, but it was not queued', text: r.body.queue_error.message }
+          : null;
+      } else {
+        S.formErr['ai:' + key] = errorText(r);
+      }
+      pollNow();
+      render();
+    });
+}
+/* Save the options of a queued entry. The controls show the entry's own values until the person changes one. */
+function saveRunOptions(key) {
+  var f = findItem(key);
+  if (!f || !f.item.run || f.item.run.state !== 'queued') return;
+  var run = f.item.run, d = (S.drafts.opt || {})[key] || {}, options = {};
+  var worker = d.worker || run.worker, effort = d.effort !== undefined ? d.effort : run.effort;
+  var minutes = d.minutes !== undefined ? d.minutes : (run.timeout_s ? run.timeout_s / 60 : '');
+  if (worker) options.worker = worker;
+  if (effort) options.effort = effort;
+  if (String(minutes).trim() !== '') {
+    var m = Number(minutes);
+    if (!(m > 0)) { S.formErr['opt:' + key] = 'The time limit must be a positive number of minutes.'; render(); return; }
+    options.timeout_s = Math.round(m * 60);
+  }
+  var p = splitIKey(key);
+  S.formErr['opt:' + key] = null;
+  send('PUT', '/api/v1/items/' + enc(p.project) + '/' + enc(p.task) + '/' + enc(p.item) + '/run-options', { options: options })
+    .then(function (r) {
+      if (r.status >= 200 && r.status < 300) { delete S.drafts.opt[key]; S.formErr['opt:' + key] = null; } else { S.formErr['opt:' + key] = errorText(r); }
+      pollNow();
+      render();
+    });
+}
+function setWorker(el) {
+  var key = el.getAttribute('data-key');
+  draftOf('opt', key).worker = el.getAttribute('data-v');
+  var f = findItem(key);
+  if (f && f.item.run && f.item.run.state === 'queued') saveRunOptions(key); else render();
 }
 function toggleTask(el) {
   var k = el.getAttribute('data-key'), was = S.openTask;
@@ -753,6 +1049,15 @@ var ACTIONS = {
   recheck: doRecheck,
   retry: doRetry,
   cancel: doCancel,
+  remove: doRemove,
+  queueall: doQueueAll,
+  defer: function (el) { doItemState(el, 'deferred'); },
+  undefer: function (el) { doItemState(el, 'available'); },
+  newtask: toggleNewTask,
+  createtask: doCreateTask,
+  additem: toggleAddItem,
+  addsubmit: doAddItem,
+  optworker: setWorker,
   togglerun: function (el) { toggleRun(el.getAttribute('data-key')); },
   select: function (el) { toggleItem(el.getAttribute('data-key')); },
   selecttask: function (el) { openTaskInList(el.getAttribute('data-key'), false); },
@@ -771,6 +1076,18 @@ document.addEventListener('click', function (e) {
   if (!fn) return;
   e.stopPropagation();
   fn(el);
+});
+/* What a person types is kept in S.drafts, not in the markup, so a re-render (the poll) never loses it. */
+function recordDraft(e) {
+  var el = e.target;
+  if (!el || !el.getAttribute || !el.getAttribute('data-draft')) return;
+  draftOf(el.getAttribute('data-draft'), el.getAttribute('data-id') || '')[el.getAttribute('data-field')] = el.value;
+}
+document.addEventListener('input', recordDraft);
+document.addEventListener('change', function (e) {
+  recordDraft(e);
+  var el = e.target;
+  if (el && el.getAttribute && el.getAttribute('data-optsave') === '1') saveRunOptions(el.getAttribute('data-id'));
 });
 document.addEventListener('toggle', function (e) {
   var k = e.target.getAttribute && e.target.getAttribute('data-open');

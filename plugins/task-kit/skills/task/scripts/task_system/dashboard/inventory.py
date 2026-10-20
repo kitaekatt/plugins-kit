@@ -155,6 +155,11 @@ def project_id_for(root: Path) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def target_root(project: "ProjectEntry") -> str:
+    """The checkout a NEW task of this project is created in: the task system's own tie-break (shortest directory name)."""
+    return min(project.roots, key=lambda r: (len(Path(r).name), Path(r).name.casefold(), Path(r).name, r))
+
+
 def _preference(project: ProjectRoot) -> tuple[int, str, str, str]:
     """The task system's own tie-break for a folder reached by several
     projects (``discovery._project_preference``): shortest name wins."""
@@ -302,6 +307,14 @@ class Inventory:
             self._snapshot = self._refresh(force)
             self._refreshed_at = self._clock()
             return self._snapshot
+
+    def invalidate(self) -> None:
+        """Drop the freshness window so the next ``snapshot()`` re-scans (a write just changed a folder).
+
+        The per-folder fingerprint cache stays: only the changed folder is re-read and re-validated.
+        """
+        with self._lock:
+            self._refreshed_at = None
 
     # -- refresh -----------------------------------------------------------
 

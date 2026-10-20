@@ -28,6 +28,8 @@ DASHBOARD_PACKAGE = ("task_system", "dashboard")
 # derives this set from the dashboard's real imports and fails on any drift.
 IMPORTED_TASK_SYSTEM_MODULES = (
     "discovery.py",
+    "init.py",
+    "relocate.py",
     "resolve.py",
     "schemas.py",
     "task_items.py",

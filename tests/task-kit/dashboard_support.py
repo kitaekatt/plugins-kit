@@ -108,13 +108,13 @@ class Running:
     """An in-process dashboard server on a thread, plus a raw HTTP client."""
 
     def __init__(self, data_dir: Path, parents: tuple[Path, ...], busy=None, edge=None,
-                 config_path: Path | None = None) -> None:
+                 config_path: Path | None = None, min_interval: float = 0.0) -> None:
         from task_system.dashboard.inventory import Inventory
         from task_system.dashboard.server import DashboardServer
 
         self.data_dir = Path(data_dir)
         self.log = io.StringIO()
-        self.inventory = Inventory(parents=parents, min_interval=0.0)
+        self.inventory = Inventory(parents=parents, min_interval=min_interval)
         self.server = DashboardServer(
             data_dir=data_dir, scripts_dir=SCRIPTS_DIR, inventory=self.inventory,
             busy=busy, log=self.log, edge=edge, config_path=config_path,
@@ -165,6 +165,12 @@ class Running:
         """A same-origin JSON mutation: (status, headers, parsed body)."""
         return self.json(
             "POST", path, body=json.dumps(body).encode("utf-8"),
+            headers={"Origin": f"http://127.0.0.1:{self.port}", "Content-Type": "application/json"}, **kw)
+
+    def send(self, method: str, path: str, body: dict | None = None, **kw):
+        """A same-origin JSON request of any verb: (status, headers, parsed body)."""
+        return self.json(
+            method, path, body=json.dumps(body if body is not None else {}).encode("utf-8"),
             headers={"Origin": f"http://127.0.0.1:{self.port}", "Content-Type": "application/json"}, **kw)
 
     def settle(self, run_id: str, *, timeout_s: float = 90.0, states=None):
@@ -263,6 +269,16 @@ class FakeEdge:
 
     def entry(self, name):
         return self.entries.get(name)
+
+    EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+    def effort_menu(self, entry):
+        found = self.entries.get(entry)
+        if found is None:
+            from task_system.dashboard.jobs_edge import EdgeError
+
+            raise EdgeError(f"no entry {entry!r}")
+        return self.EFFORTS if found.harness in ("claude", "codex") else ()
 
     def validate_job_file(self, path: Path) -> None:
         from task_system.dashboard.jobs_edge import EdgeError

@@ -27,9 +27,9 @@ CSS = (STATIC / "app.css").read_text(encoding="utf-8")
 HARNESS = Path(__file__).with_name("ui_harness.js")
 
 # The actions that change shared state. Each is drawn in every place the design shows
-# it; the four the server backs are live only when it says so, the rest stay disabled.
-LATER_ACTIONS = {"queue", "cancel", "retry", "newtask", "additem", "pause", "recheck", "defer", "queueall"}
-BACKED_ACTIONS = {"queue", "retry", "recheck", "cancel"}
+# it; the ones the server backs are live only when it says so, the rest stay disabled.
+LATER_ACTIONS = {"queue", "cancel", "retry", "newtask", "additem", "pause", "recheck", "defer", "undefer", "queueall", "remove"}
+BACKED_ACTIONS = LATER_ACTIONS - {"pause"}  # Pause worker is the one action still not built
 
 
 @pytest.mark.parametrize("name", ["index.html", "app.js", "app.css"])
@@ -60,10 +60,11 @@ def test_app_js_makes_only_same_origin_calls_and_writes_only_the_backed_actions(
     assert fetches == ["path", "path"]  # api() and send()
     assert re.findall(r"api\(\s*'(/api/v1/[^']*)'", JS)
     assert "X-Task-Kit-Token" in JS and "location.hash" in JS
-    # The one POST lives in send(); the only things sent are queue, recheck, retry and cancel.
-    assert re.findall(r"method\s*:\s*'(\w+)'", JS) == ["POST"]
-    assert len(re.findall(r"send\('/api/v1/", JS)) == 4
-    assert sorted(re.findall(r"'/(queue|recheck|retry|cancel)'", JS)) == ["cancel", "queue", "recheck", "retry"]
+    # The one fetch with a verb lives in send(method, ...); every call site names its verb as a literal.
+    assert re.findall(r"method\s*:\s*(\w+)", JS) == ["method"]
+    assert re.findall(r"send\((?!')(\w+)", JS) == ["method", "method"]  # its definition and the comment naming it: no call site hides its verb
+    assert sorted(set(re.findall(r"send\('(\w+)'", JS))) == ["DELETE", "PATCH", "POST", "PUT"]
+    assert len(re.findall(r"send\('\w+', '/api/v1/", JS)) == 10  # queue, recheck, retry, cancel, remove, queue all, defer, new task, add item, run options
 
 
 def test_app_js_never_emits_markup_the_csp_would_block():
@@ -108,8 +109,10 @@ def test_header_actions_that_change_state_are_present_and_disabled():
 def test_every_later_action_the_script_can_draw_goes_through_the_disabled_helpers():
     ids = set(re.findall(r"later(?:Button|Pill)\(.*?'(\w+)'\)", JS))
     ids |= set(re.findall(r'data-later="(\w+)"', JS))
-    ids |= set(re.findall(r"run(?:Button|Pill)\(.*?'(queue|retry|recheck)'", JS))
-    assert LATER_ACTIONS - {"pause", "newtask"} <= ids
+    ids |= set(re.findall(r"run(?:Button|Pill)\(.*?'(queue|retry|recheck|queueall)'", JS))
+    ids |= set(re.findall(r"authControl\(.*?'(defer|undefer)'", JS))
+    assert LATER_ACTIONS - {"pause", "newtask", "remove"} <= ids
+    assert "canDo('runoptions')" in JS  # the run option controls are drawn only when the server backs them
     for helper in ("laterButton", "laterPill", "runButton", "runPill"):
         body = re.search(rf"function {helper}\(.*?\n}}", JS, re.S).group(0)
         assert "disabled" in body and 'aria-disabled="true"' in body and "data-later" in body
@@ -469,7 +472,7 @@ def test_resolve_in_claude_code_only_shows_two_commands_to_copy(rendered):
 def test_item_drawer_shows_state_note_plan_section_and_disabled_run_controls(rendered):
     panel = _item_detail(rendered["itemOpen"])
     assert "Waiting for you" in panel and "pick &lt;one&gt; or two" in panel
-    assert "Run controls" in panel and "Model, effort and run options arrive in a later increment" in panel
+    assert "Run controls" in panel and "Worker, effort and time limit arrive in a later increment" in panel
     assert "webapp:open-one" in panel and "Runs in" in panel and rendered["root"] in panel
     assert "plan.md section" in panel
     assert "No section for this item" in panel  # 'wait' has no section in the fixture
@@ -582,3 +585,182 @@ def no_llm(tmp_path_factory):
 def test_cancel_run_does_not_depend_on_llm_kit_being_available(no_llm):
     assert 'data-action="cancel"' in no_llm["main"]  # the live card in Now running
     assert 'data-action="queue"' not in no_llm["mainOpen"] and 'data-action="retry"' not in no_llm["main"]
+
+
+# ---------------------------------------------------------------------------
+# authoring: the inline forms and controls
+# ---------------------------------------------------------------------------
+
+AUTHORING_HARNESS = Path(__file__).with_name("ui_authoring_harness.js")
+ALL_ACTIONS = ["queue", "retry", "recheck", "cancel", "newtask", "additem", "defer", "undefer", "queueall", "remove", "runoptions"]
+AUTHORING_CAPABILITIES = {
+    "read": True,
+    "run": {"available": True, "reason": None, "state": "ok"},
+    "mutations": {"available": True, "actions": ALL_ACTIONS, "reason": "live"},
+    "run_options": {
+        "defaults": {"worker": "claude", "effort": None, "timeout_s": 7200.0},
+        "workers": {
+            "claude": {"available": True, "entry": "opus", "efforts": ["low", "medium", "high", "xhigh", "max"], "reason": None},
+            "codex": {"available": False, "entry": "sol", "efforts": [], "reason": "Codex workers are refused until a live test shows the floor"},
+        },
+    },
+}
+
+
+@pytest.fixture(scope="module")
+def authoring(tmp_path_factory):
+    """The live page: an available item, a deferred one, a queued entry (Queued #1), driven through every form."""
+    tmp = tmp_path_factory.mktemp("ui-authoring")
+    devroot = _world(tmp)
+    snap = Inventory(parents=(devroot,), min_interval=0).snapshot()
+    cid = _checkout(snap, "open-one")
+    queued = _run_row(7, "run-q", cid, "queued", "go-too")
+    payload = snapshot.dashboard_payload(snap, runtime={"capabilities": AUTHORING_CAPABILITIES, "runs": [queued], "held": set(), "run_active": set()})
+    task = snap.find_task(cid, "dev/tasks/open-one")
+    scenario = {
+        "taskKey": f"{cid}|dev/tasks/open-one", "availItem": f"{cid}|dev/tasks/open-one|go",
+        "deferredItem": f"{cid}|dev/tasks/open-one|later", "queuedItem": f"{cid}|dev/tasks/open-one|go-too", "queuedRun": "run-q",
+        "detail": snapshot.item_detail(task, "go"),
+    }
+    (tmp / "payload.json").write_text(json.dumps(payload), encoding="utf-8")
+    (tmp / "scenario.json").write_text(json.dumps(scenario), encoding="utf-8")
+    result = subprocess.run([NODE, str(AUTHORING_HARNESS), str(STATIC / "app.js"), str(tmp / "payload.json"), str(tmp / "scenario.json")],
+                            capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    report["cid"], report["payload"], report["revision"] = cid, payload, next(t["revision"] for t in payload["tasks"] if t["id"] == "dev/tasks/open-one")
+    return report
+
+
+def _fields(html: str, scope: str) -> dict:
+    return {m.group(1): m.group(0) for m in re.finditer(rf'<(?:input|textarea|select)\b[^>]*data-draft="{scope}"[^>]*data-field="(\w+)"[^>]*>', html)}
+
+
+@needs_node
+def test_new_task_is_enabled_by_the_page_once_the_server_backs_it_and_opens_an_inline_form(authoring):
+    assert "disabled" not in authoring["newBtn"] and authoring["newBtn"]["data-action"] == "newtask"
+    form = authoring["newOpen"]
+    assert 'data-form="newtask"' in form and form.index('data-form="newtask"') < form.index('data-open="open"')  # above the task list
+    for label in ("Project", "Title", "Priority", "First item (optional)", "First item details", "Create task", "Cancel"):
+        assert label in form, label
+    assert set(_fields(form, "nt")) == {"project", "title", "priority", "itemtitle", "details"}
+    assert re.search(r'<option value="P2" selected>P2</option>', form)  # P2 is the default
+    assert "webapp" in form  # the project dropdown lists the repository
+    assert 'data-later="newtask"' not in form
+
+
+@needs_node
+def test_what_was_typed_survives_the_polls_re_render_with_focus_and_caret(authoring):
+    after = authoring["newAfterPoll"]
+    assert 'value="Fix the flaky build"' in after and "Run it twice.</textarea>" in after and 'value="Reproduce it"' in after
+    assert re.search(r'<option value="P1" selected>P1</option>', after)
+    assert '[data-fk="nt::title"]' in authoring["focusAfterPoll"]
+    assert authoring["caretAfterPoll"] == [['[data-fk="nt::title"]', 4, 4]]
+
+
+@needs_node
+def test_create_task_posts_the_form_and_closes_it(authoring):
+    (post,) = authoring["newSent"]
+    assert post["method"] == "POST" and post["url"].startswith("/api/v1/projects/") and post["url"].endswith("/tasks")
+    assert json.loads(post["body"]) == {"title": "Fix the flaky build", "priority": "P1",
+                                        "first_item": {"title": "Reproduce it", "details": "Run it twice."}}
+    assert 'data-form="newtask"' not in authoring["newAfterCreate"]
+    assert "expected_revision" not in post["body"]  # judged on its input, not on a revision
+
+
+@needs_node
+def test_an_empty_title_is_refused_in_the_form_before_any_request(authoring):
+    assert "Give the task a title." in authoring["newEmptyTitle"] and authoring["newEmptyTitleSent"] == []
+
+
+@needs_node
+def test_add_item_opens_an_inline_form_under_the_stage_map_with_three_buttons(authoring):
+    body = _rows(authoring["addOpen"])["open-one"]
+    form = body[body.index('data-form="additem"'):]
+    assert body.index('class="pipeline"') < body.index('data-form="additem"') < body.index('class="tdetails"')
+    assert set(_fields(form, "ai")) == {"title", "priority", "details"}
+    for label in ("Add and queue", "Add only", "Cancel"):
+        assert label in form, label
+    assert 'data-action="addsubmit"' in form and 'data-queue="1"' in form and 'data-queue="0"' in form
+    assert 'data-action="additem" data-key=' in body  # the bubble toggles it
+
+
+@needs_node
+def test_add_and_queue_without_details_is_refused_in_the_form_and_with_them_it_posts_the_revision_the_page_saw(authoring):
+    assert "Add and queue needs details" in authoring["addNoDetails"] and authoring["addNoDetailsSent"] == []
+    (post,) = authoring["addSent"]
+    cid = authoring["cid"]
+    assert post["method"] == "POST" and post["url"] == f"/api/v1/tasks/{cid}/dev%2Ftasks%2Fopen-one/items"
+    assert json.loads(post["body"]) == {"expected_revision": authoring["revision"], "title": "Write the docs", "priority": "P2",
+                                        "details": "Explain it.", "queue": True}
+    assert 'data-form="additem"' not in authoring["addAfter"]
+
+
+@needs_node
+def test_a_refused_add_keeps_the_form_what_was_typed_and_says_why(authoring):
+    refused = authoring["addRefused"]
+    assert "a Claude Code session is working this task" in refused
+    assert 'value="Kept title"' in refused and 'data-form="additem"' in refused
+
+
+@needs_node
+def test_defer_and_undefer_patch_the_item_with_the_revision_and_queue_all_posts_to_the_task(authoring):
+    cid, prefix = authoring["cid"], authoring["cid"] + "/dev%2Ftasks%2Fopen-one"
+    assert 'data-action="defer"' in authoring["availDetail"] and 'data-action="undefer"' in authoring["deferredDetail"]
+    (defer,) = authoring["deferSent"]
+    assert (defer["method"], defer["url"]) == ("PATCH", f"/api/v1/items/{prefix}/go")
+    assert json.loads(defer["body"]) == {"expected_revision": authoring["revision"], "state": "deferred"}
+    (undefer,) = authoring["undeferSent"]
+    assert (undefer["method"], undefer["url"]) == ("PATCH", f"/api/v1/items/{prefix}/later")
+    assert json.loads(undefer["body"]) == {"expected_revision": authoring["revision"], "state": "available"}
+    (queue_all,) = authoring["queueAllSent"]
+    assert (queue_all["method"], queue_all["url"]) == ("POST", f"/api/v1/tasks/{prefix}/queue")
+    assert json.loads(queue_all["body"]) == {"expected_revision": authoring["revision"]}
+    assert "Queue all available (2)" in _rows(authoring["openTask"])["open-one"]  # go and go-three; go-too is already queued
+
+
+@needs_node
+def test_run_options_of_an_available_item_ride_on_queue(authoring):
+    controls = authoring["optionsAvailable"]
+    assert "Worker" in controls and "Effort" in controls and "Time limit" in controls
+    assert re.search(r'<button[^>]*data-action="optworker"[^>]*data-v="claude"[^>]*aria-pressed="true"', controls)
+    codex = re.search(r"<button[^>]*>Codex</button>", controls).group(0)
+    assert "disabled" in codex and "Codex workers are refused" in codex  # disabled with the reason
+    assert '<option value="">Default</option>' in controls and all(f'<option value="{e}"' in controls for e in ("low", "high", "max"))
+    assert 'data-optsave="1"' not in controls  # an available item saves nothing until Queue
+    (queue,) = authoring["queueSent"]
+    assert json.loads(queue["body"]) == {"expected_revision": authoring["revision"], "options": {"effort": "high", "timeout_s": 900}}
+    assert "The time limit must be a positive number of minutes." in authoring["badMinutes"] and authoring["badMinutesSent"] == []
+
+
+@needs_node
+def test_a_queued_entry_shows_its_place_its_options_and_saves_a_change_at_once(authoring):
+    queued = authoring["optionsQueued"]
+    assert "Queued #1" in queued and 'data-action="remove"' in queued and "Remove from queue" in queued
+    assert 'data-action="cancel"' not in queued  # a queued entry is removed, not cancelled
+    assert queued.count('data-optsave="1"') == 2 and "Saved to the queued entry" in queued
+    (save,) = authoring["saveSent"]
+    assert (save["method"], save["url"]) == ("PUT", f"/api/v1/items/{authoring['cid']}/dev%2Ftasks%2Fopen-one/go-too/run-options")
+    assert json.loads(save["body"]) == {"options": {"worker": "claude", "effort": "low"}}
+    (remove,) = authoring["removeSent"]
+    assert (remove["method"], remove["url"]) == ("DELETE", "/api/v1/queue/run-q") and json.loads(remove["body"]) == {}
+
+
+@needs_node
+def test_authoring_is_drawn_off_with_the_reason_while_a_session_holds_the_task_or_a_run_works_it(authoring):
+    held = _rows(authoring["held"])["open-one"]
+    add = re.search(r'<button[^>]*data-idle="additem"[^>]*>', held).group(0)
+    assert "disabled" in add and "A Claude Code session is working this task" in add and 'data-action="additem"' not in held
+    working = _rows(authoring["runActive"])["open-one"]
+    assert "A dashboard run is working this task" in re.search(r'<button[^>]*data-idle="additem"[^>]*>', working).group(0)
+    assert 'data-action="queueall"' in held  # Queue is still allowed: the entry waits for the session
+
+
+@needs_node
+def test_removed_has_a_label_and_the_authoring_markup_has_no_style_or_handler(authoring):
+    assert "removed: 'Removed'" in JS
+    for surface in ("newOpen", "newAfterPoll", "addOpen", "addNoDetails", "optionsAvailable", "optionsQueued", "held"):
+        html = authoring[surface]
+        assert not re.search(r"\sstyle\s*=", html), surface
+        assert not re.search(r"\son[a-z]+\s*=", html), surface
+        assert "<form" not in html, surface  # CSP form-action 'none': nothing submits

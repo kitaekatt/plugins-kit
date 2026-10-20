@@ -50,6 +50,55 @@ def _headings(lines: list[str]) -> list[tuple[int, int, str, str]]:
     return found
 
 
+def _headings_and_open_fence(lines: list[str]) -> tuple[list[tuple[int, int, str, str]], bool]:
+    fence: str | None = None
+    found = []
+    for index, line in enumerate(lines):
+        match = _FENCE.match(line)
+        if match:
+            marker = match.group(1)[0]
+            if fence is None:
+                fence = marker
+            elif fence == marker:
+                fence = None
+            continue
+        if fence is not None:
+            continue
+        heading = _HEADING.match(line)
+        if heading:
+            found.append((index, len(heading.group(1)), heading.group(2), line.strip()))
+    return found, fence is not None
+
+
+def has_unclosed_fence(text: str) -> bool:
+    """Whether ``text`` ends inside a fenced code block (so everything after it would be code)."""
+    return _headings_and_open_fence(text.splitlines())[1]
+
+
+def headings_outside_fences(text: str, max_level: int) -> list[tuple[int, str]]:
+    """``(level, heading line)`` of every ATX heading of level ``max_level`` or shallower outside code fences."""
+    return [(level, line) for _i, level, _t, line in _headings(text.splitlines()) if level <= max_level]
+
+
+def section_insert_offset(plan_text: str, after_offset: int) -> int:
+    """Where a new item section belongs: the start of the first level 1-2 heading (outside code
+    fences) that begins at or after ``after_offset``, else the end of the text.
+
+    ``after_offset`` is the end of the task_items fence, so the section lands at the end of the
+    ``##`` region that holds the fence.
+    """
+    lines = plan_text.splitlines(keepends=True)
+    starts = []
+    position = 0
+    for line in lines:
+        starts.append(position)
+        position += len(line)
+    for index, level, _token, _text in _headings([line.rstrip("\r\n") for line in lines]):
+        if level <= 2 and starts[index] >= after_offset:
+            return starts[index]
+    return len(plan_text)
+
+
 def find_item_section(plan_text: str, item_id: str) -> PlanSection:
     lines = plan_text.splitlines()
     headings = _headings(lines)

@@ -13,7 +13,9 @@ every probe distinguishes the three runtime states an ``import`` cannot:
 
 The newest things relied on are the ledger's ``cancelled`` job state with
 ``JobStore.mark_cancelled``, and the ``llm-kit jobs cancel`` verb that records it
-(run cancellation and crash recovery close a ledger through that verb), on top of
+(run cancellation and crash recovery close a ledger through that verb) and
+``llm_kit.registry.effort.harness_effort_order`` (the efforts a harness accepts, for the run options a
+person chooses; present since llm-kit 0.1.2), on top of
 a job option mapping that carries ``disallowed_tools`` (the Claude deny floor)
 through ``Job``. Neither failure
 state falls back to anything: the autonomous controls report the message and
@@ -130,6 +132,7 @@ class JobsEdge:
     def __init__(self, ttl_s: float = 5.0) -> None:
         self._ttl_s = ttl_s
         self._cached: tuple[float, EdgeStatus] | None = None
+        self._menus: dict[str, tuple[float, tuple[str, ...]]] = {}
 
     def status(self) -> EdgeStatus:
         now = time.monotonic()
@@ -170,6 +173,7 @@ class JobsEdge:
                                 (store, "UnknownRunError")):
                 getattr(owner, name)
             _require_cancel_verb(cli_jobs)
+            getattr(importlib.import_module("llm_kit.registry.effort"), "harness_effort_order")
         except (ImportError, AttributeError, TypeError, ValueError) as exc:
             return EdgeStatus(TOO_OLD, TOO_OLD_MESSAGE.format(why=f"{type(exc).__name__}: {exc}"))
         return EdgeStatus(OK, "llm-kit is available")
@@ -219,6 +223,28 @@ class JobsEdge:
             return None
         kind = "harness" if found.kind == endpoints.HARNESS_KIND else "transport"
         return EntryInfo(id=found.id, kind=kind, harness=found.harness, model=found.model)
+
+    def effort_menu(self, entry: str) -> tuple[str, ...]:
+        """The efforts the worker harness of registry entry ``entry`` accepts, low to high; cached for the TTL.
+
+        Resolved from the entry's HARNESS (a task worker is always a harness entry), through the same discovery
+        ``entry`` uses: ``llm_kit.registry.effort.effort_menu`` reads only the user's model-endpoints registry,
+        which does not hold the entries the shipped baseline config declares (``opus``, ``sol``).
+        """
+        now = time.monotonic()
+        cached = self._menus.get(entry)
+        if cached is not None and now - cached[0] < self._ttl_s:
+            return cached[1]
+        found = self.entry(entry)
+        if found is None or found.harness is None:
+            raise EdgeError(f"model entry {entry!r} is not a harness entry, so it has no effort menu")
+        effort = importlib.import_module("llm_kit.registry.effort")
+        try:
+            menu = tuple(effort.harness_effort_order(found.harness))
+        except Exception as exc:  # noqa: BLE001 -- llm-kit raises its own error type for an unknown harness
+            raise EdgeError(f"llm-kit could not resolve the effort menu of {entry!r}: {type(exc).__name__}: {exc}") from exc
+        self._menus[entry] = (now, menu)
+        return menu
 
     def validate_job_file(self, path: Path) -> None:
         """Load ``path`` through llm-kit's own loader; raises on anything it refuses."""

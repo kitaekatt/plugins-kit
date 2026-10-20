@@ -21,11 +21,25 @@ Rules it enforces:
   and is never retried automatically; Retry creates a fresh run.
 - A runner that vanished without a result, and a run whose acceptance could not
   run for lack of time, block the task so a person inspects the shared tree.
+- Authoring (add item, defer, new task) and a Re-check write the task folder only while no
+  Claude Code session holds it and no dashboard run works it; Remove and Save run options act on a
+  queue entry and are validated against the entry's own state, like Cancel.
 - Cancel is process control on an immutable run id: it is validated against the
   run's own state under the scheduler lock and carries no task revision. A
   cancelled run is retryable like a timeout (its partial work is noted, the task
   is not blocked); one that left survivors, or whose ledger could not be closed,
   is a crash-inspection block instead.
+
+Lock order (outermost first; nothing ever takes one while holding a later one)
+-----------------------------------------------------------------------------
+1. ``_queue_lock``: Queue, Queue all and every authoring write.
+2. ``_tick_lock``: a tick (reconcile + start), Cancel, Remove, Save run options and every authoring
+   write, so no run starts between an authoring check and its write.
+3. the mutator's cross-process file lock (``TaskMutator``; waits up to 10 s).
+4. ``_hold_gate``: a plain lock held only for a short check-and-commit: ``precommit`` plus the
+   per-file compare + ``os.replace`` of a task-folder write, hold registration, and the start's hold
+   re-check + ``try_lease``. Nothing under the gate waits on a lock or runs a process (the DB's own
+   short lock aside), so a hold registration, which takes ONLY the gate, fits the 2 s handshake.
 
 Recovery state table
 --------------------
@@ -100,15 +114,20 @@ from typing import Callable
 
 import yaml
 
+from .. import init as task_init
+from ..task_items import read_task_items, sort_items
+from ..types import HAND_OFF
 from ..validate import validate_ref
+from . import authoring
 from . import findings as findings_mod
 from . import floor, proctree, redact, runfiles
-from .blocker import BlockOutcome, concise, record_block
+from .blocker import BlockOutcome, concise, record_block, record_blocks
 from .config import DashboardConfig, DashboardConfigError, load_config
 from .inventory import project_id_for
 from .jobs_edge import EdgeError
 from .mutation import (
     LOG,
+    PLAN,
     TASK_YAML,
     MutationError,
     StaleRevision,
@@ -117,6 +136,8 @@ from .mutation import (
     append_log,
     folder_revision,
     raw_items,
+    set_item_state,
+    set_task_fields,
     set_task_status,
     stored_status,
 )
@@ -130,6 +151,7 @@ from .runtime import (
     CRASHED,
     FAILED,
     QUEUED,
+    REMOVED,
     RETRYABLE_STATES,
     RUNNING,
     SKIPPED,
@@ -138,8 +160,9 @@ from .runtime import (
     TIMEOUT,
     Run,
     RuntimeDB,
+    folder_key,
 )
-from .translate import JobSpec, Reason, RunOptions, translate
+from .translate import CODEX_FLOOR_PROVED, OPTION_REASON_CODES, JobSpec, Reason, RunOptions, option_reasons, translate
 
 ACCEPT_SCRIPT = Path(__file__).with_name("accept_cli.py")
 RUNNER_SCRIPT = Path(__file__).with_name("runner_cli.py")
@@ -158,13 +181,53 @@ class QueueRefused(Exception):
     """An action was refused. ``status`` is the HTTP status the API answers with."""
 
     def __init__(self, status: int, code: str, message: str, *, reasons: list[dict] | None = None,
-                 blocked: bool = False, current_revision: str | None = None) -> None:
+                 blocked: bool = False, current_revision: str | None = None, extra: dict | None = None) -> None:
         super().__init__(message)
         self.status = status
         self.code = code
         self.reasons = reasons or []
         self.blocked = blocked
         self.current_revision = current_revision
+        self.extra = extra or {}
+
+
+HELD_MESSAGE = ("a Claude Code session is working this task; make the change there, or Re-check when it is done")
+RUN_ACTIVE_MESSAGE = "a dashboard run is working this task; wait for it to finish, or cancel it"
+ITEM_RUN_MESSAGE = "this item has a queued or running dashboard run; remove it from the queue first"
+
+
+def refusal_from_mutation(exc: MutationError, folder: Path) -> QueueRefused:
+    """The one mapping from a failed task-folder write to an API refusal (``written`` is read first).
+
+    A write that replaced some files and then failed is a ``partial-write`` whatever the cause: the
+    folder is not atomic, so the response says which files changed and which did not.
+    """
+    def current() -> str | None:
+        try:
+            return folder_revision(folder)
+        except MutationError:
+            return None
+
+    written = list(exc.written)
+    if written:
+        failed = exc.path.name if exc.path is not None else None
+        intended = list(exc.intended)
+        not_written = [name for name in intended if name not in written]
+        return QueueRefused(
+            409, "partial-write",
+            f"the change was only partly written ({', '.join(written)} changed; {', '.join(not_written) or 'nothing else'} did not): {exc}",
+            current_revision=current(),
+            extra={"cause": exc.code, "file": failed, "written": written, "not_written": not_written},
+        )
+    if isinstance(exc, StaleRevision):
+        return QueueRefused(409, "stale-revision", str(exc), current_revision=exc.current or current())
+    if exc.code == "replace-failed":
+        return QueueRefused(409, "replace-failed", str(exc), extra={"file": exc.path.name if exc.path is not None else None})
+    if exc.code == "lock-timeout":
+        return QueueRefused(409, "busy", str(exc))
+    if exc.code in ("invalid-source", "unreadable"):
+        return QueueRefused(422, exc.code, str(exc))
+    return QueueRefused(500, exc.code, str(exc))
 
 
 @dataclass
@@ -260,6 +323,10 @@ class Scheduler:
         self._log = log
         self._tick_lock = threading.Lock()
         self._queue_lock = threading.Lock()
+        self._hold_gate = threading.Lock()
+        # Per task folder: bumped (under the gate) by every hold registration, so a Re-check can tell
+        # that a /task work session started after the Re-check began.
+        self._hold_epoch: dict[str, int] = {}
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._thread: threading.Thread | None = None
@@ -279,10 +346,45 @@ class Scheduler:
             "run": run,
             "mutations": {
                 "available": True,
-                "actions": ["queue", "retry", "recheck", "cancel"],
-                "reason": "Queue, Retry, Re-check and Cancel run are live; Defer, New task, Add item and Pause worker "
-                          "arrive in a later increment.",
+                "actions": ["queue", "retry", "recheck", "cancel", "newtask", "additem", "defer", "undefer",
+                            "queueall", "remove", "runoptions"],
+                "reason": "New task, Add item, Defer, Queue, Retry, Re-check, Remove and Cancel run are live; "
+                          "Pause worker arrives in a later increment.",
             },
+            "run_options": self._run_options_capabilities(status),
+        }
+
+    def _run_options_capabilities(self, status) -> dict:
+        """What the run-options controls offer: defaults, and per worker whether it can run and its effort menu."""
+        try:
+            config = self.config()
+        except DashboardConfigError as exc:
+            return {"error": str(exc), "defaults": None, "workers": {}}
+        workers: dict[str, dict] = {}
+        for worker in ("claude", "codex"):
+            entry = config.entry_for(worker)
+            info: dict = {"available": False, "entry": entry, "efforts": [], "reason": None}
+            if worker == "codex" and not CODEX_FLOOR_PROVED:
+                info["reason"] = ("Codex workers are refused until a live Codex-side policy test shows the same "
+                                  "git/publication/delete/nested-worker floor Claude gets")
+            elif not status.available:
+                info["reason"] = status.detail
+            else:
+                try:
+                    found = self.edge.entry(entry)
+                    if found is None:
+                        info["reason"] = f"model entry {entry!r} is not in the model registry"
+                    elif found.adapter != f"{worker}-cli":
+                        info["reason"] = f"model entry {entry!r} does not run on the {worker} worker"
+                    else:
+                        info["efforts"] = list(self.edge.effort_menu(entry))
+                        info["available"] = True
+                except EdgeError as exc:
+                    info["reason"] = str(exc)
+            workers[worker] = info
+        return {
+            "defaults": {"worker": config.default_worker, "effort": config.effort, "timeout_s": config.default_timeout_s},
+            "workers": workers,
         }
 
     def busy_count(self) -> int:
@@ -299,6 +401,78 @@ class Scheduler:
             return None
         return f"{len(holds)} Claude Code session(s) are working this task in the harness; the dashboard yields"
 
+    def register_hold(self, folder: str, session: str, ident: proctree.ProcIdent) -> Run | None:
+        """Register an interactive hold; the dashboard run active on the folder (to tell the session), or None.
+
+        Takes ONLY the hold gate: never the tick lock (a tick can run for 20 s and the handshake gives
+        up at 2 s) and never the process lock. The gate is held by a write only for its short
+        check-and-commit, so this waits for at most one such section.
+        """
+        with self._hold_gate:
+            self.db.add_hold(folder, session, ident)
+            key = folder_key(folder)
+            self._hold_epoch[key] = self._hold_epoch.get(key, 0) + 1
+            return self.db.active_for_folder(folder)
+
+    def _refuse_if_held(self, folder: Path) -> None:
+        if self.db.live_holds(str(folder)):
+            raise QueueRefused(409, "held", HELD_MESSAGE)
+
+    def _authoring_precommit(self, folder: Path, *, project_root: Path, task_ref: str, item_id: str | None = None) -> Callable[[], None]:
+        """The checks made inside the hold gate immediately before the first replace of an authoring write."""
+        def check() -> None:
+            self._refuse_if_held(folder)
+            if self.db.active_for_folder(str(folder)) is not None:
+                raise QueueRefused(409, "run-active", RUN_ACTIVE_MESSAGE)
+            if item_id is not None and self.db.live_for(project_id_for(project_root), task_ref, item_id) is not None:
+                raise QueueRefused(409, "item-has-live-run", ITEM_RUN_MESSAGE)
+        return check
+
+    # -- guarded writes -------------------------------------------------------
+
+    def _write(self, folder: Path, edit, *, expected_revision: str | None, precommit: Callable[[], None] | None) -> str:
+        """One task-folder write through the gate; every failure becomes a typed refusal."""
+        try:
+            return self.mutator.mutate(folder, edit, expected_revision=expected_revision, gate=self._hold_gate,
+                                       precommit=precommit)
+        except MutationError as exc:
+            raise refusal_from_mutation(exc, folder) from exc
+        except authoring.AuthoringRefused as exc:
+            raise QueueRefused(422, exc.code, str(exc)) from exc
+
+    def _read_revision(self, folder: Path) -> str:
+        try:
+            return folder_revision(folder)
+        except MutationError as exc:
+            raise QueueRefused(422, "unreadable", str(exc)) from exc
+
+    # -- run options -----------------------------------------------------------
+
+    def validate_options(self, body: dict, config: DashboardConfig | None = None) -> dict:
+        """The run options a client sent, checked as a REQUEST: any problem is a 422 and nothing is written.
+
+        A bad option describes a run, not the task, so it never blocks the task (translation-time
+        option reasons end the run instead).
+        """
+        if not isinstance(body, dict):
+            raise QueueRefused(422, "bad-options", "options must be an object")
+        options = _options_from(body)
+        if config is None:
+            try:
+                config = self.config()
+            except DashboardConfigError as exc:
+                raise QueueRefused(422, "config", str(exc)) from exc
+        reasons = option_reasons(RunOptions(**options), config, self.edge)
+        if reasons:
+            raise QueueRefused(422, "bad-options", "the run options are not usable: " + "; ".join(r.line() for r in reasons),
+                               reasons=_reasons_json(reasons))
+        return options
+
+    def _require_edge(self) -> None:
+        status = self.edge.status()
+        if not status.available:
+            raise QueueRefused(503, "llm-kit-unavailable", status.detail)
+
     # -- actions -------------------------------------------------------------
 
     def queue(self, *, project_root: str, task_ref: str, item_id: str, body: dict,
@@ -308,19 +482,22 @@ class Scheduler:
             return self._queue(project_root=project_root, task_ref=task_ref, item_id=item_id, body=body,
                                expected_revision=expected_revision, retry_of=retry_of)
 
+    def _admit(self, project_root: str, task_ref: str, item_id: str, options_in: dict, config: DashboardConfig,
+               revision: str, project_id: str):
+        """Translate one item for a new run; ``(run_id, translation)``. Nothing is created."""
+        run_id = uuid.uuid4().hex[:16]
+        result = self._translate(Path(project_root), task_ref, item_id, RunOptions(**options_in), config, run_id,
+                                 self.run_dir_for(project_id, run_id), revision)
+        return run_id, result
+
     def _queue(self, *, project_root: str, task_ref: str, item_id: str, body: dict,
                expected_revision: str | None, retry_of: str | None) -> Run:
         folder = Path(project_root) / task_ref
-        try:
-            current = folder_revision(folder)
-        except MutationError as exc:
-            raise QueueRefused(422, "unreadable", str(exc)) from exc
+        current = self._read_revision(folder)
         if expected_revision is not None and current != expected_revision:
             raise QueueRefused(409, "stale-revision", "the task changed since this page last loaded it",
                                current_revision=current)
-        status = self.edge.status()
-        if not status.available:
-            raise QueueRefused(503, "llm-kit-unavailable", status.detail)
+        self._require_edge()
         project_id = project_id_for(Path(project_root))
         if self.db.live_for(project_id, task_ref, item_id):
             raise QueueRefused(409, "already-queued", f"{item_id} already has a queued or running dashboard run")
@@ -328,10 +505,8 @@ class Scheduler:
             config = self.config()
         except DashboardConfigError as exc:
             raise QueueRefused(422, "config", str(exc)) from exc
-        options_in = _options_from(body)
-        run_id = uuid.uuid4().hex[:16]
-        result = self._translate(Path(project_root), task_ref, item_id, RunOptions(**options_in), config, run_id,
-                                 self.run_dir_for(project_id, run_id), current)
+        options_in = self.validate_options(body, config)
+        run_id, result = self._admit(project_root, task_ref, item_id, options_in, config, current, project_id)
         if result.reasons:
             blocking = [r for r in result.reasons if r.blocking]
             hard = [r for r in blocking if r.code not in SOURCE_CHANGED]
@@ -339,9 +514,7 @@ class Scheduler:
                 raise QueueRefused(422, "not-ready", "the item is not ready to run: " + "; ".join(r.line() for r in blocking),
                                    reasons=_reasons_json(result.reasons), current_revision=current)
             if hard:
-                self._block_for(folder, item_id, hard, f"dashboard queue of {item_id}")
-                raise QueueRefused(422, "translation-failed", "the item could not be translated into a job, so the task is now blocked: "
-                                   + "; ".join(r.line() for r in hard), reasons=_reasons_json(result.reasons), blocked=True)
+                self._block_on_queue(folder, [(item_id, hard)], f"dashboard queue of {item_id}", result.reasons, current)
         title = next((i.get("title", item_id) for i in (raw_items((folder / "plan.md").read_text(encoding="utf-8")) or [])
                       if i.get("id") == item_id), item_id)
         run = self.db.enqueue(run_id=run_id, project_id=project_id, project_root=str(project_root), task_ref=task_ref,
@@ -349,6 +522,82 @@ class Scheduler:
                               retry_of=retry_of)
         self.wake()
         return run
+
+    def _block_on_queue(self, folder: Path, hard_by_item: list[tuple[str, list[Reason]]], source: str,
+                        reasons: tuple, revision: str) -> None:
+        """Queue (single or all) found a translation problem with the item(s): block the task, then refuse. Never returns.
+
+        The block carries the revision the translation read, so a harness fix that landed meanwhile is a
+        409 and not a block on stale text. A task a Claude Code session holds is not blocked at all.
+        """
+        flat = [r for _id, rs in hard_by_item for r in rs]
+        summary = "; ".join(r.line() for r in flat)
+        try:
+            if len(hard_by_item) == 1:
+                item_id, rs = hard_by_item[0]
+                self._block_for(folder, item_id, rs, source, revision=revision, refuse_held=True)
+            else:
+                record_blocks(
+                    self.mutator, folder,
+                    items=[(i, f"{rs[0].code}: {rs[0].detail}") for i, rs in hard_by_item],
+                    log_detail=f"{source}: not translated into jobs: " + concise("; ".join(f"{i}: {rs[0].line()}" for i, rs in hard_by_item)),
+                    expected_revision=revision, gate=self._hold_gate, precommit=lambda: self._refuse_if_held(folder))
+        except QueueRefused as held:  # (the hold arrived: the fix happens in the session that holds the task)
+            if held.code != "held":
+                raise
+            raise QueueRefused(422, "translation-failed", "the item could not be translated into a job; the task was not "
+                               "blocked because a Claude Code session is working it: " + summary,
+                               reasons=_reasons_json(reasons)) from held
+        except MutationError as exc:
+            raise refusal_from_mutation(exc, folder) from exc
+        raise QueueRefused(422, "translation-failed", "the item could not be translated into a job, so the task is now blocked: "
+                           + summary, reasons=_reasons_json(reasons), blocked=True)
+
+    def queue_all(self, *, project_root: str, task_ref: str, expected_revision: str, body: dict) -> list[Run]:
+        """Queue every available item without a live run, in ``task items`` order, or none of them."""
+        with self._queue_lock:
+            folder = Path(project_root) / task_ref
+            current = self._read_revision(folder)
+            if current != expected_revision:
+                raise QueueRefused(409, "stale-revision", "the task changed since this page last loaded it",
+                                   current_revision=current)
+            self._require_edge()
+            project_id = project_id_for(Path(project_root))
+            try:
+                config = self.config()
+            except DashboardConfigError as exc:
+                raise QueueRefused(422, "config", str(exc)) from exc
+            options_in = self.validate_options(body, config)
+            read = read_task_items(folder, HAND_OFF)
+            candidates = [i for i in sort_items(read.items) if i.state == "available"
+                          and self.db.live_for(project_id, task_ref, i.id) is None]
+            if not candidates:
+                raise QueueRefused(422, "nothing-to-queue", "no available item without a queued or running run")
+            admitted = []
+            hard_by_item: list[tuple[str, list[Reason]]] = []
+            source_changed: list[Reason] = []
+            every_reason: list[Reason] = []
+            for item in candidates:
+                run_id, result = self._admit(project_root, task_ref, item.id, options_in, config, current, project_id)
+                every_reason.extend(result.reasons)
+                blocking = [r for r in result.reasons if r.blocking]
+                hard = [r for r in blocking if r.code not in SOURCE_CHANGED]
+                if hard:
+                    hard_by_item.append((item.id, hard))
+                elif blocking:
+                    source_changed.extend(blocking)
+                admitted.append((run_id, item))
+            if hard_by_item:
+                self._block_on_queue(folder, hard_by_item, f"dashboard queue of {len(candidates)} item(s)", tuple(every_reason), current)
+            if source_changed:
+                raise QueueRefused(422, "not-ready", "the items are not ready to run: " + "; ".join(r.line() for r in source_changed),
+                                   reasons=_reasons_json(every_reason), current_revision=current)
+            runs = self.db.enqueue_many([
+                {"run_id": run_id, "project_id": project_id, "project_root": str(project_root), "task_ref": task_ref,
+                 "item_id": item.id, "item_title": item.title, "options": options_in, "source_revision": current}
+                for run_id, item in admitted])
+            self.wake()
+            return runs
 
     def retry(self, run_id: str, *, expected_revision: str | None) -> Run:
         old = self.db.get(run_id)
@@ -394,13 +643,51 @@ class Scheduler:
             self.wake()
             return self.db.get(run.id)  # type: ignore[return-value]
 
+    def remove(self, run_id: str) -> Run:
+        """Take a queued entry out of the queue (``queued`` -> ``removed``). A runtime record: validated by its own state."""
+        with self._tick_lock:
+            run = self.db.get(run_id)
+            if run is None:
+                raise QueueRefused(404, "unknown-run", f"no run {run_id}")
+            if run.state != QUEUED:
+                raise QueueRefused(409, "not-queued", f"run {run_id} is {run.state}; only a queued entry can be removed. "
+                                   "Cancel a run that has started.")
+            self.db.transition(run.id, (QUEUED,), REMOVED, code="removed",
+                               detail="removed from the queue before it started; nothing ran and nothing was created")
+            return self.db.get(run.id)  # type: ignore[return-value]
+
+    def set_run_options(self, *, project_root: str, task_ref: str, item_id: str, options: dict) -> Run:
+        """Replace the options of the item's QUEUED entry. Validated against the entry's own state, like Cancel."""
+        self._require_edge()
+        with self._tick_lock:
+            run = self.db.live_for(project_id_for(Path(project_root)), task_ref, item_id)
+            if run is None or run.state != QUEUED:
+                raise QueueRefused(409, "not-queued", f"{item_id} has no queued entry (it is "
+                                   f"{run.state if run else 'not queued'}); options can be changed only while it waits")
+            options_in = self.validate_options(options)
+            if not self.db.set_options(run.id, options_in):
+                raise QueueRefused(409, "not-queued", f"run {run.id} started while its options were being saved")
+            return self.db.get(run.id)  # type: ignore[return-value]
+
     def recheck(self, *, project_root: str, task_ref: str, expected_revision: str | None) -> dict:
+        """Re-validate a task and clear its block; ends the holds that predate this request, never a newer one.
+
+        Reads the folder's hold epoch first. The holds are released INSIDE the hold gate, in the write's
+        ``precommit``, and only when no hold registered meanwhile (a new ``/task work`` bumps the epoch):
+        in that case nothing is written or released and the answer is 409 ``held``.
+        """
         folder = Path(project_root) / task_ref
-        released = self.db.clear_holds(str(folder))
-        try:
-            current = folder_revision(folder)
-        except MutationError as exc:
-            raise QueueRefused(422, "unreadable", str(exc)) from exc
+        key = folder_key(folder)
+        epoch = self._hold_epoch.get(key, 0)
+        released = {"n": 0}
+
+        def release() -> None:
+            if self._hold_epoch.get(key, 0) != epoch:
+                raise QueueRefused(409, "held", "a Claude Code session started working this task while Re-check ran; "
+                                   "Re-check again when it is done")
+            released["n"] = self.db.clear_holds(str(folder))
+
+        current = self._read_revision(folder)
         if expected_revision is not None and current != expected_revision:
             raise QueueRefused(409, "stale-revision", "the task changed since this page last loaded it", current_revision=current)
         result = validate_ref(task_ref, Path(project_root))
@@ -410,6 +697,9 @@ class Scheduler:
         problems = [Reason("validation", f) for f in findings] + [
             Reason("item-blocked", f"item {i} is still blocked-user") for i in blocked_items]
         if problems:
+            with self._hold_gate:  # the refusal still ends the holds that predate this request
+                if self._hold_epoch.get(key, 0) == epoch:
+                    self.db.clear_holds(str(folder))
             raise QueueRefused(422, "recheck-failed", "the task is not clear yet: " + "; ".join(p.line() for p in problems[:5]),
                                reasons=_reasons_json(problems), current_revision=current)
 
@@ -422,13 +712,143 @@ class Scheduler:
             return {TASK_YAML: set_task_status(texts.task_yaml, "active"),
                     LOG: append_log(texts.log, "dashboard: re-check cleared the block; the task is active again")}
 
+        revision = self._write(folder, edit, expected_revision=current, precommit=release)
+        return {"changed": changed["value"], "holds_released": released["n"], "revision": revision}
+
+    # -- authoring ------------------------------------------------------------------
+
+    def add_item(self, *, project_root: str, task_ref: str, expected_revision: str, title, priority, details,
+                 queue: bool = False, options: dict | None = None) -> dict:
+        """Add an available item (and its plan.md section); optionally queue it. See authoring.py for the text edit.
+
+        ``{"item", "revision", "run" | "queue_error"}``. The write is refused (409) while a Claude Code
+        session holds the task or a dashboard run works it. When ``queue`` is set and the add
+        succeeded but the queue step was refused, the add stands and ``queue_error`` says why.
+        """
         try:
-            revision = self.mutator.mutate(folder, edit, expected_revision=current)
-        except StaleRevision as exc:
-            raise QueueRefused(409, "stale-revision", str(exc), current_revision=exc.current) from exc
-        except MutationError as exc:
-            raise QueueRefused(500, exc.code, str(exc)) from exc
-        return {"changed": changed["value"], "holds_released": released, "revision": revision}
+            title = authoring.check_title(title)
+            priority = authoring.check_priority(priority)
+            details = authoring.check_details(details)
+        except authoring.AuthoringRefused as exc:
+            raise QueueRefused(422, exc.code, str(exc)) from exc
+        options_in: dict = {}
+        if queue:
+            if not details:
+                raise QueueRefused(422, "details-required", "an item that is queued needs details: they are the worker's instructions")
+            self._require_edge()
+            options_in = self.validate_options(options or {})
+        folder = Path(project_root) / task_ref
+        added: dict = {}
+
+        def edit(texts: TaskTexts) -> dict[str, str]:
+            if stored_status(texts.task_yaml) not in ("active", "blocked"):
+                raise authoring.AuthoringRefused("task-not-open", "items can be added only to an active or blocked task")
+            plan, item = authoring.add_item_to_plan(texts.plan, title=title, priority=priority, details=details)
+            added.update(item)
+            return {PLAN: plan, LOG: append_log(texts.log, f"dashboard: added item {item['id']} ({title})")}
+
+        with self._queue_lock, self._tick_lock:
+            revision = self._write(folder, edit, expected_revision=expected_revision,
+                                   precommit=self._authoring_precommit(folder, project_root=Path(project_root), task_ref=task_ref))
+        outcome: dict = {"item": {"id": added["id"], "title": added["title"], "state": added["state"],
+                                  "priority": added.get("priority")}, "revision": revision}
+        if queue:
+            try:
+                outcome["run"] = self.queue(project_root=project_root, task_ref=task_ref, item_id=added["id"],
+                                            body=options_in, expected_revision=revision)
+            except QueueRefused as exc:
+                outcome["queue_error"] = {"code": exc.code, "message": str(exc), "reasons": exc.reasons, "blocked": exc.blocked}
+        return outcome
+
+    def defer_item(self, *, project_root: str, task_ref: str, item_id: str, expected_revision: str, state: str) -> dict:
+        """available -> deferred or deferred -> available; the item's note is untouched."""
+        if state not in ("deferred", "available"):
+            raise QueueRefused(422, "bad-transition", "state must be deferred or available")
+        folder = Path(project_root) / task_ref
+
+        def edit(texts: TaskTexts) -> dict[str, str]:
+            current = next((i.get("state") for i in (raw_items(texts.plan) or []) if i.get("id") == item_id), None)
+            if (current, state) not in (("available", "deferred"), ("deferred", "available")):
+                raise authoring.AuthoringRefused("bad-transition", f"{item_id} is {current!r}; only available <-> deferred is allowed here")
+            verb = "deferred" if state == "deferred" else "undeferred"
+            return {PLAN: set_item_state(texts.plan, item_id, state), LOG: append_log(texts.log, f"dashboard: {verb} item {item_id}")}
+
+        with self._queue_lock, self._tick_lock:
+            revision = self._write(folder, edit, expected_revision=expected_revision,
+                                   precommit=self._authoring_precommit(folder, project_root=Path(project_root), task_ref=task_ref,
+                                                                       item_id=item_id))
+        return {"item_id": item_id, "state": state, "revision": revision}
+
+    def new_task(self, *, project_root: str, title, priority, first_item) -> dict:
+        """Create a dev/tasks task with the task system's own ``init``; priority and a first item follow in one write.
+
+        A brand-new folder has no reader yet, so creation needs no gate; the target path is refused when
+        a hold already names it. A failed follow-up leaves the (valid) created task and says so.
+        """
+        try:
+            title = authoring.check_title(title)
+            priority = authoring.check_priority(priority)
+            first = None
+            if first_item is not None:
+                if not isinstance(first_item, dict):
+                    raise authoring.AuthoringRefused("bad-title", "first_item must be an object")
+                first = (authoring.check_title(first_item.get("title")), authoring.check_details(first_item.get("details")))
+            stub, _ = task_init.derive_stub_and_title(title)
+        except authoring.AuthoringRefused as exc:
+            raise QueueRefused(422, exc.code, str(exc)) from exc
+        except task_init.InitError as exc:
+            raise QueueRefused(422, "bad-title", str(exc)) from exc
+        root = Path(project_root)
+        canonical = f"dev/tasks/{stub}"
+        folder = (root / canonical).absolute()
+        with self._queue_lock, self._tick_lock:
+            if self.db.live_holds(str(folder)):
+                raise QueueRefused(409, "held", HELD_MESSAGE)
+            if folder.exists():
+                raise QueueRefused(409, "task-exists", f"{canonical} already exists", current_revision=self._safe_revision(folder))
+            try:
+                created = task_init.init_task(title, root, dest="dev/tasks")
+            except FileExistsError as exc:
+                raise QueueRefused(409, "task-exists", f"{canonical} already exists", current_revision=self._safe_revision(folder)) from exc
+            except task_init.InitError as exc:
+                if "already exists" in str(exc):
+                    raise QueueRefused(409, "task-exists", str(exc), current_revision=self._safe_revision(folder)) from exc
+                raise QueueRefused(422, "init-failed", str(exc)) from exc
+            revision = self._read_revision(created)
+            outcome: dict = {"path": canonical, "task_ref": canonical, "revision": revision}
+            if priority or first:
+                added: dict = {}
+
+                def edit(texts: TaskTexts) -> dict[str, str]:
+                    changes: dict[str, str] = {}
+                    parts = []
+                    if priority:
+                        changes[TASK_YAML] = set_task_fields(texts.task_yaml, priority=priority)
+                        parts.append(f"priority {priority}")
+                    if first:
+                        plan, item = authoring.add_item_to_plan(texts.plan, title=first[0], priority=None, details=first[1])
+                        added.update(item)
+                        changes[PLAN] = plan
+                        parts.append(f"first item {item['id']}")
+                    changes[LOG] = append_log(texts.log, "dashboard: created task with " + ", ".join(parts))
+                    return changes
+
+                try:
+                    outcome["revision"] = self._write(
+                        created, edit, expected_revision=revision,
+                        precommit=self._authoring_precommit(created, project_root=root, task_ref=canonical))
+                except QueueRefused as exc:
+                    outcome["followup_error"] = {"code": exc.code, "message": str(exc), "file": exc.extra.get("file"),
+                                                 "written": exc.extra.get("written", [])}
+                    outcome["revision"] = self._safe_revision(created) or revision
+        return outcome
+
+    @staticmethod
+    def _safe_revision(folder: Path) -> str | None:
+        try:
+            return folder_revision(folder)
+        except MutationError:
+            return None
 
     # -- the loop -------------------------------------------------------------
 
@@ -500,6 +920,14 @@ class Scheduler:
         if not self.edge.status().available:
             return
         for run in self.db.runs((QUEUED,)):
+            # Cheap pre-checks BEFORE translating (translation runs git): a checkout that already holds a
+            # lease, no free slot, or a held folder cannot start this run now, and none of that needs the
+            # item translated. The entry stays queued in its place, so a later entry may still pass it.
+            busy = {r.project_id for r in self.db.runs(ACTIVE_STATES)}
+            if run.project_id in busy or len(busy) >= config.max_parallel_projects:
+                continue
+            if self.db.live_holds(run.folder):
+                continue
             try:
                 self._try_start(run, config)
             except Exception:  # noqa: BLE001 -- one run that cannot start must not keep the others from starting
@@ -528,17 +956,29 @@ class Scheduler:
             if changed:
                 self.db.set_state(run.id, SKIPPED, code="task-source-changed", detail="; ".join(r.line() for r in changed))
                 return
+            options_bad = [r for r in hard if r.code in OPTION_REASON_CODES]
+            if options_bad:  # the run's options, not the task: the run ends, the task is untouched
+                self.db.set_state(run.id, FAILED, code="bad-options", detail="; ".join(r.line() for r in options_bad))
+                return
             if hard:
                 try:
-                    self._block_for(folder, run.item_id, hard, f"dashboard run {run.id}")
+                    self._block_for(folder, run.item_id, hard, f"dashboard run {run.id}", revision=revision, refuse_held=True)
                     self.db.set_state(run.id, BLOCKED, code=hard[0].code, detail="; ".join(r.line() for r in hard))
+                except QueueRefused:  # a hold registered meanwhile: the run yields and stays queued
+                    return
+                except StaleRevision as exc:  # the task changed during translation: never block on stale text
+                    self.db.add_event(run.id, "task-source-changed", f"re-translating next tick: {exc}")
                 except MutationError as exc:
                     self.db.set_state(run.id, FAILED, code="block-not-recorded",
                                       detail=f"translation failed ({hard[0].line()}) and the block could not be recorded: {exc}")
                 return
             self._report_once(run.id, "; ".join(r.line() for r in result.reasons))
             return  # only non-blocking reasons: it stays queued
-        if not self.db.try_lease(run.id, run.project_id, max_projects=config.max_parallel_projects):
+        with self._hold_gate:  # the hold re-check and the lease are one step, so a hold cannot slip between them
+            if self.db.live_holds(run.folder):
+                return
+            leased = self.db.try_lease(run.id, run.project_id, max_projects=config.max_parallel_projects)
+        if not leased:
             return
         stage = _Stage()
         try:
@@ -562,10 +1002,15 @@ class Scheduler:
             revision=revision,
         )
 
-    def _block_for(self, folder: Path, item_id: str, reasons: list[Reason], source: str) -> BlockOutcome:
+    def _block_for(self, folder: Path, item_id: str, reasons: list[Reason], source: str, *, revision: str | None,
+                   refuse_held: bool = False) -> BlockOutcome:
+        """Record a translation block. ``revision`` is the one the translation read (a harness fix that landed
+        since is StaleRevision, never a block on stale text); ``refuse_held`` raises QueueRefused ``held`` from
+        inside the gate when a Claude Code session holds the folder."""
         detail = "; ".join(r.line() for r in reasons)
         return record_block(self.mutator, folder, item_id=item_id, note=f"{reasons[0].code}: {reasons[0].detail}",
-                            log_detail=f"{source}: not translated into a job: {concise(detail)}")
+                            log_detail=f"{source}: not translated into a job: {concise(detail)}", expected_revision=revision,
+                            gate=self._hold_gate, precommit=(lambda: self._refuse_if_held(folder)) if refuse_held else None)
 
     def _dispatch(self, run: Run, spec: JobSpec, run_dir: Path, revision: str, stage: "_Stage") -> None:
         if spec.worker == "claude":
@@ -578,7 +1023,13 @@ class Scheduler:
             self.edge.validate_job_file(job_file)
         except EdgeError as exc:
             shutil.rmtree(run_dir, ignore_errors=True)  # created above, nothing has seen it
-            self._block_for(Path(spec.folder), spec.item_id, [Reason("job-file-invalid", str(exc))], f"dashboard run {run.id}")
+            try:
+                self._block_for(Path(spec.folder), spec.item_id, [Reason("job-file-invalid", str(exc))], f"dashboard run {run.id}",
+                                revision=spec.start.revision, refuse_held=True)
+            except (QueueRefused, StaleRevision) as why:  # a hold, or the task changed: the run fails, the task is left alone
+                self.db.set_state(run.id, FAILED, code="job-file-invalid",
+                                  detail=f"{exc}. The task was not blocked: {why}")
+                return
             self.db.set_state(run.id, BLOCKED, code="job-file-invalid", detail=str(exc))
             return
         start = spec.start
@@ -773,7 +1224,8 @@ class Scheduler:
         """A crash-inspection block: the task is blocked for a person, the run ends ``crashed``. Never a success, never a retry."""
         try:
             record_block(self.mutator, Path(run.folder), item_id=run.item_id, note=f"{code}: {detail}",
-                         log_detail=f"dashboard run {run.id}: crash inspection ({code}): {concise(detail)}")
+                         log_detail=f"dashboard run {run.id}: crash inspection ({code}): {concise(detail)}",
+                         gate=self._hold_gate)  # a run boundary: it records what a live run did, so it ignores a hold
         except MutationError as exc:
             detail += f" (the block could not be recorded: {exc})"
         self.db.set_state(run.id, CRASHED, code=code, detail=detail)
@@ -838,7 +1290,8 @@ class Scheduler:
         if self._acceptance_starved(run_dir):
             detail = "the model used the whole time budget, leaving none for acceptance; inspect the shared tree"
             try:
-                self._block_for(Path(run.folder), run.item_id, [Reason("acceptance-starved", detail)], f"dashboard run {run.id}")
+                self._block_for(Path(run.folder), run.item_id, [Reason("acceptance-starved", detail)], f"dashboard run {run.id}",
+                                revision=None)
             except MutationError as exc:
                 detail += f" (the block could not be recorded: {exc})"
             self.db.set_state(run.id, BLOCKED, code="acceptance-starved", detail=detail)

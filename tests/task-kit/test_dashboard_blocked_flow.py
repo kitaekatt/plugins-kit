@@ -317,7 +317,7 @@ def test_the_dashboard_payload_lists_runs_and_attaches_the_latest_to_each_item(r
     failed = rig.run_to_end()
     status, _h, payload = rig.srv.json("GET", "/api/v1/dashboard")
     assert payload["capabilities"]["run"]["available"] is True
-    assert payload["capabilities"]["mutations"]["actions"] == ["queue", "retry", "recheck", "cancel"]
+    assert payload["capabilities"]["mutations"]["actions"] == ["queue", "retry", "recheck", "cancel", "newtask", "additem", "defer", "undefer", "queueall", "remove", "runoptions"]
     assert payload["runs"] == [] and [r["id"] for r in payload["recent_runs"]] == [failed.id]
     item = next(i for t in payload["tasks"] for i in t["items"] if i["id"] == "do-it")
     assert item["run"]["id"] == failed.id and item["run"]["state"] == "failed"

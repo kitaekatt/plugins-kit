@@ -35,10 +35,10 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from . import proctree, redact, snapshot
 from .codehash import DASHBOARD_PACKAGE, code_hash
-from .inventory import Inventory
+from .inventory import Inventory, project_id_for, target_root
 from .jobs_edge import EdgeError, JobsEdge
 from .mutation import TaskMutator
-from .runtime import DB_FILE, LIVE_STATES, TERMINAL_STATES, RuntimeDB
+from .runtime import ACTIVE_STATES, DB_FILE, HISTORY_STATES, LIVE_STATES, RuntimeDB, folder_key
 from .scheduler import QueueRefused, Scheduler
 from .state import (
     LOCK_FILE,
@@ -225,9 +225,11 @@ class DashboardServer:
         if scheduler is None:
             return None
         live = scheduler.db.runs(LIVE_STATES)
-        recent = scheduler.db.runs(TERMINAL_STATES, limit=RUNS_IN_SNAPSHOT, newest_first=True)
+        recent = scheduler.db.runs(HISTORY_STATES, limit=RUNS_IN_SNAPSHOT, newest_first=True)
         phases = {r.id: p for r in live if (p := scheduler.ledger_phase(r)) is not None}
-        return {"capabilities": scheduler.capabilities(), "runs": sorted(live + recent, key=lambda r: -r.seq), "phases": phases}
+        active = {folder_key(r.folder) for r in scheduler.db.runs(ACTIVE_STATES)}
+        return {"capabilities": scheduler.capabilities(), "runs": sorted(live + recent, key=lambda r: -r.seq), "phases": phases,
+                "held": scheduler.db.held_folders(), "run_active": active}
 
     def server_info(self) -> dict:
         return {"instance": self.nonce, "code_hash": self.code_hash[:12]}
@@ -410,6 +412,9 @@ class _Handler(BaseHTTPRequestHandler):
             payload["blocked"] = True
         if exc.current_revision:
             payload["current_revision"] = exc.current_revision
+        payload.update(exc.extra)
+        if exc.blocked or exc.code == "partial-write":
+            self.app.inventory.invalidate()  # the folder changed, so the next read must see it
         self._json(exc.status, {"error": payload})
 
     def _expected_revision(self, body: dict) -> str | None:
@@ -516,6 +521,168 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self._error(404, "not_found", "No such endpoint.")
 
+    # -- task authoring ---------------------------------------------------------
+
+    def _checked_body(self, allowed: set[str], *, revision: bool = True) -> dict | None:
+        """The mutation body (gates applied) with unknown keys refused; None after the error was sent."""
+        body = self._read_json_body()
+        if body is None:
+            return None
+        unknown = sorted(set(body) - allowed)
+        if unknown:
+            self._error(422, "unknown_field", f"unknown field(s) {unknown}; allowed: {sorted(allowed)}")
+            return None
+        if revision and self._expected_revision(body) is None:
+            return None
+        return body
+
+    def _task_row(self, task) -> dict:
+        scheduler = self.app.scheduler
+        key = folder_key(task.folder)
+        held = key in scheduler.db.held_folders()
+        active = any(folder_key(r.folder) == key for r in scheduler.db.runs(ACTIVE_STATES))
+        return snapshot.task_json(task, held=held, run_active=active)
+
+    def _fresh_task(self, checkout: str, task_id: str):
+        self.app.inventory.invalidate()
+        return self.app.inventory.snapshot().find_task(checkout, task_id)
+
+    def _find_task(self, checkout: str, task_id: str):
+        task = self.app.inventory.snapshot().find_task(checkout, task_id)
+        if task is None:
+            self._error(404, "unknown_task", "No such task in any configured project.")
+        return task
+
+    def _task_collection(self, method: str, route: list[str]) -> None:
+        """POST /tasks/<checkout>/<task>/items (add an item) and /queue (queue all available)."""
+        if method != "POST":
+            self._error(405, "method_not_allowed", "Use POST.")
+            return
+        checkout, task_id, action = route[1], route[2], route[3]
+        allowed = ({"expected_revision", "title", "priority", "details", "queue", "options"} if action == "items"
+                   else {"expected_revision", "options"})
+        body = self._checked_body(allowed)
+        if body is None:
+            return
+        task = self._find_task(checkout, task_id)
+        if task is None:
+            return
+        options = body.get("options", {})
+        if not isinstance(options, dict):
+            self._error(422, "bad-options", "options must be an object.")
+            return
+        scheduler = self.app.scheduler
+        try:
+            if action == "queue":
+                runs = scheduler.queue_all(project_root=task.project_root, task_ref=task.id,
+                                           expected_revision=body["expected_revision"], body=options)
+                self.app.log(f"queued {len(runs)} run(s) for {task.id}")
+                self._json(202, {"runs": [snapshot.run_json(r, task.project_name) for r in runs]})
+                return
+            queue = body.get("queue", False)
+            if not isinstance(queue, bool):
+                self._error(422, "bad_queue", "queue must be true or false.")
+                return
+            outcome = scheduler.add_item(project_root=task.project_root, task_ref=task.id,
+                                         expected_revision=body["expected_revision"], title=body.get("title"),
+                                         priority=body.get("priority"), details=body.get("details"), queue=queue,
+                                         options=options)
+        except QueueRefused as exc:
+            self._refused(exc)
+            return
+        self.app.log(f"added item {outcome['item']['id']} to {task.id}")
+        fresh = self._fresh_task(checkout, task_id)
+        payload = {"item": outcome["item"], "revision": outcome["revision"], "task": self._task_row(fresh) if fresh else None}
+        status = 201
+        if "run" in outcome:
+            payload["run"] = snapshot.run_json(outcome["run"], task.project_name)
+            status = 202
+        if "queue_error" in outcome:
+            payload["queue_error"] = outcome["queue_error"]
+        self._json(status, payload)
+
+    def _item_state(self, method: str, route: list[str]) -> None:
+        """PATCH /items/<checkout>/<task>/<item>: Defer / Undefer."""
+        body = self._checked_body({"expected_revision", "state"})
+        if body is None:
+            return
+        checkout, task_id, item_id = route[1], route[2], route[3]
+        task = self._find_task(checkout, task_id)
+        if task is None:
+            return
+        try:
+            outcome = self.app.scheduler.defer_item(project_root=task.project_root, task_ref=task.id, item_id=item_id,
+                                                    expected_revision=body["expected_revision"], state=body.get("state"))
+        except QueueRefused as exc:
+            self._refused(exc)
+            return
+        self.app.log(f"item {item_id} of {task.id} is now {outcome['state']}")
+        fresh = self._fresh_task(checkout, task_id)
+        item = next((i for i in fresh.core.items if i.id == item_id), None) if fresh else None
+        self._json(200, {"item": snapshot._item_json(item) if item else {"id": item_id, "state": outcome["state"]},
+                         "revision": outcome["revision"]})
+
+    def _run_options(self, method: str, route: list[str]) -> None:
+        """PUT /items/<checkout>/<task>/<item>/run-options: the options of the item's queued entry."""
+        body = self._checked_body({"options"}, revision=False)
+        if body is None:
+            return
+        options = body.get("options")
+        if not isinstance(options, dict):
+            self._error(422, "bad-options", "options must be an object.")
+            return
+        task = self._find_task(route[1], route[2])
+        if task is None:
+            return
+        try:
+            run = self.app.scheduler.set_run_options(project_root=task.project_root, task_ref=task.id, item_id=route[3],
+                                                     options=options)
+        except QueueRefused as exc:
+            self._refused(exc)
+            return
+        self._json(200, {"run": snapshot.run_json(run, task.project_name)})
+
+    def _remove_run(self, method: str, route: list[str]) -> None:
+        """DELETE /queue/<run-id>: take a queued entry out of the queue."""
+        if method != "DELETE":
+            self._error(405, "method_not_allowed", "Use DELETE.")
+            return
+        if self._read_json_body() is None:
+            return
+        try:
+            run = self.app.scheduler.remove(route[1])
+        except QueueRefused as exc:
+            self._refused(exc)
+            return
+        self.app.log(f"removed {run.id} from the queue")
+        self._json(200, {"run": snapshot.run_json(run, "")})
+
+    def _new_task(self, method: str, route: list[str]) -> None:
+        """POST /projects/<project-id>/tasks: create a dev/tasks task."""
+        if method != "POST":
+            self._error(405, "method_not_allowed", "Use POST.")
+            return
+        body = self._checked_body({"title", "priority", "first_item"}, revision=False)
+        if body is None:
+            return
+        project = next((p for p in self.app.inventory.snapshot().projects if p.id == route[1]), None)
+        if project is None:
+            self._error(404, "unknown_project", "No such project.")
+            return
+        root = target_root(project)
+        try:
+            outcome = self.app.scheduler.new_task(project_root=root, title=body.get("title"), priority=body.get("priority"),
+                                                  first_item=body.get("first_item"))
+        except QueueRefused as exc:
+            self._refused(exc)
+            return
+        self.app.log(f"created task {outcome['path']}")
+        fresh = self._fresh_task(project_id_for(Path(root)), outcome["task_ref"])
+        payload = {"task": self._task_row(fresh) if fresh else None, "revision": outcome["revision"], "path": outcome["path"]}
+        if "followup_error" in outcome:
+            payload["followup_error"] = outcome["followup_error"]
+        self._json(201, payload)
+
     def _holds(self, method: str) -> None:
         """Register an interactive hold: the harness is about to work this task folder."""
         if method != "POST":
@@ -531,8 +698,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._error(422, "bad_hold", "A hold needs folder, session, pid and create_time.")
             return
         scheduler = self.app.scheduler
-        scheduler.db.add_hold(folder, session, proctree.ProcIdent(pid, float(ctime)))
-        active = scheduler.db.active_for_folder(folder)
+        active = scheduler.register_hold(folder, session, proctree.ProcIdent(pid, float(ctime)))
         self.app.log(f"hold on {Path(folder).name} by session {session[:8]}")
         self._json(200, {"ok": True, "active_run": snapshot.run_json(active, "") if active else None})
 
@@ -555,6 +721,24 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if route[:1] == ["items"] and len(route) == 5 and route[4] in ("queue", "recheck"):
             self._item_action(method, route)
+            return
+        if route[:1] == ["tasks"] and len(route) == 4 and route[3] in ("items", "queue"):
+            self._task_collection(method, route)
+            return
+        if route[:1] == ["items"] and len(route) == 4 and method == "PATCH":
+            self._item_state(method, route)
+            return
+        if route[:1] == ["items"] and len(route) == 5 and route[4] == "run-options":
+            if method != "PUT":
+                self._error(405, "method_not_allowed", "Use PUT.")
+                return
+            self._run_options(method, route)
+            return
+        if route[:1] == ["queue"] and len(route) == 2:
+            self._remove_run(method, route)
+            return
+        if route[:1] == ["projects"] and len(route) == 3 and route[2] == "tasks":
+            self._new_task(method, route)
             return
         if route[:1] == ["runs"] and len(route) in (2, 3):
             self._runs(method, route, query)

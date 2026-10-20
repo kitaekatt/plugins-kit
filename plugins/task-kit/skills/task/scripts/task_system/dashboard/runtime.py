@@ -17,9 +17,13 @@ folder now says why), ``failed`` / ``timeout`` / ``cancelled`` (no acceptance
 verdict; Retry may follow, and the shared tree may hold partial work),
 ``crashed`` (crash inspection: the runner vanished, or what it left could not be
 trusted; the task is blocked for a person to inspect), ``skipped`` (the task
-changed under the queue entry, so it was dropped).
+changed under the queue entry, so it was dropped), ``removed`` (the user took a
+queued entry out of the queue before it started; unlike ``cancelled`` it is not
+retryable, and the item simply shows Queue again).
 
-The schema stays 1: the new states are values of an existing text column.
+The schema stays 1: the new states are values of an existing text column, and
+code that predates ``removed`` selects runs only by explicit state lists, so it
+never meets one.
 """
 
 from __future__ import annotations
@@ -38,12 +42,14 @@ SCHEMA_VERSION = 1
 DB_FILE = "dashboard.sqlite3"
 
 QUEUED, STARTING, RUNNING, CANCELLING = "queued", "starting", "running", "cancelling"
-ACCEPTED, BLOCKED, FAILED, TIMEOUT, CRASHED, SKIPPED, CANCELLED = (
-    "accepted", "blocked", "failed", "timeout", "crashed", "skipped", "cancelled",
+ACCEPTED, BLOCKED, FAILED, TIMEOUT, CRASHED, SKIPPED, CANCELLED, REMOVED = (
+    "accepted", "blocked", "failed", "timeout", "crashed", "skipped", "cancelled", "removed",
 )
 ACTIVE_STATES = (STARTING, RUNNING, CANCELLING)
 LIVE_STATES = (QUEUED, STARTING, RUNNING, CANCELLING)
-TERMINAL_STATES = (ACCEPTED, BLOCKED, FAILED, TIMEOUT, CRASHED, SKIPPED, CANCELLED)
+TERMINAL_STATES = (ACCEPTED, BLOCKED, FAILED, TIMEOUT, CRASHED, SKIPPED, CANCELLED, REMOVED)
+# The terminal states the run history shows: a removed entry never ran, so it is not history.
+HISTORY_STATES = tuple(state for state in TERMINAL_STATES if state != REMOVED)
 RETRYABLE_STATES = (FAILED, TIMEOUT, CANCELLED)
 CANCELLABLE_STATES = (QUEUED, STARTING, RUNNING)
 
@@ -176,6 +182,28 @@ class RuntimeDB:
             self.add_event(run_id, "queued", f"{task_ref} / {item_id}")
             return self.get(run_id)  # type: ignore[return-value]
 
+    def enqueue_many(self, entries: list[dict]) -> list[Run]:
+        """Enqueue several runs in one transaction: all of them or none. Each entry takes ``enqueue``'s keywords."""
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                for entry in entries:
+                    self.enqueue(**entry)
+                self._conn.execute("COMMIT")
+            except BaseException:
+                self._conn.execute("ROLLBACK")
+                raise
+            return [self.get(entry["run_id"]) for entry in entries]  # type: ignore[misc]
+
+    def set_options(self, run_id: str, options: dict) -> bool:
+        """Replace a QUEUED run's options; False when the run is no longer queued (it started or was removed)."""
+        with self._lock:
+            changed = self._conn.execute("UPDATE runs SET options_json=? WHERE id=? AND state=?",
+                                         (json.dumps(options, sort_keys=True), run_id, QUEUED)).rowcount
+            if changed:
+                self.add_event(run_id, "options", json.dumps(options, sort_keys=True))
+            return changed == 1
+
     def get(self, run_id: str) -> Run | None:
         with self._lock:
             row = self._conn.execute(f"SELECT {', '.join(_COLUMNS)} FROM runs WHERE id=?", (run_id,)).fetchone()
@@ -304,6 +332,18 @@ class RuntimeDB:
                 else:
                     alive.append({"session": session, "pid": pid, "created_at": created})
         return alive
+
+    def held_folders(self) -> set[str]:
+        """The ``folder_key`` of every folder with a live hold (dead holds are deleted, as in ``live_holds``)."""
+        with self._lock:
+            rows = self._conn.execute("SELECT id, folder, pid, ctime FROM holds").fetchall()
+            held = set()
+            for hold_id, folder, pid, ctime in rows:
+                if proctree.live(proctree.ProcIdent(pid, ctime)) is None:
+                    self._conn.execute("DELETE FROM holds WHERE id=?", (hold_id,))
+                else:
+                    held.add(folder)
+        return held
 
     def clear_holds(self, folder: str) -> int:
         with self._lock:

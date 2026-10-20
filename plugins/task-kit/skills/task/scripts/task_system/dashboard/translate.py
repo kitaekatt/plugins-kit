@@ -250,8 +250,9 @@ def translate(
         accept, accept_reasons = _accept_lists(item)
         reasons.extend(accept_reasons)
 
-    # 5. worker and model entry
+    # 5. worker, model entry and effort
     adapter = _worker_reasons(options, edge, reasons)
+    _effort_reasons(options, edge, reasons, adapter)
 
     # 6. paths
     script = Path(accept_script)
@@ -261,8 +262,7 @@ def translate(
         reasons.append(Reason("path", f"the project root {project_root} is not a writable directory"))
     if not folder.is_dir():
         reasons.append(Reason("path", f"the task folder {folder} does not exist"))
-    if options.timeout_s is None or options.timeout_s <= 0:
-        reasons.append(Reason("timeout", "the run timeout must be positive"))
+    _timeout_reasons(options, reasons)
 
     # 7. llm-kit, 8. interactive hold (neither blocks the task)
     edge_status = edge.status()
@@ -313,6 +313,44 @@ def translate(
         document=document, accept=accept, start=start, contract_argv=contract, network=options.network,
     )
     return Translation(reasons=(), spec=spec)
+
+
+# Reason codes that describe a RUN's options, not the task: a run whose options are refused ends
+# `failed` (bad-options) and the task is left alone; they never block the task.
+OPTION_REASON_CODES = frozenset({"bad-worker", "codex-floor-unproved", "model-entry", "bad-effort", "timeout"})
+
+
+def _effort_reasons(options: RunOptions, edge, reasons: list[Reason], adapter: str | None) -> None:
+    """An effort must be on the chosen entry's menu (checked only once the entry resolved to a worker adapter)."""
+    if not options.effort or adapter is None:
+        return
+    try:
+        menu = tuple(edge.effort_menu(options.entry))
+    except Exception as exc:  # noqa: BLE001 -- the edge raises its own error type; report it as a reason
+        reasons.append(Reason("bad-effort", str(exc), blocking=False))
+        return
+    if options.effort not in menu:
+        shown = ", ".join(menu) if menu else "none (it takes no effort)"
+        reasons.append(Reason("bad-effort", f"effort {options.effort!r} is not on the menu of {options.entry!r}: {shown}"))
+
+
+def _timeout_reasons(options: RunOptions, reasons: list[Reason]) -> None:
+    if options.timeout_s is None or options.timeout_s <= 0:
+        reasons.append(Reason("timeout", "the run timeout must be positive"))
+
+
+def option_reasons(options: RunOptions, config: DashboardConfig, edge) -> list[Reason]:
+    """Everything wrong with a run's OPTIONS alone (worker, entry, effort, timeout), as typed reasons.
+
+    The same checks :func:`translate` makes, so a request can be refused for them before anything is
+    queued or written. Needs the edge to be available (it resolves the entry and its effort menu).
+    """
+    resolved = options.resolved(config)
+    reasons: list[Reason] = []
+    adapter = _worker_reasons(resolved, edge, reasons)
+    _effort_reasons(resolved, edge, reasons, adapter)
+    _timeout_reasons(resolved, reasons)
+    return reasons
 
 
 def _worker_reasons(options: RunOptions, edge, reasons: list[Reason]) -> str | None:

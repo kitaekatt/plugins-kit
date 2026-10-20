@@ -100,6 +100,29 @@ def test_the_working_copy_of_llm_kit_probes_ok(real_llm_kit):
     assert (status.state, status.available) == (OK, True)
 
 
+def test_an_llm_kit_without_the_effort_menu_reads_as_too_old(real_llm_kit, monkeypatch):
+    """The run-options controls rely on llm_kit.registry.effort.harness_effort_order; its absence is a stale copy, not a crash."""
+    assert JobsEdge(ttl_s=0).status().state == OK  # (everything else imports first, so only this symbol is missing)
+    effort = importlib.import_module("llm_kit.registry.effort")
+    monkeypatch.delattr(effort, "harness_effort_order")
+    status = JobsEdge(ttl_s=0).status()
+    assert status.state == TOO_OLD and "harness_effort_order" in status.detail
+    assert "claude plugin update llm-kit@plugins-kit" in status.detail
+
+
+def test_the_effort_menu_resolves_through_the_real_registry_and_is_cached(real_llm_kit, monkeypatch):
+    edge = JobsEdge(ttl_s=60)
+    menu = edge.effort_menu("opus")
+    assert "high" in menu and menu == edge.effort_menu("opus")
+    effort = importlib.import_module("llm_kit.registry.effort")
+    monkeypatch.setattr(effort, "harness_effort_order", lambda harness: (_ for _ in ()).throw(AssertionError("asked again")))
+    assert edge.effort_menu("opus") == menu  # served from the cache within its TTL
+    with pytest.raises(EdgeError, match="no-such-entry"):
+        JobsEdge(ttl_s=0).effort_menu("no-such-entry")
+    with pytest.raises(EdgeError, match="not a harness entry"):
+        JobsEdge(ttl_s=0).effort_menu("or-qwen")  # an endpoint is never a task worker
+
+
 def test_the_status_is_cached_for_its_ttl_and_not_forever(monkeypatch):
     calls = []
     edge = JobsEdge(ttl_s=60)
@@ -194,7 +217,7 @@ def test_the_rest_of_the_dashboard_still_works_and_says_why_runs_are_off(rig):
     assert status == 200 and payload["tasks"] and payload["capabilities"]["read"] is True
     run = payload["capabilities"]["run"]
     assert run["available"] is False and run["state"] == "absent" and "claude plugin install llm-kit@plugins-kit" in run["reason"]
-    assert payload["capabilities"]["mutations"]["actions"] == ["queue", "retry", "recheck", "cancel"]
+    assert payload["capabilities"]["mutations"]["actions"] == ["queue", "retry", "recheck", "cancel", "newtask", "additem", "defer", "undefer", "queueall", "remove", "runoptions"]
     # Re-check is a task-folder action, not an llm-kit one, so it works.
     status, _h, body = rig.srv.post(rig.path("recheck"), {"expected_revision": folder_revision(rig.folder)})
     assert status == 200 and body["changed"] is False
