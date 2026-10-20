@@ -24,10 +24,24 @@ retryable, and the item simply shows Queue again).
 The schema stays 1: the new states are values of an existing text column, and
 code that predates ``removed`` selects runs only by explicit state lists, so it
 never meets one.
+
+Endpoint helper authority lives here too, in two additive tables (``IF NOT EXISTS``; a task-kit that
+predates them opens the database, checks only ``meta.schema`` and never reads them). ``helper_grants``
+holds, per run, the SHA-256 of the run-scoped token the server issued at dispatch and the helpers
+offered to that run (immutable from then on); ``helper_calls`` holds one row per call or refusal and
+is the budget the server counts. Nothing the worker can write decides either: a run directory is
+never read for them.
+
+Two single transactions carry the guarantee. A TERMINAL ``set_state`` writes the run's state, revokes
+its grant and records the event in one ``BEGIN IMMEDIATE``. ``reserve_helper_call`` checks the token,
+the revocation, the run's liveness, the offer, the request size and the per-helper budget and inserts
+the reservation in one ``BEGIN IMMEDIATE``, under the connection lock. A reservation is therefore
+either committed before the revocation or refused as revoked; none lands on a revoked grant.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sqlite3
@@ -94,11 +108,45 @@ CREATE TABLE IF NOT EXISTS events (
     detail TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS events_run ON events (run_id, id);
+CREATE TABLE IF NOT EXISTS helper_grants (
+    run_id TEXT PRIMARY KEY,
+    token_sha256 TEXT NOT NULL UNIQUE,
+    offers_json TEXT NOT NULL,
+    issued_at TEXT NOT NULL,
+    revoked_at TEXT
+);
+CREATE TABLE IF NOT EXISTS helper_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    helper TEXT NOT NULL,
+    state TEXT NOT NULL,
+    reserved_at TEXT NOT NULL,
+    ended_at TEXT,
+    entry TEXT,
+    status TEXT,
+    input_chars INTEGER NOT NULL DEFAULT 0,
+    output_chars INTEGER,
+    usage_json TEXT,
+    reported_cost_usd REAL,
+    detail TEXT
+);
+CREATE INDEX IF NOT EXISTS helper_calls_run ON helper_calls (run_id, helper, id);
 """
+
+# Helper call states. The first four consume the helper's budget (a reservation that never ended still
+# counts: the call may have reached the endpoint); a refusal does not.
+CALL_RESERVED, CALL_COMPLETED, CALL_FAILED, CALL_INTERRUPTED, CALL_REFUSED = (
+    "reserved", "completed", "failed", "interrupted", "refused")
+CALL_CONSUMING = (CALL_RESERVED, CALL_COMPLETED, CALL_FAILED, CALL_INTERRUPTED)
 
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def precise_now() -> str:
+    """A timestamp that orders two writes made within one second (the helper tables compare them)."""
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
 def folder_key(folder: str | Path) -> str:
@@ -131,6 +179,27 @@ class Run:
     @property
     def folder(self) -> str:
         return str(Path(self.project_root) / self.task_ref)
+
+
+@dataclass(frozen=True)
+class Reservation:
+    """A helper call the server authorized and recorded as ``reserved`` (its budget is spent)."""
+
+    call_id: int
+    run_id: str
+    helper: str
+    offer: dict
+
+
+@dataclass(frozen=True)
+class Refusal:
+    """A helper call refused. ``status`` is the HTTP status; ``call_id`` names the ``refused`` row (None: no run known)."""
+
+    status: int
+    code: str
+    message: str
+    call_id: int | None = None
+    offered: tuple[str, ...] = ()
 
 
 _COLUMNS = (
@@ -273,10 +342,27 @@ class RuntimeDB:
                 self._conn.execute("ROLLBACK")
                 raise
 
+    @contextlib.contextmanager
+    def _transaction(self):
+        """One ``BEGIN IMMEDIATE`` ... ``COMMIT`` (``ROLLBACK`` on any error); joins a transaction the caller already
+        holds. The caller holds ``self._lock``, so no other thread of this process writes in between."""
+        if self._conn.in_transaction:
+            yield
+            return
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield
+        except BaseException:
+            self._conn.execute("ROLLBACK")
+            raise
+        self._conn.execute("COMMIT")
+
     def set_state(self, run_id: str, state: str, *, code: str | None = None, detail: str | None = None,
                   run_dir: str | None = None, runner: proctree.ProcIdent | None = None) -> None:
+        """Move a run to ``state``. A TERMINAL state is one transaction: the run's update, the revocation of its
+        helper grant and the event, so a helper call can never be authorized after the run ended."""
         terminal = state in TERMINAL_STATES
-        with self._lock:
+        with self._lock, (self._transaction() if terminal else contextlib.nullcontext()):
             self._conn.execute(
                 "UPDATE runs SET state=?, code=COALESCE(?, code), detail=COALESCE(?, detail),"
                 " run_dir=COALESCE(?, run_dir), runner_pid=COALESCE(?, runner_pid), runner_ctime=COALESCE(?, runner_ctime),"
@@ -284,6 +370,8 @@ class RuntimeDB:
                 (state, code, detail, run_dir, runner.pid if runner else None, runner.create_time if runner else None,
                  1 if terminal else 0, now(), run_id),
             )
+            if terminal:
+                self._revoke_grant(run_id)
             self.add_event(run_id, state, (code + ": " if code else "") + (detail or ""))
 
     def transition(self, run_id: str, expected: tuple[str, ...], state: str, *, code: str | None = None,
@@ -297,10 +385,133 @@ class RuntimeDB:
             return True
 
     def release_to_queue(self, run_id: str) -> None:
-        with self._lock:
+        with self._lock, self._transaction():
             if self._conn.execute("UPDATE runs SET state=?, started_at=NULL WHERE id=? AND state=?",
                                   (QUEUED, run_id, STARTING)).rowcount:
+                self._revoke_grant(run_id)
                 self.add_event(run_id, "requeued", "the server stopped before it spawned a runner; the run is queued again")
+
+    # -- endpoint helper grants and calls -------------------------------------
+
+    def issue_helper_grant(self, run_id: str, token_sha256: str, offers: list[dict]) -> None:
+        """Record the helpers offered to an ACTIVE run and the hash of its token. The offers never change afterwards.
+
+        A run that was released to the queue and dispatched again gets a fresh token; the earlier one stops working.
+        """
+        with self._lock, self._transaction():
+            row = self._conn.execute("SELECT state FROM runs WHERE id=?", (run_id,)).fetchone()
+            if row is None or row[0] not in ACTIVE_STATES:
+                raise RuntimeError(f"run {run_id} is not active, so it gets no helper grant")
+            self._conn.execute(
+                "INSERT INTO helper_grants (run_id, token_sha256, offers_json, issued_at) VALUES (?,?,?,?) "
+                "ON CONFLICT(run_id) DO UPDATE SET token_sha256=excluded.token_sha256, offers_json=excluded.offers_json,"
+                " issued_at=excluded.issued_at, revoked_at=NULL",
+                (run_id, token_sha256, json.dumps(offers, sort_keys=True), precise_now()),
+            )
+
+    def _revoke_grant(self, run_id: str) -> None:
+        self._conn.execute("UPDATE helper_grants SET revoked_at=? WHERE run_id=? AND revoked_at IS NULL", (precise_now(), run_id))
+
+    def revoke_helper_grant(self, run_id: str) -> None:
+        with self._lock, self._transaction():
+            self._revoke_grant(run_id)
+
+    def helper_grant(self, run_id: str) -> dict | None:
+        """``{"offers", "issued_at", "revoked_at"}`` for a run's grant, or None when it was offered no helper."""
+        with self._lock:
+            row = self._conn.execute("SELECT offers_json, issued_at, revoked_at FROM helper_grants WHERE run_id=?", (run_id,)).fetchone()
+        return None if row is None else {"offers": json.loads(row[0]), "issued_at": row[1], "revoked_at": row[2]}
+
+    def _insert_call(self, run_id: str, helper: str, state: str, *, input_chars: int, detail: str | None = None) -> int:
+        cursor = self._conn.execute(
+            "INSERT INTO helper_calls (run_id, helper, state, reserved_at, input_chars, detail) VALUES (?,?,?,?,?,?)",
+            (run_id, helper, state, precise_now(), input_chars, detail),
+        )
+        return int(cursor.lastrowid)
+
+    def _helper_budget_used(self, run_id: str, helper: str) -> int:
+        """How many of ``helper``'s calls this run has spent (a reservation counts until proven otherwise)."""
+        return int(self._conn.execute(
+            f"SELECT COUNT(*) FROM helper_calls WHERE run_id=? AND helper=? AND state IN ({','.join('?' * len(CALL_CONSUMING))})",
+            (run_id, helper, *CALL_CONSUMING),
+        ).fetchone()[0])
+
+    def reserve_helper_call(self, token_sha256: str, helper: str, request_chars: int, *,
+                            problem: tuple[str, str] | None = None) -> "Reservation | Refusal":
+        """Authorize one helper call and record it, in ONE transaction under the connection lock.
+
+        In order: the token's grant (401), not revoked (410), the grant's run is still active (410), the helper
+        was offered to this run (404), the request is usable (422; ``problem`` is the ``(code, message)`` of an empty
+        or malformed body), its size (input plus system characters) is within the offer's limit (422), and the run
+        has calls left for this helper (429). Then the ``reserved``
+        row is inserted. Every refusal after the grant was found is recorded as a ``refused`` row. Because the
+        terminal ``set_state`` revokes in a transaction of its own under the same lock, a reservation is either
+        committed before the revocation or refused 410.
+        """
+        with self._lock, self._transaction():
+            grant = self._conn.execute(
+                "SELECT run_id, offers_json, revoked_at FROM helper_grants WHERE token_sha256=?", (token_sha256,)).fetchone()
+            if grant is None:
+                return Refusal(401, "unknown-token", "the run token is not known to this dashboard")
+            run_id, offers_json, revoked_at = grant
+            offers = json.loads(offers_json)
+
+            def refuse(status: int, code: str, message: str, offered: tuple[str, ...] = ()) -> Refusal:
+                call_id = self._insert_call(run_id, helper, CALL_REFUSED, input_chars=request_chars, detail=f"{code}: {message}")
+                return Refusal(status, code, message, call_id, offered)
+
+            if revoked_at is not None:
+                return refuse(410, "revoked", "this run has ended, so its helper access was revoked")
+            state = self._conn.execute("SELECT state FROM runs WHERE id=?", (run_id,)).fetchone()
+            if state is None or state[0] not in ACTIVE_STATES:
+                return refuse(410, "revoked", "this run is not active, so it may not call a helper")
+            offer = next((o for o in offers if o.get("name") == helper), None)
+            if offer is None:
+                names = tuple(o.get("name", "") for o in offers)
+                return refuse(404, "not-offered", f"helper {helper!r} is not offered to this run; offered: {', '.join(names) or 'none'}", names)
+            if problem is not None:
+                return refuse(422, problem[0], problem[1])
+            if request_chars > int(offer["max_input_chars"]):
+                return refuse(422, "too-large", f"input plus system is {request_chars} characters; this helper accepts {offer['max_input_chars']}")
+            used = self._helper_budget_used(run_id, helper)
+            if used >= int(offer["max_calls"]):
+                return refuse(429, "budget-spent", f"{used} of {offer['max_calls']} calls for {helper} are spent in this run")
+            return Reservation(self._insert_call(run_id, helper, CALL_RESERVED, input_chars=request_chars), run_id, helper, offer)
+
+    def end_helper_call(self, call_id: int, *, state: str, entry: str | None = None, status: str | None = None,
+                        output_chars: int | None = None, usage: dict | None = None, reported_cost_usd: float | None = None,
+                        detail: str | None = None) -> None:
+        """Record how a reserved call ended (``completed`` or ``failed``)."""
+        if state not in (CALL_COMPLETED, CALL_FAILED):
+            raise ValueError(f"a call ends completed or failed, not {state!r}")
+        with self._lock:
+            self._conn.execute(
+                "UPDATE helper_calls SET state=?, ended_at=?, entry=?, status=?, output_chars=?, usage_json=?, reported_cost_usd=?,"
+                " detail=COALESCE(?, detail) WHERE id=?",
+                (state, precise_now(), entry, status, output_chars, json.dumps(usage, sort_keys=True) if usage else None,
+                 reported_cost_usd, detail, call_id),
+            )
+
+    def helper_calls(self, run_id: str) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, helper, state, reserved_at, ended_at, entry, status, input_chars, output_chars, usage_json,"
+                " reported_cost_usd, detail FROM helper_calls WHERE run_id=? ORDER BY id", (run_id,)).fetchall()
+        keys = ("id", "helper", "state", "reserved_at", "ended_at", "entry", "status", "input_chars", "output_chars", "usage",
+                "reported_cost_usd", "detail")
+        out = []
+        for row in rows:
+            record = dict(zip(keys, row))
+            record["usage"] = json.loads(record["usage"]) if record["usage"] else None
+            out.append(record)
+        return out
+
+    def interrupt_open_calls(self) -> int:
+        """On server start: a call still ``reserved`` lost its server, so it is ``interrupted`` (and still counts)."""
+        with self._lock:
+            return self._conn.execute(
+                "UPDATE helper_calls SET state=?, ended_at=?, detail=COALESCE(detail, 'the server stopped while this call was in flight') "
+                "WHERE state=?", (CALL_INTERRUPTED, precise_now(), CALL_RESERVED)).rowcount
 
     # -- events -------------------------------------------------------------
 

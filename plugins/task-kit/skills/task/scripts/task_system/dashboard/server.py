@@ -15,6 +15,12 @@ construction, not configuration:
 
 Health is the one unauthenticated endpoint and reveals only the instance
 nonce, the code hash, the port and the busy-job count.
+
+The one route a run (not the browser) uses is ``POST /api/v1/helper-calls/<helper>``: it is
+authenticated ONLY by the run-scoped token header (``X-Task-Kit-Run-Token``), never by the
+dashboard token, the dashboard token authorizes nothing on it and the run token authorizes
+nothing else; a request that carries an ``Origin`` header is refused (a page cannot cause
+egress); its body cap is 4 MiB (``endpoint_helper.MAX_BODY_BYTES``). See ``endpoint_helper.py``.
 """
 
 from __future__ import annotations
@@ -33,7 +39,7 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from . import cli_check, proctree, redact, snapshot
+from . import cli_check, endpoint_helper, proctree, redact, snapshot
 from .codehash import DASHBOARD_PACKAGE, code_hash
 from .config import load_config
 from .inventory import Inventory, project_id_for, target_root
@@ -120,6 +126,7 @@ class DashboardServer:
         self._config_path = config_path
         self._cli_observer = cli_observer
         self.scheduler = scheduler
+        self.helper_broker: endpoint_helper.HelperBroker | None = None
         self.log_stream = log if log is not None else sys.stderr
         self.code_hash = code_hash(self.scripts_dir)
         self.assets = load_static(self.scripts_dir)
@@ -168,6 +175,11 @@ class DashboardServer:
                     log=self.log,
                     observer=observer,
                 )
+            # A helper call still reserved lost its server: it is interrupted (and still counts against the budget).
+            interrupted = self.scheduler.db.interrupt_open_calls()
+            if interrupted:
+                self.log(f"{interrupted} endpoint helper call(s) were in flight when the previous server stopped; they count as interrupted")
+            self.helper_broker = endpoint_helper.HelperBroker(db=self.scheduler.db, edge=self._edge, log=self.log)
             httpd = ThreadingHTTPServer((LOOPBACK, 0), _Handler)
             httpd.daemon_threads = True
             httpd.dashboard = self  # type: ignore[attr-defined]
@@ -335,13 +347,19 @@ class _Handler(BaseHTTPRequestHandler):
         supplied = self.headers.get(TOKEN_HEADER) or ""
         return hmac.compare_digest(supplied.encode("utf-8"), self.app.token.encode("utf-8"))
 
-    def _read_json_body(self) -> dict | None:
+    def _read_json_body(self, *, no_origin: bool = False, limit: int = MAX_BODY_BYTES) -> dict | None:
         """Validate a mutation's origin, type and size; return the JSON body.
 
-        Sends the error response itself and returns None when any gate fails.
+        Sends the error response itself and returns None when any gate fails. ``no_origin`` is the helper
+        route's gate: the caller is a run's process, never a page, so a request that carries ANY ``Origin``
+        is refused instead of one that lacks a same-origin one. ``limit`` is the body cap.
         """
         origin = self.headers.get("Origin")
-        if origin is None or origin.lower() not in self.app.allowed_origins():
+        if no_origin:
+            if origin is not None:
+                self._error(403, "bad_origin", "A helper call comes from a run, never from a page: a request with an Origin is refused.")
+                return None
+        elif origin is None or origin.lower() not in self.app.allowed_origins():
             self._error(403, "bad_origin", "A mutation needs a same-origin Origin header.")
             return None
         content_type = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
@@ -353,8 +371,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._error(411, "length_required", "A mutation needs a Content-Length.")
             return None
         length = int(length_header)
-        if length > MAX_BODY_BYTES:
-            self._error(413, "body_too_large", f"A mutation body is limited to {MAX_BODY_BYTES} bytes.")
+        if length > limit:
+            self._error(413, "body_too_large", f"A mutation body is limited to {limit} bytes.")
             return None
         raw = self.rfile.read(length) if length else b""
         try:
@@ -390,6 +408,10 @@ class _Handler(BaseHTTPRequestHandler):
                     return
                 self._json(200, self.app.health())
                 return
+            if route[:1] == [endpoint_helper.ROUTE]:
+                # Before the dashboard-token check on purpose: this route has its own, narrower credential.
+                self._helper_call(method, route)
+                return
             if not self._token_ok():
                 self._error(401, "unauthorized", "Missing or wrong token; reopen the dashboard with `task-kit`.")
                 return
@@ -400,6 +422,28 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception as exc:  # noqa: BLE001 -- a handler must answer, then log loudly
             self.app.log("unhandled error:\n" + traceback.format_exc())
             self._error(500, "internal", f"{type(exc).__name__}: {exc}")
+
+    def _helper_call(self, method: str, route: list[str]) -> None:
+        """POST /helper-calls/<helper>: a run asks an endpoint helper (token header only; see the module docstring)."""
+        if len(route) != 2 or not route[1]:
+            self._error(404, "not_found", "No such endpoint.")
+            return
+        if method != "POST":
+            self._error(405, "method_not_allowed", "Use POST.")
+            return
+        token = self.headers.get(endpoint_helper.RUN_TOKEN_HEADER) or ""
+        if not token:
+            self._error(401, "unauthorized", f"A helper call needs the run token in the {endpoint_helper.RUN_TOKEN_HEADER} header.")
+            return
+        body = self._read_json_body(no_origin=True, limit=endpoint_helper.MAX_BODY_BYTES)
+        if body is None:
+            return
+        broker = self.app.helper_broker
+        if broker is None:
+            self._error(503, "unavailable", "The dashboard is not ready for helper calls.")
+            return
+        status, payload = broker.call(token, route[1], body)
+        self._json(status, payload)
 
     def _static(self, segments: list[str]) -> None:
         if segments in ([""], ["index.html"]):
@@ -480,7 +524,10 @@ class _Handler(BaseHTTPRequestHandler):
             if method not in ("GET", "HEAD"):
                 self._error(405, "method_not_allowed", "Use GET.")
                 return
-            detail = {"run": snapshot.run_json(run, ""), "events": scheduler.db.events(run.id)}
+            grant = scheduler.db.helper_grant(run.id)
+            detail = {"run": snapshot.run_json(run, ""), "events": scheduler.db.events(run.id),
+                      "helpers_offered": grant["offers"] if grant else [],
+                      "helper_calls": scheduler.db.helper_calls(run.id)}
             try:
                 detail["ledger_events"] = scheduler.ledger_events(run)
             except EdgeError as exc:  # said, not hidden: the dashboard's own events above are still complete
@@ -554,7 +601,8 @@ class _Handler(BaseHTTPRequestHandler):
         key = folder_key(task.folder)
         held = key in scheduler.db.held_folders()
         active = any(folder_key(r.folder) == key for r in scheduler.db.runs(ACTIVE_STATES))
-        return snapshot.task_json(task, held=held, run_active=active)
+        helpers = scheduler.helper_names_by_checkout({task.checkout_id: task.project_root}).get(task.checkout_id)
+        return snapshot.task_json(task, held=held, run_active=active, helpers=helpers)
 
     def _fresh_task(self, checkout: str, task_id: str):
         self.app.inventory.invalidate()
@@ -722,13 +770,17 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             force = query.get("refresh", [""])[0] == "1"
             inventory = self.app.inventory.snapshot(force=force)
+            runtime = self.app.runtime_view()
+            if runtime is not None:
+                roots = {t.checkout_id: t.project_root for p in inventory.projects for t in p.tasks}
+                runtime["helpers_by_checkout"] = self.app.scheduler.helper_names_by_checkout(roots)
             payload = snapshot.dashboard_payload(
                 inventory,
                 project=query.get("project", [""])[0] or None,
                 query=query.get("q", [""])[0],
                 needs_only=query.get("needs", [""])[0] in ("1", "true"),
                 server=self.app.server_info(),
-                runtime=self.app.runtime_view(),
+                runtime=runtime,
             )
             self._json(200, payload)
             return

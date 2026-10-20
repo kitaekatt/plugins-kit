@@ -46,6 +46,7 @@ var S = {
   sel: null,           // selected item key "checkout|task|item"; its detail shows in the open task
   runOpen: {},         // run id -> true while its result and log are shown inline
   runLog: {},          // run id -> { text, cursor }
+  runHelpers: {},      // run id -> its endpoint helper calls (an array), or { error }
   notice: null,        // { kind, title, text } shown with the banners after an action
   detail: {},          // item key -> detail payload
   open: {},            // <details> open state by data-open key (all start closed)
@@ -243,6 +244,32 @@ function subagentsHtml() {
   else if (chk.state === 'unobserved' || chk.state === 'vacuous') extra = ' Not observed: ' + (chk.detail || 'the check did not conclude') + '.';
   return '<p class="hint" data-subagents="' + esc(sub.state || 'off') + '">Native sub-agents: ' + esc(sub.state || 'off') + ' (denied).' + esc(extra) + '</p>';
 }
+/* The endpoint helper line of the run controls: which helpers this repository's runs are offered (consent is by repository). */
+function helpersHtml(task) {
+  var names = (task && task.helpers) || [];
+  return '<p class="hint" data-helpers="' + (names.length ? 'offered' : 'none') + '">Endpoint helpers for this repository: ' +
+    (names.length ? esc(names.join(', ')) : 'none configured') + '.</p>';
+}
+/* A run's endpoint helper calls: helper, entry, outcome, duration, characters, tokens and cost when reported. */
+function helperCallsHtml(id) {
+  var calls = S.runHelpers[id];
+  if (!calls) return '';
+  var head = '<div class="sec-title">Endpoint helper calls</div>';
+  if (calls.error) return head + '<p class="hint">Unavailable: ' + esc(calls.error) + '</p>';
+  if (!calls.length) return '';
+  return head + calls.map(function (c) {
+    var t0 = Date.parse(c.reserved_at), t1 = Date.parse(c.ended_at), parts = [];
+    parts.push(c.helper + (c.entry ? ' (' + c.entry + ')' : ''));
+    parts.push(c.state === 'completed' ? 'answered' : c.state + (c.status && c.status !== c.state ? ': ' + c.status : ''));
+    if (!isNaN(t0) && !isNaN(t1)) parts.push(((t1 - t0) / 1000).toFixed(1) + ' s');
+    parts.push(c.input_chars + ' characters in' + (c.output_chars != null ? ', ' + c.output_chars + ' out' : ''));
+    var u = c.usage || {}, tok = u.total_tokens || ((u.input_tokens || 0) + (u.output_tokens || 0));
+    if (tok) parts.push(tok + ' tokens');
+    if (c.reported_cost_usd != null) parts.push('$' + Number(c.reported_cost_usd).toFixed(4));
+    return '<div class="mini-run" data-helper-call="' + esc(String(c.id)) + '"><span class="t">' + esc(parts.join(' - ')) + '</span>' +
+      (c.detail ? '<span class="m">' + esc(c.detail.split('\n')[0]) + '</span>' : '') + '</div>';
+  }).join('');
+}
 function isLiveRun(r) { return !!r && (r.state === 'queued' || r.state === 'starting' || r.state === 'running' || r.state === 'cancelling'); }
 /* Cancel run: live whenever the server backs it and the run can still be cancelled; a run already
  * cancelling shows a disabled "Cancelling" so a second click cannot be mistaken for progress. With no
@@ -309,6 +336,14 @@ function fetchRunLog(id) {
     if (S.runOpen[id] && (first || r.text)) render();
   }, function (e) { S.runLog[id] = { text: '(log unavailable: ' + e.message + ')', cursor: 0 }; if (S.runOpen[id]) render(); });
 }
+/* The endpoint helper calls of a run (GET /api/v1/runs/<id>): the server's own record, never the worker's. */
+function fetchRunHelpers(id) {
+  return api('/api/v1/runs/' + encodeURIComponent(id)).then(function (d) {
+    var calls = d.helper_calls || [], old = S.runHelpers[id];
+    S.runHelpers[id] = calls;
+    if (S.runOpen[id] && (!old || old.error || JSON.stringify(old) !== JSON.stringify(calls))) render();
+  }, function (e) { S.runHelpers[id] = { error: e.message }; if (S.runOpen[id]) render(); });
+}
 function fetchDetail(k) {
   var p = splitIKey(k);
   return api('/api/v1/items/' + encodeURIComponent(p.project) + '/' + encodeURIComponent(p.task) + '/' + encodeURIComponent(p.item))
@@ -333,7 +368,7 @@ function poll() {
     } else {
       renderStatus();
     }
-    Object.keys(S.runOpen).forEach(function (id) { if (S.runOpen[id]) fetchRunLog(id); });
+    Object.keys(S.runOpen).forEach(function (id) { if (S.runOpen[id]) { fetchRunLog(id); fetchRunHelpers(id); } });
   }, function (e) {
     S.conn = e.auth ? 'auth' : 'offline'; S.connDetail = e.message;
     renderBanners(); renderStatus();
@@ -703,7 +738,7 @@ function runDetailHtml(run) {
   if (run.state === 'blocked' || run.state === 'crashed') h += '<span class="hint">Resolve it in Claude Code, then Re-check the item.</span>';
   if (isLiveRun(run)) h += cancelControl(run, 'sm danger');
   if (run.state === 'cancelled') h += '<span class="hint">Stopped on request. Partial work may be in the shared tree; look at it before you Retry.</span>';
-  return h + '</div><div class="sec-title">Run log</div>' + logPre(run.id) + '</div>';
+  return h + '</div>' + helperCallsHtml(run.id) + '<div class="sec-title">Run log</div>' + logPre(run.id) + '</div>';
 }
 function updatesHtml(task) {
   return task.updates.length ? task.updates.map(function (u) {
@@ -790,7 +825,7 @@ function itemDetailHtml(task, it) {
   if (ui === 'blocked') left += recheckButton({ item: it.id, project: task.project, checkout: task.checkout, task: task.id }, '');
   left += '</div>';
   if (S.resolve[key]) left += detail && detail.handoff ? cmdBox(detail.handoff) : (task.handoff ? cmdBox(task.handoff) : '');
-  left += '<div class="sec-title">Run controls</div><div class="card">' + runOptionsHtml(task, it, live) + subagentsHtml() +
+  left += '<div class="sec-title">Run controls</div><div class="card">' + runOptionsHtml(task, it, live) + subagentsHtml() + helpersHtml(task) +
     '<div class="acts">' + cancelControl(live ? it.run : null, 'sm danger') + '</div>' +
     '<p class="hint">' + (canDo('runoptions')
       ? 'Worker, effort and time limit belong to one queue entry; what you leave empty uses the machine defaults from task.local.yaml. '
@@ -802,7 +837,7 @@ function itemDetailHtml(task, it) {
       esc(waitingText(it.run) ? ' -- ' + waitingText(it.run) : '') +
       '</dd><dt>Result</dt><dd>' + esc(it.run.code || '') + (it.run.detail ? ' - ' + esc(it.run.detail) : '') + '</dd></dl>' +
       '<div class="acts"><button type="button" class="btn sm" data-action="togglerun" data-key="' + esc(it.run.id) + '" aria-expanded="' + !!S.runOpen[it.run.id] + '">' + ic('eye') +
-      (S.runOpen[it.run.id] ? 'Hide run log' : 'Run log') + '</button></div>' + (S.runOpen[it.run.id] ? logPre(it.run.id) : '') + '</div>';
+      (S.runOpen[it.run.id] ? 'Hide run log' : 'Run log') + '</button></div>' + (S.runOpen[it.run.id] ? helperCallsHtml(it.run.id) + logPre(it.run.id) : '') + '</div>';
   }
   right += '<div class="sec-title">plan.md section</div>';
   if (!detail) right += '<p class="muted fs13">Loading...</p>';
@@ -1059,7 +1094,7 @@ function toggleTask(el) {
 function toggleRun(id) {
   S.runOpen[id] = !S.runOpen[id];
   render();
-  if (S.runOpen[id]) fetchRunLog(id);
+  if (S.runOpen[id]) { fetchRunLog(id); fetchRunHelpers(id); }
 }
 var ACTIONS = {
   queue: doQueue,

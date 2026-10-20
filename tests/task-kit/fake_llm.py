@@ -11,7 +11,10 @@ branch-switch, commit, hang, lingering, exit-1, attempt-timeout, slow-done
 (sleeps ``sleep_s`` from behavior.json, then behaves as ``done``), hang-after-done
 (finishes the item and writes the acceptance receipt, then hangs), env-dump (records the
 environment variables the dashboard sets for a run and the job's options in ``env-dump.json``
-beside the job file, then behaves as ``done``).
+beside the job file, then behaves as ``done``), helper-call (runs the helper command the system
+prompt prints, once per entry of ``calls`` in behavior.json -- each ``{"helper", "input", "system"}`` --
+with the run's own environment, records exit status, stdout and stderr in ``helper-calls.json`` beside
+the job file, then behaves as ``done``).
 
 ``fake_llm.py --cancel <store> <run-id> <reason>`` plays ``llm-kit jobs cancel``
 against the stand-in ledger ``fake-ledger.json`` beside the store: exit 0 and a
@@ -123,6 +126,29 @@ if BEHAVIOR == "env-dump":
     (RUN_DIR / "env-dump.json").write_text(json.dumps({
         "env": {name: os.environ.get(name) for name in ("TASK_KIT_AGENT_DEPTH", "CLAUDE_CODE_DISABLE_WORKFLOWS")},
         "options": JOB["options"]}), encoding="utf-8")
+    finish_item()
+    sys.exit(run_contract("All done.\n" + result_block("done")))
+def helper_command(name: str) -> list[str]:
+    """The command the prompt prints for asking a helper, with ``<name>`` replaced: what a diligent agent would run."""
+    import shlex
+
+    tail = " <name> <<'EOF'"
+    for line in JOB["prompt"]["system"].splitlines():
+        if line.startswith("Run: ") and line.endswith(tail):
+            return shlex.split(line[len("Run: "):-len(tail)]) + [name]
+    raise SystemExit("the prompt prints no helper command")
+
+
+if BEHAVIOR == "helper-call":
+    behavior = json.loads((RUN_DIR / "behavior.json").read_text(encoding="utf-8"))
+    results = []
+    for call in behavior.get("calls", []):
+        argv = helper_command(call["helper"])
+        if call.get("system") is not None:
+            argv += ["--system", call["system"]]
+        proc = subprocess.run(argv, input=call.get("input", ""), text=True, capture_output=True)
+        results.append({"exit": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr})
+    (RUN_DIR / "helper-calls.json").write_text(json.dumps(results), encoding="utf-8")
     finish_item()
     sys.exit(run_contract("All done.\n" + result_block("done")))
 if BEHAVIOR == "done":

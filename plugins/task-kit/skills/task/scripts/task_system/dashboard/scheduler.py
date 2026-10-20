@@ -126,7 +126,7 @@ from ..types import HAND_OFF
 from ..validate import validate_ref
 from . import authoring
 from . import findings as findings_mod
-from . import cli_check, floor, proctree, redact, runfiles
+from . import cli_check, endpoint_helper, floor, proctree, redact, repo_identity, runfiles, vcs
 from .blocker import BlockOutcome, concise, record_block, record_blocks
 from .config import DashboardConfig, DashboardConfigError, load_config
 from .inventory import project_id_for
@@ -178,6 +178,7 @@ RUNNER_GRACE_S = 5.0
 # server writes it off (the runner is a fresh Python process; the server may also have just restarted).
 ADOPT_GRACE_S = 20.0
 USER_CANCEL_REASON = "cancelled from the dashboard"
+REPO_KEY_TTL_S = 30.0
 LOG_TAIL_BYTES = 64 * 1024
 # Reasons that mean "someone changed the task on purpose": drop the entry, change nothing.
 SOURCE_CHANGED = {"item-missing", "item-duplicate", "item-not-available", "task-not-active", "no-items-block"}
@@ -339,6 +340,7 @@ class Scheduler:
         self._wake = threading.Event()
         self._thread: threading.Thread | None = None
         self._reported: dict[str, str] = {}
+        self._repo_keys: dict[str, tuple[float, str | None]] = {}
 
     # -- configuration and capabilities --------------------------------------
 
@@ -363,6 +365,33 @@ class Scheduler:
             "subagents": {"claude": {"state": "off", "reason": "denied by the dashboard floor",
                                      "cli_check": self.cli_check_summary()}},
         }
+
+    def helper_names_by_checkout(self, roots: dict[str, str]) -> dict[str, list[str]]:
+        """``{checkout id: names of the endpoint helpers offered there}`` for ``roots`` (checkout id -> working root).
+
+        Empty while no helper is configured. A checkout whose origin cannot be read is offered none (a run there
+        is refused with the reason, see ``translate._helper_offers``); the repository key is cached briefly
+        because the page asks on every poll.
+        """
+        try:
+            config = self.config()
+        except DashboardConfigError:
+            return {}
+        if not config.endpoint_helpers:
+            return {}
+        now = time.monotonic()
+        out: dict[str, list[str]] = {}
+        for checkout, root in roots.items():
+            cached = self._repo_keys.get(root)
+            if cached is None or now - cached[0] > REPO_KEY_TTL_S:
+                try:
+                    key: str | None = repo_identity.repo_key_for(Path(root))
+                except vcs.GitError as exc:  # git cannot read this checkout's origin: it is offered nothing; say so once
+                    key = None
+                    self._report_once(f"repo-key:{root}", f"cannot read the origin of {root}: {exc}")
+                cached = self._repo_keys[root] = (now, key)
+            out[checkout] = [o["name"] for o in endpoint_helper.offers_for(config, cached[1])] if cached[1] else []
+        return out
 
     def cli_check_summary(self) -> dict:
         """What the per-binary denial observation knows right now, as JSON (``state`` is never missing)."""
@@ -484,11 +513,12 @@ class Scheduler:
 
     # -- run options -----------------------------------------------------------
 
-    def validate_options(self, body: dict, config: DashboardConfig | None = None) -> dict:
+    def validate_options(self, body: dict, config: DashboardConfig | None = None, project_root: str | Path | None = None) -> dict:
         """The run options a client sent, checked as a REQUEST: any problem is a 422 and nothing is written.
 
         A bad option describes a run, not the task, so it never blocks the task (translation-time
-        option reasons end the run instead).
+        option reasons end the run instead). ``project_root`` is the checkout the run will execute in, so the
+        endpoint helpers offered there are checked too.
         """
         if not isinstance(body, dict):
             raise QueueRefused(422, "bad-options", "options must be an object")
@@ -498,7 +528,7 @@ class Scheduler:
                 config = self.config()
             except DashboardConfigError as exc:
                 raise QueueRefused(422, "config", str(exc)) from exc
-        reasons = option_reasons(RunOptions(**options), config, self.edge)
+        reasons = option_reasons(RunOptions(**options), config, self.edge, project_root)
         if not reasons:
             ignored = self._cli_ignored_reason(RunOptions(**options).resolved(config))
             if ignored is not None:
@@ -555,7 +585,7 @@ class Scheduler:
             config = self.config()
         except DashboardConfigError as exc:
             raise QueueRefused(422, "config", str(exc)) from exc
-        options_in = self.validate_options(body, config)
+        options_in = self.validate_options(body, config, project_root)
         run_id, result = self._admit(project_root, task_ref, item_id, options_in, config, current, project_id)
         if result.reasons:
             blocking = [r for r in result.reasons if r.blocking]
@@ -619,7 +649,7 @@ class Scheduler:
                 config = self.config()
             except DashboardConfigError as exc:
                 raise QueueRefused(422, "config", str(exc)) from exc
-            options_in = self.validate_options(body, config)
+            options_in = self.validate_options(body, config, project_root)
             read = read_task_items(folder, HAND_OFF)
             candidates = [i for i in sort_items(read.items) if i.state == "available"
                           and self.db.live_for(project_id, task_ref, i.id) is None]
@@ -716,7 +746,7 @@ class Scheduler:
             if run is None or run.state != QUEUED:
                 raise QueueRefused(409, "not-queued", f"{item_id} has no queued entry (it is "
                                    f"{run.state if run else 'not queued'}); options can be changed only while it waits")
-            options_in = self.validate_options(options)
+            options_in = self.validate_options(options, None, project_root)
             if not self.db.set_options(run.id, options_in):
                 raise QueueRefused(409, "not-queued", f"run {run.id} started while its options were being saved")
             return self.db.get(run.id)  # type: ignore[return-value]
@@ -788,7 +818,7 @@ class Scheduler:
             if not details:
                 raise QueueRefused(422, "details-required", "an item that is queued needs details: they are the worker's instructions")
             self._require_edge()
-            options_in = self.validate_options(options or {})
+            options_in = self.validate_options(options or {}, None, project_root)
         folder = Path(project_root) / task_ref
         added: dict = {}
 
@@ -1220,6 +1250,13 @@ class Scheduler:
             return
         start = spec.start
         store = run_dir / runfiles.LEDGER_FILE
+        # A run offered endpoint helpers gets ONE run-scoped token: the worker holds it, the database holds its
+        # hash and the offers, and the terminal state of the run revokes it (RuntimeDB.set_state).
+        run_env = dict(floor.RUN_ENV)
+        token = endpoint_helper.new_token() if spec.helper_offers else None
+        if token is not None:
+            run_env.update(endpoint_helper.grant_env(token, self.root))
+            redact.register_secret(token)
         runner_spec = {
             "schema": 1, "run_id": run.id, "project_root": spec.project_root, "folder": spec.folder,
             "task_ref": spec.task_ref, "item_id": spec.item_id, "lock_path": str(self.mutator.lock_path),
@@ -1231,13 +1268,18 @@ class Scheduler:
                 "argv": self.edge.runner_argv(job_file, store, spec.timeout_s, run.id),
                 "cancel_argv": self.edge.cancel_argv(store, run.id, runfiles.REASON_PLACEHOLDER),
                 "deadline_s": spec.timeout_s + RUNNER_SLACK_S, "grace_s": RUNNER_GRACE_S,
-                "env": dict(floor.RUN_ENV),
+                "env": run_env,
             },
             "subagents": {"state": "off", "reason": "denied by the dashboard floor", "deny_tools": list(spec.deny_tools)},
             "cli_check": self.cli_check_summary() if spec.worker == "claude" else None,
         }
-        runfiles.write_json(run_dir / runfiles.SPEC_FILE, runner_spec)
+        if token is None:
+            runfiles.write_json(run_dir / runfiles.SPEC_FILE, runner_spec)
+        else:
+            endpoint_helper.write_private_json(run_dir / runfiles.SPEC_FILE, runner_spec)  # it carries the run's token
         self.db.set_state(run.id, STARTING, run_dir=str(run_dir))
+        if token is not None:
+            self.db.issue_helper_grant(run.id, endpoint_helper.hash_token(token), [dict(o) for o in spec.helper_offers])
         self._spawn([self._python, str(RUNNER_SCRIPT), str(run_dir)], run_dir)
         stage.spawned = True
         ident = self._await_runner(run_dir)

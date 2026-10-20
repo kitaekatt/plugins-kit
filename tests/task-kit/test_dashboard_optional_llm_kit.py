@@ -262,6 +262,44 @@ def test_a_copy_without_the_cancel_verb_reads_as_too_old(real_llm_kit, monkeypat
     assert status.state == TOO_OLD and "jobs cancel" in status.detail
 
 
+# -- the tool-less completion an endpoint helper makes --------------------------------------------
+
+
+@pytest.mark.parametrize("module, symbol", [
+    ("llm_kit.dispatch.declaration", "run"),
+    ("llm_kit.dispatch.declaration", "RunRequest"),
+    ("llm_kit.dispatch.declaration", "NoUsableRoutingTarget"),
+    ("llm_kit.completion.types", "BackendOptions"),
+])
+def test_a_copy_without_the_tool_less_completion_symbols_reads_as_too_old(real_llm_kit, monkeypatch, module, symbol):
+    """RED: drop the probe lines for these symbols and an endpoint helper call would fail with a bare AttributeError."""
+    assert JobsEdge(ttl_s=0).status().state == OK
+    monkeypatch.delattr(importlib.import_module(module), symbol)
+    status = JobsEdge(ttl_s=0).status()
+    assert status.state == TOO_OLD and symbol in status.detail
+    assert "claude plugin update llm-kit@plugins-kit" in status.detail
+
+
+def test_an_entry_resolves_for_the_checkout_that_asks(real_llm_kit, tmp_path):
+    seen = []
+    from llm_kit.registry import models
+
+    original = models.discover_model_entries
+
+    def spy(**kw):
+        seen.append(kw)
+        return original(**kw)
+
+    models.discover_model_entries = spy
+    try:
+        edge = JobsEdge(ttl_s=0)
+        assert edge.entry("or-qwen", project_root=tmp_path).kind == "transport"
+        assert edge.entry("or-qwen").kind == "transport"
+    finally:
+        models.discover_model_entries = original
+    assert seen == [{"project_root": str(tmp_path)}, {}]
+
+
 def test_the_cancel_command_is_the_verb_the_ledger_owner_documents(real_llm_kit):
     argv = JobsEdge(ttl_s=0).cancel_argv(Path("/x/ledger.sqlite3"), "run-1", "why")
     assert argv[1:] == ["-m", "llm_kit.cli", "jobs", "cancel", "run-1", "--store", "/x/ledger.sqlite3", "--reason", "why"]

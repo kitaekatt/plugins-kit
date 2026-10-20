@@ -15,7 +15,9 @@ The newest things relied on are the ledger's ``cancelled`` job state with
 ``JobStore.mark_cancelled``, and the ``llm-kit jobs cancel`` verb that records it
 (run cancellation and crash recovery close a ledger through that verb) and
 ``llm_kit.registry.effort.harness_effort_order`` (the efforts a harness accepts, for the run options a
-person chooses; present since llm-kit 0.1.2), on top of
+person chooses; present since llm-kit 0.1.2), and the tool-less completion an endpoint helper makes
+(``llm_kit.dispatch.declaration.run`` with ``RunRequest`` and ``NoUsableRoutingTarget``, and
+``llm_kit.completion.types.BackendOptions``; present since llm-kit 0.1.5), on top of
 a job option mapping that carries ``disallowed_tools`` (the Claude deny floor)
 through ``Job``. Neither failure
 state falls back to anything: the autonomous controls report the message and
@@ -58,6 +60,13 @@ SUPPORTED_HARNESSES = {"claude": "claude-cli", "codex": "codex-cli"}
 
 class EdgeError(RuntimeError):
     """llm-kit is present but a call into it failed (a registry that will not load, say)."""
+
+
+#: The outcomes a tool-less run reports (``llm_kit.dispatch.declaration``'s statuses, plus ``unroutable`` for the floor).
+TRANSPORT_COMPLETED = "completed"
+TRANSPORT_UNROUTABLE = "unroutable"
+#: Outcomes an agent must not be able to cause, and a text-only model must not have: the model gets no tool.
+TEXT_ONLY_GUARANTEES = ("filesystem-write", "shell-exec", "subagent-spawn")
 
 
 class _ArgvCaptured(Exception):
@@ -106,6 +115,24 @@ class LedgerView:
         if not states:
             return "empty"
         return states[0] if len(set(states)) == 1 else "mixed"
+
+
+@dataclass(frozen=True)
+class TransportOutcome:
+    """How one tool-less completion ended: ``status`` is ``completed``, ``failed``, ``attempt-limit`` or ``unroutable``.
+
+    ``attempts`` are llm-kit's per-attempt records (entry, halt, error, outcome); ``floor`` is the
+    no-usable-routing-target report (every declared entry and why it was not used) when nothing could run.
+    """
+
+    status: str
+    entry: str | None
+    text: str
+    attempts: tuple[dict, ...]
+    usage: dict
+    reported_cost_usd: float | None
+    detail: str = ""
+    floor: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -182,6 +209,10 @@ class JobsEdge:
                 getattr(owner, name)
             _require_cancel_verb(cli_jobs)
             getattr(importlib.import_module("llm_kit.registry.effort"), "harness_effort_order")
+            declaration = importlib.import_module("llm_kit.dispatch.declaration")
+            for name in ("run", "RunRequest", "NoUsableRoutingTarget"):
+                getattr(declaration, name)
+            getattr(importlib.import_module("llm_kit.completion.types"), "BackendOptions")
         except (ImportError, AttributeError, TypeError, ValueError) as exc:
             return EdgeStatus(TOO_OLD, TOO_OLD_MESSAGE.format(why=f"{type(exc).__name__}: {exc}"))
         return EdgeStatus(OK, "llm-kit is available")
@@ -219,12 +250,18 @@ class JobsEdge:
         except Exception as exc:  # noqa: BLE001
             raise EdgeError(f"the events of {run_id} in {store} could not be read: {type(exc).__name__}: {exc}") from exc
 
-    def entry(self, name: str) -> EntryInfo | None:
-        """The registry entry called ``name``, or None when no such entry exists."""
+    def entry(self, name: str, project_root: Path | str | None = None) -> EntryInfo | None:
+        """The registry entry called ``name``, or None when no such entry exists.
+
+        ``project_root`` names the checkout whose project-level registry layer applies (a helper's models are
+        resolved for the run's own checkout).
+        """
         registry = importlib.import_module("llm_kit.registry.models")
         endpoints = importlib.import_module("llm_kit.registry.model_endpoints")
         try:
-            found = registry.discover_model_entries().get(name)
+            entries = registry.discover_model_entries() if project_root is None else registry.discover_model_entries(
+                project_root=str(project_root))
+            found = entries.get(name)
         except Exception as exc:  # noqa: BLE001 -- llm-kit raises several registry error types
             raise EdgeError(f"llm-kit could not load its model registry: {type(exc).__name__}: {exc}") from exc
         if found is None:
@@ -290,6 +327,50 @@ class JobsEdge:
         except Exception as exc:  # noqa: BLE001 -- llm-kit raises several error types (registry, executable lookup)
             raise EdgeError(f"llm-kit could not build the worker argv for {entry!r}: {type(exc).__name__}: {exc}") from exc
         raise EdgeError("llm-kit's Claude backend did not reach its runner")
+
+    def complete_transport(self, models: list[str], *, system: str, prompt: str, timeout_s: float, project_root: Path | str,
+                           backend_factory=None, entries=None, reachability_cache=None) -> TransportOutcome:
+        """One tool-less completion over ``models`` (registry entry ids, tried in order), for an endpoint helper.
+
+        Runs llm-kit's ``declaration.run`` with the three guarantees (no file write, no shell, no sub-agent), so an
+        entry that could use a tool is armed text-only or not selected, and a transport entry (no tools at all) is
+        admitted as is. ``max_attempts`` is the number of models. Nothing here raises for an unusable declaration
+        of entries: the floor is returned as ``unroutable`` with every entry's disposition. ``backend_factory``,
+        ``entries`` and ``reachability_cache`` exist for the in-process test only.
+        """
+        try:
+            declaration = importlib.import_module("llm_kit.dispatch.declaration")
+            types = importlib.import_module("llm_kit.completion.types")
+        except ImportError as exc:
+            raise EdgeError(f"llm-kit could not be loaded for an endpoint helper call: {type(exc).__name__}: {exc}") from exc
+        attempts: list[dict] = []
+        options = types.BackendOptions(timeout_s=float(timeout_s), client_id="task-kit:endpoint-helper", log_prefix="[endpoint-helper]")
+        request = declaration.RunRequest(system=system, prompt=prompt, options=options)
+        extra: dict = {}
+        if backend_factory is not None:
+            extra["backend_factory"] = backend_factory
+        if entries is not None:
+            extra["entries"] = entries
+        if reachability_cache is not None:
+            extra["reachability_cache"] = reachability_cache
+        try:
+            result = declaration.run(
+                list(models), request, project_root=str(project_root), requirements={"guarantees": list(TEXT_ONLY_GUARANTEES)},
+                max_attempts=len(models), on_attempt=lambda attempt: attempts.append(attempt.to_json()), **extra)
+        except declaration.NoUsableRoutingTarget as exc:
+            return TransportOutcome(
+                status=TRANSPORT_UNROUTABLE, entry=None, text="", attempts=tuple(attempts), usage={}, reported_cost_usd=None,
+                detail=str(exc), floor=exc.to_json())
+        except (ValueError, RuntimeError, OSError) as exc:  # a declaration llm-kit refuses, an unarmable guarantee, a registry that will not load
+            raise EdgeError(f"llm-kit refused the helper call: {type(exc).__name__}: {exc}") from exc
+        response = result.response
+        usage = {}
+        if response is not None:
+            usage = {name: getattr(response, name) for name in ("input_tokens", "output_tokens", "total_tokens", "cache_hit_tokens")
+                     if getattr(response, name, None)}
+        return TransportOutcome(
+            status=result.status, entry=result.entry, text=getattr(response, "text", "") or "", attempts=tuple(attempts),
+            usage=usage, reported_cost_usd=getattr(response, "reported_cost_usd", None), detail=result.detail or "")
 
     def validate_job_file(self, path: Path) -> None:
         """Load ``path`` through llm-kit's own loader; raises on anything it refuses."""

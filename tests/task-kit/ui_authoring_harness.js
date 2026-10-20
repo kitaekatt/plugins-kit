@@ -60,6 +60,7 @@ function fakeFetch(url, opts) {
     return Promise.resolve({ status: 200, ok: true, json: () => Promise.resolve({}) });
   }
   const body = url.indexOf('/log') > 0 ? { text: '', cursor: 0 } :
+    /^\/api\/v1\/runs\/[^/]+$/.test(url) ? { helper_calls: sc.helperCalls || [] } :
     url.indexOf('/api/v1/items/') === 0 ? sc.detail : payload;
   return Promise.resolve({ status: 200, ok: true, json: () => Promise.resolve(body) });
 }
@@ -208,6 +209,12 @@ const sent = (from) => requests.slice(from).filter((r) => r.method !== 'GET');
   click({ 'data-action': 'remove', 'data-key': sc.queuedRun });
   await flush();
   report.removeSent = sent(at);
+
+  // ---- A run's endpoint helper calls are listed in its details, from the server's own record
+  click({ 'data-action': 'togglerun', 'data-key': sc.queuedRun });
+  await flush(); await flush();
+  report.runHelperCalls = els.main.innerHTML;
+  click({ 'data-action': 'togglerun', 'data-key': sc.queuedRun });
 
   // ---- A task a session holds, and a task a run works: authoring is drawn off with the reason
   const task = payload.tasks.filter((t) => t.key === sc.taskKey)[0];

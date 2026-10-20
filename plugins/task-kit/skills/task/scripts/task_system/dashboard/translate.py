@@ -32,8 +32,9 @@ from typing import Callable, Mapping
 import yaml
 
 from ..validate import validate_ref
+from . import endpoint_helper
 from . import findings as findings_mod
-from . import floor, plan_sections, vcs
+from . import floor, plan_sections, repo_identity, vcs
 from .config import DashboardConfig
 from .inventory import project_id_for
 from .mutation import raw_items, stored_status
@@ -106,6 +107,7 @@ class JobSpec:
     contract_argv: tuple[str, ...]
     network: bool = False
     deny_tools: tuple[str, ...] = ()  # the tool-level denials this run's disallowed_tools value carries
+    helper_offers: tuple[dict, ...] = ()  # the endpoint helpers offered to this run (the server issues the grant from these)
 
 
 @dataclass(frozen=True)
@@ -125,7 +127,8 @@ class Translation:
 # -- prompts ----------------------------------------------------------------
 
 
-def _system_prompt(*, root: str, folder: str, task_ref: str, item_id: str, revision: str) -> str:
+def _system_prompt(*, root: str, folder: str, task_ref: str, item_id: str, revision: str,
+                   helpers: str = "") -> str:
     return "\n".join([
         "You are an unattended worker completing exactly ONE task item in a shared checkout.",
         f"Project root: {root}",
@@ -148,6 +151,7 @@ def _system_prompt(*, root: str, folder: str, task_ref: str, item_id: str, revis
         "- If you cannot finish (a decision is needed, access is missing, the instructions are unclear or conflict),",
         "  stop and report blocked instead of guessing. A person will resolve it in Claude Code and a fresh run follows.",
         "",
+        *([helpers, ""] if helpers else []),
         RESULT_DESCRIPTION,
     ])
 
@@ -254,6 +258,7 @@ def translate(
     # 5. worker, model entry and effort
     adapter = _worker_reasons(options, edge, reasons)
     _effort_reasons(options, edge, reasons, adapter)
+    offers = _helper_offers(config, edge, project_root, reasons)
 
     # 6. paths
     script = Path(accept_script)
@@ -293,7 +298,8 @@ def translate(
     job = {
         "id": f"{_slug(task_ref)}--{item_id}--{run_id}",
         "prompt": {
-            "system": _system_prompt(root=str(project_root), folder=str(folder), task_ref=task_ref, item_id=item_id, revision=revision),
+            "system": _system_prompt(root=str(project_root), folder=str(folder), task_ref=task_ref, item_id=item_id, revision=revision,
+                                     helpers=endpoint_helper.prompt_section(offers, python=py)),
             "user": _user_prompt(item=item, heading=section.heading or item_id, body=section.body, folder=str(folder), revision=revision),
         },
         "models": [options.entry],
@@ -309,7 +315,7 @@ def translate(
         task_ref=task_ref, folder=str(folder), item_id=item_id, item_title=str(item.get("title", item_id)),
         worker=options.worker, entry=options.entry or "", timeout_s=float(options.timeout_s),
         document=document, accept=accept, start=start, contract_argv=contract, network=options.network,
-        deny_tools=deny_tools,
+        deny_tools=deny_tools, helper_offers=tuple(offers),
     )
     return Translation(reasons=(), spec=spec)
 
@@ -331,7 +337,7 @@ def worker_job_options(adapter: str | None, effort: str | None, deny_tools: tupl
 # Reason codes that describe a RUN's options, not the task: a run whose options are refused ends
 # `failed` (bad-options) and the task is left alone; they never block the task.
 OPTION_REASON_CODES = frozenset({"bad-worker", "codex-floor-unproved", "model-entry", "bad-effort", "timeout",
-                                 "cli-deny-ignored"})
+                                 "cli-deny-ignored", "endpoint-helper"})
 
 
 def _effort_reasons(options: RunOptions, edge, reasons: list[Reason], adapter: str | None) -> None:
@@ -353,18 +359,51 @@ def _timeout_reasons(options: RunOptions, reasons: list[Reason]) -> None:
         reasons.append(Reason("timeout", "the run timeout must be positive"))
 
 
-def option_reasons(options: RunOptions, config: DashboardConfig, edge) -> list[Reason]:
-    """Everything wrong with a run's OPTIONS alone (worker, entry, effort, timeout), as typed reasons.
+def option_reasons(options: RunOptions, config: DashboardConfig, edge, project_root: Path | str | None = None) -> list[Reason]:
+    """Everything wrong with a run's OPTIONS alone (worker, entry, effort, timeout, offered helpers), as typed reasons.
 
     The same checks :func:`translate` makes, so a request can be refused for them before anything is
     queued or written. Needs the edge to be available (it resolves the entry and its effort menu).
+    ``project_root`` is the checkout the run executes in; without it the helpers offered there are not checked.
     """
     resolved = options.resolved(config)
     reasons: list[Reason] = []
     adapter = _worker_reasons(resolved, edge, reasons)
     _effort_reasons(resolved, edge, reasons, adapter)
     _timeout_reasons(resolved, reasons)
+    if project_root is not None:
+        _helper_offers(config, edge, Path(project_root), reasons)
     return reasons
+
+
+def _helper_offers(config: DashboardConfig, edge, project_root: Path, reasons: list[Reason]) -> list[dict]:
+    """The endpoint helpers offered to the checkout at ``project_root``; a reason for each offer a run cannot honor.
+
+    Consent is by repository identity (``repo_identity.repo_key_for``), never by display name. A helper's models
+    must be TRANSPORT entries (text-only endpoints): a harness entry is an agent, and an agent is a worker, never
+    a helper. A model the registry does not know is not refused here; the call that names it ends ``unroutable``
+    and says why.
+    """
+    if not config.endpoint_helpers:
+        return []
+    try:
+        key = repo_identity.repo_key_for(project_root)
+    except vcs.GitError as exc:
+        reasons.append(Reason("endpoint-helper", f"the checkout's origin remote cannot be read, so no endpoint helper can be offered: {exc}"))
+        return []
+    offers = endpoint_helper.offers_for(config, key)
+    if not offers or not edge.status().available:
+        return offers
+    for offer in offers:
+        for model in offer["models"]:
+            found = edge.entry(model, project_root=project_root)  # a registry that will not load raises (EdgeError)
+            if found is not None and found.kind != "transport":
+                reasons.append(Reason(
+                    "endpoint-helper",
+                    f"endpoint helper {offer['name']!r} names model entry {model!r}, a {found.kind} entry"
+                    + (f" ({found.harness})" if found.harness else "")
+                    + "; a helper's models must be transport entries (text-only endpoints), because an agent is a worker, never a helper"))
+    return offers
 
 
 def _worker_reasons(options: RunOptions, edge, reasons: list[Reason]) -> str | None:

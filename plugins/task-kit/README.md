@@ -51,6 +51,11 @@ are denied in its Claude command, and `task-kit` itself refuses inside a run (ex
 Claude Code binary waits for a one-time check that the binary honors those denials; a binary seen to ignore them
 refuses Claude runs. These are tripwires against a careless worker, not confinement.
 
+A run can ask a configured text-only model (an endpoint helper) a question through the dashboard server, for the
+repositories that consent to it in `dashboard.endpoint_helpers`. The server owns what is offered, each helper's call
+budget and the run's token, which it revokes when the run ends; a helper is never a worker, and every call is listed in
+the run's details. Nothing is offered unless configured (`skills/task/references/dashboard.md`).
+
 The dashboard runs beside the task system: the `task` verbs and the Claude Code
 workflow behave the same whether or not it is running. A refresh never edits a
 task folder; the dashboard writes one only to record a block, a Re-check, a New task,

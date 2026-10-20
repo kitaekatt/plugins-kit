@@ -53,13 +53,48 @@ A run that timed out or ended without a verdict is shown with Retry, which is al
   descends from a live runner of the dashboard it targets; a dashboard on another `--data-dir` is not refused, so
   task-kit's own tests can run inside a worker.
 
+## Endpoint helpers
+
+A run can ask a text-only model (a helper: no tools, no file access, never a worker) a question when you configure one
+for the repository. Nothing is offered by default. In `~/.claude/task.local.yaml`:
+
+```yaml
+dashboard:
+  endpoint_helpers:
+    local-qwen:                      # name: lowercase letters, digits and hyphens; not claude or codex
+      models: [qwen-local]           # registry entries, tried in order; each must be a transport (text-only) entry
+      repositories:                  # consent: the repositories a run may use it in
+        - https://github.com/org/repo      # any spelling of the origin URL
+        - /path/to/checkout-with-no-origin # an absolute path, for a checkout that has no origin
+      purpose: "summarize long logs"       # optional, one line, 200 characters at most
+      max_calls: 20                  # per run, per helper (default 20)
+      timeout_s: 300                 # per call (default 300)
+      max_input_chars: 100000        # input plus system text together, at most 1000000 (default 100000)
+```
+
+- Consent is by repository identity (the normalized `origin` URL, or the real path without an origin), never by the
+  displayed project name. A helper is offered only to runs in a listed repository, and the run's prompt then names it
+  and the command that asks it; the page shows "Endpoint helpers for this repository" in the run controls.
+- A helper whose models include an agent (a harness entry) is refused: Queue answers 422 `bad-options` with reason
+  `endpoint-helper`. A model the registry does not know fails at the call (`unroutable`, with every entry's reason).
+- The dashboard server, not the run, decides what is offered, how many calls remain and whether the run is still live.
+  The run holds one token, issued when it starts and revoked when it ends; a call after that is refused (410), a spent
+  budget is 429, an unlisted helper 404, an oversize or empty excerpt 422. The command exits 0 when answered, 2 when
+  refused, 3 when no usable endpoint remains and 1 when the call failed or the dashboard cannot be reached.
+- Every call and refusal is recorded; the run's details list them (helper, entry, outcome, time, characters, tokens and
+  cost when reported). The raw excerpts and answers stay in the run directory (`helpers/`) and are not served. A helper
+  call is a paid call to a model you configured; send only what the question needs and never a credential.
+- This stops a run from widening its own offers or budgets. It does not stop a process that calls the model library
+  directly or reads an endpoint key from your data directory.
+
 ## Recovery and settings
 
 Runs survive the dashboard server: a restarted server adopts the live runner from its run directory and settles a finished one from its receipt, never starting a second runner. A runner that vanished is crash inspection: its leftover processes are stopped, its ledger is closed as cancelled, and the task is blocked with the run shown `Crashed`; nothing is retried or reported complete. A receipt that cannot be read blocks and never counts as success. The ordered recovery table is documented at the top of scripts/task_system/dashboard/scheduler.py.
 
 Machine settings live under `dashboard:` in `~/.claude/task.local.yaml`: `max_parallel_projects` (checkouts running at
 once, default 2), `default_timeout_s` (default 7200), `default_worker` (claude or codex, default claude),
-`claude_entry` (default opus), `codex_entry` (default sol), `effort` (default unset), `codex_network` (default false).
+`claude_entry` (default opus), `codex_entry` (default sol), `effort` (default unset), `codex_network` (default false),
+`endpoint_helpers` (default none; see Endpoint helpers).
 
 ## Related
 

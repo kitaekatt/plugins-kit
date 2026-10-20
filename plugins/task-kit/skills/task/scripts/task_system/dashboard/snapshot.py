@@ -116,9 +116,10 @@ def _item_json(item: ItemView) -> dict:
     }
 
 
-def task_json(task: TaskEntry, *, held: bool = False, run_active: bool = False) -> dict:
+def task_json(task: TaskEntry, *, held: bool = False, run_active: bool = False, helpers: list[str] | None = None) -> dict:
     """One task row. ``held`` (a Claude Code session works the task) and ``run_active`` (a dashboard run does)
-    say why authoring is off for it, so the page disables the control with the reason instead of inviting a 409."""
+    say why authoring is off for it, so the page disables the control with the reason instead of inviting a 409.
+    ``helpers`` names the endpoint helpers configured for the task's repository (what a run there is offered)."""
     core = task.core
     return {
         "key": f"{task.checkout_id}|{task.id}",
@@ -131,6 +132,7 @@ def task_json(task: TaskEntry, *, held: bool = False, run_active: bool = False) 
         "revision": core.revision,
         "held": held,
         "run_active": run_active,
+        "helpers": list(helpers or []),
         "location": task.location,
         "title": core.title or task.stub,
         "classification": core.classification,
@@ -269,13 +271,14 @@ def dashboard_payload(
     closed_seen: dict[str, int] = {}
     held_keys = (runtime or {}).get("held") or set()
     active_keys = (runtime or {}).get("run_active") or set()
+    helper_names = (runtime or {}).get("helpers_by_checkout") or {}
     task_rows = []
     hidden_closed = 0
     for task in sorted(
         tasks, key=lambda t: t.core.last_activity or "", reverse=True
     ):
         key = os.path.normcase(os.path.realpath(task.folder))
-        row = task_json(task, held=key in held_keys, run_active=key in active_keys)
+        row = task_json(task, held=key in held_keys, run_active=key in active_keys, helpers=helper_names.get(task.checkout_id))
         if row["section"] == "closed":
             seen = closed_seen.get(task.project_id, 0)
             if seen >= CLOSED_TASKS_SHOWN:
@@ -318,7 +321,7 @@ def dashboard_payload(
                 item_row["run"] = latest.get((task_row["checkout"], task_row["id"], item_row["id"]))
         revision = hashlib.sha256(
             json.dumps([inventory.revision, runtime["capabilities"], runs_json, recent_json,
-                        sorted(held_keys), sorted(active_keys)], sort_keys=True).encode("utf-8")
+                        sorted(held_keys), sorted(active_keys), helper_names], sort_keys=True).encode("utf-8")
         ).hexdigest()[:16]
 
     return {

@@ -198,7 +198,7 @@ class Running:
 
 # The variables a dashboard run's command inherits. A subprocess a test builds for the task-kit launcher must not
 # carry them (a worker running these very tests has them set), so such environments are built through clean_env().
-RUN_MARKERS = ("TASK_KIT_AGENT_DEPTH", "TASK_KIT_RUN_TOKEN")
+RUN_MARKERS = ("TASK_KIT_AGENT_DEPTH", "TASK_KIT_RUN_TOKEN", "TASK_KIT_DASHBOARD_ROOT")
 
 
 def clean_env(extra: dict | None = None, *, base: dict | None = None) -> dict:
@@ -260,13 +260,17 @@ class FakeEdge:
     """
 
     def __init__(self, *, state: str = "ok", detail: str = "", behavior: str = "done", entries: dict | None = None,
-                 invalid_job_file: str | None = None, sleep_s: float = 3.0) -> None:
+                 invalid_job_file: str | None = None, sleep_s: float = 3.0, behavior_args: dict | None = None) -> None:
         from task_system.dashboard.jobs_edge import EntryInfo
 
         self.state = state
         self.detail = detail or ("llm-kit is available" if state == "ok" else f"llm-kit is {state}")
         self.behavior = behavior
+        self.behavior_args = dict(behavior_args or {})  # extra keys for fake_llm's behavior.json (a helper-call script, say)
         self.sleep_s = sleep_s
+        self.transport_calls: list[dict] = []  # every complete_transport call the server made
+        self.transport_gate = None  # a callable run inside complete_transport (a test holds a call open with it)
+        self.transport_answer = lambda prompt: f"echo: {prompt}"
         self.invalid_job_file = invalid_job_file
         self.entries = entries if entries is not None else {
             "opus": EntryInfo(id="opus", kind="harness", harness="claude", model="opus"),
@@ -283,8 +287,28 @@ class FakeEdge:
 
         return EdgeStatus(self.state, self.detail)
 
-    def entry(self, name):
+    def entry(self, name, project_root=None):
         return self.entries.get(name)
+
+    def complete_transport(self, models, *, system, prompt, timeout_s, project_root, **_kw):
+        """A scripted tool-less completion: the first TRANSPORT entry of ``models`` answers, none -> ``unroutable``."""
+        from task_system.dashboard.jobs_edge import TransportOutcome
+
+        self.transport_calls.append({"models": list(models), "system": system, "prompt": prompt, "timeout_s": timeout_s,
+                                     "project_root": str(project_root)})
+        if self.transport_gate is not None:
+            self.transport_gate()
+        usable = [m for m in models if self.entries.get(m) is not None and self.entries[m].kind == "transport"]
+        if not usable:
+            floor = {"kind": "no-usable-routing-target", "caller": "process",
+                     "dispositions": [{"entry": m, "usable": False, "reason": "not a registry entry" if m not in self.entries else "not a transport entry"}
+                                      for m in models]}
+            return TransportOutcome(status="unroutable", entry=None, text="", attempts=(), usage={}, reported_cost_usd=None,
+                                    detail=f"no usable routing target in [{', '.join(models)}]", floor=floor)
+        return TransportOutcome(
+            status="completed", entry=usable[0], text=self.transport_answer(prompt),
+            attempts=({"entry": usable[0], "number": 1, "outcome": "completed"},),
+            usage={"input_tokens": 3, "output_tokens": 2}, reported_cost_usd=0.0001)
 
     EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
@@ -318,7 +342,7 @@ class FakeEdge:
 
     def runner_argv(self, job_file: Path, store: Path, timeout_s: float, run_id: str) -> list[str]:
         (Path(job_file).parent / "behavior.json").write_text(
-            json.dumps({"behavior": self.behavior, "sleep_s": self.sleep_s}), encoding="utf-8")
+            json.dumps({"behavior": self.behavior, "sleep_s": self.sleep_s, **self.behavior_args}), encoding="utf-8")
         return [sys.executable, str(FAKE_LLM), str(job_file), str(store), run_id]
 
     def cancel_argv(self, store: Path, run_id: str, reason: str) -> list[str]:
