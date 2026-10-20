@@ -144,6 +144,7 @@ def test_the_handshake_registers_a_hold_keyed_by_session_and_a_live_run_gets_one
     assert [h["session"] for h in holds] == ["sess-123"] and holds[0]["pid"] == session.pid
     lines = err.getvalue().splitlines()
     assert len(lines) == 1 and live.id in lines[0] and "keeps running" in lines[0] and "/task work proceeds unchanged" in lines[0]
+    assert "Cancel run" in lines[0] and "later release" not in lines[0]
     # The run was not touched: the harness proceeds and the dashboard yields next time.
     assert rig.srv.scheduler.db.get(live.id).state == runtime.RUNNING
     psutil.Process(live.runner_pid).kill()

@@ -114,7 +114,7 @@ capability_skill:
       operation: task.py work <ref> [--init] [--root PATH]  (preceded by the dashboard handshake, task_hold.py <ref> --session "${CLAUDE_SESSION_ID}")
       steps:
         - n: 1
-          action: "Run the dashboard handshake first, once: `task_hold.py <ref> --session \"${CLAUDE_SESSION_ID}\"`, invoked exactly like task.py (same venv Python, `scripts/task_hold.py`, same project root). It tells a running task-kit dashboard that this session is working that task folder, so the dashboard stops starting autonomous runs on it while the session lives. With no dashboard running it prints nothing. Otherwise it prints at most ONE line on stderr, never anything on stdout, and always exits 0: relay a printed line to the user in one sentence, then continue to step 2 either way. A hold never gates the work verb, and a dashboard run already live on the same task keeps running (the line names its run id)."
+          action: "Run the dashboard handshake first, once: `task_hold.py <ref> --session \"${CLAUDE_SESSION_ID}\"`, invoked exactly like task.py (same venv Python, `scripts/task_hold.py`, same project root). It never fails and never blocks the work verb. If it printed a line on stderr, relay it to the user in one sentence; then continue to step 2 either way. What it does and prints: references/dashboard.md, \"The /task work handshake\"."
         - n: 2
           action: "Run the work verb. It validates first: ANY error OR warning blocks (exit non-zero, findings on stderr, initialization block not emitted). A remote ref (tmp + other host) cannot be worked locally. If no folder exists at the ref, work ERRORS -- treat that as a mistyped path (run list) rather than a task to create; --init opts into scaffolding the folder and working it, and is for a ref you meant to promote."
         - n: 3
@@ -226,7 +226,7 @@ capability_skill:
           action: "Run `bash \"${CLAUDE_PLUGIN_ROOT}/bin/task-kit\"` (what typing `task-kit` in a terminal does once bootstrap has put it on PATH). It starts the dashboard server, or reuses the running one, restarts it when its code changed, and opens the user's browser. Report the command's exit status and its printed URL, or its stderr when it fails."
       gotchas:
         - "The dashboard contract (what Queue, Retry, Re-check, Cancel and the authoring actions do and refuse, eligibility, holds, the start order and what a queued entry waits for, the denied tools and the nested-run refusal, `dashboard:` settings in `~/.claude/task.local.yaml`) is in references/dashboard.md: load it before answering a question about the dashboard beyond launching it."
-        - "The launcher exits 0 ok, 1 error, 3 `status`: not running, 4 server up but the browser could not be opened (the URL is still printed), 5 refused because jobs are running, 6 refused inside a dashboard run. `--no-open` (or TASK_KIT_NO_OPEN=1) skips the browser. Relay any launcher message as printed: a corrupt server record, or something else answering on the recorded port, stops it with a message naming the file; do not delete the record or kill a process to get past it."
+        - "The launcher's exit codes and `--no-open` (or TASK_KIT_NO_OPEN=1) are in references/dashboard.md, \"Launcher exit codes\". Relay any launcher message as printed; do not delete the server record or kill a process to get past a refusal."
     - id: show
       keywords: [show task, task details, read fields, inspect]
       user_objective: "Render one task's selected task.yaml fields, cheaply."

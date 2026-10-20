@@ -37,12 +37,13 @@ import subprocess
 import tempfile
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from . import floor, proctree
+from . import floor, proctree, redact
 
 OBSERVED, IGNORED, VACUOUS, UNOBSERVED = "observed", "ignored", "vacuous", "unobserved"
 
@@ -148,6 +149,12 @@ class StreamRun:
     init_tools: list[str] | None = None
     result: dict | None = None
     problem: str | None = None  # timeout | exited | closed | spawn: ...
+    stderr_tail: str = ""  # the CLI's last non-empty stderr line (redacted, at most 300 characters), when it said anything
+
+    def reason(self) -> str:
+        """``problem`` plus the CLI's own words, for a message a person reads: ``exited; stderr: Not logged in``."""
+        base = self.problem or "none seen"
+        return f"{base}; stderr: {self.stderr_tail}" if self.problem and self.stderr_tail else base
 
 
 def tool_names(init_event: dict) -> list[str]:
@@ -326,7 +333,7 @@ class CliObserver:
             actual = self._stream(probe_argv(actual_argv), INIT_PROMPT, scratch, until="init", timeout_s=self.init_timeout_s)
             for label, run in (("baseline", baseline), ("actual", actual)):
                 if run.init_tools is None:
-                    return DenyObservation(binary, UNOBSERVED, detail=f"no init event in the {label} run ({run.problem or 'none seen'})",
+                    return DenyObservation(binary, UNOBSERVED, detail=f"no init event in the {label} run ({run.reason()})",
                                            at=_now())
             base_tools, actual_tools = set(baseline.init_tools), set(actual.init_tools)  # type: ignore[arg-type]
             if not (base_tools & set(floor.SUBAGENT_TOOL_NAMES)):
@@ -361,7 +368,8 @@ class CliObserver:
         return claude_version(executable, self.version_timeout_s)
 
     def _stream(self, argv: list[str], prompt: str, cwd: Path, *, until: str, timeout_s: float) -> StreamRun:
-        return run_stream(argv, prompt, cwd, until=until, timeout_s=timeout_s, env=floor.run_environment(), closed=self._closed.is_set)
+        return run_stream(argv, prompt, cwd, until=until, timeout_s=timeout_s, env=floor.run_environment(),
+                          stderr_path=cwd / f"stderr-{uuid.uuid4().hex[:8]}.log", closed=self._closed.is_set)
 
 
 def claude_version(executable: str, timeout_s: float = VERSION_TIMEOUT_S) -> str:
@@ -379,20 +387,33 @@ def identify_binary(key: ClaudeKey, executable: str | None = None) -> ClaudeBina
     return ClaudeBinary(key, key.realpath, _digest(key.realpath), claude_version(executable or key.realpath))
 
 
+STDERR_TAIL_CHARS = 300
+
+
+def _stderr_tail(path: Path) -> str:
+    text = Path(path).read_text(encoding="utf-8", errors="replace")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return redact.redact(lines[-1])[:STDERR_TAIL_CHARS] if lines else ""
+
+
 def run_stream(argv: list[str], prompt: str, cwd: Path, *, until: str, timeout_s: float, env: dict,
-               closed: Callable[[], bool] = lambda: False) -> StreamRun:
+               stderr_path: Path, closed: Callable[[], bool] = lambda: False) -> StreamRun:
     """Run ``argv`` with ``prompt`` on stdin, collecting stream-json events.
 
     ``until`` is ``init`` (stop at the CLI's system/init event), ``result`` (stop at the first result event) or
     ``exit`` (read to the end of the stream: a run whose sub-agents report after the first result). The process
     tree is always stopped before this returns. ``problem`` says why a run ended early: ``timeout``, ``closed``,
     ``exited`` (the stream ended before the event asked for), or ``spawn: ...``.
+
+    The CLI's stderr goes to ``stderr_path`` (a file the caller keeps as evidence, never DEVNULL: a CLI that
+    refuses to start says why only there). When the run ended early, ``stderr_tail`` holds its last line.
     """
     run = StreamRun()
     try:
-        proc = subprocess.Popen(argv, cwd=str(cwd), env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace",
-                                start_new_session=(os.name == "posix"))
+        with open(stderr_path, "wb") as stderr_file:
+            proc = subprocess.Popen(argv, cwd=str(cwd), env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                    stderr=stderr_file, text=True, encoding="utf-8", errors="replace",
+                                    start_new_session=(os.name == "posix"))
     except OSError as exc:
         run.problem = f"spawn: {exc}"
         return run
@@ -447,6 +468,8 @@ def run_stream(argv: list[str], prompt: str, cwd: Path, *, until: str, timeout_s
                     break
     finally:
         _stop(proc)
+    if run.problem:
+        run.stderr_tail = _stderr_tail(stderr_path)
     return run
 
 

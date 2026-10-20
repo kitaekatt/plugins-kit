@@ -58,6 +58,9 @@ repositories that consent to it in `dashboard.endpoint_helpers`. The server owns
 budget and the run's token, which it revokes when the run ends; a helper is never a worker, and every call is listed in
 the run's details. Nothing is offered unless configured (`skills/task/references/dashboard.md`).
 
+Platforms: exercised on macOS. The Linux and Windows code paths are covered by unit
+tests with faked platform facts and have not been run on those systems.
+
 The dashboard runs beside the task system: the `task` verbs and the Claude Code
 workflow behave the same whether or not it is running. A refresh never edits a
 task folder; the dashboard writes one only to record a block, a Re-check, a New task,

@@ -43,7 +43,12 @@ Lock order (outermost first; nothing ever takes one while holding a later one)
 -----------------------------------------------------------------------------
 1. ``_queue_lock``: Queue, Queue all and every authoring write.
 2. ``_tick_lock``: a tick (reconcile + start), Cancel, Remove, Save run options and every authoring
-   write, so no run starts between an authoring check and its write.
+   write, so no run starts between an authoring check and its write. Under it a reconcile only
+   CLASSIFIES: a run whose runner is gone is CLAIMED (``_recovering``, guarded by its own small lock)
+   and finished AFTER the lock is released, because finishing stops processes and runs the ledger's
+   cancel command (up to ``runfiles.CANCEL_COMMAND_TIMEOUT_S``), none of which may hold up Cancel.
+   Cancel, Remove, Save run options and authoring therefore wait on this lock for at most one start
+   (translation plus the 20 s runner handshake) and a reconcile pass's file reads and cheap transitions.
 3. the mutator's cross-process file lock (``TaskMutator``; waits up to 10 s).
 4. ``_hold_gate``: a plain lock held only for a short check-and-commit: ``precommit`` plus the
    per-file compare + ``os.replace`` of a task-folder write, hold registration, and the start's hold
@@ -129,7 +134,7 @@ from ..types import HAND_OFF
 from ..validate import validate_ref
 from . import authoring
 from . import findings as findings_mod
-from . import cli_check, endpoint_helper, floor, proctree, redact, repo_identity, runfiles, subagents, vcs
+from . import cli_check, endpoint_helper, floor, proctree, procspawn, redact, repo_identity, runfiles, subagents, vcs
 from .blocker import BlockOutcome, concise, record_block, record_blocks
 from .config import DashboardConfig, DashboardConfigError, load_config
 from .inventory import project_id_for
@@ -310,6 +315,10 @@ def job_timeout(snapshot: dict | None) -> str | None:
     return None
 
 
+class _CannotMarkCrashed(RuntimeError):
+    """Finishing a run failed and so did recording that failure; the run keeps its claim and stays active."""
+
+
 class Scheduler:
     def __init__(
         self,
@@ -323,6 +332,7 @@ class Scheduler:
         spawn: Callable[[list[str], Path], None] | None = None,
         log: Callable[[str], None] = lambda message: None,
         observer: "cli_check.CliObserver | None" = None,
+        fatal: Callable[[str], None] | None = None,
     ) -> None:
         self.root = Path(root)
         self.db = db
@@ -334,6 +344,13 @@ class Scheduler:
         self._log = log
         self.observer = observer
         self._tick_lock = threading.Lock()
+        # Runs claimed for finishing (their runner is gone). In memory only: a claim never outlives the server, so the
+        # next server's ``adopt`` considers a run again. Guarded by its own lock, taken inside ``_tick_lock``.
+        self._recovering: set[str] = set()
+        self._recovering_lock = threading.Lock()
+        # Called with a message when a run could not even be marked crashed: the server must stop so the next one
+        # re-adopts the run. Without it the scheduler raises (see ``_stop_for_unrecordable``).
+        self._fatal = fatal
         self._queue_lock = threading.Lock()
         self._hold_gate = threading.Lock()
         # Per task folder: bumped (under the gate) by every hold registration, so a Re-check can tell
@@ -998,18 +1015,40 @@ class Scheduler:
         directory (rows 0-22 of the table in the module docstring) and either adopted, settled, or
         blocked. Nothing is requeued unless no run directory exists, and no directory is deleted.
         """
-        with self._tick_lock:
-            self._reconcile_active()
+        claimed: list[Run] = []
+        try:
+            with self._tick_lock:
+                self._reconcile_active(claimed)
+        finally:
+            self._finish_all(claimed)
 
     def tick(self) -> None:
-        with self._tick_lock:
-            self._reconcile_active()
-            self._start_queued()
+        claimed: list[Run] = []
+        try:
+            with self._tick_lock:
+                self._reconcile_active(claimed)
+                self._start_queued()
+        finally:
+            # A claim is only cleared by its finish, so a pass that fails after claiming (a start that raises, a
+            # reconcile that fails midway) must still finish every run it claimed; the failure itself still propagates.
+            self._finish_all(claimed)
 
-    def _reconcile_active(self) -> None:
+    def _reconcile_active(self, claimed: list[Run]) -> None:
+        """Under ``_tick_lock``: handle the cheap rows in place and CLAIM every run whose runner is gone.
+
+        Appends each claimed run to ``claimed`` as it is claimed, so the caller finishes them (after releasing the
+        lock) even if this pass fails part way. A run already claimed by an earlier pass is skipped, so a slow finish
+        is never started twice.
+        """
         for run in self.db.runs(ACTIVE_STATES):
+            with self._recovering_lock:
+                if run.id in self._recovering:
+                    continue
             try:
-                self._reconcile(run)
+                if self._reconcile(run):
+                    with self._recovering_lock:
+                        self._recovering.add(run.id)
+                    claimed.append(run)
             except Exception:  # noqa: BLE001 -- a run the server cannot read is a crash-inspection block, never a loop
                 trace = traceback.format_exc()
                 self._log(f"reconciling run {run.id} failed:\n{trace}")
@@ -1017,6 +1056,55 @@ class Scheduler:
                     self._inspection_block(run, "reconcile-error", f"the server could not reconcile this run: {trace.strip().splitlines()[-1]}")
                 except Exception:  # noqa: BLE001
                     self._log(f"run {run.id} could not even be marked crashed:\n" + traceback.format_exc())
+
+    def _finish_all(self, claimed: list[Run]) -> None:
+        """Outside ``_tick_lock``: finish every claimed run, attempting each one, THEN stop the server for any that failed.
+
+        A run whose finish failed AND whose failure could not be recorded keeps its claim (no later tick retries it)
+        and is collected; the first such failure never strands the runs claimed after it.
+        """
+        unrecordable: list[tuple[Run, BaseException]] = []
+        finished = False
+        for run in claimed:
+            try:
+                self._finish(run)
+                finished = True
+            except _CannotMarkCrashed as exc:
+                unrecordable.append((run, exc.__cause__ or exc))
+        if finished:
+            self.wake()  # a freed checkout starts on the next tick, not after the interval
+        if unrecordable:
+            self._stop_for_unrecordable(unrecordable)
+
+    def _finish(self, run: Run) -> None:
+        """Rows 1-10 and 15-22 for a claimed run: stop what it left, close its ledger, settle or block it.
+
+        An exception becomes a ``reconcile-error`` inspection block and the claim is released. If that conversion
+        raises too, the claim is KEPT and :class:`_CannotMarkCrashed` is raised: the run stays active, nothing retries it.
+        """
+        try:
+            self._finish_body(run)
+        except Exception:  # noqa: BLE001 -- a run the server cannot finish is a crash-inspection block, never a loop
+            trace = traceback.format_exc()
+            self._log(f"finishing run {run.id} failed:\n{trace}")
+            try:
+                self._inspection_block(run, "reconcile-error", f"the server could not reconcile this run: {trace.strip().splitlines()[-1]}")
+            except Exception as exc:  # noqa: BLE001
+                self._log(f"run {run.id} could not even be marked crashed:\n" + traceback.format_exc())
+                raise _CannotMarkCrashed(run.id) from exc
+        with self._recovering_lock:
+            self._recovering.discard(run.id)
+
+    def _stop_for_unrecordable(self, failures: list[tuple[Run, BaseException]]) -> None:
+        names = ", ".join(run.id for run, _exc in failures)
+        message = (f"run(s) {names} could not be finished or marked crashed ({type(failures[0][1]).__name__}: {failures[0][1]}); "
+                   "they stay active and are not retried by this server. Stopping the server so the next one re-adopts them")
+        self._log(message)
+        self._stop.set()
+        self._wake.set()
+        if self._fatal is None:
+            raise RuntimeError(message)
+        self._fatal(message)
 
     # -- starting -------------------------------------------------------------
 
@@ -1332,23 +1420,48 @@ class Scheduler:
 
     @staticmethod
     def _default_spawn(argv: list[str], run_dir: Path) -> None:
-        flags: dict = {}
-        if sys.platform == "win32":
-            flags["creationflags"] = (getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-                                      | getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        else:
-            flags["start_new_session"] = True
+        flags = procspawn.detached(windows=procspawn.WINDOWS)
         with open(run_dir / "spawn.log", "ab") as log:
             subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=log, stderr=log, close_fds=True, **flags)
 
     # -- reconciling --------------------------------------------------------------
     # The state table is in the module docstring; the row numbers in the comments below are its rows.
 
-    def _reconcile(self, run: Run) -> None:
+    def _reconcile(self, run: Run) -> bool:
+        """Under ``_tick_lock``: classify ``run``. The cheap rows are handled here; True means CLAIM it for ``_finish``.
+
+        Cheap rows (a requeue, adopting a live runner, a runner that has not recorded itself yet) read a few files and
+        make one database transition. Every run whose runner is gone -- with a result.json (rows 1-10) or without one
+        (rows 15-22) -- is claimed instead, because finishing it stops processes and runs the ledger's cancel command.
+        """
         if not run.run_dir:
             if run.state == STARTING:
                 self.db.release_to_queue(run.id)  # row 0: no directory was ever recorded, so nothing existed
-            return
+            return False
+        run_dir = Path(run.run_dir)
+        status, result = runfiles.read_json(run_dir / runfiles.RESULT_FILE)
+        if status != runfiles.MISSING:  # rows 1-10: the runner wrote a result (or something that is not one)
+            return True
+        ident = self._runner_ident(run, run_dir)
+        if ident is None:
+            if run.state == STARTING:
+                self._starting_without_runner(run, run_dir)  # rows 13-14
+                return False
+            return True  # rows 15-22
+        if proctree.live(ident) is not None:  # rows 11-12
+            if run.state == STARTING:
+                cancelled = (run_dir / runfiles.CANCEL_FILE).exists()
+                self.db.transition(run.id, (STARTING,), CANCELLING if cancelled else RUNNING, runner=ident,
+                                   code="cancelling" if cancelled else None,
+                                   detail="adopted the runner after a server restart")
+            return False
+        status, result = runfiles.read_json(run_dir / runfiles.RESULT_FILE)
+        if status != runfiles.MISSING:  # it finished between the two looks
+            return False  # settled by the next tick, from the top of this method
+        return True  # rows 15-22
+
+    def _finish_body(self, run: Run) -> None:
+        """What finishing a claimed run does, from the files as they are now (outside ``_tick_lock``)."""
         run_dir = Path(run.run_dir)
         status, result = runfiles.read_json(run_dir / runfiles.RESULT_FILE)
         if status == runfiles.OK and isinstance(result.get("outcome"), str):
@@ -1359,23 +1472,6 @@ class Scheduler:
             self._inspection_block(run, "result-unreadable", f"the runner's result.json cannot be used ({why}); the shared tree "
                                    "may hold partial work to inspect in the harness")
             return
-        ident = self._runner_ident(run, run_dir)
-        if ident is None:
-            if run.state == STARTING:
-                self._starting_without_runner(run, run_dir)  # rows 13-14
-            else:
-                self._runner_vanished(run, run_dir)
-            return
-        if proctree.live(ident) is not None:  # rows 11-12
-            if run.state == STARTING:
-                cancelled = (run_dir / runfiles.CANCEL_FILE).exists()
-                self.db.transition(run.id, (STARTING,), CANCELLING if cancelled else RUNNING, runner=ident,
-                                   code="cancelling" if cancelled else None,
-                                   detail="adopted the runner after a server restart")
-            return
-        status, result = runfiles.read_json(run_dir / runfiles.RESULT_FILE)
-        if status != runfiles.MISSING:  # it finished between the two looks
-            return  # settled by the next tick, from the top of this method
         self._runner_vanished(run, run_dir)  # rows 15-22
 
     @staticmethod

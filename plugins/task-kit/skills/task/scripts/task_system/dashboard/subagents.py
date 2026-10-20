@@ -328,16 +328,38 @@ def check_helper_command(ev: Evidence) -> Check:
     return Check(INCONCLUSIVE, "the orchestrator did not run the helper client's --check", informational=True)
 
 
+def _leg_ended_early(probe_dir: Path, leg: str) -> str:
+    """``"<problem>; stderr: <last line>"`` when the leg's CLI run ended early, else ``""`` (read from ``leg.json``)."""
+    path = Path(probe_dir) / leg / "leg.json"
+    status, data = runfiles.read_json(path)
+    if status == runfiles.UNREADABLE:
+        raise ValueError(f"{path} cannot be read: {data}")
+    if status == runfiles.MISSING or not data.get("problem"):
+        return ""
+    tail = data.get("stderr_tail") or ""
+    return f"{data['problem']}; stderr: {tail}" if tail else str(data["problem"])
+
+
+def _explained(check: Check, legs: tuple[str, ...], probe_dir: Path) -> Check:
+    """A check that did not pass says why its leg ended early, in the CLI's own words, when it did."""
+    if check.verdict == PASS:
+        return check
+    notes = [f"leg {leg} ended early: {why}" for leg in legs if (why := _leg_ended_early(probe_dir, leg))]
+    if not notes:
+        return check
+    return Check(check.verdict, f"{check.detail} ({'; '.join(notes)})", check.informational)
+
+
 def evaluate(probe_dir: Path) -> dict[str, Check]:
     """Every check, judged from the legs saved under ``probe_dir``."""
     a, b, control = (load_leg(probe_dir, leg) for leg in LEGS)
     return {
-        "agent_callable": check_agent_callable(a),
-        "floor_orchestrator": check_floor_orchestrator(a),
-        "floor_inherited": check_floor_inherited(a),
-        "depth_cap": check_depth_cap(a, control),
-        "concurrent_cap": check_concurrent_cap(b),
-        "helper_command_allowed": check_helper_command(a),
+        "agent_callable": _explained(check_agent_callable(a), ("A",), probe_dir),
+        "floor_orchestrator": _explained(check_floor_orchestrator(a), ("A",), probe_dir),
+        "floor_inherited": _explained(check_floor_inherited(a), ("A",), probe_dir),
+        "depth_cap": _explained(check_depth_cap(a, control), ("A", "control"), probe_dir),
+        "concurrent_cap": _explained(check_concurrent_cap(b), ("B",), probe_dir),
+        "helper_command_allowed": _explained(check_helper_command(a), ("A",), probe_dir),
     }
 
 
@@ -629,13 +651,15 @@ def characterize(*, root: Path, edge, config: DashboardConfig, python: str, help
         env.update(plan.set_env)
         print(f"  leg {plan.name} ({plan.label}) ...", end="", flush=True, file=out)
         began = time.monotonic()
-        run = stream(stream_argv(argv, forward_subagent_text=forward), plan.request, work, until="exit", timeout_s=leg_timeout_s, env=env)
+        run = stream(stream_argv(argv, forward_subagent_text=forward), plan.request, work, until="exit", timeout_s=leg_timeout_s, env=env,
+                     stderr_path=probe_dir / plan.name / "stderr.log")
         with open(probe_dir / plan.name / "events.jsonl", "w", encoding="utf-8") as handle:
             for event in run.events:
                 handle.write(json.dumps(event) + "\n")
         runfiles.write_json(probe_dir / plan.name / "leg.json", {
-            "leg": plan.name, "label": plan.label, "env": plan.set_env, "argv": argv, "problem": run.problem, "events": len(run.events)})
-        print(f" {time.monotonic() - began:.0f}s, {len(run.events)} events" + (f", ended early: {run.problem}" if run.problem else ""), file=out)
+            "leg": plan.name, "label": plan.label, "env": plan.set_env, "argv": argv, "problem": run.problem, "stderr_tail": run.stderr_tail,
+            "events": len(run.events)})
+        print(f" {time.monotonic() - began:.0f}s, {len(run.events)} events" + (f", ended early: {run.reason()}" if run.problem else ""), file=out)
     checks = evaluate(probe_dir)
     finished = _now()
     claude = {

@@ -41,7 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from . import proctree, subagents
+from . import proctree, procspawn, subagents
 from .codehash import code_hash
 from .config import DashboardConfigError, load_config
 from .jobs_edge import EdgeError, JobsEdge
@@ -51,6 +51,7 @@ from .state import (
     LOG_FILE,
     DashboardStateError,
     ServerState,
+    ensure_private_root,
     read_state,
     resolve_data_dir,
     runtime_root,
@@ -74,6 +75,7 @@ READY_POLL_S = 0.2
 STOP_TIMEOUT_S = 10.0
 PROBE_TIMEOUT_S = 2.0
 BROWSER_TIMEOUT_S = 10.0
+BROWSER_LOG_FILE = "browser.log"
 CREATE_TIME_TOLERANCE_S = 2.0
 NO_OPEN_ENV = "TASK_KIT_NO_OPEN"
 
@@ -180,21 +182,23 @@ def post_shutdown(state: ServerState, force: bool, timeout: float = PROBE_TIMEOU
 def spawn_server(entrypoint: Path, data_dir: Path, log_path: Path) -> subprocess.Popen:
     """Start ``serve`` detached: no stdin, stdout and stderr appended to the log.
 
-    POSIX uses a new session. Windows uses CREATE_NO_WINDOW (the server gets a
-    hidden console of its own, so no console grandchild ever flashes a window)
-    plus a new process group. DETACHED_PROCESS is NOT combined with it: that
-    pairing makes CREATE_NO_WINDOW a no-op and lets console grandchildren open
-    windows.
+    The platform's detach flags come from :mod:`procspawn`, the one place that reads the platform.
     """
-    log_path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_private_root(log_path.parent)
     command = [sys.executable, str(entrypoint), "serve", "--data-dir", str(data_dir)]
-    kwargs: dict = {"stdin": subprocess.DEVNULL, "close_fds": True, "cwd": str(log_path.parent)}
-    if os.name == "nt":
-        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
-    else:
-        kwargs["start_new_session"] = True
+    kwargs: dict = {"stdin": subprocess.DEVNULL, "close_fds": True, "cwd": str(log_path.parent),
+                    **procspawn.detached(windows=procspawn.WINDOWS)}
     with open(log_path, "ab") as log:
         return subprocess.Popen(command, stdout=log, stderr=log, **kwargs)
+
+
+def _log_tail(path: Path, offset: int) -> str:
+    """The last non-empty line the opener wrote since ``offset`` (at most 300 characters)."""
+    with open(path, "rb") as handle:
+        handle.seek(offset)
+        text = handle.read().decode("utf-8", "replace")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return lines[-1][-300:] if lines else ""
 
 
 def open_browser(
@@ -203,12 +207,24 @@ def open_browser(
     platform: str | None = None,
     startfile: Callable[[str], None] | None = None,
     run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    popen: Callable[..., subprocess.Popen] = subprocess.Popen,
+    log_path: Path | None = None,
     timeout: float = BROWSER_TIMEOUT_S,
-) -> None:
-    """Open ``url`` in the default browser, or raise :class:`BrowserOpenError`.
+) -> str:
+    """Ask the platform to open ``url``, or raise :class:`BrowserOpenError`.
 
-    Windows uses ``os.startfile``; macOS ``open``; Linux ``xdg-open``. A spawn
-    error, a nonzero exit and a timeout are reported as three distinct kinds.
+    Returns a sentence naming what was confirmed. It never claims a window
+    opened: the opener's exit status is all the launcher can see.
+
+    - Windows: ``os.startfile``. A spawn ``OSError`` is kind ``spawn``.
+    - macOS: ``open`` is a run-to-completion acceptor, judged by its exit
+      status. A spawn error, a nonzero exit and the deadline are three kinds.
+    - Linux: ``xdg-open`` may BE the browser (it can run one in the
+      foreground), so it is started in its own session with its output
+      appended to ``log_path`` (a file, never DEVNULL) and waited on for at
+      most ``timeout`` seconds. Exit 0 is accepted, a nonzero exit is kind
+      ``exit`` carrying the log's last line, and still running at the deadline
+      is accepted and left running.
     """
     platform = sys.platform if platform is None else platform
     if platform == "win32":
@@ -217,20 +233,41 @@ def open_browser(
             opener(url)
         except OSError as exc:
             raise BrowserOpenError("spawn", str(exc)) from exc
-        return
-    command = ["open", url] if platform == "darwin" else ["xdg-open", url]
+        return "asked Windows to open the URL"
+    if platform == "darwin":
+        command = ["open", url]
+        try:
+            completed = run(command, capture_output=True, text=True, timeout=timeout)
+        except FileNotFoundError as exc:
+            raise BrowserOpenError("spawn", f"open not found: {exc}") from exc
+        except OSError as exc:
+            raise BrowserOpenError("spawn", str(exc)) from exc
+        except subprocess.TimeoutExpired as exc:
+            raise BrowserOpenError("timeout", f"open did not return within {timeout:g}s") from exc
+        if completed.returncode != 0:
+            raise BrowserOpenError("exit", f"open exited {completed.returncode}: {(completed.stderr or '').strip()}")
+        return "asked open to open the URL"
+    if log_path is None:
+        raise ValueError("opening a browser on this platform needs log_path for the opener's output")
+    command = ["xdg-open", url]
+    log_path = Path(log_path)
+    offset = log_path.stat().st_size if log_path.exists() else 0
     try:
-        completed = run(command, capture_output=True, text=True, timeout=timeout)
+        with open(log_path, "ab") as log:
+            process = popen(command, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                            close_fds=True, start_new_session=True)
     except FileNotFoundError as exc:
-        raise BrowserOpenError("spawn", f"{command[0]} not found: {exc}") from exc
+        raise BrowserOpenError("spawn", f"xdg-open not found: {exc}") from exc
     except OSError as exc:
         raise BrowserOpenError("spawn", str(exc)) from exc
-    except subprocess.TimeoutExpired as exc:
-        raise BrowserOpenError("timeout", f"{command[0]} did not return within {timeout:g}s") from exc
-    if completed.returncode != 0:
-        raise BrowserOpenError(
-            "exit", f"{command[0]} exited {completed.returncode}: {(completed.stderr or '').strip()}"
-        )
+    try:
+        code = process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return (f"asked xdg-open to open the URL (still running after {timeout:g}s; it may be the browser itself; "
+                f"its output goes to {log_path})")
+    if code != 0:
+        raise BrowserOpenError("exit", f"xdg-open exited {code}: {_log_tail(log_path, offset)} (see {log_path})")
+    return "asked xdg-open to open the URL"
 
 
 # -- the launcher ----------------------------------------------------------
@@ -261,7 +298,7 @@ class Launcher:
         probe: Callable[[int], dict] = probe_health,
         create_time: Callable[[int], float | None] = process_create_time,
         shutdown: Callable[[ServerState, bool], None] = post_shutdown,
-        browser: Callable[[str], None] = open_browser,
+        browser: Callable[[str], str | None] | None = None,
         kill: Callable[[ServerState], None] | None = None,
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
@@ -278,7 +315,8 @@ class Launcher:
         self._probe = probe
         self._create_time = create_time
         self._shutdown = shutdown
-        self._browser = browser
+        self._browser = browser if browser is not None else (
+            lambda url: open_browser(url, log_path=self.root / BROWSER_LOG_FILE))
         self._kill = kill if kill is not None else self._kill_verified
         self._sleep = sleep
         self._monotonic = monotonic
@@ -364,10 +402,12 @@ class Launcher:
         self._say(f"task-kit: {url}")
         if open_url:
             try:
-                self._browser(url)
+                confirmed = self._browser(url)
             except BrowserOpenError as exc:
                 self._warn(f"task-kit: {exc}. The server is running; open the URL above yourself.")
                 return EXIT_BROWSER
+            if confirmed:
+                self._say(f"task-kit: {confirmed}")
         return EXIT_OK
 
     def status(self) -> int:

@@ -125,6 +125,6 @@ def run(
     active = answer.get("active_run")
     if active:
         say(f"dashboard run {active['id']} ({active['state']}) is live on this task; it keeps running and its edits may "
-            "collide with yours. Cancel arrives in a later release: the run ends by itself or at its time limit. "
-            "/task work proceeds unchanged.")
+            "collide with yours. Cancel it in the dashboard (Cancel run), or let it end by itself or at its time "
+            "limit. /task work proceeds unchanged.")
     return 0

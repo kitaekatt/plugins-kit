@@ -43,7 +43,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import proctree, runfiles
+from . import proctree, procspawn, runfiles
 from .runfiles import (  # noqa: F401 -- the file names are part of this module's public surface
     CANCEL_FILE,
     CHILD_FILE,
@@ -110,7 +110,8 @@ def run(run_dir: Path) -> int:
         return _refuse(run_dir, str(exc))
 
     me = proctree.ident_of(os.getpid())
-    assert me is not None
+    if me is None:
+        raise RuntimeError(f"the runner cannot read its own process identity (pid {os.getpid()})")
     _write_json(run_dir / RUNNER_FILE, {"pid": me.pid, "create_time": me.create_time, "started_at": _now()})
 
     env = os.environ.copy()
@@ -127,11 +128,7 @@ def run(run_dir: Path) -> int:
         })
         return EXIT_OK
 
-    flags: dict = {}
-    if os.name == "posix":
-        flags["start_new_session"] = True
-    else:
-        flags["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    flags = procspawn.hidden(windows=procspawn.WINDOWS)
     launch = [sys.executable, str(CHILD_EXEC), str(run_dir), str(me.pid), repr(me.create_time), "--", *argv]
 
     with open(run_dir / LLM_OUT_FILE, "wb") as out, open(run_dir / LOG_FILE, "ab") as log:

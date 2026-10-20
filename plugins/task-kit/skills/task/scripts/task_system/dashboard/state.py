@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -167,13 +168,45 @@ def _corrupt(path: Path, reason: str) -> str:
     )
 
 
+PRIVATE_DIR_MODE = 0o700
+PRIVATE_FILE_MODE = 0o600
+
+
+def ensure_private_root(root: Path) -> bool:
+    """Create the runtime root owner-only (0700), and tighten an existing one.
+
+    ``server.json`` holds the token that authorizes queueing runs, so no other
+    local account may read the root. On POSIX an existing root with any other
+    mode is chmodded to 0700 and the call returns True so the caller can log it
+    once. Windows creates the root and chmods nothing: its privacy comes from
+    the profile ACL, which this does not assert.
+    """
+    root = Path(root)
+    root.mkdir(parents=True, exist_ok=True, mode=PRIVATE_DIR_MODE)
+    if os.name == "nt":
+        return False
+    current = stat.S_IMODE(root.stat().st_mode)
+    if current == PRIVATE_DIR_MODE:
+        return False
+    os.chmod(root, PRIVATE_DIR_MODE)
+    return True
+
+
 def write_state(root: Path, state: ServerState) -> None:
-    """Atomically replace ``server.json`` (write a sibling, fsync, replace)."""
+    """Atomically replace ``server.json`` (write a sibling, fsync, replace).
+
+    The file is owner-only (0600) from the moment it exists; a stale sibling
+    left by a crashed writer is chmodded too, because ``O_TRUNC`` keeps the old
+    mode. Windows relies on the profile ACL.
+    """
     root = Path(root)
     final = state_path(root)
     temp = root / f"{STATE_FILE}.{os.getpid()}.tmp"
     payload = (json.dumps(asdict(state), indent=2, sort_keys=True) + "\n").encode("utf-8")
-    with open(temp, "wb") as handle:
+    descriptor = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, PRIVATE_FILE_MODE)
+    with os.fdopen(descriptor, "wb") as handle:
+        if os.name != "nt":
+            os.fchmod(handle.fileno(), PRIVATE_FILE_MODE)
         handle.write(payload)
         handle.flush()
         os.fsync(handle.fileno())

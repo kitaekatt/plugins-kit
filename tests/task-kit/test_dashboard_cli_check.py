@@ -53,6 +53,8 @@ behavior = json.loads((here / "behavior.json").read_text(encoding="utf-8"))
 prompt = sys.stdin.read()
 time.sleep(behavior.get("init_delay", 0))
 if behavior.get("no_init"):
+    if behavior.get("stderr"):
+        print(behavior["stderr"], file=sys.stderr)
     raise SystemExit(1)
 value = args[args.index("--disallowedTools") + 1] if "--disallowedTools" in args else ""
 denied = set(value.split(","))
@@ -194,6 +196,53 @@ def test_each_outcome_of_the_observation_is_its_own_state(tmp_path, monkeypatch,
     if expected != cli_check.UNOBSERVED or behavior.get("bash") == "none":
         assert state.binary is not None and state.binary.version.startswith("9.9.9")
         assert len(state.binary.digest) == 64
+
+
+def test_a_cli_that_cannot_start_a_session_says_why_in_the_observation_detail(tmp_path, monkeypatch):
+    """H9. The CLI's own stderr line reaches the detail; before, a failed observation read only "(exited)".
+
+    Red: restore ``stderr=subprocess.DEVNULL`` in ``run_stream``; the detail lacks the reason.
+    """
+    FakeCli(tmp_path, monkeypatch, no_init=True, stderr="Not logged in")
+    edge = FakeEdge()
+    edge.worker_argv = shaped_argv
+    state = observe(observer_for(tmp_path, edge, tmp_path / "none.yaml"))
+    assert state.state == cli_check.UNOBSERVED
+    assert "exited; stderr: Not logged in" in state.detail, state.detail
+
+
+def test_the_stderr_tail_is_the_last_line_redacted_and_bounded(tmp_path, monkeypatch):
+    from task_system.dashboard import redact
+
+    FakeCli(tmp_path, monkeypatch, no_init=True, stderr="first\n" + "x" * 500)
+    fake = str(tmp_path / "fake-bin" / "claude")
+    run = cli_check.run_stream([fake], "hi", tmp_path, until="init", timeout_s=5, env=dict(os.environ),
+                               stderr_path=tmp_path / "stderr.log")
+    assert run.problem == "exited" and run.stderr_tail == "x" * cli_check.STDERR_TAIL_CHARS
+    assert (tmp_path / "stderr.log").read_text(encoding="utf-8").startswith("first")  # the whole stream is kept as evidence
+    (tmp_path / "fake-bin" / "behavior.json").write_text(
+        json.dumps({"no_init": True, "stderr": "auth failed for hunter2hunter2"}), encoding="utf-8")
+    redact.register_secret("hunter2hunter2")
+    try:
+        run = cli_check.run_stream([fake], "hi", tmp_path, until="init", timeout_s=5, env=dict(os.environ),
+                                   stderr_path=tmp_path / "stderr2.log")
+    finally:
+        redact.clear_secrets()
+    assert "hunter2hunter2" not in run.stderr_tail and run.stderr_tail.startswith("auth failed")
+
+
+def test_a_characterize_check_that_did_not_pass_carries_its_legs_stderr_line(tmp_path):
+    """H9, characterize. Red: leave ``_explained`` out of ``evaluate``; the detail lacks the CLI's reason."""
+    from task_system.dashboard import runfiles, subagents
+
+    for leg in subagents.LEGS:
+        (tmp_path / leg).mkdir()
+        (tmp_path / leg / "events.jsonl").write_text("", encoding="utf-8")
+        runfiles.write_json(tmp_path / leg / "leg.json", {"leg": leg, "problem": "exited", "stderr_tail": "Not logged in"})
+    checks = subagents.evaluate(tmp_path)
+    assert all("exited; stderr: Not logged in" in check.detail for check in checks.values() if check.verdict != subagents.PASS)
+    assert checks["agent_callable"].verdict == subagents.INCONCLUSIVE
+    assert "leg A ended early: exited; stderr: Not logged in" in checks["agent_callable"].detail
 
 
 def test_a_probe_command_that_ran_and_failed_is_executed_not_unclear():

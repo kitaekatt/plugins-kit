@@ -32,17 +32,10 @@ def skill_capabilities() -> dict[str, dict]:
     raise AssertionError("no capability_skill block in SKILL.md")
 
 
-# The last version published before the dashboard (the extraction release).
-LAST_PUBLISHED = (0, 1, 0)
-
-
-def _version(text: str) -> tuple[int, ...]:
-    return tuple(int(part) for part in text.split("."))
-
-
-def test_versions_agree_and_are_past_the_last_published_version():
+def test_plugin_json_and_pyproject_state_one_version():
+    """The bump property (a changed plugin carries a version past the last publish) belongs to its producer,
+    ``scripts/pre-commit-version-check.sh``. A copy of it here only re-typed a floor that went stale."""
     assert PLUGIN_JSON["version"] == PYPROJECT["project"]["version"]
-    assert _version(PLUGIN_JSON["version"]) > LAST_PUBLISHED
 
 
 def test_psutil_is_declared_for_install_and_for_verification():
@@ -85,6 +78,28 @@ def test_dashboard_is_not_a_task_py_verb():
 
 def test_the_dashboard_adds_no_llm_kit_install_edge():
     """No plugin dependency and no auto/manual install entry for llm-kit. (llm_kit may
-    appear in shared_lib_imports for the pre-existing summary-repair import.)"""
+    appear in shared_lib_imports for the pre-existing summary-repair import.)
+
+    llm-kit is published, but optional: without it task-kit still lists and manages tasks, and only the
+    autonomous run actions REFUSE. So there is no ``install: "auto"`` edge and no ``plugin.json`` dependency.
+    The refusal message names ``claude plugin install llm-kit@plugins-kit``, and that message is the
+    discoverability, so there is no ``install: "manual"`` entry either.
+    """
     assert not any("llm-kit" in p["ref"] for p in BOOTSTRAP["plugins"])
     assert "llm-kit" not in PLUGIN_JSON["dependencies"]
+
+
+def test_the_work_capability_runs_the_handshake_first_and_never_waits_on_it():
+    """Step 1 of ``work`` is the dashboard handshake; it cannot gate step 2, the work verb itself.
+
+    Red: delete step 1 (or its command) from the ``work`` capability.
+    """
+    steps = skill_capabilities()["work"]["steps"]
+    assert [step["n"] for step in steps][:2] == [1, 2]
+    handshake, work = steps[0]["action"], steps[1]["action"]
+    assert 'task_hold.py <ref> --session "${CLAUDE_SESSION_ID}"' in handshake
+    assert "never fails and never blocks the work verb" in handshake
+    assert "continue to step 2" in handshake
+    assert "Run the work verb" in work
+    reference = (PLUGIN_ROOT / "skills" / "task" / "references" / "dashboard.md").read_text(encoding="utf-8")
+    assert "## The /task work handshake" in reference and "## Launcher exit codes" in reference

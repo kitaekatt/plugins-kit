@@ -382,17 +382,17 @@ def test_windows_opens_with_startfile_and_reports_a_spawn_error():
     assert excinfo.value.kind == "spawn"
 
 
-@pytest.mark.parametrize("platform,command", [("darwin", "open"), ("linux", "xdg-open")])
-def test_posix_platforms_use_their_opener(platform, command):
+def test_darwin_opens_with_open_and_judges_it_by_its_exit_status():
     seen = []
-    L.open_browser("http://x/", platform=platform,
-                   run=lambda cmd, **kw: seen.append((cmd, kw["timeout"])) or _completed())
-    assert seen[0][0] == [command, "http://x/"] and seen[0][1] > 0
+    said = L.open_browser("http://x/", platform="darwin",
+                          run=lambda cmd, **kw: seen.append((cmd, kw["timeout"])) or _completed())
+    assert seen[0][0] == ["open", "http://x/"] and seen[0][1] > 0
+    assert "asked open" in said and "window" not in said  # names what was confirmed, never a window
 
 
-def test_posix_open_failures_are_three_distinct_kinds():
+def test_darwin_open_failures_are_three_distinct_kinds():
     def missing(cmd, **kw):
-        raise FileNotFoundError("xdg-open")
+        raise FileNotFoundError("open")
 
     def hang(cmd, **kw):
         raise subprocess.TimeoutExpired(cmd, kw["timeout"])
@@ -400,9 +400,94 @@ def test_posix_open_failures_are_three_distinct_kinds():
     kinds = []
     for run in (missing, hang, lambda cmd, **kw: _completed(3, "no browser")):
         with pytest.raises(L.BrowserOpenError) as excinfo:
-            L.open_browser("http://x/", platform="linux", run=run)
+            L.open_browser("http://x/", platform="darwin", run=run)
         kinds.append(excinfo.value.kind)
     assert kinds == ["spawn", "timeout", "exit"]
+
+
+class FakeOpener:
+    """A scriptable stand-in for the Popen that runs ``xdg-open``."""
+
+    def __init__(self, *, exits: int | None = 0, output: str = "", spawn_error: Exception | None = None):
+        self.exits = exits  # None: still running at every deadline
+        self.output = output
+        self.spawn_error = spawn_error
+        self.killed = False
+        self.waited: list[float] = []
+        self.kwargs: dict = {}
+        self.command: list = []
+
+    def __call__(self, command, **kwargs):
+        if self.spawn_error:
+            raise self.spawn_error
+        self.command, self.kwargs = command, kwargs
+        kwargs["stdout"].write(self.output.encode())
+        return self
+
+    def wait(self, timeout=None):
+        self.waited.append(timeout)
+        if self.exits is None:
+            raise subprocess.TimeoutExpired(self.command, timeout)
+        return self.exits
+
+    def kill(self):
+        self.killed = True
+
+    terminate = kill
+
+
+def test_linux_accepts_a_lingering_opener_and_does_not_kill_it(tmp_path):
+    """xdg-open may BE the browser: still running at the deadline means accepted.
+
+    Red: restore ``subprocess.run(..., timeout=)`` for Linux; the opener is killed and this raises.
+    """
+    opener = FakeOpener(exits=None)
+    said = L.open_browser("http://x/", platform="linux", popen=opener, log_path=tmp_path / "browser.log", timeout=0.5)
+    assert opener.command == ["xdg-open", "http://x/"] and opener.waited == [0.5]
+    assert not opener.killed
+    assert opener.kwargs["start_new_session"] is True
+    assert opener.kwargs["stdout"] is opener.kwargs["stderr"]  # a file, never DEVNULL
+    assert "still running" in said and "may be the browser itself" in said and "window" not in said
+
+
+def test_linux_exit_zero_is_accepted(tmp_path):
+    said = L.open_browser("http://x/", platform="linux", popen=FakeOpener(exits=0), log_path=tmp_path / "browser.log")
+    assert "asked xdg-open" in said
+
+
+def test_linux_nonzero_exit_reports_the_tail_of_the_log_written_by_this_launch(tmp_path):
+    log = tmp_path / "browser.log"
+    log.write_bytes(b"an older launch complained\n")
+    with pytest.raises(L.BrowserOpenError) as excinfo:
+        L.open_browser("http://x/", platform="linux", log_path=log,
+                       popen=FakeOpener(exits=3, output="starting\nno display\n"))
+    assert excinfo.value.kind == "exit"
+    assert "no display" in str(excinfo.value) and "older launch" not in str(excinfo.value)
+
+
+def test_linux_spawn_errors_are_kind_spawn(tmp_path):
+    for error in (FileNotFoundError("xdg-open"), PermissionError("denied")):
+        with pytest.raises(L.BrowserOpenError) as excinfo:
+            L.open_browser("http://x/", platform="linux", log_path=tmp_path / "b.log",
+                           popen=FakeOpener(spawn_error=error))
+        assert excinfo.value.kind == "spawn"
+
+
+def test_linux_needs_a_log_path_rather_than_discarding_the_openers_output():
+    with pytest.raises(ValueError, match="log_path"):
+        L.open_browser("http://x/", platform="linux")
+
+
+def test_the_launcher_says_what_the_opener_confirmed(tmp_path, monkeypatch):
+    monkeypatch.setattr(L, "code_hash", lambda _d: HASH)
+    fakes = Fakes()
+    launcher, out, _err = make_launcher(tmp_path, fakes)
+    state = make_state(launcher.root)
+    fakes.create_times[state.pid] = state.pid_create_time
+    fakes.health = healthy(state)
+    launcher._browser = lambda url: "asked xdg-open to open the URL"
+    assert launcher.launch(open_url=True) == L.EXIT_OK
+    assert "task-kit: asked xdg-open to open the URL" in out.getvalue()
 
 
 def test_no_open_flag_and_environment_variable_suppress_the_browser(tmp_path, monkeypatch, outside_a_run):
@@ -425,28 +510,6 @@ def test_no_open_flag_and_environment_variable_suppress_the_browser(tmp_path, mo
     monkeypatch.setenv(L.NO_OPEN_ENV, "1")
     L.main(data, **kw)
     assert opened == [True, False, False]
-
-
-def test_spawn_uses_a_hidden_window_on_windows_and_a_new_session_elsewhere(tmp_path, monkeypatch):
-    captured = {}
-
-    class FakePopen:
-        def __init__(self, command, **kwargs):
-            captured.update(command=command, kwargs=kwargs)
-
-    monkeypatch.setattr(L.subprocess, "Popen", FakePopen)
-    L.spawn_server(ENTRYPOINT, tmp_path / "d", tmp_path / "d" / "dashboard" / "server.log")
-    kwargs = captured["kwargs"]
-    assert captured["command"][1:] == [str(ENTRYPOINT), "serve", "--data-dir", str(tmp_path / "d")]
-    assert kwargs["stdin"] == subprocess.DEVNULL and kwargs["stdout"] is kwargs["stderr"]
-    if os.name == "nt":
-        flags = kwargs["creationflags"]
-        assert flags & subprocess.CREATE_NO_WINDOW
-        assert flags & subprocess.CREATE_NEW_PROCESS_GROUP
-        # DETACHED_PROCESS would make CREATE_NO_WINDOW a no-op.
-        assert not flags & 0x00000008
-    else:
-        assert kwargs["start_new_session"] is True
 
 
 # ---------------------------------------------------------------------------

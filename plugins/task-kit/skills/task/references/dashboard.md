@@ -119,6 +119,24 @@ dashboard:
 - This stops a run from widening its own offers or budgets. It does not stop a process that calls the model library
   directly or reads an endpoint key from your data directory.
 
+## The /task work handshake
+
+`task work <ref>` is preceded by `task_hold.py <ref> --session "${CLAUDE_SESSION_ID}"`, which tells a running dashboard that this session is working that task folder, so the dashboard stops starting autonomous runs on it while the session lives. It is bounded by 2 seconds, never gates the work verb and always exits 0. With no dashboard running it prints nothing. Otherwise it prints at most one line on stderr and nothing on stdout. When a dashboard run is already live on the same task, that line names its run id and state, says the run keeps running and its edits may collide with the session's, and says to cancel it in the dashboard (Cancel run) or let it end by itself or at its time limit. The run is never touched by the handshake.
+
+## Launcher exit codes
+
+The launcher (`task-kit`, or `/task dashboard`) exits 0 ok, 1 error, 3 `status`: not running, 4 server up but the browser could not be opened (the URL is still printed), 5 refused because jobs are running, 6 refused inside a dashboard run. `--no-open` (or `TASK_KIT_NO_OPEN=1`) skips the browser. A corrupt server record, or something else answering on the recorded port, stops the launcher with a message naming the file.
+
+How the browser is opened depends on the platform, and the launcher prints what was confirmed, never that a window opened:
+
+- macOS runs `open` and judges it by its exit status. A failure to start it, a nonzero exit (with its stderr) and ten seconds without an exit are three distinct failures (exit 4).
+- Linux starts `xdg-open` in its own session with its output appended to `browser.log` in the dashboard runtime directory. A nonzero exit is a failure (exit 4) and shows the log's last line. An opener still running after ten seconds counts as accepted and is left running, because `xdg-open` can be the browser itself.
+- Windows asks the shell to open the URL (`os.startfile`).
+
+## Security
+
+The dashboard's runtime directory is owner-only (0700) and `server.json`, which holds the token that authorizes queueing runs, is owner-only (0600) on macOS and Linux; an existing, more open directory is tightened when the server starts and the server log says so once. On Windows the profile's access control applies and nothing is changed. Every mutation route is listed in one table the server enforces, a request to any other mutation route answers 405, and a connection that sends nothing for 30 seconds is closed.
+
 ## Recovery and settings
 
 Runs survive the dashboard server: a restarted server adopts the live runner from its run directory and settles a finished one from its receipt, never starting a second runner. A runner that vanished is crash inspection: its leftover processes are stopped, its ledger is closed as cancelled, and the task is blocked with the run shown `Crashed`; nothing is retried or reported complete. A receipt that cannot be read blocks and never counts as success. The ordered recovery table is documented at the top of scripts/task_system/dashboard/scheduler.py.

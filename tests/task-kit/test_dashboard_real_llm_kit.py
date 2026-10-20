@@ -369,21 +369,36 @@ def test_a_killed_runner_leaves_a_cancelled_real_ledger_and_a_blocked_task(llm_p
         rig.close()
 
 
-def test_live_polls_leave_the_ledger_files_byte_unchanged(llm_path, tmp_path, monkeypatch):
-    """The only ledger read while a run is live is LedgerReader.snapshot, which opens it read-only."""
+@pytest.mark.parametrize("write_delay_s", [0, 1.5], ids=["no-delay", "delayed-writes"])
+def test_live_polls_leave_the_ledger_files_byte_unchanged(llm_path, tmp_path, monkeypatch, write_delay_s):
+    """The only ledger read while a run is live is LedgerReader.snapshot, which opens it read-only.
+
+    The stand-in writes its ledger three times. The comparison starts only after the LAST write
+    (the ``ledger-ready`` marker), so load cannot move a stand-in write between "before" and "after";
+    ``delayed-writes`` makes the later writes land 1.5 s after the first, which is the window the old
+    snapshot-exists wait lost under ``-n`` load.
+    """
     from rig_support import wait_for
 
     from task_system.dashboard import runtime
 
+    monkeypatch.setenv("TASK_KIT_TEST_LEDGER_WRITE_DELAY_S", str(write_delay_s))
     rig = _real_rig(tmp_path, monkeypatch)
     try:
         run_id = rig.queue("do-it", {"timeout_s": 120})
         run = rig.tick_until(run_id, (runtime.RUNNING,))
         store = Path(run.run_dir) / "ledger.sqlite3"
+        ready = Path(run.run_dir) / "ledger-ready"
+        # 1. the start wait under test: the stand-in's last ledger write has landed
+        assert wait_for(ready.exists, timeout_s=60), "the stand-in never finished writing its ledger"
         assert wait_for(lambda: rig.edge.ledger_snapshot(store, run_id) is not None)
+        # 2. the "before" digests
         files = [store, store.with_name(store.name + "-wal")]
         before = [_digest(f) for f in files]
         sizes = [f.stat().st_size if f.exists() else None for f in files]
+        # 3. a causal wait: every stand-in write has landed before any poll or comparison
+        assert wait_for(ready.exists, timeout_s=60)
+        # 4. the polls, then the comparison
         for _ in range(15):
             assert rig.srv.json("GET", "/api/v1/dashboard")[0] == 200
             rig.srv.scheduler.tick()

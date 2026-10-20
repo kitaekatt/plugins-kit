@@ -34,13 +34,26 @@ _SCRIPTS = Path(__file__).resolve().parents[2]
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
-from task_system.dashboard import proctree, runfiles  # noqa: E402
+from task_system.dashboard import proctree, procspawn, runfiles  # noqa: E402
 
 GO_TIMEOUT_S = 30.0
 POLL_S = 0.02
 EXIT_RUNNER_GONE = 75
 EXIT_NO_GO = 76
 EXIT_USAGE = 2
+
+
+def become(command: list[str], *, windows: bool) -> int:
+    """Run ``command`` as this process's successor, and return its exit code.
+
+    POSIX replaces this process (``execvp``), so the command IS the process the
+    runner recorded and this call does not return. Windows has no ``exec``: the
+    command runs as a child of this process, which therefore stays the recorded
+    ancestor, and its exit code is returned. Recovery relies on that parentage.
+    """
+    if windows:
+        return subprocess.call(command)
+    os.execvp(command[0], command)  # does not return
 
 
 def main(argv: list[str]) -> int:
@@ -51,7 +64,8 @@ def main(argv: list[str]) -> int:
     runner = proctree.ProcIdent(int(argv[2]), float(argv[3]))
     command = argv[5:]
     me = proctree.ident_of(os.getpid())
-    assert me is not None
+    if me is None:
+        raise RuntimeError(f"child_exec cannot read its own process identity (pid {os.getpid()})")
     runfiles.write_json(run_dir / runfiles.CHILD_FILE, {"pid": me.pid, "create_time": me.create_time, "runner": runner.to_json()})
 
     deadline = time.monotonic() + GO_TIMEOUT_S
@@ -67,9 +81,7 @@ def main(argv: list[str]) -> int:
         print("child_exec: the runner is gone; not running the command", file=sys.stderr)
         return EXIT_RUNNER_GONE
 
-    if os.name == "posix":
-        os.execvp(command[0], command)  # does not return
-    return subprocess.call(command)
+    return become(command, windows=procspawn.WINDOWS)
 
 
 if __name__ == "__main__":

@@ -54,6 +54,7 @@ from .state import (
     LockHeldError,
     ServerLock,
     ServerState,
+    ensure_private_root,
     remove_state_if_owned,
     runtime_root,
     write_state,
@@ -62,6 +63,28 @@ from .state import (
 LOOPBACK = "127.0.0.1"
 TOKEN_HEADER = "X-Task-Kit-Token"
 MAX_BODY_BYTES = 64 * 1024
+# A hang guard, not a policy: it bounds each socket read and write, so a client that connects and sends nothing
+# (or trickles bytes) cannot hold a handler thread forever. It does not bound request PROCESSING, so a helper call
+# that waits for its own ``timeout_s`` is unaffected.
+IDLE_TIMEOUT_S = 30.0
+# Every route that changes anything. ``_dispatch`` serves a non-GET/HEAD request under /api/v1 only when its
+# (method, shape) is listed here; ``{}`` stands for one non-empty path segment. The helper route keeps its own
+# credential and is checked before the dashboard token, but it is listed so the table is the whole mutation surface.
+MUTATION_ROUTES = frozenset({
+    ("POST", "items/{}/{}/{}/queue"),
+    ("POST", "items/{}/{}/{}/recheck"),
+    ("POST", "tasks/{}/{}/items"),
+    ("POST", "tasks/{}/{}/queue"),
+    ("PATCH", "items/{}/{}/{}"),
+    ("PUT", "items/{}/{}/{}/run-options"),
+    ("DELETE", "queue/{}"),
+    ("POST", "projects/{}/tasks"),
+    ("POST", "runs/{}/cancel"),
+    ("POST", "runs/{}/retry"),
+    ("POST", "holds"),
+    ("POST", "shutdown"),
+    ("POST", f"{endpoint_helper.ROUTE}/{{}}"),
+})
 MUTATION_LOCK_FILE = "mutation.lock"
 RUNS_IN_SNAPSHOT = 60
 EXIT_LOCK_HELD = 75  # EX_TEMPFAIL: another server already runs; use that one.
@@ -155,7 +178,8 @@ class DashboardServer:
         """Take the lock, bind port 0, and publish ownership. Raises LockHeldError."""
         import psutil
 
-        self.root.mkdir(parents=True, exist_ok=True)
+        if ensure_private_root(self.root):
+            self.log(f"tightened {self.root} to owner-only (0700); the ownership record holds the token")
         self._lock.acquire()
         try:
             if self.scheduler is None:
@@ -174,6 +198,7 @@ class DashboardServer:
                     config_path=self._config_path,
                     log=self.log,
                     observer=observer,
+                    fatal=lambda message: self.request_shutdown(),
                 )
             # A helper call still reserved lost its server: it is interrupted (and still counts against the budget).
             interrupted = self.scheduler.db.interrupt_open_calls()
@@ -266,9 +291,22 @@ class DashboardServer:
         return {f"http://{LOOPBACK}:{self.port}", f"http://localhost:{self.port}"}
 
 
+def mutation_route_listed(method: str, route: list[str]) -> bool:
+    """Whether ``(method, route)`` matches a shape in ``MUTATION_ROUTES`` (read at call time)."""
+    for listed_method, shape in MUTATION_ROUTES:
+        if listed_method != method:
+            continue
+        pattern = shape.split("/")
+        if len(pattern) == len(route) and all(
+                part == "{}" and bool(segment) or part == segment for part, segment in zip(pattern, route)):
+            return True
+    return False
+
+
 class _Handler(BaseHTTPRequestHandler):
     server_version = "task-kit-dashboard"
     sys_version = ""
+    timeout = IDLE_TIMEOUT_S  # StreamRequestHandler applies it to the connection's socket
 
     def version_string(self) -> str:
         return self.server_version
@@ -414,6 +452,9 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             if not self._token_ok():
                 self._error(401, "unauthorized", "Missing or wrong token; reopen the dashboard with `task-kit`.")
+                return
+            if method not in ("GET", "HEAD") and not mutation_route_listed(method, route):
+                self._error(405, "method_not_allowed", "No such mutation.")
                 return
             self._api(method, route, query)
         except ConnectionError as exc:
