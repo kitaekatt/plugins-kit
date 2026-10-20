@@ -51,11 +51,12 @@ REF_LEGACY_IDS = ["ref-example-block", "ref-gotcha-block", "ref-prohibited-disci
 PATTERN_LEGACY_IDS = ["pattern-recognition-block", "pattern-counter-example", "pattern-prohibited-bundle",
                       "pattern-prohibited-checklist", "pattern-prohibited-rule-counter"]
 TECHNIQUE_LEGACY_IDS = ["technique-ordered-steps", "step-tracking", "technique-prohibited-pressure-test"]
+WRAPPER_LEGACY_IDS = ["wrapper-ordered-step", "wrapper-procedure-cited", "wrapper-max-lines"]
 DISCIPLINE_LEGACY_IDS = ["discipline-rule-counter", "discipline-red-flags", "discipline-pressure-test"]
 DOMAIN_LEGACY_IDS = ["domain-identity-sentence", "domain-companion-declaration", "domain-orientation",
                      "domain-reference-index", "domain-prohibited-index-only"]
-LEGACY_IDS = [*REF_LEGACY_IDS, *PATTERN_LEGACY_IDS, *TECHNIQUE_LEGACY_IDS, *DISCIPLINE_LEGACY_IDS,
-              *DOMAIN_LEGACY_IDS]
+LEGACY_IDS = [*REF_LEGACY_IDS, *PATTERN_LEGACY_IDS, *TECHNIQUE_LEGACY_IDS, *WRAPPER_LEGACY_IDS,
+              *DISCIPLINE_LEGACY_IDS, *DOMAIN_LEGACY_IDS]
 CLAUDE_IDS = ["claude-md-import-size", "claude-md-size-signal", "claude-md-record-floor"]
 
 

@@ -37,7 +37,10 @@ class TestScoreableTypeSet:
         scores = type_signals(KITCHEN_SINK_BODY)
         assert scores["audit-skill"] == 0
 
-    def test_scoreable_types_are_every_type_except_audit_skill(self):
+    def test_scoreable_types_are_every_type_except_audit_skill_and_technique_wrapper(self):
+        # A technique-wrapper is identified by its declaration, never by body signals: the
+        # stub is short prose, and scoring it would make ordinary technique skills read as mixed.
         scores = type_signals(KITCHEN_SINK_BODY)
+        assert scores["technique-wrapper"] == 0
         scoreable = {t for t, s in scores.items() if s > 0}
-        assert scoreable == set(CANONICAL_TYPES) - {"audit-skill"}
+        assert scoreable == set(CANONICAL_TYPES) - {"audit-skill", "technique-wrapper"}

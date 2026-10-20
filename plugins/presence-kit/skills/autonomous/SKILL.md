@@ -1,7 +1,7 @@
 ---
 name: autonomous
 description: "Use when the user hands work over to finish without them: decide instead of asking, recap at the end. Do NOT use for a plain afk or a quiet user."
-skill-type: technique-skill
+skill-type: technique-wrapper
 ---
 
 # autonomous

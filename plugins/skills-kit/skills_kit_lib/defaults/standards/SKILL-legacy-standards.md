@@ -10,7 +10,9 @@ missing, the audit stops with an error rather than skipping these rows.
 The block below is the single source of truth for each criterion's id,
 statement and severity. Each criterion is `mechanical`: the check itself is a
 registered evaluator in `audit.py` (`MECHANICAL_EVALUATORS`), keyed by the
-criterion `id`. None declares a threshold.
+criterion `id`. None declares a threshold; `wrapper-max-lines` reads the built-in
+`wrapper_max_lines` limit (default 40), which a user tunes with
+`thresholds: {wrapper_max_lines: <positive int>}`.
 
 Every criterion here is scoped by the evaluator's `applies` gate, not by this
 file, and the scope has three parts:
@@ -102,6 +104,21 @@ standards_set:
       statement: A technique-skill body omits adversarial RED/GREEN/REFACTOR pressure testing.
       severity: fail
       keywords: [technique-skill, prohibited pressure testing, red green refactor, legacy heuristics]
+      enforcement: mechanical
+    - id: wrapper-ordered-step
+      statement: A technique-wrapper body has an ordered-step sequence (its one numbered step).
+      severity: fail
+      keywords: [technique-wrapper, ordered step, numbered list, legacy heuristics]
+      enforcement: mechanical
+    - id: wrapper-procedure-cited
+      statement: A technique-wrapper body cites at least one references/ document, and every document it cites exists.
+      severity: fail
+      keywords: [technique-wrapper, procedure document, references citation, load-graph edge, legacy heuristics]
+      enforcement: mechanical
+    - id: wrapper-max-lines
+      statement: A technique-wrapper body stays within `wrapper_max_lines` lines.
+      severity: fail
+      keywords: [technique-wrapper, stub length, wrapper_max_lines, repeat invocation, legacy heuristics]
       enforcement: mechanical
     - id: discipline-rule-counter
       statement: A discipline-skill body carries at least one rule+counter pair.

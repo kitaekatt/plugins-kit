@@ -443,6 +443,13 @@ glossary:
         A skill whose primary content is one or more *techniques* (the procedural pattern). Composes pattern + reference into procedure(s), and may bundle scripts as canonical executable forms. A technique-skill invoked only by user slash command (rather than by LLM auto-discovery) carries the `trigger: user-only` attribute; this replaces what the project previously called `script-skill`.
       source: obra/superpowers (line 63)
 
+    - id: technique_wrapper
+      term: Technique-wrapper
+      keywords: [technique-wrapper, repeat invocation, stub skill, procedure in references, one numbered step, wrapper_max_lines]
+      definition: |
+        A technique-skill packaged for repeat firing: SKILL.md is a short prose stub with one numbered step that follows a procedure document under `references/`, so a skill invoked many times in a session re-injects the stub and not the procedure. It carries no YAML contract block in the normal case and is identified by its declared `skill-type: technique-wrapper`, never by body signals.
+      source: skill-standards.md section 3.3
+
     - id: capability_skill
       term: Capability-skill
       keywords: [capability-skill, wrapper, external capability, tool wrapper, mcp wrapper, api wrapper, service wrapper, layering manifest, capabilities at root]

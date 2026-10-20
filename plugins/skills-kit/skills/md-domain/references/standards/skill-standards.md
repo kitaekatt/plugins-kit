@@ -313,8 +313,8 @@ recurring event (each turn end, each return, each completed job); another
 skill's steps invoke it; or it is the target of a loop. A skill the user runs
 once to start a task does not qualify.
 
-**Rule: the technique-wrapper.** A qualifying technique-skill is a
-technique-wrapper skill. It keeps `skill-type: technique-skill`, and its
+**Rule: the technique-wrapper.** A qualifying skill declares
+`skill-type: technique-wrapper` (its contract is in section 6), and its
 SKILL.md holds only what the agent needs on EVERY firing before it can act:
 
 - frontmatter, one or two sentences saying what the skill does, the arguments,
@@ -322,9 +322,11 @@ SKILL.md holds only what the agent needs on EVERY firing before it can act:
   reading it first unless its text is already in context this session;
 - no YAML contract block. The stub is plain prose, so audit takes the
   legacy-markdown route: `yaml_contract_block` reports judgment-required
-  (never FAIL) and the legacy technique rows apply, which is why the single
-  step is a numbered list item. A stub also names the other reference files
-  its procedure uses, so each has a direct load-graph edge from SKILL.md.
+  (never FAIL) and the three wrapper rows apply (`wrapper-ordered-step`,
+  `wrapper-procedure-cited`, `wrapper-max-lines`), which is why the single
+  step is a numbered list item that cites its procedure. A stub also names
+  the other reference files its procedure uses, so each has a direct
+  load-graph edge from SKILL.md.
 
 The procedure itself, with its ordered steps and tool commands, and
 everything those steps consult (output templates, dispatch tables, worked
@@ -336,10 +338,12 @@ document is not a substituted surface, so commands inside it name the plugin
 root in the agent-typed form the repository requires of references, not the
 harness variable.
 
-A wrapper trades away mechanical step validation: the schema validates the
-contract block's `steps:` list, and a procedure in a reference is audited only
-as a skill reference document (section 10). Use the form for a skill that
-passes the criterion below, and keep an ordinary technique-skill otherwise.
+A wrapper trades away mechanical step validation: the technique-skill schema
+validates a contract block's `steps:` list, and a procedure in a reference is
+audited only as a skill reference document (section 10). Use the type for a
+skill that passes the criterion above, and keep an ordinary technique-skill
+otherwise. A body is never classified as a wrapper from its text; the
+declaration decides.
 
 **Why this does not trip the 3.1 anti-pattern.** 3.1 condemns a stub that
 always co-loads its references because that costs two tool calls for one
@@ -678,9 +682,22 @@ diverge, the registry wins**; the table gets updated to match.
 |---|---|
 | **Required blocks** | SKILL.md file with frontmatter and trigger; >=1 technique with an ordered-step body (`steps:` list, min 1 step); >=1 gotcha OR >=1 `anti_patterns` record. Gotchas and `anti_patterns` records are alternate containers for the same caution surface; state each caution once. `output_template:` is an optional companion to `steps:` carrying the output-shape contract for the agent's reply -- not a substitute for steps. Even user-only slash-command skills reduce to a 1-step procedure ("invoke command; render output") and write that step explicitly. |
 | **Required patterns** | activation metadata, exclusion clause, technique, known gotchas (satisfiable by gotchas OR `anti_patterns` records) |
-| **Conditionally required patterns** | explicit step-tracking -- IF the technique has more than 3 steps (criterion + OR-form + YAML-canonical note: see 2.4); utility bundle -- IF the procedure has deterministic steps that would otherwise be regenerated each call (criterion: any step whose output depends only on input); self-correcting loop -- IF the procedure produces output that can be programmatically validated (criterion: a validator script or rubric exists); plan-validate-execute -- IF the procedure has batch operations or irreversible side effects (criterion: any step that modifies external state at scale or is hard to undo); technique-wrapper form -- IF the skill is expected to fire more than once in a session (criterion: section 3.3) |
+| **Conditionally required patterns** | explicit step-tracking -- IF the technique has more than 3 steps (criterion + OR-form + YAML-canonical note: see 2.4); utility bundle -- IF the procedure has deterministic steps that would otherwise be regenerated each call (criterion: any step whose output depends only on input); self-correcting loop -- IF the procedure produces output that can be programmatically validated (criterion: a validator script or rubric exists); plan-validate-execute -- IF the procedure has batch operations or irreversible side effects (criterion: any step that modifies external state at scale or is hard to undo); declare `technique-wrapper` instead -- IF the skill is expected to fire more than once in a session (criterion: section 3.3) |
 | **Prohibited patterns** | adversarial pressure testing |
 | **Audit** | Can the agent apply the method to a novel scenario? Try variation and missing-information tests. |
+
+### technique-wrapper
+
+A technique-skill packaged for repeat firing (3.3): SKILL.md is a short prose
+stub, and the procedure lives in a `references/` document the agent reads once.
+
+| Contract | Items |
+|---|---|
+| **Required blocks** | SKILL.md file with frontmatter and trigger; ONE numbered step that follows a procedure document under `references/`; that procedure document, which holds the ordered steps, tool commands and consulted content |
+| **Required patterns** | activation metadata, exclusion clause, a direct citation of every `references/` file the stub names (a cited file that does not exist is a FAIL) |
+| **Optional blocks** | a `technique_wrapper:` YAML block with `procedure` (skill-relative path), optional `identity` and `arguments`; normally absent |
+| **Prohibited patterns** | a body longer than `wrapper_max_lines` lines (default 40); a `technique_skill:` contract beside it (a skill claims one type); `techniques`, `steps`, `rules`, `counters`, `facts`, `patterns`, `members`, `index` or `anti_patterns` keys in the optional block |
+| **Audit** | Rules `wrapper-ordered-step`, `wrapper-procedure-cited`, `wrapper-max-lines` (all FAIL). The YAML contract row is judgment-required without a block, never a FAIL. Does the procedure document, read once, let the agent finish the technique on every later firing? |
 
 ### capability-skill
 
@@ -854,7 +871,8 @@ Order of application when generating or refining a SKILL.md:
    file. 4.2 decides standalone skill vs reference of an existing domain;
    4.3-4.6 decide membership in a domain.
 2. **Type second.** Pick the type from the content shape (section 6), then
-   author bottom-up per 4.1. Run the 5.1 mixed-type check on the draft: a
+   author bottom-up per 4.1. A skill expected to fire more than once per
+   session takes the technique-wrapper type (3.3). Run the 5.1 mixed-type check on the draft: a
    skill spanning two types splits along the boundary rather than being
    forced into one contract.
 3. **Description third.** Write it against all five rules in 2.1. It is the

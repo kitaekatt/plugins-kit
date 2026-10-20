@@ -2,7 +2,7 @@
 name: recap
 description: "Use when the user asks for a recap, returns from afk, or an afk or autonomous run ends: a recap fit to its trigger. Do NOT use to summarize documents or code."
 argument-hint: "[return|afk-ending|autonomous-done <pid>]"
-skill-type: technique-skill
+skill-type: technique-wrapper
 ---
 
 # recap

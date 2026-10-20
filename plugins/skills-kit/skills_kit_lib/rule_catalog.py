@@ -22,7 +22,7 @@ field, it carries the judgment criteria an agent applies inside a workflow lane
 
 Criteria declared by the shipped standards layer (defaults/standards/) are not
 catalogued here: the shipped file is their source, and the resolver rejects a
-criterion id that repeats a catalog id. Thirty-six ids live there:
+criterion id that repeats a catalog id. Thirty-nine ids live there:
 
 - SKILL-standards.md: desc-160-char, desc-directive-form,
   desc-exclusion-clause, skill-type-tag, skill-type-valid, body-line-count,
@@ -33,7 +33,8 @@ criterion id that repeats a catalog id. Thirty-six ids live there:
   pattern-recognition-block, pattern-counter-example,
   pattern-prohibited-bundle, pattern-prohibited-checklist,
   pattern-prohibited-rule-counter, technique-ordered-steps, step-tracking,
-  technique-prohibited-pressure-test, discipline-rule-counter,
+  technique-prohibited-pressure-test, wrapper-ordered-step,
+  wrapper-procedure-cited, wrapper-max-lines, discipline-rule-counter,
   discipline-red-flags, discipline-pressure-test, domain-identity-sentence,
   domain-companion-declaration, domain-orientation, domain-reference-index and
   domain-prohibited-index-only.
@@ -119,6 +120,7 @@ THRESHOLD_CONSUMERS: dict[str, str] = {
     "body_max_lines": "`body-size-signal`, `claude-md-size-signal`",
     "body_max_tokens": "`body-size-signal`, `claude-md-size-signal`",
     "mixed_min_score": "`mixed-type`",
+    "wrapper_max_lines": "`wrapper-max-lines`",
 }
 
 

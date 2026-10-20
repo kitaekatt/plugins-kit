@@ -1,7 +1,7 @@
 ---
 name: afk
 description: "Use when the user says afk or steps away, even with nothing running: cover jobs, park questions, recap. Do NOT use for a hand-over (presence-kit:autonomous)."
-skill-type: technique-skill
+skill-type: technique-wrapper
 ---
 
 # afk

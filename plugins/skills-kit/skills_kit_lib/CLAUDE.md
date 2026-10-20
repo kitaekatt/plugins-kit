@@ -133,7 +133,7 @@ claude_md:
       summary: Portable units coexist freely; skill-type roots are mutually exclusive within a document.
       detail: |
         schema_registry tracks two role categories: SKILL_TYPE_ROOTS (reference_skill,
-        pattern_skill, technique_skill, discipline_skill, domain_skill, capability_skill,
+        pattern_skill, technique_skill, technique_wrapper, discipline_skill, domain_skill, capability_skill,
         audit_skill) and PORTABLE_UNIT_ROOTS (references, facts, area_config, sub_areas, actions,
         asset_dependencies, standards_set).
         detect_mixed_type_yaml only flags drift on skill-type roots; portable units are

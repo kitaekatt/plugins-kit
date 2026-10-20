@@ -110,6 +110,14 @@ technique_skill:
         - The keywords list must hold at least three entries on every load-bearing record.
 ```
 
+`technique_wrapper:`:
+
+```yaml
+technique_wrapper:
+  identity: Wrapper that points a repeat-fired skill at its procedure document.
+  procedure: references/author-instance.md
+```
+
 `discipline_skill:`:
 
 ```yaml

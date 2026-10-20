@@ -119,6 +119,7 @@ THRESHOLDS = _BuiltinThresholds({
     "body_max_lines": 500,
     "body_max_tokens": 3000,
     "mixed_min_score": 2,
+    "wrapper_max_lines": 40,
 })
 
 
@@ -535,6 +536,34 @@ def _eval_ordered_steps(ctx: SkillContext, th: dict[str, int]) -> tuple[str, boo
     return "ordered-step body", step_count >= 1, f"{step_count} ordered-step entries detected"
 
 
+_WRAPPER_CITATION = re.compile(
+    r"(?:\$\{CLAUDE_SKILL_DIR\}/|(?<![/:\w.-]))references/([A-Za-z0-9_\-]+\.md)"
+)
+
+
+def _eval_wrapper_procedure_cited(ctx: SkillContext, th: dict[str, int]) -> tuple[str, bool, str]:
+    """A technique-wrapper stub cites at least one references/ document, and every
+    one it cites exists: the stub's only job is to point at the procedure, so a
+    stub that points at nothing, or at a missing file, has no technique."""
+    label = "wrapper cites its procedure document"
+    cited = sorted(set(_WRAPPER_CITATION.findall(ctx.body.text)))
+    if not cited:
+        return label, False, "no references/<file>.md citation in the body"
+    missing = [name for name in cited if not (ctx.skill_dir / "references" / name).is_file()]
+    if missing:
+        return label, False, f"cited but missing: {missing}"
+    return label, True, f"cites {len(cited)} reference file(s)"
+
+
+def _eval_wrapper_max_lines(ctx: SkillContext, th: dict[str, int]) -> tuple[str, bool, str]:
+    """A technique-wrapper stub stays within wrapper_max_lines lines: a longer body
+    has inlined content or steps the procedure document should carry, and a
+    skill that fires repeatedly pays that body on every firing."""
+    limit = th["wrapper_max_lines"]
+    lines = ctx.body.lines
+    return f"wrapper stub within {limit} lines", lines <= limit, f"{lines} lines"
+
+
 def _eval_step_tracking(ctx: SkillContext, th: dict[str, int]) -> tuple[str, bool | None, str]:
     label = "explicit step-tracking (conditional, IF >3 steps): checklist OR tracker invocation"
     step_count = count_ordered_steps(ctx.body.text)
@@ -591,6 +620,7 @@ _PATTERN_SKILL_APPLIES = _legacy_applies("pattern-skill")
 _TECHNIQUE_SKILL_APPLIES = _legacy_applies("technique-skill")
 _DISCIPLINE_SKILL_APPLIES = _legacy_applies("discipline-skill")
 _DOMAIN_SKILL_APPLIES = _legacy_applies("domain-skill")
+_TECHNIQUE_WRAPPER_APPLIES = _legacy_applies("technique-wrapper")
 
 
 def _has_claude_md_block(ctx: ClaudeMdContext) -> bool:
@@ -807,6 +837,24 @@ MECHANICAL_EVALUATORS: dict[str, MechanicalEvaluator] = {
             "RED/GREEN/REFACTOR markers present",
         ),
         section="type_specific", bare_severity="fail",
+    ),
+    "wrapper-ordered-step": MechanicalEvaluator(
+        "skill_md", None,
+        "ordered-step body (deferred)", _TECHNIQUE_WRAPPER_APPLIES, _eval_ordered_steps,
+        section="type_specific", bare_severity="fail",
+    ),
+    "wrapper-procedure-cited": MechanicalEvaluator(
+        "skill_md", None,
+        "wrapper cites its procedure document (deferred)", _TECHNIQUE_WRAPPER_APPLIES,
+        _eval_wrapper_procedure_cited,
+        section="type_specific", bare_severity="fail",
+    ),
+    "wrapper-max-lines": MechanicalEvaluator(
+        "skill_md", None,
+        "wrapper stub within wrapper_max_lines lines (deferred)", _TECHNIQUE_WRAPPER_APPLIES,
+        _eval_wrapper_max_lines,
+        section="type_specific", bare_severity="fail",
+        reads_builtin_thresholds=("wrapper_max_lines",),
     ),
     "discipline-rule-counter": MechanicalEvaluator(
         "skill_md", None,
@@ -1867,6 +1915,9 @@ _LEGACY_SKILL_RULES: dict[str, tuple[str, ...]] = {
     ),
     "technique-skill": (
         "technique-ordered-steps", "step-tracking", "technique-prohibited-pressure-test",
+    ),
+    "technique-wrapper": (
+        "wrapper-ordered-step", "wrapper-procedure-cited", "wrapper-max-lines",
     ),
     "discipline-skill": (
         "discipline-rule-counter", "discipline-red-flags", "discipline-pressure-test",

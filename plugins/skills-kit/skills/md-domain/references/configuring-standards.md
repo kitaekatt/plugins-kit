@@ -220,6 +220,9 @@ source of each statement, severity and threshold default.
 | `technique-ordered-steps` | `skill_md` | fail | A technique-skill body has an ordered-step sequence. |
 | `step-tracking` | `skill_md` | fail | A technique-skill with more than three steps carries a tickbox checklist or a step-tracker invocation. |
 | `technique-prohibited-pressure-test` | `skill_md` | fail | A technique-skill body omits adversarial RED/GREEN/REFACTOR pressure testing. |
+| `wrapper-ordered-step` | `skill_md` | fail | A technique-wrapper body has an ordered-step sequence (its one numbered step). |
+| `wrapper-procedure-cited` | `skill_md` | fail | A technique-wrapper body cites at least one references/ document, and every document it cites exists. |
+| `wrapper-max-lines` | `skill_md` | fail | A technique-wrapper body stays within `wrapper_max_lines` lines. |
 | `discipline-rule-counter` | `skill_md` | fail | A discipline-skill body carries at least one rule+counter pair. |
 | `discipline-red-flags` | `skill_md` | fail | A discipline-skill body carries a "Red flags" list. |
 | `discipline-pressure-test` | `skill_md` | fail | A discipline-skill applies adversarial pressure testing to its own rules. |
@@ -263,7 +266,7 @@ document, so they carry no config knob.
 
 ## Thresholds
 
-Six named thresholds carry the numeric limits some rules apply. Override any of
+Seven named thresholds carry the numeric limits some rules apply. Override any of
 them in `thresholds:`; an override must be a positive integer. A threshold
 declared by a shipped criterion takes its default from that criterion.
 
@@ -273,6 +276,7 @@ declared by a shipped criterion takes its default from that criterion.
 | `body_max_lines` | 500 | `body-size-signal`, `claude-md-size-signal` |
 | `body_max_tokens` | 3000 | `body-size-signal`, `claude-md-size-signal` |
 | `mixed_min_score` | 2 | `mixed-type` |
+| `wrapper_max_lines` | 40 | `wrapper-max-lines` |
 | `import_max_lines` | 50 | `claude-md-import-size` (declared by the criterion) |
 | `desc_max_chars` | 160 | `desc-160-char` (declared by the criterion) |
 

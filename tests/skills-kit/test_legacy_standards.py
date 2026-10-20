@@ -54,11 +54,13 @@ ROWS_BY_TYPE = {
                       "pattern-prohibited-rule-counter"],
     "technique-skill": ["technique-ordered-steps", "step-tracking",
                         "technique-prohibited-pressure-test"],
+    "technique-wrapper": ["wrapper-ordered-step", "wrapper-procedure-cited", "wrapper-max-lines"],
     "discipline-skill": ["discipline-rule-counter", "discipline-red-flags", "discipline-pressure-test"],
     "domain-skill": ["domain-identity-sentence", "domain-companion-declaration", "domain-orientation",
                      "domain-reference-index", "domain-prohibited-index-only"],
 }
-MIGRATED_TYPES = ("reference-skill", "pattern-skill", "technique-skill", "discipline-skill", "domain-skill")
+MIGRATED_TYPES = ("reference-skill", "pattern-skill", "technique-skill", "technique-wrapper",
+                  "discipline-skill", "domain-skill")
 LEGACY_IDS = [rid for t in MIGRATED_TYPES for rid in ROWS_BY_TYPE[t]]
 TYPE_OF = {rid: t for t in MIGRATED_TYPES for rid in ROWS_BY_TYPE[t]}
 
@@ -71,6 +73,7 @@ SEVERITY = {
     "pattern-prohibited-rule-counter": "fail",
     "technique-ordered-steps": "fail", "step-tracking": "fail",
     "technique-prohibited-pressure-test": "fail",
+    "wrapper-ordered-step": "fail", "wrapper-procedure-cited": "fail", "wrapper-max-lines": "fail",
     "discipline-rule-counter": "fail", "discipline-red-flags": "fail", "discipline-pressure-test": "fail",
     "domain-identity-sentence": "judgment", "domain-companion-declaration": "fail",
     "domain-orientation": "fail", "domain-reference-index": "fail", "domain-prohibited-index-only": "fail",
@@ -81,6 +84,8 @@ BLANK = H1 + "Prose only.\n"
 STEPS_2 = "1. one\n2. two\n"
 STEPS_3 = STEPS_2 + "3. three\n"
 STEPS_4 = STEPS_3 + "4. four\n"
+WRAPPER_CITES = "wrapper cites its procedure document"
+WRAPPER_LINES = "wrapper stub within 40 lines"
 STEP_TRACKING = "explicit step-tracking (conditional, IF >3 steps): checklist OR tracker invocation"
 
 # (id, scenario, body, directories to create, expected (label, verdict, note)).
@@ -153,6 +158,23 @@ CASES = [
      (STEP_TRACKING, PASS, "4 steps; satisfied via step-tracker invocation")),
     ("step-tracking", "pass-both-reports-checklist", H1 + STEPS_4 + "- [ ] a tick\nUse TaskCreate.\n", (),
      (STEP_TRACKING, PASS, "4 steps; satisfied via tickbox checklist")),
+    ("wrapper-ordered-step", "miss", BLANK, (),
+     ("ordered-step body", FAIL, "0 ordered-step entries detected")),
+    ("wrapper-ordered-step", "hit", H1 + STEPS_2, (),
+     ("ordered-step body", PASS, "2 ordered-step entries detected")),
+    ("wrapper-procedure-cited", "miss-no-citation", BLANK, (),
+     (WRAPPER_CITES, FAIL, "no references/<file>.md citation in the body")),
+    ("wrapper-procedure-cited", "miss-file-absent", H1 + "1. Follow `references/nope.md`.\n", ("references",),
+     (WRAPPER_CITES, FAIL, "cited but missing: ['nope.md']")),
+    ("wrapper-procedure-cited", "hit-skill-dir-form",
+     H1 + "1. Follow `${CLAUDE_SKILL_DIR}/references/x.md`.\n", ("references",),
+     (WRAPPER_CITES, PASS, "cites 1 reference file(s)")),
+    ("wrapper-procedure-cited", "hit-bare-form", H1 + "1. Follow `references/x.md`.\n", ("references",),
+     (WRAPPER_CITES, PASS, "cites 1 reference file(s)")),
+    ("wrapper-max-lines", "hit", H1 + STEPS_2, (),
+     (WRAPPER_LINES, PASS, "4 lines")),
+    ("wrapper-max-lines", "miss-inlined-body", H1 + "line\n" * 100, (),
+     (WRAPPER_LINES, FAIL, "102 lines")),
     ("technique-prohibited-pressure-test", "miss", BLANK, (),
      ("prohibited: adversarial pressure testing", PASS, "")),
     ("technique-prohibited-pressure-test", "hit", H1 + "Apply RED -> GREEN -> REFACTOR.\n", (),
@@ -224,6 +246,8 @@ FENCED = [
      H1 + "```markdown\n| excuse | reality |\n|---|---|\n| a | b |\n```\n", PASS),
     ("technique-ordered-steps", H1 + "```text\n1. a\n2. b\n```\n", FAIL),
     ("step-tracking", H1 + STEPS_2 + "```text\n3. c\n4. d\n5. e\n```\n", NA),
+    ("wrapper-ordered-step", H1 + "```text\n1. a\n2. b\n```\n", FAIL),
+    ("wrapper-procedure-cited", H1 + "```text\nreferences/x.md\n```\n", FAIL),
     ("technique-prohibited-pressure-test", H1 + "```markdown\nRED -> GREEN -> REFACTOR\n```\n", PASS),
     ("discipline-rule-counter",
      H1 + "```markdown\n| excuse | reality |\n|---|---|\n| a | b |\n```\n", FAIL),
@@ -240,6 +264,7 @@ CONTRACT_BLOCK = {
     "reference-skill": "```yaml\nreference_skill:\n  _schema_version: \"1\"\n```\n",
     "pattern-skill": "```yaml\npattern_skill:\n  _schema_version: \"1\"\n```\n",
     "technique-skill": "```yaml\ntechnique_skill:\n  _schema_version: \"1\"\n```\n",
+    "technique-wrapper": "```yaml\ntechnique_wrapper:\n  procedure: references/x.md\n```\n",
     "discipline-skill": "```yaml\ndiscipline_skill:\n  _schema_version: \"1\"\n```\n",
     "domain-skill": "```yaml\ndomain_skill:\n  _schema_version: \"1\"\n```\n",
 }
@@ -268,6 +293,7 @@ def _skill(tmp_path, skill_type, body=BLANK, dirs=(), name="subject"):
     for sub in dirs:
         (d / sub).mkdir()
         (d / sub / "x.sh").write_text("x", encoding="utf-8")
+        (d / sub / "x.md").write_text("x", encoding="utf-8")
     type_line = "" if skill_type is None else f"skill-type: {skill_type}\n"
     (d / "SKILL.md").write_text(
         f"---\nname: subject\ndescription: Use when X. Do NOT use for Y.\n{type_line}---\n{body}",
@@ -332,10 +358,10 @@ def _standards_md(criteria_yaml):
 # ---------------------------------------------------------------------------
 
 
-def test_all_twenty_legacy_ids_have_moved_into_the_shipped_file():
-    """The 19 per-type ids and step-tracking, no more and no fewer."""
-    assert len(LEGACY_IDS) == 20
-    assert set(MIGRATED_TYPES) == {"reference-skill", "pattern-skill", "technique-skill",
+def test_all_twenty_three_legacy_ids_have_moved_into_the_shipped_file():
+    """The 19 per-type ids, step-tracking and the three technique-wrapper ids, no more and no fewer."""
+    assert len(LEGACY_IDS) == 23
+    assert set(MIGRATED_TYPES) == {"reference-skill", "pattern-skill", "technique-skill", "technique-wrapper",
                                    "discipline-skill", "domain-skill"}
     assert "step-tracking" in LEGACY_IDS
     assert LEGACY_IDS == [c["id"] for c in _shipped_block()["standards_set"]["criteria"]]
@@ -436,8 +462,8 @@ def test_a_type_gets_its_rows_in_order_in_the_type_specific_list(tmp_path, skill
 
 
 @pytest.mark.parametrize("other", [None, "bogus-skill", "capability-skill", "audit-skill",
-                                   "pattern-skill", "technique-skill", "discipline-skill",
-                                   "domain-skill", "reference-skill"])
+                                   "pattern-skill", "technique-skill", "technique-wrapper",
+                                   "discipline-skill", "domain-skill", "reference-skill"])
 def test_a_row_is_emitted_only_for_its_own_declared_type(tmp_path, other):
     report = audit(_skill(tmp_path, other))
     emitted = [r["rule"] for r in report["type_specific"] if r["rule"] in LEGACY_IDS]
@@ -458,6 +484,22 @@ def test_a_staged_contract_suppresses_every_legacy_row(tmp_path, skill_type):
 def test_a_marker_inside_a_code_fence_is_ignored(tmp_path, rid, body, verdict):
     row = _legacy_rows(audit(_skill(tmp_path, TYPE_OF[rid], body)))[rid]
     assert row["verdict"] == verdict
+
+
+def test_a_fenced_block_counts_toward_the_wrapper_length(tmp_path):
+    """Unlike a marker, length is what every firing injects: fenced lines are paid for too."""
+    body = H1 + "1. Follow `references/x.md`.\n\n```text\n" + "l\n" * 60 + "```\n"
+    row = _legacy_rows(audit(_skill(tmp_path, "technique-wrapper", body, ("references",))))["wrapper-max-lines"]
+    assert row["verdict"] == FAIL
+
+
+def test_the_wrapper_length_limit_is_tunable_through_thresholds(tmp_path):
+    """wrapper_max_lines is a built-in threshold: raising it turns the miss into a pass."""
+    (_user_layer(tmp_path) / "config.yaml").write_text("thresholds:\n  wrapper_max_lines: 200\n", encoding="utf-8")
+    resolved = sr.resolve(None)
+    body = H1 + "1. Follow `references/x.md`.\n" + "line\n" * 100
+    report = audit(_skill(tmp_path, "technique-wrapper", body, ("references",)), resolved)
+    assert _legacy_rows(report)["wrapper-max-lines"]["verdict"] == PASS
 
 
 def test_the_type_specific_context_carries_the_fence_stripped_body_and_the_staged_flag():

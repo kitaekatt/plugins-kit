@@ -803,19 +803,26 @@ claude_md:
       added: "2026-09-30"
     - id: repeat_invoked_skills_are_technique_wrappers
       keywords: [technique-wrapper, repeat invocation, context duplication, skill fires repeatedly, stub skill, procedure in references, one-step technique, Stop hook nudge, skill body re-injected, CRP-fail split exception]
-      summary: A technique-skill expected to fire more than once per session is packaged as a technique-wrapper -- a one-step SKILL.md whose step reads a procedure document in references/ -- because each Skill call re-injects the whole body while a reference Read can be skipped when its text is already in context. skill-standards 3.3 holds the rule and its criterion.
+      summary: A skill expected to fire more than once per session declares skill-type technique-wrapper -- a short prose SKILL.md whose one numbered step reads a procedure document in references/ -- because each Skill call re-injects the whole body while a reference Read can be skipped when its text is already in context. skill-standards 3.3 holds the rule and its criterion; section 6 holds the type contract.
       detail: |
         Each Skill invocation appends the full SKILL.md to the context and
         nothing removes earlier copies, so a skill that hooks or nudges re-invoke
         costs its body once per firing. A reference is loaded by a Read the agent
         chooses to make and can skip. The first design kept ordered steps in the
         body and moved only consulted content out; the owner then asked for the
-        technique itself to move, naming the result a technique-wrapper skill.
-        It stays skill-type technique-skill, and a new type value would have meant
-        a schema registry change nobody needed. The stub is plain prose with one
-        numbered step and no YAML contract block, at the owner's request ("skip
-        the whole yaml structure thing"); audit takes the legacy-markdown route
-        for it, so the missing block is judgment-required and never a FAIL.
+        technique itself to move, naming the result a technique-wrapper skill,
+        and asked for it to be a type of its own ("call it technique-wrapper"),
+        because the header technique-skill named a contract the file does not
+        carry. The registry gained technique_wrapper (an
+        optional block with a required `procedure` path) and three legacy rows
+        (wrapper-ordered-step, wrapper-procedure-cited, wrapper-max-lines, the
+        last tunable through the built-in wrapper_max_lines threshold). The stub
+        is plain prose with one numbered step and no YAML contract block, at the
+        owner's request ("skip the whole yaml structure thing"); audit takes the
+        legacy-markdown route for it, so the missing block is judgment-required
+        and never a FAIL. Body heuristics never score the type: only the
+        declaration decides, because a short numbered stub that cites references/
+        is also what an ordinary technique skill looks like.
         The cost, stated in 3.3: the procedure in a reference loses the schema's
         mechanical step validation (it is audited as a skill reference document,
         section 10), and the first firing pays one extra Read. 3.1's CRP-fail
@@ -827,7 +834,7 @@ claude_md:
         across a session, and a count showed one copy of the skill body per
         invocation. Finding: the owner asked for repeat-invoked skills to hold
         minimal context, first as content-in-references, then as procedure-in-
-        references. Follow-up: apply the form to presence-kit afk and autonomous
-        if their repeat firing justifies it; recap shipped first.
+        references, then as its own type. Follow-up: none; presence-kit's recap,
+        afk and autonomous all declare the type.
       added: "2026-10-20"
 ```

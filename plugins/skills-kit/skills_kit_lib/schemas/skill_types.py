@@ -149,6 +149,27 @@ TECHNIQUE_SKILL_SCHEMA = {
                        "standards_set"],
 }
 
+TECHNIQUE_WRAPPER_SCHEMA = {
+    "root": "technique_wrapper",
+    "owner_doc": "skills/md-domain/references/skill-domain/schema-fixtures.md",
+    "keys": {
+        "_schema_version": {"type": "string", "required": False},
+        "identity": {"type": "string", "required": False,
+                     "note": "one-sentence identity for the skill (optional: the stub prose carries it)"},
+        "procedure": {"type": "string", "required": True,
+                      "note": "skill-relative path of the references/ document that holds the procedure"},
+        "arguments": {"type": "list", "required": False, "items": {"keys": {
+            "name": {"type": "string", "required": True},
+            "required": {"type": "bool", "required": True},
+            "description": {"type": "string", "required": True},
+        }}},
+    },
+    "forbidden_keys": ["techniques", "steps", "rules", "counters", "facts", "patterns",
+                       "apply_when", "do_not_apply_when", "members", "index",
+                       "standards_set", "anti_patterns"],
+}
+
+
 DISCIPLINE_SKILL_SCHEMA = {
     "root": "discipline_skill",
     "owner_doc": "skills/md-domain/references/skill-domain/schema-fixtures.md",
@@ -448,6 +469,8 @@ register_schema("pattern_skill", PATTERN_SKILL_SCHEMA, role="skill_type",
                 owner_doc=PATTERN_SKILL_SCHEMA["owner_doc"])
 register_schema("technique_skill", TECHNIQUE_SKILL_SCHEMA, role="skill_type",
                 owner_doc=TECHNIQUE_SKILL_SCHEMA["owner_doc"])
+register_schema("technique_wrapper", TECHNIQUE_WRAPPER_SCHEMA, role="skill_type",
+                owner_doc=TECHNIQUE_WRAPPER_SCHEMA["owner_doc"])
 register_schema("discipline_skill", DISCIPLINE_SKILL_SCHEMA, role="skill_type",
                 owner_doc=DISCIPLINE_SKILL_SCHEMA["owner_doc"])
 register_schema("domain_skill", DOMAIN_SKILL_SCHEMA, role="skill_type",
