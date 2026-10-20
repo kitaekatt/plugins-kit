@@ -83,6 +83,11 @@ def git_template(tmp_path_factory):
     receives an empty directory. Callers must treat the result as READ-ONLY and
     hand tests a `sk_testlib.copy_git_tree` copy of it -- see that module for
     why this exists and why it is safe under pytest-xdist.
+
+    A template can be a tree in a LATER state, built by driving the real CLI
+    over a copy of an earlier template: see `test_dest_guard.state_template`,
+    which is built on this fixture. Replaying the CLI per test is the expensive
+    part of a recovery test's setup; replaying it once per process is not.
     """
     root = tmp_path_factory.mktemp("git-templates")
     built = {}
@@ -91,6 +96,10 @@ def git_template(tmp_path_factory):
         if key not in built:
             target = root / key
             target.mkdir(parents=True)
+            if sys.platform.startswith("win"):
+                # A template that runs the CLI needs the owner-only data root
+                # a test's tmp_path gets from `isolated_user_home`.
+                _owner_only_windows_root(target)
             with pytest.MonkeyPatch.context() as patch:
                 for name, value in _GIT_HOST_ISOLATION.items():
                     patch.setenv(name, value)

@@ -1,18 +1,21 @@
 """Actual fetched Git views, public authoring effects and stale-read controls."""
 
 import json
+import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 
 import pytest
 
 from sk_publish import fixture_commit_and_push
+from sk_testlib import remove_git_tree, replace_git_tree
 
 from secrets_kit import SecretsError, agefile
 from secrets_kit import converge as convergence
 from secrets_kit import repo as repository
-from test_dest_guard import _armored, _templates, adding
+from test_dest_guard import _armored, _templates, adding, state_template
 from test_repo import _commit, _fleet_git_template, fleet_git
 
 
@@ -91,16 +94,112 @@ def test_actual_ahead_only_checkout_remains_accepted(fleet_git):
     assert _git(fleet_git.author, 'rev-parse', 'HEAD') == old
 
 
-def _seed_author(adding):
+def _author_cli(adding, patch):
+    """What authoring a fleet through the real CLI leaves in the adding tree.
+
+    A CLI `add` (blob, manifest, installed pre-commit hook, push), a published
+    `identity.age`, and a cached identity: about a hundred git processes. It
+    runs once per process, in `state_template`; `_seed_author` serves it.
+    """
     assert adding.cli.main(['add', 'ha-token', '--file', adding.source, '--dest', '${PLAIN}/ha-token.txt', '--profile', 'base']) == 0
     (adding.clone / 'identity.age').write_bytes(_armored(b'age1dummywrap', b'dummy wrapped identity\n'))
     fixture_commit_and_push(adding.clone, 'dummy wrapped identity', ['identity.age'])
     identity = adding.data_dir / 'identity.txt'
     identity.write_bytes(b'dummy cached old identity\n');identity.chmod(0o600)
+
+
+def _author_template():
+    return state_template('authored', _author_cli)
+
+
+def _configure_machine(adding):
+    """The per-test half of a served state: the machine config lives outside the tree."""
     raw = json.loads(adding.config_path.read_text());raw['machines']['testbox']['profiles'] = ['base']
     adding.config_path.write_text(json.dumps(raw))
     source_hook = Path(__file__).resolve().parents[2] / 'plugins/secrets-kit/hooks/fleet-secrets-pre-commit'
     assert (adding.clone / '.git/hooks/pre-commit').read_bytes() == source_hook.read_bytes()
+
+
+def _seed_author(adding):
+    """Put `adding` in the state a real CLI `add` plus a published identity leave it.
+
+    Served from a per-process template (`state_template('authored', ...)`): the
+    tree is swapped for a copy, in place, so every path the caller holds stays
+    valid. Call it before patching anything the CLI would reach (`repository._git`,
+    agefile): the template is built on first use, under whatever is patched then.
+    """
+    replace_git_tree(_author_template(), adding.data_dir.parent)
+    _configure_machine(adding)
+
+
+def _configure_cli(adding, patch):
+    """Authored fleet plus a second entry, materialized once on this machine.
+
+    The strict decrypt stand-in (`test_repo_binding._strict_crypto`) is in force
+    while the second `add` and the converge run, as `test_seed_recovery`'s
+    subject configuration runs them. Asserts here run once per process.
+    """
+    from test_repo_binding import _strict_crypto
+    _configure_machine(adding)
+    _strict_crypto(adding, patch)
+    second = adding.data_dir.parent / 'second dummy source.txt'
+    second.write_bytes(b'dummy second old value\n')
+    assert adding.cli.main(['add', 'second-old', '--file', str(second), '--dest', '${PLAIN}/second.txt', '--profile', 'base']) == 0
+    assert convergence.converge(adding.config_path, adding.data_dir).written == 2
+
+
+def _configure_template():
+    return state_template('configured', _configure_cli, after=_author_template())
+
+
+def _seed_configured(adding):
+    """`_seed_author`, then a second entry `second-old` added and both entries converged.
+
+    The state is `test_seed_recovery._configure_subject`'s force branch up to its
+    `converge(...).written == 2` line, served from a template. Differences a
+    caller can see: the strict-crypto `calls` of the second add and the converge
+    are not in the caller's list (apply `_strict_crypto` after this call), and
+    a converge pass now writes 0, not 2. The file 'second dummy source.txt' is
+    in the tree, as it was.
+    """
+    replace_git_tree(_configure_template(), adding.data_dir.parent)
+    _configure_machine(adding)
+
+
+def test_a_served_configured_state_is_detached_from_its_template(adding):
+    """The ledger a served copy carries names the copy's paths, not the template's.
+
+    A converge reads `data/state.json`: were its destinations still the template's,
+    the pass would find nothing at the copy's destinations and try to decrypt for
+    real. Converging with nothing to write is the proof they were repointed.
+    """
+    _seed_configured(adding)
+    template = _configure_template()
+    rows = json.loads((adding.data_dir / 'state.json').read_text())['entries']
+    assert sorted(rows) == ['ha-token', 'second-old']
+    assert all(Path(row['dest']).parent == adding.plain for row in rows.values())
+    assert convergence.converge(adding.config_path, adding.data_dir).written == 0
+    (adding.plain / 'second.txt').unlink()
+    assert (template / 'plain/second.txt').is_file()
+    assert str(template) not in (adding.data_dir / 'state.json').read_text()
+
+
+def test_removing_a_tree_survives_read_only_git_objects(tmp_path, monkeypatch):
+    """Windows refuses to delete a read-only file; git writes its objects 0444."""
+    tree = tmp_path / 'tree'
+    (tree / 'objects').mkdir(parents=True)
+    packed = tree / 'objects' / 'pack.idx'
+    packed.write_bytes(b'dummy')
+    packed.chmod(0o444)
+    unlink = os.unlink
+    def windows_unlink(path, *, dir_fd=None):
+        target = os.stat(path, dir_fd=dir_fd)
+        if not target.st_mode & stat.S_IWRITE:
+            raise PermissionError(13, 'read-only', str(path))
+        return unlink(path, dir_fd=dir_fd)
+    monkeypatch.setattr(os, 'unlink', windows_unlink)
+    remove_git_tree(tree)
+    assert not tree.exists()
 
 
 def _publish_other_metadata(adding):

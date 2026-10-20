@@ -325,7 +325,7 @@
       "baseline_failures": []
     },
     {
-      "path": "tests/llm-scripting-kit/test_custom_bootstrap.py",
+      "path": "tests/llm-scripting-kit/test_llm_scripting_custom_bootstrap.py",
       "disposition": "legacy-only",
       "reason": "Tests plugins/llm-scripting-kit/custom_bootstrap.py (OpenRouter key check, deferred requirements, legacy .env and data-dir migration). llm-kit carries the key check and the deferred-requirement reporting (plugins/llm-kit/custom_bootstrap.py, hooked in its bootstrap.json) and asserts them natively, under a temporary HOME and a fake network, in tests/llm-kit/test_custom_bootstrap.py. It drops the loc-ops .env migration and the pre-rename data-directory move, and seeds no config layer: decision 7 makes the legacy credential and config locations the shared ones, so llm-kit reads them and moves none. The legacy file stays the frozen plugin's own test.",
       "rewrite_classes": [],

@@ -157,8 +157,17 @@ def both(sides, group: str, verb: str, *rest: str, capsys, monkeypatch, stdin: O
         out, err = normalize(outcome.out, repl), normalize(outcome.err, repl)
         if side.name == "legacy":
             out, err = to_final(out), to_final(err)
+        # The final side loses its group word after the executable above ("llm-kit models" -> "<exe>"), but
+        # to_final re-adds the group to a legacy message the final CLI words with it (the halt write-back
+        # names "models record-halt"). Strip the group after the executable on both sides, so the comparison
+        # is symmetric; the final group wording itself is asserted by tests/llm-kit/test_final_messages.py.
+        out, err = _strip_group_after_exe(out, group), _strip_group_after_exe(err, group)
         results.append(Outcome(outcome.code, out, err))
     return results[0], results[1]
+
+
+def _strip_group_after_exe(text: str, group: str) -> str:
+    return text.replace(f"<exe> {group} ", "<exe> ")
 
 
 def same(left: Outcome, right: Outcome) -> Outcome:

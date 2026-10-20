@@ -124,7 +124,7 @@
     {
       "name": "hue-kit",
       "description": "Manage Philips Hue scenes as editable YAML -- bridge sync and dry-run apply.",
-      "version": "0.16.4",
+      "version": "0.16.5",
       "author": {
         "name": "Christina"
       },
@@ -163,7 +163,7 @@
     {
       "name": "secrets-kit",
       "description": "Fleet secrets provisioning: materialize age-encrypted credentials from a private repo onto each machine, declaratively. One passphrase-protected identity per fleet, unlocked once per machine; blobs encrypt to the public key so adding or rotating a secret never needs the passphrase. Session-start convergence + CLI.",
-      "version": "0.8.41",
+      "version": "0.8.42",
       "author": {
         "name": "Christina"
       },
@@ -243,7 +243,7 @@
     {
       "name": "llm-kit",
       "description": "LLM access, durable agent jobs and batch content pipelines in one library. Consolidation of llm-scripting-kit, job-kit and content-pipeline-kit.",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "author": {
         "name": "Christina"
       },

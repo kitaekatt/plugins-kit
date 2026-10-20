@@ -136,12 +136,12 @@ def test_collection_counts_reconcile_to_every_collected_test():
         assert LEDGERS[suite]["collection_total"] == totals[suite]
 
 
-def test_the_expected_baseline_failure_is_recorded():
+def test_the_version_test_is_green_so_no_baseline_failure_is_recorded():
+    """The legacy __version__ drift (0.36.0 against manifest 0.37.0) was fixed by a patch bump."""
     rows = {r["path"]: r for r in LEDGERS["content-pipeline-kit"]["rows"]}
     row = rows["tests/content-pipeline-kit/test_version_matches_plugin_json.py"]
     assert row["disposition"] == "legacy-only"
-    assert row["baseline_failures"] == [
-        "content-pipeline-kit/test_version_matches_plugin_json.py::test_version_matches_plugin_json"]
+    assert row["baseline_failures"] == []
 
 
 def test_rewrite_classes_match_the_current_rewrite():

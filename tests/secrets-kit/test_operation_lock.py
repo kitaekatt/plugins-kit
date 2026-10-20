@@ -301,7 +301,9 @@ def test_exec_child_does_not_keep_released_operation_owned(adding, monkeypatch):
     try:
         child_still_alive = _alive(child)
         retry = _finish(_start(*b), b[0])
-    finally:os.kill(child, signal.SIGTERM)
+    finally:
+        try:os.kill(child, signal.SIGTERM)
+        except ProcessLookupError:pass
     assert second['code'] == 1 and first['code'] == retry['code'] == 0 and child_still_alive
 
 

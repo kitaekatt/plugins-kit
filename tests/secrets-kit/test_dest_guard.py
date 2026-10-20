@@ -73,6 +73,7 @@ _TEMPLATES = {}
 
 @pytest.fixture(scope="session", autouse=True)
 def _templates(git_template):
+    _TEMPLATES["factory"] = git_template
     _TEMPLATES["plain"] = git_template("dest-guard-plain", _build_plain_repo)
     _TEMPLATES["adding"] = git_template("dest-guard-adding", _build_adding_tree)
 
@@ -442,18 +443,14 @@ def _build_adding_tree(root: Path) -> None:
     (root / "source.txt").write_bytes(_PLAINTEXT)
 
 
-@pytest.fixture
-def adding(tmp_path, monkeypatch):
-    """A seeded secrets repo with a real remote, plus dest trees to aim at.
+def _adding_subject(tree, config_path, monkeypatch):
+    """The `adding` object over `tree`: the CLI loaded against it and wired in.
 
-    Neither `fleet` nor the `repo` fixture in test_guard.py fits: this needs a
-    pushable secrets repo AND a real git working tree standing in for the
-    consumer. `no_network` deliberately stubs git out, so it cannot be reused.
-
-    The tree itself is a private copy of a per-process template (see
-    `sk_testlib`); the copy is a real git repo and the test owns it outright.
+    `tree` is a private copy of the adding template (or of a state template
+    derived from it); `config_path` is where this subject's secrets.json is
+    written. `monkeypatch` owns every patch made here, so a caller that is not a
+    test (a session template build) passes a `pytest.MonkeyPatch.context()`.
     """
-    tree = copy_git_tree(_TEMPLATES["adding"], tmp_path / "adding")
     remote = tree / "remote.git"
     data_dir = tree / "data"
     clone = data_dir / "repo"
@@ -461,7 +458,6 @@ def adding(tmp_path, monkeypatch):
     plain = tree / "plain"
     source = tree / "source.txt"
 
-    config_path = tmp_path / "secrets.json"
     config_path.write_text(
         json.dumps(
             {
@@ -526,6 +522,69 @@ def adding(tmp_path, monkeypatch):
 
     a.entry = entry
     return a
+
+
+@pytest.fixture
+def adding(tmp_path, monkeypatch):
+    """A seeded secrets repo with a real remote, plus dest trees to aim at.
+
+    Neither `fleet` nor the `repo` fixture in test_guard.py fits: this needs a
+    pushable secrets repo AND a real git working tree standing in for the
+    consumer. `no_network` deliberately stubs git out, so it cannot be reused.
+
+    The tree itself is a private copy of a per-process template (see
+    `sk_testlib`); the copy is a real git repo and the test owns it outright.
+    """
+    tree = copy_git_tree(_TEMPLATES["adding"], tmp_path / "adding")
+    return _adding_subject(tree, tmp_path / "secrets.json", monkeypatch)
+
+
+def state_template(key, populate, *, after=None):
+    """Path of a prebuilt tree in the state `populate` leaves the `adding` tree in.
+
+    The first call in a process builds it, the way a test would: a private copy
+    of the adding template (or of the state template `after`, a path an earlier
+    `state_template` call returned), an `adding` subject over it, and
+    `populate(subject, patch)` driving the real CLI and git. `patch` is the
+    `MonkeyPatch` that owns the build's patches (crypto stand-ins, say); it is
+    undone when the build ends. Later calls return the same path.
+
+    The result is READ-ONLY; hand a test `sk_testlib.copy_git_tree(path, dest)`
+    or, for a test that already holds an `adding`,
+    `sk_testlib.replace_git_tree(path, <the adding tree>)`. Never run a test
+    against the template itself. The subject's secrets.json lives OUTSIDE the
+    tree, so a template cannot carry config edits: the caller re-applies them
+    (`populate` makes them too, when its own CLI calls need them).
+
+    `populate` runs once per process, so an assertion in it is made once per
+    process; keep a per-test check in the caller if it must hold per test.
+    Each key names ONE state: two states that differ get two keys.
+
+    Build conditions mirror a test's: host-isolated git, an empty user home, the
+    dummy `encrypt_to_recipient` of `adding`, and `secrets_kit_cli` restored in
+    `sys.modules` afterwards. Calling this under a test's own patches (a fault
+    injected into repo._git, say) would build the template under them, so call
+    it before patching, as every `_seed_author` caller does.
+    """
+
+    def build(target):
+        tree = copy_git_tree(after or _TEMPLATES["adding"], target / "adding")
+        home = target / "user home"
+        home.mkdir()
+        previous_cli = sys.modules.get("secrets_kit_cli")
+        try:
+            with pytest.MonkeyPatch.context() as patch:
+                patch.setenv("HOME", str(home))
+                patch.setenv("USERPROFILE", str(home))
+                subject = _adding_subject(tree, target / "secrets.json", patch)
+                populate(subject, patch)
+        finally:
+            if previous_cli is None:
+                sys.modules.pop("secrets_kit_cli", None)
+            else:
+                sys.modules["secrets_kit_cli"] = previous_cli
+
+    return _TEMPLATES["factory"]("state-" + key, build) / "adding"
 
 
 class TestAddRefusal:

@@ -108,7 +108,7 @@ _KINDS = [
         "posix",
         marks=pytest.mark.skipif(_BASH is None, reason="bash not available"),
     ),
-    # Bash 3.2 lane: task-kit only (the other shims are outside this increment).
+    # Bash 3.2 lane: every POSIX shim, under a stock macOS /bin/bash.
     pytest.param(
         "posix32",
         marks=pytest.mark.skipif(_BASH32 is None, reason="/bin/bash is not bash 3.x here"),
@@ -150,8 +150,6 @@ class _Launch:
     def __init__(self, tmp_path: Path, template: Path, plugin: str, stem: str,
                  entrypoint: str, kind: str, cache_marketplace: str | None = None,
                  data_bundle_marketplace: str | None = None) -> None:
-        if kind == "posix32" and plugin != "task-kit":
-            pytest.skip("the bash 3.2 lane covers task-kit's shim only")
         self.template = template
         self.plugin = plugin
         self.kind = kind
@@ -393,15 +391,18 @@ def test_data_dir_launcher_copy_never_reads_the_production_venv_in_a_redirected_
     assert "refusing to fall back to the production venv" in result.stderr
 
 
-# --- BOOTSTRAP_PYTHON validation (task-kit's POSIX shim) -------------------------
+# --- BOOTSTRAP_PYTHON validation (every POSIX shim) ------------------------------
 #
 # Root CLAUDE.md: the variable counts only when its OWN realpath resolves inside
 # the standalone directory; a stranger's BOOTSTRAP_PYTHON must never substitute.
+# The cases run against each shim that accepts BOOTSTRAP_PYTHON (task-kit, llm-kit,
+# hue-kit, secrets-kit); job-kit and llm-scripting-kit are frozen and out of scope.
 # Every case runs with no plugin venv, a fakebin ``python3`` that prints PATHPY
 # first on PATH, and a tools directory holding only the utilities the shim calls.
 
 _STANDALONE_REL = Path(".local") / "share" / "python-standalone"
 _TOOLS = ("dirname", "uname", "tr", "readlink")
+_BP_SHIMS = [spec for spec in _SHIMS if spec[0] in ("task-kit", "llm-kit", "hue-kit", "secrets-kit")]
 
 
 def _script(path: Path, marker: str) -> Path:
@@ -412,11 +413,15 @@ def _script(path: Path, marker: str) -> Path:
 
 
 class _BootstrapPython:
-    """task-kit's shim with no plugin venv, run against a controlled PATH."""
+    """A shim with no plugin venv, run against a controlled PATH.
 
-    def __init__(self, tmp_path: Path, venv_template: Path, kind: str) -> None:
-        self.launch = _Launch(tmp_path, venv_template, "task-kit", "task-kit",
-                              "bin/task_kit_entrypoint.py", kind)
+    The standalone tree never holds ``python/bin/python3``: hue-kit and secrets-kit
+    run that file directly when it exists, before BOOTSTRAP_PYTHON is consulted.
+    """
+
+    def __init__(self, tmp_path: Path, venv_template: Path, kind: str, spec) -> None:
+        plugin, stem, entrypoint = spec
+        self.launch = _Launch(tmp_path, venv_template, plugin, stem, entrypoint, kind)
         self.home = self.launch.home
         self.standalone = self.home / _STANDALONE_REL
         self.tools = tmp_path / "tools"
@@ -444,9 +449,14 @@ def posix_kind(request):
     return request.param
 
 
+@pytest.fixture(params=_BP_SHIMS, ids=[s[0] for s in _BP_SHIMS])
+def bp_spec(request):
+    return request.param
+
+
 @pytest.fixture
-def bp(tmp_path, venv_template, posix_kind) -> _BootstrapPython:
-    return _BootstrapPython(tmp_path, venv_template, posix_kind)
+def bp(tmp_path, venv_template, posix_kind, bp_spec) -> _BootstrapPython:
+    return _BootstrapPython(tmp_path, venv_template, posix_kind, bp_spec)
 
 
 def _marker(result: subprocess.CompletedProcess) -> str:
@@ -471,17 +481,17 @@ def test_a_real_file_inside_the_standalone_tree_is_accepted(bp):
 
 
 def test_a_symlink_outside_the_tree_pointing_into_it_is_accepted(bp):
-    """(c2) This machine's real layout: ~/.local/bin/python3 -> standalone .../python3
+    """(c2) This machine's real layout: ~/.local/bin/python3 -> standalone .../pylink
     -> python3.12. The old directory-only check rejected it.
 
     Shown to fail: resolve ``dirname "$BOOTSTRAP_PYTHON"`` instead of the followed
     link; the variable is rejected and PATHPY runs.
     """
     bp.inside("python", "bin", "python3.12")
-    (bp.standalone / "python" / "bin" / "python3").symlink_to("python3.12")
+    (bp.standalone / "python" / "bin" / "pylink").symlink_to("python3.12")
     outer = bp.home / ".local" / "bin" / "python3"
     outer.parent.mkdir(parents=True, exist_ok=True)
-    outer.symlink_to(bp.standalone / "python" / "bin" / "python3")
+    outer.symlink_to(bp.standalone / "python" / "bin" / "pylink")
     assert _marker(bp.run(outer)) == "STANDALONE"
 
 
@@ -506,7 +516,7 @@ def test_a_symlink_inside_the_tree_pointing_out_is_refused(bp):
     Shown to fail: resolve ``dirname "$BOOTSTRAP_PYTHON"`` instead of the followed
     link; the stranger runs.
     """
-    link = bp.standalone / "python" / "bin" / "python3"
+    link = bp.standalone / "python" / "bin" / "pylink"
     link.parent.mkdir(parents=True, exist_ok=True)
     link.symlink_to(bp.stranger)
     assert _marker(bp.run(link)) == "PATHPY"

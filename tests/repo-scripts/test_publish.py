@@ -696,8 +696,11 @@ _PROP_HOTFIX = "H"
 _PUB_MANIFEST = "plugins/pub-kit/.claude-plugin/plugin.json"
 # Bounded on purpose: each case builds a real repo. These two numbers are the
 # whole runtime knob, and `test_the_corpus_covers_every_shape` is what stops a
-# tweak to either from quietly dropping the cases that matter.
-_PROP_SEEDS = 12
+# tweak to either from quietly dropping the cases that matter. Seeds 7 and 10
+# are the minimal pair that reaches every shape and sensitivity the guard
+# requires, and no other listed seed covers what either contributes; 1, 2, 4
+# and 6 add unrelated sequences for the agreement test.
+_PROP_SEEDS = (1, 2, 4, 6, 7, 10)
 _PROP_LENGTH = 14
 
 
@@ -982,7 +985,7 @@ class TestMasterOnlyGuardAgainstAModel:
             _git(repo, "checkout", "-q", "dev")
             _git(repo, "fetch", "-q", "origin")
 
-    @pytest.mark.parametrize("seed", range(_PROP_SEEDS))
+    @pytest.mark.parametrize("seed", _PROP_SEEDS)
     def test_the_guard_agrees_with_the_model(self, repo, seed):
         ops = _plan(seed, _PROP_LENGTH)
         model = _BranchModel()
@@ -1025,7 +1028,7 @@ class TestMasterOnlyGuardAgainstAModel:
         """
         seen = set()
         sensitive = set()
-        for seed in range(_PROP_SEEDS):
+        for seed in _PROP_SEEDS:
             model = _BranchModel()
             model.seed()
             minor = 0

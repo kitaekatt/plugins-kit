@@ -201,7 +201,10 @@ class TestPosixLauncher:
         tools = {name: shutil.which(name) for name in ("uname", "dirname", "tr", "printf", "cd", "pwd")}
         for name, found in tools.items():
             if found and name not in ("cd", "pwd", "printf"):
-                shutil.copy2(found, bare / Path(found).name)
+                # copy, not copy2: copy2 also replays st_flags, and macOS system tools carry
+                # SF_RESTRICTED (/usr/bin/uname), which an unprivileged chflags on the copy refuses.
+                # The stripped PATH needs only the executable bit, which copy preserves.
+                shutil.copy(found, bare / Path(found).name)
         result = plugin.posix("x", PATH=str(bare))
         if result.returncode == 127:  # the stripped PATH lost a tool this host's bash needs
             pytest.skip("cannot build a Python-free PATH for this bash")

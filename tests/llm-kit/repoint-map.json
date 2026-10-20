@@ -1622,7 +1622,7 @@
       "kind": "facade-names",
       "names": {},
       "constants": {
-        "__version__": "0.36.0"
+        "__version__": "0.37.1"
       }
     },
     "plugins/content-pipeline-kit/lib/content_pipeline/audit/__init__.py": {

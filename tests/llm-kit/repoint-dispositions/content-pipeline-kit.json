@@ -944,15 +944,22 @@
     {
       "path": "tests/content-pipeline-kit/test_review_fix_c_skill_script_paths.py",
       "disposition": "rewrite",
-      "reason": "Re-pointed at llm-kit's final module names: plugins/<kit> path to plugins/llm-kit, plugins/<kit>/lib path strings, prose mentions left unchanged.",
+      "reason": "Re-pointed at llm-kit's final module names: plugins/<kit> path to plugins/llm-kit, plugins/<kit>/lib path strings, prose mentions left unchanged; 1 declared difference below.",
       "rewrite_classes": [
+        "declared-skip",
         "path-plugin-dir",
         "path-string",
         "prose-kept",
         "text-edit"
       ],
       "collection_count": 8,
-      "baseline_failures": []
+      "baseline_failures": [],
+      "declared_differences": {
+        "content-pipeline-kit/test_review_fix_c_skill_script_paths.py::test_guard_fires_on_the_text_before_the_fix": {
+          "mirror_status": "skipped",
+          "reason": "legacy-only: reads the pre-fix text of the frozen plugin's workflow-pipeline SKILL.md from git revision 532a01d1 by a plugins/content-pipeline-kit path handed to a git child process; the mirror's import-root guard rejects that argv by design, and llm-kit has no pre-fix revision of its skill at that path to re-point the check to. The guard's regex is still exercised by the other parameters of this file."
+        }
+      }
     },
     {
       "path": "tests/content-pipeline-kit/test_review_fix_d_cache_key.py",
@@ -1144,9 +1151,7 @@
       "reason": "Asserts content_pipeline.__version__ equals the content-pipeline-kit manifest version; llm-kit versions independently and has its own manifest.",
       "rewrite_classes": [],
       "collection_count": 1,
-      "baseline_failures": [
-        "content-pipeline-kit/test_version_matches_plugin_json.py::test_version_matches_plugin_json"
-      ]
+      "baseline_failures": []
     },
     {
       "path": "tests/content-pipeline-kit/test_worker_assets_drift.py",

@@ -18,6 +18,9 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Work-stealing distribution for every -n run: the default `load` mode pre-assigns
+# contiguous chunks, so slow test blocks cluster on a few workers. Inert without -n.
+addopts = ["--dist=worksteal"]
 # pythonpath is reserved for genuine package roots (plus the engine dir, whose
 # modules tests import as bare names). Do NOT add per-skill script dirs here:
 # they share one flat namespace and risk shadowing. Single-file skill scripts

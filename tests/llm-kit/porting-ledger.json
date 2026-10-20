@@ -13,5 +13,14 @@
     "ported",
     "rejected"
   ],
-  "entries": []
+  "entries": [
+    {
+      "legacy_path": "plugins/content-pipeline-kit/lib/content_pipeline/__init__.py",
+      "legacy_commit": "dddd6042f158d1dd1cadded0ceaac68e993c4cc6",
+      "legacy_sha256": "60c709ed7664ee261dc74705ea5ba7b257aae993cdb2422566e8bfa8a8edc341",
+      "final_target": null,
+      "disposition": "rejected",
+      "validating_test": "tests/content-pipeline-kit/test_version_matches_plugin_json.py::test_version_matches_plugin_json"
+    }
+  ]
 }
