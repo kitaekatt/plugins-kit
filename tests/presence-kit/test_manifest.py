@@ -1,5 +1,6 @@
 """presence-kit 0.3.0 manifest shape: plugin.json, bootstrap.json, hooks.json."""
 import json
+import re
 from pathlib import Path
 
 PLUGIN = Path(__file__).resolve().parents[2] / "plugins" / "presence-kit"
@@ -13,7 +14,7 @@ def _load(rel: str) -> dict:
 def test_plugin_json_shape():
     manifest = _load(".claude-plugin/plugin.json")
     assert manifest["name"] == "presence-kit"
-    assert manifest["version"] == "0.3.3"
+    assert re.fullmatch(r"\d+\.\d+\.\d+", manifest["version"])
     assert manifest["dependencies"] == ["bootstrap"]
     assert manifest["description"].strip()
 

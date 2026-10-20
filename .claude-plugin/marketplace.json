@@ -71,7 +71,7 @@
     {
       "name": "skills-kit",
       "description": "Author and audit every md file a project loads or ships -- CLAUDE.md, SKILL.md, project docs, and their cross-references -- for placement, cohesion, and drift.",
-      "version": "0.98.0",
+      "version": "0.98.3",
       "author": {
         "name": "Christina"
       },
@@ -230,7 +230,7 @@
     {
       "name": "presence-kit",
       "description": "Is the user at the keyboard, away, or has the work been handed over, and how should Claude wait, ask and recap in each case? Sits above bootstrap, which provisions the environment, because presence is a policy question bootstrap cannot answer for any session.",
-      "version": "0.3.3",
+      "version": "0.3.6",
       "author": {
         "name": "Christina"
       },

@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- index-pages: {"generated_by":"md-domain","source_sha":"60f10b423af49463267c1e477eb093321d377faa","directory":"plugins/skills-kit","kind":"page"} -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>The skills-kit plugin that authors and audits project markdown through a verb-by-artifact dispatch, carrying its four skills, fan-out lane workflows, and deprecation contract.</title>
+<link rel="stylesheet" href="../../.databench/index-pages.css">
+</head>
+<body>
+<nav data-index-pages-chrome="nav"><ul><li><a href="../index.html"><span class="hh-nav-label">plugins</span> <span class="hh-nav-identity">The plugins-kit marketplace: independently installable Claude Code plugins for code review, LLM dispatch, job execution, Hue scenes, PDF rendering, secrets, tasks, and Unreal Engine automation, provisioned by the bootstrap engine and linked through shared libraries</span></a></li><li><a href="scripts/index.html"><span class="hh-nav-label">scripts</span> <span class="hh-nav-identity">The skills-kit plugin&#x27;s scripts for bootstrap guarding, code generation, standards resolution, and command dispatch</span></a></li><li><a href="skills/md-domain/references/index.html"><span class="hh-nav-label">references</span> <span class="hh-nav-identity">Reference documentation for the md-domain skill: audit framework, per-artifact standards, lane procedures, authoring patterns, provenance records, and cross-cutting guidance on cohesion, capability boundaries, and standards configuration.</span></a></li><li><a href="skills/md-domain/scripts/index.html"><span class="hh-nav-label">scripts</span> <span class="hh-nav-identity">Python scripts implementing the md-domain skill&#x27;s discovery, audit, validation, and reporting functions</span></a></li><li><a href="skills_kit_lib/index.html"><span class="hh-nav-label">skills_kit_lib</span> <span class="hh-nav-identity">The skills-kit plugin library that validates, classifies, and audits skill documents against typed-unit schemas, with its shipped standards and lane-model configuration.</span></a></li><li><a href="README.md"><span class="hh-nav-label">README.md</span> <span class="hh-nav-identity">The human-facing install and usage guide: what each verb does, how to install the plugin, and when the machinery is overkill.</span></a></li></ul></nav>
+<main>
+<h1>The skills-kit plugin that authors and audits project markdown through a verb-by-artifact dispatch, carrying its four skills, fan-out lane workflows, and deprecation contract.</h1>
+<p class="hh-orientation">This is the skills-kit plugin: it audits and authors the markdown a project loads or ships - the guidance and skill files an agent reads at runtime, the project docs, and the links between them. It is organized around one front door that dispatches by verb and artifact: name an action (check, write, generate, analyze, render) and a target (a skill, a guidance file, a project doc, or the cross-references), and the door routes the pair to the one lane that handles it, so checking and writing read the same written-down standards from opposite directions. Three smaller skills sit beside the door for encoding a fresh insight, reviewing a finished session, and designing a tool that emits a durable artifact. The heavier machinery - the validator library, the discovery and audit scripts, the standards and lane reference docs, and the command dispatcher - each has its own page, linked above.</p><section><h2>Where to start</h2><p>Start with the front door, <a href="skills/md-domain/SKILL.md">plugins/skills-kit/skills/md-domain/SKILL.md</a>. Its dispatch table maps every verb-and-artifact pair to the lane and the standards doc that lane reads, so it tells you where a request lands before you open a single other file.</p></section><section><h2>Routes</h2><ul><li><strong>Audit a corpus of guidance files</strong><ol><li>The dispatch row in <a href="skills/md-domain/SKILL.md">plugins/skills-kit/skills/md-domain/SKILL.md</a> names the lane, its procedure, and its standards doc.</li><li>When a lane spans two or more files, <a href="skills/md-domain/workflow/claude-md-detect.js">plugins/skills-kit/skills/md-domain/workflow/claude-md-detect.js</a> fans out one detect lane per file and classifies each finding, making no edits.</li><li>After the decision gate, <a href="skills/md-domain/workflow/claude-md-remediate.js">plugins/skills-kit/skills/md-domain/workflow/claude-md-remediate.js</a> applies only the edits you accepted, in a separate pass.</li></ol></li><li><strong>Write a guidance file from code</strong><ol><li>Analysis in <a href="skills/md-domain/workflow/coverage-detect.js">plugins/skills-kit/skills/md-domain/workflow/coverage-detect.js</a> reads one directory&#x27;s own code and reports the facts its guidance file should carry - report-only, no edits.</li><li>Then <a href="skills/md-domain/workflow/claude-md-generate.js">plugins/skills-kit/skills/md-domain/workflow/claude-md-generate.js</a> writes the documents deepest first, composing each parent from its own code plus its children&#x27;s finished files.</li></ol></li><li><strong>Read how the plugin ships</strong><ol><li><a href=".claude-plugin/plugin.json">plugins/skills-kit/.claude-plugin/plugin.json</a> is the manifest: name, version, and the dependency on the bootstrap plugin.</li><li><a href="bootstrap.json">plugins/skills-kit/bootstrap.json</a> sets the required bootstrap version, the shared libraries, and the pyyaml venv check.</li><li><a href="pyproject.toml">plugins/skills-kit/pyproject.toml</a> declares the Python package, the Python floor, and its single dependency.</li></ol></li></ul></section><section><h2>The dispatch and its shape</h2><ul><li><a href="skills/md-domain/SKILL.md">plugins/skills-kit/skills/md-domain/SKILL.md</a> - the single front door; its dispatch table is the routing source, so open it to trace any verb-and-artifact pair to the lane that handles it.</li><li><a href="skills/md-domain/CLAUDE.md">plugins/skills-kit/skills/md-domain/CLAUDE.md</a> - the shape decisions for that skill: why it is one skill, the required lane-record fields, and the decision provenance. Open it when editing the dispatch.</li></ul></section><section><h2>The three companion skills</h2><ul><li><a href="skills/knowledge-encoding/SKILL.md">plugins/skills-kit/skills/knowledge-encoding/SKILL.md</a> - the procedure for turning a discovered insight into a durable record, deferring placement and shape to the placement and content-shape references. Open it after a session surfaced a finding worth keeping.</li><li><a href="skills/update-documentation/SKILL.md">plugins/skills-kit/skills/update-documentation/SKILL.md</a> - the end-of-session pass that filters session work into a short, approved set of doc updates. Open it before committing.</li><li><a href="skills/materialized-output/SKILL.md">plugins/skills-kit/skills/materialized-output/SKILL.md</a> - the pattern skill for designing a tool that emits a durable structured artifact instead of a one-shot print. Open it when a deep scan would otherwise be recomputed per query.</li><li><a href="skills/materialized-output/CLAUDE.md">plugins/skills-kit/skills/materialized-output/CLAUDE.md</a> - the type rationale and provenance for that skill: why it is a pattern-skill and where its content came from.</li></ul></section><section><h2>How the plugin ships</h2><ul><li><a href=".claude-plugin/plugin.json">plugins/skills-kit/.claude-plugin/plugin.json</a> - the plugin manifest: name, version, and the dependency on the bootstrap plugin. Open it to see what the plugin declares to the marketplace.</li><li><a href="bootstrap.json">plugins/skills-kit/bootstrap.json</a> - the provisioning: the required bootstrap version, the shared libraries, and the pyyaml venv check. Open it to see what must be installed.</li><li><a href="pyproject.toml">plugins/skills-kit/pyproject.toml</a> - the Python package definition: name, the Python floor, and its single dependency. Open it when the library packaging changes.</li></ul></section><section><h2>The deprecation contract</h2><ul><li><a href="contract/public-surface.json">plugins/skills-kit/contract/public-surface.json</a> - the deprecation ledger for the audit module&#x27;s public names: what is deprecated, since which version, and what replaces it. Open it when changing the audit API.</li></ul></section><section><h2>The fan-out lanes</h2><ul><li><a href="skills/md-domain/workflow">plugins/skills-kit/skills/md-domain/workflow</a> - ten fan-out lane scripts: the per-artifact detect and remediate passes for the audit lanes, the report-only coverage detect, and the wave-ordered generate orchestrator. Each is dispatched by the front door when a lane spans more than one file.</li></ul></section>
+</main>
+<script>
+if (window.parent !== window) {
+  window.parent.postMessage({
+    type: "index-pages:announce",
+    version: 1,
+    directory: "plugins/skills-kit",
+    file: "index.html",
+    kind: "page",
+    source_sha: "60f10b423af49463267c1e477eb093321d377faa"
+  }, "*");
+  document.addEventListener("click", function (event) {
+    if (event.defaultPrevented || event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    var el = event.target;
+    while (el && el.nodeName !== "A") el = el.parentNode;
+    if (!el) return;
+    var href = el.getAttribute("href");
+    if (!href) return;
+    if (href.charAt(0) === "#" || href.charAt(0) === "/") return;
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
+    var target = href.split("#")[0].split("?")[0];
+    if (!target) return;
+    if (/(^|\/)index-page(\.[^/]+)?\.html$/.test(target)) return;
+    var parts = "plugins/skills-kit".split("/");
+    if (parts.length === 1 && parts[0] === ".") parts = [];
+    var segs = target.split("/");
+    for (var i = 0; i < segs.length; i++) {
+      if (segs[i] === "" || segs[i] === ".") continue;
+      if (segs[i] === "..") { parts.pop(); continue; }
+      parts.push(segs[i]);
+    }
+    event.preventDefault();
+    window.parent.postMessage({
+      type: "index-pages:navigate",
+      version: 1,
+      path: parts.join("/")
+    }, "*");
+  });
+}
+</script>
+</body>
+</html>

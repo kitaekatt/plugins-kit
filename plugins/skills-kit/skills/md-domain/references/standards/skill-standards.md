@@ -264,7 +264,9 @@ one (or N) references that always load next. Symptoms: a short SKILL.md
 (~30-100 lines) containing primarily Conditional Loading entries; every
 reference loads every time the skill fires, with no sub-trigger selecting
 between them. Revert by inlining the reference back into SKILL.md and
-accepting the over-threshold size.
+accepting the over-threshold size. The cost model assumes ONE invocation per
+session; a skill that fires repeatedly is governed by 3.3, which reverses the
+answer.
 
 **CRP-pass split:** a domain-skill declaring N member sub-domains with one
 Conditional Loading entry each. Each fires on a different sub-task, so a
@@ -295,6 +297,66 @@ cross-shell quoting collision hit constantly across many tasks is L1.
 Counter-example: a tool-wrapper layering audit found 5 of 7 SKILL.md
 gotchas were common across sessions OUTSIDE that tool's domain and belonged
 in CLAUDE.md -- frequency fired and trigger-relevance did not.
+
+### 3.3 A skill that fires repeatedly is a technique-wrapper
+
+3.1 prices a split at one invocation. A skill invoked N times in one session
+pays for its SKILL.md N times, because each Skill call injects the full body
+again and nothing removes the earlier copies. A reference is different: it
+loads by a Read the agent chooses to make, so the agent can skip the Read
+when the text is already in its context.
+
+**Criterion (testable).** The skill is expected to fire more than once per
+session when ANY of these holds: a hook or nudge names it (a Stop or
+UserPromptSubmit hook line telling the agent to invoke it); its trigger is a
+recurring event (each turn end, each return, each completed job); another
+skill's steps invoke it; or it is the target of a loop. A skill the user runs
+once to start a task does not qualify.
+
+**Rule: the technique-wrapper.** A qualifying technique-skill is a
+technique-wrapper skill. It keeps `skill-type: technique-skill`, and its
+SKILL.md holds only what the agent needs on EVERY firing before it can act:
+
+- frontmatter, one or two sentences saying what the skill does, the arguments,
+  and ONE numbered step: follow the procedure document in `references/`,
+  reading it first unless its text is already in context this session;
+- no YAML contract block. The stub is plain prose, so audit takes the
+  legacy-markdown route: `yaml_contract_block` reports judgment-required
+  (never FAIL) and the legacy technique rows apply, which is why the single
+  step is a numbered list item. A stub also names the other reference files
+  its procedure uses, so each has a direct load-graph edge from SKILL.md.
+
+The procedure itself, with its ordered steps and tool commands, and
+everything those steps consult (output templates, dispatch tables, worked
+examples, selection rules, anti-pattern prose) live in `references/`. The
+procedure points at the other references by file name and says when to read
+each. The first firing pays the SKILL.md plus one Read; every later firing
+pays the stub alone, because the procedure is already in context. A reference
+document is not a substituted surface, so commands inside it name the plugin
+root in the agent-typed form the repository requires of references, not the
+harness variable.
+
+A wrapper trades away mechanical step validation: the schema validates the
+contract block's `steps:` list, and a procedure in a reference is audited only
+as a skill reference document (section 10). Use the form for a skill that
+passes the criterion below, and keep an ordinary technique-skill otherwise.
+
+**Why this does not trip the 3.1 anti-pattern.** 3.1 condemns a stub that
+always co-loads its references because that costs two tool calls for one
+reading task. Here the reference Read is optional on every firing after the
+first and conditional on the branch taken (a bare recap and an away recap
+read different templates), so the split passes CRP on both counts. The test
+that separates the cases is repeat firing, not file size.
+
+**What stays in the stub regardless.** A caution that must hold BEFORE the
+procedure can be read stays in SKILL.md. The procedure's own step-level
+cautions travel with the procedure, because the stub's single step is to read
+and follow it.
+
+**Test.** Count the lines a second firing re-injects. Content in the body that
+no step branches on, and that a repeat firing would not need again, is a
+finding (IMPROVE, judgment). Offer it only with a named reference file to
+receive it, as 3.1 requires.
 
 ## 4. Packaging standards -- one skill, several skills, or a domain
 
@@ -616,7 +678,7 @@ diverge, the registry wins**; the table gets updated to match.
 |---|---|
 | **Required blocks** | SKILL.md file with frontmatter and trigger; >=1 technique with an ordered-step body (`steps:` list, min 1 step); >=1 gotcha OR >=1 `anti_patterns` record. Gotchas and `anti_patterns` records are alternate containers for the same caution surface; state each caution once. `output_template:` is an optional companion to `steps:` carrying the output-shape contract for the agent's reply -- not a substitute for steps. Even user-only slash-command skills reduce to a 1-step procedure ("invoke command; render output") and write that step explicitly. |
 | **Required patterns** | activation metadata, exclusion clause, technique, known gotchas (satisfiable by gotchas OR `anti_patterns` records) |
-| **Conditionally required patterns** | explicit step-tracking -- IF the technique has more than 3 steps (criterion + OR-form + YAML-canonical note: see 2.4); utility bundle -- IF the procedure has deterministic steps that would otherwise be regenerated each call (criterion: any step whose output depends only on input); self-correcting loop -- IF the procedure produces output that can be programmatically validated (criterion: a validator script or rubric exists); plan-validate-execute -- IF the procedure has batch operations or irreversible side effects (criterion: any step that modifies external state at scale or is hard to undo) |
+| **Conditionally required patterns** | explicit step-tracking -- IF the technique has more than 3 steps (criterion + OR-form + YAML-canonical note: see 2.4); utility bundle -- IF the procedure has deterministic steps that would otherwise be regenerated each call (criterion: any step whose output depends only on input); self-correcting loop -- IF the procedure produces output that can be programmatically validated (criterion: a validator script or rubric exists); plan-validate-execute -- IF the procedure has batch operations or irreversible side effects (criterion: any step that modifies external state at scale or is hard to undo); technique-wrapper form -- IF the skill is expected to fire more than once in a session (criterion: section 3.3) |
 | **Prohibited patterns** | adversarial pressure testing |
 | **Audit** | Can the agent apply the method to a novel scenario? Try variation and missing-information tests. |
 
@@ -802,7 +864,8 @@ Order of application when generating or refining a SKILL.md:
    wrapper. Where prose is chosen, be able to articulate why it would be
    worse as YAML.
 5. **Allocation fifth.** Apply section 3 per fact and 3.2 per example or
-   anti-pattern. Do not split on size alone -- 3.1 gates the split.
+   anti-pattern. Do not split on size alone -- 3.1 gates the split, and 3.3 applies when
+   the skill is expected to fire more than once per session.
 6. **Declare the edges.** Every member gets an index entry or citation
    (5.4); every runtime-consumed repo file gets an `asset_dependencies`
    record (5.3); keyword clusters carry the terms a searcher would use.

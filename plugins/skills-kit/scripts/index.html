@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en">
 <head>
-<!-- index-pages: {"generated_by":"md-domain","source_sha":"bce913a291b2c16dd005e8d32674fbd70027813f","directory":"plugins/skills-kit/scripts","kind":"page"} -->
+<!-- index-pages: {"generated_by":"md-domain","source_sha":"18c7a790af67c6a45e121d24627ada6fe6f49a82","directory":"plugins/skills-kit/scripts","kind":"page"} -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
@@ -9,7 +9,7 @@
 <link rel="stylesheet" href="../../../.databench/index-pages.css">
 </head>
 <body>
-<nav data-index-pages-chrome="nav"><ul><li><a href="../../index.html"><span class="hh-nav-label">plugins</span> <span class="hh-nav-identity">The plugins-kit marketplace: independently installable Claude Code plugins sharing the bootstrap provisioning engine and the llm-scripting-kit access layer, covering git and Perforce code review, durable job execution, LLM endpoint dispatch, Hue scene sync, PDF rendering, fleet secrets, prompt statusline, cache forensics, markdown auditing, and Unreal Engine automation.</span></a></li></ul></nav>
+<nav data-index-pages-chrome="nav"><ul><li><a href="../index.html"><span class="hh-nav-label">skills-kit</span> <span class="hh-nav-identity">The skills-kit plugin that authors and audits project markdown through a verb-by-artifact dispatch, carrying its four skills, fan-out lane workflows, and deprecation contract.</span></a></li></ul></nav>
 <main>
 <h1>The skills-kit plugin&#x27;s scripts for bootstrap guarding, code generation, standards resolution, and command dispatch</h1>
 <p class="hh-orientation">These are the skills-kit plugin standalone entry points. They wrap the skills_kit_lib package, where audit, classify, tag, and resolution logic lives. Their shared constraint is the virtualenv boundary: a subset runs before bootstrap provisions the venv, so it is stdlib-only and refuses shared-library imports until the guard re-execs the process inside that venv. The rest assume the venv exists and either resolve layered configuration or dispatch a library command. Two scripts close a loop by regenerating marked regions from one source of truth and exposing a check mode for drift tests.</p><section><h2>Where to start</h2><p>Start with <a href="bootstrap_guard.py">plugins/skills-kit/scripts/bootstrap_guard.py</a>, the canonical guard every script re-execs through. It is the source other plugins copy byte-for-byte and states the directory rule: a script stays stdlib-only so it can run before the venv exists.</p></section><section><h2>Entry points</h2><ul><li><a href="bootstrap_guard.py">plugins/skills-kit/scripts/bootstrap_guard.py</a> Stdlib-only guard that detects whether bootstrap provisioned the plugin, prints the absence message, and re-execs under the plugin venv. Other plugins keep byte-identical copies.</li><li><a href="print_version.py">plugins/skills-kit/scripts/print_version.py</a> Prints the plugin name and version from its manifest; warns on stderr without exiting when bootstrap has not provisioned it. A launcher banner.</li><li><a href="gen_standards_doc.py">plugins/skills-kit/scripts/gen_standards_doc.py</a> Rewrites the marked region of the standards reference doc from the rule catalog and threshold defaults. With <code>--check</code> it exits 1 on drift and writes nothing.</li><li><a href="gen_workflow_js.py">plugins/skills-kit/scripts/gen_workflow_js.py</a> Renders four lane scripts from one template plus per-lane fragments and rewrites a shared lane-route chunk inside hand-written detect scripts. With <code>--check</code> it asserts shipped files are byte-identical.</li><li><a href="resolve_standards.py">plugins/skills-kit/scripts/resolve_standards.py</a> Resolves layered standards config to one JSON object: disabled rules, threshold overrides, per-primitive standards paths, fix mode, and lane models. md-domain audit lanes read it once per run.</li><li><a href="skills_kit_tool.py">plugins/skills-kit/scripts/skills_kit_tool.py</a> Dispatcher for audit, classify, tag, material, and lane-models. It re-execs under the plugin venv, then runs the matching skills_kit_lib module as the main program.</li></ul></section><section><h2>Generated-region check</h2><ul><li>Edit the source of truth a generator reads, then run <a href="gen_standards_doc.py">plugins/skills-kit/scripts/gen_standards_doc.py</a> or <a href="gen_workflow_js.py">plugins/skills-kit/scripts/gen_workflow_js.py</a> with no flags to rewrite the shipped file in place.</li><li>Run the same generator with <code>--check</code>; it exits 1 on drift and writes nothing, the assertion a CI test makes.</li></ul></section>
@@ -22,7 +22,7 @@ if (window.parent !== window) {
     directory: "plugins/skills-kit/scripts",
     file: "index.html",
     kind: "page",
-    source_sha: "bce913a291b2c16dd005e8d32674fbd70027813f"
+    source_sha: "18c7a790af67c6a45e121d24627ada6fe6f49a82"
   }, "*");
   document.addEventListener("click", function (event) {
     if (event.defaultPrevented || event.button !== 0) return;

@@ -29,6 +29,17 @@ DESCRIPTIONS = {
 LENGTHS = {"afk": 157, "autonomous": 145, "recap": 158}
 
 MODEL_REFERENCE = "${CLAUDE_PLUGIN_ROOT}/references/presence.md"
+# Technique-wrapper skills: SKILL.md is a stub whose single step points at a
+# procedure document in references/ (skill-standards 3.3). The commands live in
+# the procedure, a reference document, where the harness substitutes nothing, so
+# they name the plugin root in the agent-typed form.
+WRAPPERS = {
+    "afk": "afk-procedure.md",
+    "autonomous": "autonomous-procedure.md",
+    "recap": "recap-procedure.md",
+}
+WRAPPER_ROOT = '"${PRESENCE_KIT_ROOT:?presence-kit is not provisioned}/scripts/presence.py"'
+HARNESS_ROOT = '"${CLAUDE_PLUGIN_ROOT}/scripts/presence.py"'
 CONFIG_COMMAND = (
     '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" '
     '"${CLAUDE_PLUGIN_ROOT}/scripts/presence.py" config'
@@ -93,6 +104,25 @@ def _contract(name: str) -> dict:
     return yaml.safe_load(blocks[0])
 
 
+def _references(name: str) -> dict[str, str]:
+    """The skill's reference documents by file name (empty when it has none)."""
+    folder = SKILLS / name / "references"
+    if not folder.is_dir():
+        return {}
+    return {p.name: p.read_text(encoding="utf-8") for p in sorted(folder.glob("*.md"))}
+
+
+def _steps_text(name: str) -> str:
+    """Where the skill's commands live: the procedure document for a wrapper, else the body."""
+    if name in WRAPPERS:
+        return _references(name)[WRAPPERS[name]]
+    return _split(name)[1]
+
+
+def _root(name: str) -> str:
+    return WRAPPER_ROOT if name in WRAPPERS else HARNESS_ROOT
+
+
 def _table_rows(body: str) -> list[list[str]]:
     rows = []
     for line in body.splitlines():
@@ -138,6 +168,12 @@ def test_files_are_ascii(name):
 
 
 @pytest.mark.parametrize("name", NAMES)
+def test_reference_files_are_ascii(name):
+    for text in _references(name).values():
+        text.encode("ascii")
+
+
+@pytest.mark.parametrize("name", NAMES)
 def test_body_cites_the_model_reference(name):
     _, body = _split(name)
     assert MODEL_REFERENCE in body
@@ -145,10 +181,12 @@ def test_body_cites_the_model_reference(name):
 
 @pytest.mark.parametrize("name", NAMES)
 def test_config_runs_before_any_state_change(name):
-    _, body = _split(name)
-    assert CONFIG_COMMAND in body
-    first_config = body.index(CONFIG_COMMAND)
-    changers = [body.index(word) for word in STATE_CHANGERS if word in body]
+    body = _steps_text(name)
+    config = CONFIG_COMMAND.replace(HARNESS_ROOT, _root(name))
+    assert config in body
+    first_config = body.index(config)
+    swapped = [word.replace(HARNESS_ROOT, _root(name)) for word in STATE_CHANGERS]
+    changers = [body.index(word) for word in swapped if word in body]
     assert changers, f"{name}: no state-changing command found"
     assert first_config < min(changers)
 
@@ -156,17 +194,28 @@ def test_config_runs_before_any_state_change(name):
 @pytest.mark.parametrize("name", NAMES)
 def test_commands_use_the_interpreter_variable_and_harness_root(name):
     _, body = _split(name)
-    commands = [line for line in body.splitlines() if "presence.py" in line and "scripts/" in line]
+    text = _steps_text(name)
+    commands = [line for line in text.splitlines() if "presence.py" in line and "scripts/" in line]
     assert commands
     for line in commands:
         assert '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}"' in line, line
-        assert '"${CLAUDE_PLUGIN_ROOT}/scripts/presence.py"' in line, line
-    assert "PRESENCE_KIT_ROOT" not in body
+        assert _root(name) in line, line
+    if name in WRAPPERS:
+        # a wrapper's body carries no command at all
+        assert "presence.py" not in body
+    else:
+        assert "PRESENCE_KIT_ROOT" not in body
     assert not re.search(r"(?<![\w{}:?-])(python3?|py)\s+\S*presence\.py", body)
 
 
 @pytest.mark.parametrize("name", NAMES)
 def test_contract_block_parses_with_ordered_steps(name):
+    if name in WRAPPERS:
+        # a wrapper is a short prose stub with one numbered step and no contract block
+        _, body = _split(name)
+        assert "```yaml" not in body
+        assert re.search(r"(?m)^1\. Follow ", body)
+        return
     contract = _contract(name)["technique_skill"]
     assert contract["techniques"]
     for technique in contract["techniques"]:
@@ -189,7 +238,7 @@ def test_skills_are_named_in_full_plugin_skill_form(name):
     ),
 )
 def test_by_flag_paths(name, state_set, behavior):
-    _, body = _split(name)
+    body = _steps_text(name)
     # The two commands are separate lines, so one path cannot be dropped
     # while the other keeps the test green.
     user_lines = [l for l in body.splitlines() if f"{state_set} --by user" in l]
@@ -202,81 +251,121 @@ def test_by_flag_paths(name, state_set, behavior):
 
 
 def test_autonomous_passes_the_goal_and_can_revoke():
-    _, body = _split("autonomous")
+    body = _steps_text("autonomous")
     assert body.count('--goal "<granted goal>"') == 2
     assert "state set normal" in body
 
 
 def test_afk_uses_the_configured_waiter_model():
-    _, body = _split("afk")
+    body = _steps_text("afk")
     assert "values.waiter_model" in body
 
 
 def test_autonomous_uses_the_configured_waiter_model():
-    _, body = _split("autonomous")
+    body = _steps_text("autonomous")
     assert "values.waiter_model" in body
 
 
 def test_recap_contains_every_trigger_row():
-    _, body = _split("recap")
-    rows = _table_rows(body)
+    rows = _table_rows(_references("recap")["recap-rows.md"])
     for expected in RECAP_ROWS:
         assert list(expected) in rows, f"missing trigger row: {expected[0]}"
 
 
 def test_recap_records_each_away_trigger():
-    _, body = _split("recap")
-    away_rows = [row for row in _table_rows(body) if "recap-done" in row[3]]
+    body = _steps_text("recap")
+    away_rows = [
+        row for row in _table_rows(_references("recap")["recap-rows.md"]) if "recap-done" in row[3]
+    ]
     assert [row[3] for row in away_rows] == [
         f"`presence.py recap-done {trigger} <pid>`"
         for trigger in ("return", "return", "afk-ending", "autonomous-done")
     ]
-    for trigger in AWAY_TRIGGERS:
-        assert f"recap-done {trigger} <pid>" in body
-    # The one command template every away row runs.
+    # The one command template every away row runs stays in the body.
     assert (
         '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" '
-        '"${CLAUDE_PLUGIN_ROOT}/scripts/presence.py" recap-done <trigger> <pid>'
+        + WRAPPER_ROOT
+        + " recap-done <trigger> <pid>"
     ) in body
 
 
 def test_recap_ports_the_awesome_kit_phases():
-    _, body = _split("recap")
+    refs = _references("recap")
+    templates, interview = refs["recap-templates.md"], refs["recap-interview.md"]
     for heading in (
-        "### Phase 1 -- the recap: text only, NO AskUserQuestion",
-        "### Phase 2 -- on a neutral reply: interview",
+        "## Phase 1 -- the recap: text only, NO AskUserQuestion",
         "## What \"what got done\" means",
         "## Selecting decisions",
     ):
-        assert heading in body
-    assert "No decisions pending." in body
-    assert "ONE AskUserQuestion call carrying every pending decision (max 4)" in body
+        assert heading in templates
+    assert "# Phase 2 -- on a neutral reply: interview" in interview
+    assert "No decisions pending." in templates
+    assert "ONE AskUserQuestion call carrying every pending decision (max 4)" in interview
+
+
+@pytest.mark.parametrize(
+    "name, files",
+    (
+        (
+            "recap",
+            ("recap-procedure.md", "recap-rows.md", "recap-templates.md", "recap-interview.md"),
+        ),
+        ("afk", ("afk-procedure.md",)),
+        ("autonomous", ("autonomous-procedure.md",)),
+    ),
+)
+def test_repeat_invoked_skill_body_points_at_its_references(name, files):
+    """A technique-wrapper keeps procedure and content out of its body (skill-standards 3.3).
+
+    The body cites each reference by its skill-dir path, the file exists, and the
+    content the references carry is absent from the body: reverting the move
+    (inlining a template or a table row back) turns this red.
+    """
+    _, body = _split(name)
+    assert sorted(_references(name)) == sorted(files)
+    # the stub stays short: that is the point of the form
+    assert len(body.split()) <= 150, f"{name}: stub is {len(body.split())} words"
+    # the wrapper's body points only at its procedure; the procedure points at the rest
+    assert f"${{CLAUDE_SKILL_DIR}}/references/{WRAPPERS[name]}" in body
+    procedure = _steps_text(name)
+    for file in files:
+        if file != WRAPPERS[name]:
+            assert file in procedure
+    for moved in (
+        "Read the configuration",
+        "recap-done <trigger>",
+        "What got done",
+        "Decided for you",
+        "No decisions pending.",
+        "(Recommended)",
+        "| Trigger | Window |",
+    ):
+        assert moved not in body, f"{name}: '{moved}' belongs in references/"
 
 
 def test_recap_names_its_behavior_ids_and_state_reads():
-    _, body = _split("recap")
+    body = _steps_text("recap")
     for token in ("recap-on-return", "ending-recap", "unresolved", "greeted", "state get"):
         assert token in body
 
 
 def test_afk_undoes_a_hook_set_afk_when_the_user_is_not_leaving():
-    """K3: the prompt hook sets afk itself; the skill's step 2 is the undo branch (`state set present`)."""
-    steps = _contract("afk")["technique_skill"]["techniques"][0]["steps"]
-    step = steps[1]
-    assert step["n"] == 2
-    assert step["tool"] == (
-        '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/presence.py" '
-        "state set present"
-    )
-    action = " ".join(step["action"].split())
+    """K3: the prompt hook sets afk itself; step 2 of the procedure is the undo branch (`state set present`)."""
+    procedure = _steps_text("afk")
+    step = procedure[procedure.index("2. **Decide whether to continue."):procedure.index("3. **Only when")]
+    action = " ".join(step.split())
     assert 'beginning "set the user afk" or "kept the user afk"' in action
     assert "id `afk-on-departure`" in action
     assert "the user is not leaving" in action and "undo it" in action
-    # the undo is the only place the skill unsets afk
-    _, body = _split("afk")
-    assert len([l for l in body.splitlines() if "state set present" in l]) == 1
-    # the config still runs first and the skill keeps its two enter paths
-    assert body.index(CONFIG_COMMAND) < body.index("state set present")
+    # the undo is the only place the skill unsets afk, and it sits in step 2
+    commands = [l for l in procedure.splitlines() if "state set present" in l]
+    assert len(commands) == 1
+    assert "state set present" in step
+    # the config still runs first
+    config = CONFIG_COMMAND.replace(HARNESS_ROOT, WRAPPER_ROOT)
+    assert procedure.index(config) < procedure.index("state set present")
+    # and the stub itself carries no command, so the undo cannot be reached around the procedure
+    assert "state set present" not in _split("afk")[1]
 
 
 def test_afk_description_is_unchanged_by_the_prompt_hook():
