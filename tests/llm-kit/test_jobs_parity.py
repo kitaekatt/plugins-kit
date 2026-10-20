@@ -35,7 +35,15 @@ Deliberate differences, each pinned by name below:
   version, so the skew they diagnosed cannot occur (``TestDeliberateDifferences``);
 * the default capability provider is ``ConfiguredBackendFactory`` and the
   default backend factory is ``dispatch.factory.create_backend``, so jobs
-  import no adapter (``TestDeliberateDifferences``).
+  import no adapter (``TestDeliberateDifferences``);
+* the ``cancelled`` job state, ``llm-kit jobs cancel`` and ledger schema 13
+  (user ruling 2026-10-19: llm-kit may change its frozen formats for a
+  per-job timeout and ``jobs cancel``). Legacy job-kit stays at schema 12 and
+  refuses a schema-13 ledger. The ledger-bytes comparisons stop at schema 12
+  (``TestLedgerSchema``), the scenario dumps leave out the ``schema_version``
+  table and a zero ``counts.cancelled``, and a rollback from llm-kit to
+  job-kit is pinned as a refusal (``TestCrossVersionState``,
+  ``TestDeliberateDifferences``).
 """
 
 from __future__ import annotations
@@ -244,7 +252,13 @@ class Scrub:
 
 
 def dump_ledger(db: Path, scrub: Scrub) -> dict[str, list]:
-    """Every table of a ledger, in rowid order, scrubbed."""
+    """Every table of a ledger, in rowid order, scrubbed.
+
+    The ``schema_version`` table is left out: legacy job-kit stays at schema 12
+    and llm-kit is at 13 (``cancelled``), a deliberate difference pinned in
+    ``TestLedgerSchema`` and ``TestDeliberateDifferences``. Every other table
+    is compared as it is.
+    """
     conn = sqlite3.connect(str(db))
     conn.row_factory = sqlite3.Row
     try:
@@ -253,6 +267,7 @@ def dump_ledger(db: Path, scrub: Scrub) -> dict[str, list]:
             for row in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
             )
+            if row["name"] != "schema_version"
         ]
         out: dict[str, list] = {}
         for table in tables:
@@ -450,12 +465,27 @@ def _write_jobs(path: Path, jobs: list, **top: Any) -> Path:
     return path
 
 
+def comparable_snapshot(snapshot: Any) -> dict:
+    """A snapshot mapping with the one key legacy job-kit lacks removed.
+
+    ``counts`` gains ``cancelled`` with the ``cancelled`` job state (a
+    deliberate difference). It is dropped only while it is zero, so a run that
+    cancelled a job would still differ and is not a parity scenario.
+    """
+    mapping = snapshot.to_mapping()
+    counts = mapping.get("counts")
+    if isinstance(counts, dict) and counts.get("cancelled") == 0:
+        counts = {key: value for key, value in counts.items() if key != "cancelled"}
+        mapping = {**mapping, "counts": counts}
+    return mapping
+
+
 def _outcome(side: Any, base: Path, store_path: Path, run_id: str, snapshot: Any, transports: Mapping[str, Transport]) -> dict:
     scrub = Scrub(base)
     store = side.store.JobStore(store_path, create=False)
     return {
         "exit_code": exit_code(snapshot),
-        "snapshot": scrub.value(snapshot.to_mapping()),
+        "snapshot": scrub.value(comparable_snapshot(snapshot)),
         "ledger": dump_ledger(store_path, scrub),
         "events": [scrub.text(line) for line in render_events(store, run_id)],
         "calls": {name: [scrub.value(list(call)) for call in t.calls] for name, t in transports.items()},
@@ -1057,11 +1087,17 @@ def build_schema_fixtures(side: Any, work: Path, monkeypatch: pytest.MonkeyPatch
     return files
 
 
+def _master_sql(dump: Mapping[str, Any], name: str) -> str:
+    return next(row[3] for row in dump["sqlite_master"] if row[1] == name)
+
+
 class TestLedgerSchema:
-    def test_the_product_ddl_is_byte_identical(self, sides):
+    def test_the_product_ddl_is_byte_identical_through_schema_twelve(self, sides):
+        """Deliberate difference: llm-kit adds step 13 (``cancelled``); legacy stays at 12."""
         legacy, final = sides
-        assert final.store._MIGRATIONS == legacy.store._MIGRATIONS
-        assert len(final.store._MIGRATIONS) == 12
+        assert len(legacy.store._MIGRATIONS) == 12
+        assert len(final.store._MIGRATIONS) == final.store.CANCEL_SCHEMA == 13
+        assert final.store._MIGRATIONS[:12] == legacy.store._MIGRATIONS
         assert (final.store.READER_MIN_SCHEMA, final.store.INTERRUPT_SCHEMA) == (
             legacy.store.READER_MIN_SCHEMA,
             legacy.store.INTERRUPT_SCHEMA,
@@ -1075,13 +1111,25 @@ class TestLedgerSchema:
             assert first[-1] == "INSERT INTO schema_version(version) VALUES (1)"
             assert not any("UPDATE schema_version" in s for step in side.store._MIGRATIONS for s in step)
 
-    def test_fixtures_are_byte_equal_between_the_two_sides(self):
+    def test_fixtures_are_byte_equal_through_schema_twelve(self):
+        """Every prefix dump through 12 is shared; fresh and every upgrade end at 13 on llm-kit.
+
+        Deliberate difference: ``fresh.json`` and ``upgrade-from-*.json`` differ
+        (legacy ends at schema 12, llm-kit at 13), and llm-kit has the extra
+        ``prefix-13`` and ``upgrade-from-13`` dumps.
+        """
         legacy = sorted(p.name for p in (_FIXTURES / "legacy").glob("*.json"))
         final = sorted(p.name for p in (_FIXTURES / "llm-kit").glob("*.json"))
-        assert legacy == final
         assert len(legacy) == 1 + 12 + 12
-        for name in legacy:
+        assert len(final) == 1 + 13 + 13
+        assert set(final) - set(legacy) == {"prefix-13.json", "upgrade-from-13.json"}
+        shared = [name for name in legacy if name.startswith("prefix-")]
+        assert len(shared) == 12
+        for name in shared:
             assert (_FIXTURES / "legacy" / name).read_bytes() == (_FIXTURES / "llm-kit" / name).read_bytes(), name
+        for name in legacy:
+            if not name.startswith("prefix-"):
+                assert (_FIXTURES / "legacy" / name).read_bytes() != (_FIXTURES / "llm-kit" / name).read_bytes(), name
 
     def test_each_side_regenerates_its_own_fixtures_byte_for_byte(self, sides, tmp_path, monkeypatch):
         for side, directory in zip(sides, ("legacy", "llm-kit")):
@@ -1091,23 +1139,29 @@ class TestLedgerSchema:
             committed = {p.name: p.read_bytes() for p in (_FIXTURES / directory).glob("*.json")}
             assert produced == committed, directory
 
-    def test_fresh_create_ends_at_schema_twelve_with_one_version_row(self):
+    def test_fresh_create_ends_at_schema_thirteen_with_one_version_row(self):
+        legacy = json.loads((_FIXTURES / "legacy" / "fresh.json").read_text(encoding="ascii"))
+        assert legacy["schema_version"] == [12]
         fresh = json.loads((_FIXTURES / "llm-kit" / "fresh.json").read_text(encoding="ascii"))
-        assert fresh["schema_version"] == [12]
+        assert fresh["schema_version"] == [13]
         assert fresh["journal_mode"] == "wal"
         names = [row[1] for row in fresh["sqlite_master"] if row[0] == "table"]
         assert "schema_version" in names and "interrupts" in names and "events" in names
 
     def test_every_upgrade_converges_on_the_fresh_create_bytes(self):
         fresh = json.loads((_FIXTURES / "llm-kit" / "fresh.json").read_text(encoding="ascii"))
-        for prefix in range(1, 13):
+        for prefix in range(1, 14):
             upgraded = json.loads(
                 (_FIXTURES / "llm-kit" / f"upgrade-from-{prefix:02d}.json").read_text(encoding="ascii")
             )
-            assert upgraded["schema_version"] == [12]
+            assert upgraded["schema_version"] == [13]
             assert {row[1] for row in upgraded["sqlite_master"] if row[0] == "table"} == {
                 row[1] for row in fresh["sqlite_master"] if row[0] == "table"
             }, prefix
+            assert _master_sql(upgraded, "interrupt_resolutions") == _master_sql(
+                fresh, "interrupt_resolutions"
+            ), prefix
+            assert "'cancelled'" in _master_sql(upgraded, "interrupt_resolutions"), prefix
 
     def test_statement_order_on_open_is_identical(self, sides, tmp_path, monkeypatch):
         """Pragma order: every statement a fresh open, a reopen and a write verb issue."""
@@ -1136,6 +1190,14 @@ class TestLedgerSchema:
             finally:
                 monkeypatch.setattr(sqlite3, "connect", real_connect)
             traces.append([line.replace(str(base), "<ROOT>") for line in log])
+        # Deliberate difference: llm-kit's extra migration step (schema 13) and
+        # its version UPDATE are the only statements legacy does not issue.
+        final_trace = traces[1]
+        start = final_trace.index("DROP TRIGGER interrupts_one_open_per_job")
+        stop = final_trace.index("UPDATE schema_version SET version = 13")
+        step_13 = [" ".join(statement.split()) for statement in sides[1].store._MIGRATIONS[12]]
+        assert [" ".join(line.split()) for line in final_trace[start:stop]] == step_13
+        traces[1] = final_trace[:start] + final_trace[stop + 1 :]
         assert traces[0] == traces[1]
         text = "\n".join(traces[1])
         # The documented order: busy_timeout, then WAL, then foreign_keys, then BEGIN IMMEDIATE.
@@ -1151,16 +1213,48 @@ class TestLedgerSchema:
             db = base / "runs.sqlite3"
             side.store.JobStore(db)
             conn = sqlite3.connect(str(db))
-            conn.execute("UPDATE schema_version SET version = 13")
+            conn.execute(
+                "UPDATE schema_version SET version = ?", (len(side.store._MIGRATIONS) + 1,)
+            )
             conn.commit()
             conn.close()
             before = db.read_bytes()
             wal_before = sorted(p.name for p in base.iterdir())
             with pytest.raises(side.store.StoreError) as excinfo:
                 side.store.JobStore(db)
-            outcomes.append((to_final(str(excinfo.value).replace(str(base), "<ROOT>")), db.read_bytes() == before, wal_before == sorted(p.name for p in base.iterdir())))
+            newest = len(side.store._MIGRATIONS)
+            message = (
+                str(excinfo.value)
+                .replace(str(base), "<ROOT>")
+                .replace(f"version {newest + 1} ", "version <NEXT> ")
+                .replace(f"max {newest})", "max <NEWEST>)")
+            )
+            outcomes.append((to_final(message), db.read_bytes() == before, wal_before == sorted(p.name for p in base.iterdir())))
+        # The version numbers differ by design (legacy 12, llm-kit 13); the refusal is the same.
         assert outcomes[0] == outcomes[1]
         assert outcomes[0][1] is True
+
+    def test_legacy_job_kit_refuses_a_ledger_llm_kit_has_written_at_schema_thirteen(
+        self, sides, tmp_path
+    ):
+        """The deliberate old-reader refusal: schema 13 is not readable by frozen job-kit."""
+        legacy, final = sides
+        db = tmp_path / "runs.sqlite3"
+        final.store.JobStore(db)
+        before = db.read_bytes()
+        with pytest.raises(legacy.store.StoreError, match=r"schema version 13 is newer .*max 12"):
+            legacy.store.JobStore(db, create=False)
+        with pytest.raises(legacy.store.StoreError, match=r"schema version 13 is newer .*max 12"):
+            legacy.store.LedgerReader(db).schema_version()
+        assert db.read_bytes() == before
+
+    def test_llm_kit_upgrades_a_schema_twelve_ledger_legacy_wrote(self, sides, tmp_path):
+        legacy, final = sides
+        db = tmp_path / "runs.sqlite3"
+        legacy.store.JobStore(db)
+        assert final.store.LedgerReader(db).schema_version() == 12
+        final.store.JobStore(db, create=False)
+        assert final.store.LedgerReader(db).schema_version() == 13
 
     def test_the_reader_refuses_a_ledger_older_than_its_floor(self, sides, tmp_path, monkeypatch):
         outcomes = []
@@ -1244,6 +1338,17 @@ class TestCrossVersionState:
                 backend_factory=_factory(first, tr1),
             )
             assert exit_code(snap) == 4
+            if first is sides[1] and second is sides[0]:
+                # Rollback is the deliberate difference: llm-kit wrote a schema-13
+                # ledger and legacy job-kit (schema 12) refuses it, loudly and
+                # before it writes anything. The same-side run still finishes.
+                before = store_path.read_bytes()
+                with pytest.raises(second.store.StoreError, match=r"newer than this .*max 12"):
+                    second.store.JobStore(store_path, create=False)
+                with pytest.raises(second.store.StoreError, match=r"newer than this .*max 12"):
+                    second.store.LedgerReader(store_path).snapshot("r")
+                assert store_path.read_bytes() == before
+                second = first
             store2 = second.store.JobStore(store_path, create=False)
             store2.resolve_interrupt("r", 1, decision="answer", input={"approved": True}, now=1_900_000_000.0)
             tr2 = {"ep": Transport(second)}
@@ -1708,9 +1813,18 @@ class TestWorkspaceParity:
             legacy.workspace.GIT_TREE_TIMEOUT_S,
         ) == (30.0, 900.0)
 
-    def test_the_workspace_module_is_the_legacy_source_byte_for_byte(self, sides):
+    def test_the_workspace_module_is_the_legacy_source_but_for_the_cancelled_disposition(self, sides):
+        """Deliberate difference: ``gc`` also reclaims a reservation's worktree after a cancel.
+
+        The one changed line adds the ``cancelled`` reservation disposition (ledger
+        schema 13) to the dispositions whose worktree ``gc`` may reclaim.
+        """
         legacy, final = sides
-        assert Path(final.workspace.__file__).read_bytes() == Path(legacy.workspace.__file__).read_bytes()
+        legacy_source = Path(legacy.workspace.__file__).read_text(encoding="utf-8")
+        old = '                    "pre_invoke_failure",\n                }\n'
+        new = '                    "pre_invoke_failure",\n                    "cancelled",\n                }\n'
+        assert legacy_source.count(old) == 1
+        assert Path(final.workspace.__file__).read_text(encoding="utf-8") == legacy_source.replace(old, new)
 
 
 # --------------------------------------------------------------------------
@@ -2048,6 +2162,16 @@ class TestFactorySeamParity:
 
 
 class TestDeliberateDifferences:
+    def test_the_cancelled_state_and_schema_thirteen_exist_only_on_llm_kit(self, sides):
+        legacy, final = sides
+        assert "CANCELLED" not in legacy.model.JobState.__members__
+        assert final.model.JobState.CANCELLED.value == "cancelled"
+        assert final.model.JobState.CANCELLED in final.model.TERMINAL_STATES
+        assert not hasattr(legacy.store.JobStore, "mark_cancelled")
+        assert hasattr(final.store.JobStore, "mark_cancelled")
+        assert not hasattr(legacy.store, "CANCEL_SCHEMA")
+        assert (len(legacy.store._MIGRATIONS), len(final.store._MIGRATIONS)) == (12, 13)
+
     def test_the_version_skew_probes_are_gone(self, sides):
         legacy, final = sides
         assert hasattr(legacy.select, "SharedLibTooOldError")

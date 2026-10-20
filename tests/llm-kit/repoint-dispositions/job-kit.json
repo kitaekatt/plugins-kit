@@ -227,9 +227,10 @@
     {
       "path": "tests/job-kit/test_ledger_reader.py",
       "disposition": "rewrite",
-      "reason": "Re-pointed at llm-kit's final module names: import statements, global wording_edits.",
+      "reason": "Re-pointed at llm-kit's final module names: import statements, test_text_edits rows, global wording_edits; 1 test_text_edits row in repoint-map.json adapts the test to llm-kit's ledger schema 13 (first unsupported version 14).",
       "rewrite_classes": [
         "import",
+        "text-edit",
         "wording-edit"
       ],
       "collection_count": 14,
@@ -333,9 +334,10 @@
     {
       "path": "tests/job-kit/test_store.py",
       "disposition": "rewrite",
-      "reason": "Re-pointed at llm-kit's final module names: import statements.",
+      "reason": "Re-pointed at llm-kit's final module names: import statements, test_text_edits rows; 1 test_text_edits row in repoint-map.json adapts the test to llm-kit's ledger schema 13.",
       "rewrite_classes": [
-        "import"
+        "import",
+        "text-edit"
       ],
       "collection_count": 27,
       "baseline_failures": []

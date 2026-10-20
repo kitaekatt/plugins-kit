@@ -70,12 +70,15 @@ class TestVerbMap:
             code = run(final_mods.cli.main, [*target.split(), "--help"], capsys).code
             assert code == 0, target
 
-    def test_the_jobs_group_carries_exactly_the_job_kit_verbs(self, legacy_mods, final_mods, capsys):
+    def test_the_jobs_group_carries_the_job_kit_verbs_and_cancel(self, legacy_mods, final_mods, capsys):
         legacy = _choices(legacy_mods.jobs_cli._parser())
         assert legacy == {"run", "status", "resume", "resolve", "events", "gc"}
         for verb in legacy:
             assert run(final_mods.cli.main, ["jobs", verb, "--help"], capsys).code == 0, verb
-        assert _choices(final_mods.jobs_cli._parser()) == legacy
+        # Deliberate difference (ledger schema 13): llm-kit adds `cancel`; the
+        # legacy verbs are all still there.
+        assert _choices(final_mods.jobs_cli._parser()) == legacy | {"cancel"}
+        assert run(final_mods.cli.main, ["jobs", "cancel", "--help"], capsys).code == 0
 
     def test_the_pipeline_group_carries_the_store_only_command_set(self, legacy_mods, final_mods, tmp_path):
         store = legacy_mods.cpk_store.ExecutionStore(tmp_path / "legacy.db")

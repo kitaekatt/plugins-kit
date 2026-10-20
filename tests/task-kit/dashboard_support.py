@@ -240,12 +240,13 @@ class FakeEdge:
     """
 
     def __init__(self, *, state: str = "ok", detail: str = "", behavior: str = "done", entries: dict | None = None,
-                 invalid_job_file: str | None = None) -> None:
+                 invalid_job_file: str | None = None, sleep_s: float = 3.0) -> None:
         from task_system.dashboard.jobs_edge import EntryInfo
 
         self.state = state
         self.detail = detail or ("llm-kit is available" if state == "ok" else f"llm-kit is {state}")
         self.behavior = behavior
+        self.sleep_s = sleep_s
         self.invalid_job_file = invalid_job_file
         self.entries = entries if entries is not None else {
             "opus": EntryInfo(id="opus", kind="harness", harness="claude", model="opus"),
@@ -271,8 +272,25 @@ class FakeEdge:
             raise EdgeError(self.invalid_job_file)
 
     def runner_argv(self, job_file: Path, store: Path, timeout_s: float, run_id: str) -> list[str]:
-        (Path(job_file).parent / "behavior.json").write_text(json.dumps({"behavior": self.behavior}), encoding="utf-8")
+        (Path(job_file).parent / "behavior.json").write_text(
+            json.dumps({"behavior": self.behavior, "sleep_s": self.sleep_s}), encoding="utf-8")
         return [sys.executable, str(FAKE_LLM), str(job_file), str(store), run_id]
+
+    def cancel_argv(self, store: Path, run_id: str, reason: str) -> list[str]:
+        return [sys.executable, str(FAKE_LLM), "--cancel", str(store), run_id, reason]
+
+    def ledger_snapshot(self, store: Path, run_id: str):
+        """The stand-in ledger fake_llm.py keeps beside the store, or None before the job started."""
+        from task_system.dashboard.jobs_edge import LedgerView
+
+        path = Path(store).parent / "fake-ledger.json"
+        if not path.is_file():
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return LedgerView(run_id=data["run"], jobs=tuple((j["id"], j["state"]) for j in data["jobs"]))
+
+    def ledger_events(self, store: Path, run_id: str) -> list[dict]:
+        return []
 
 
 def agent_world(tmp_path: Path, *, repo: bool = True, items=None, sections=None, status: str = "active",

@@ -924,10 +924,34 @@ def _jobs_both(pair, capsys, monkeypatch, verb: str, *rest: str, stdin: Optional
     return outcomes[0], outcomes[1]
 
 
+def _without_zero_cancelled_count(text: str) -> str:
+    """Drop ``counts.cancelled`` from a status payload while it is zero.
+
+    Deliberate difference (ledger schema 13): llm-kit's ``counts`` carries a
+    ``cancelled`` key legacy job-kit lacks. A nonzero count is left in place so
+    a run that cancelled a job would still differ.
+    """
+    stripped = []
+    for line in text.splitlines(keepends=True):
+        try:
+            payload = json.loads(line)
+        except ValueError:
+            stripped.append(line)
+            continue
+        counts = payload.get("counts") if isinstance(payload, dict) else None
+        if isinstance(counts, dict) and counts.get("cancelled") == 0:
+            del counts["cancelled"]
+            line = json.dumps(payload, sort_keys=True) + ("\n" if line.endswith("\n") else "")
+        stripped.append(line)
+    return "".join(stripped)
+
+
 def _same_jobs_json(left: Outcome, right: Outcome) -> Outcome:
     assert left.code == right.code, (left, right)
     assert left.err == right.err, (left.err, right.err)
-    assert normalize_json_text(left.out, {}) == normalize_json_text(right.out, {}), (left.out, right.out)
+    assert normalize_json_text(_without_zero_cancelled_count(left.out), {}) == normalize_json_text(
+        _without_zero_cancelled_count(right.out), {}
+    ), (left.out, right.out)
     return left
 
 

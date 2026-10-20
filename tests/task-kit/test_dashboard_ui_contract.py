@@ -27,9 +27,9 @@ CSS = (STATIC / "app.css").read_text(encoding="utf-8")
 HARNESS = Path(__file__).with_name("ui_harness.js")
 
 # The actions that change shared state. Each is drawn in every place the design shows
-# it; the three the server backs are live only when it says so, the rest stay disabled.
+# it; the four the server backs are live only when it says so, the rest stay disabled.
 LATER_ACTIONS = {"queue", "cancel", "retry", "newtask", "additem", "pause", "recheck", "defer", "queueall"}
-BACKED_ACTIONS = {"queue", "retry", "recheck"}
+BACKED_ACTIONS = {"queue", "retry", "recheck", "cancel"}
 
 
 @pytest.mark.parametrize("name", ["index.html", "app.js", "app.css"])
@@ -52,7 +52,7 @@ def test_css_pulls_in_nothing_remote():
     assert not re.search(r"url\(\s*['\"]?(https?:)?//", CSS)
 
 
-def test_app_js_makes_only_same_origin_calls_and_writes_only_the_three_backed_actions():
+def test_app_js_makes_only_same_origin_calls_and_writes_only_the_backed_actions():
     assert not re.search(r"\b(eval|XMLHttpRequest|WebSocket|EventSource|sendBeacon|localStorage|sessionStorage)\b", JS)
     assert "new Function" not in JS and "document.write" not in JS
     assert not re.search(r"https?://", JS)
@@ -60,10 +60,10 @@ def test_app_js_makes_only_same_origin_calls_and_writes_only_the_three_backed_ac
     assert fetches == ["path", "path"]  # api() and send()
     assert re.findall(r"api\(\s*'(/api/v1/[^']*)'", JS)
     assert "X-Task-Kit-Token" in JS and "location.hash" in JS
-    # The one POST lives in send(); the only things sent are queue, recheck and retry.
+    # The one POST lives in send(); the only things sent are queue, recheck, retry and cancel.
     assert re.findall(r"method\s*:\s*'(\w+)'", JS) == ["POST"]
-    assert len(re.findall(r"send\('/api/v1/", JS)) == 3
-    assert sorted(re.findall(r"'/(queue|recheck|retry)'", JS)) == ["queue", "recheck", "retry"]
+    assert len(re.findall(r"send\('/api/v1/", JS)) == 4
+    assert sorted(re.findall(r"'/(queue|recheck|retry|cancel)'", JS)) == ["cancel", "queue", "recheck", "retry"]
 
 
 def test_app_js_never_emits_markup_the_csp_would_block():
@@ -193,18 +193,20 @@ def rendered(tmp_path_factory):
 LIVE_CAPABILITIES = {
     "read": True,
     "run": {"available": True, "reason": None, "state": "ok"},
-    "mutations": {"available": True, "actions": ["queue", "retry", "recheck"], "reason": "live"},
+    "mutations": {"available": True, "actions": ["queue", "retry", "recheck", "cancel"], "reason": "live"},
 }
 
 
 def _run_row(seq, run_id, project_id, state, item, task="open-one", **extra):
     from task_system.dashboard.runtime import Run
 
+    ended = ("failed", "accepted", "cancelled", "timeout")
+
     return Run(seq=seq, id=run_id, project_id=project_id, project_root="x", task_ref=f"dev/tasks/{task}", item_id=item,
                item_title=f"Title of {item}", state=state, code=extra.get("code"), detail=extra.get("detail"),
                options={"worker": "claude", "entry": "opus"}, source_revision="r", queued_at="2026-10-01 09:00",
                started_at="2026-10-01 09:01" if state != "queued" else None,
-               ended_at="2026-10-01 09:30" if state in ("failed", "accepted") else None,
+               ended_at="2026-10-01 09:30" if state in ended else None,
                run_dir=None, runner_pid=None, runner_ctime=None, retry_of=None)
 
 
@@ -215,12 +217,14 @@ def live(tmp_path_factory):
     devroot = _world(tmp)
     snap = Inventory(parents=(devroot,), min_interval=0).snapshot()
     cid = _checkout(snap, "open-one")  # runs belong to the checkout they execute in
-    runs = [_run_row(3, "run-queued", cid, "queued", "c1", task="calm-p1"),
+    runs = [_run_row(5, "run-cancelled", cid, "cancelled", "wait", code="cancelled", detail="Partial work may be in the shared tree."),
+            _run_row(4, "run-stopping", cid, "cancelling", "mid", code="cancelling", detail="stop requested"),
+            _run_row(3, "run-queued", cid, "queued", "c1", task="calm-p1"),
             _run_row(2, "run-live", cid, "running", "go-too"),
             _run_row(1, "run-fail", cid, "failed", "go", code="timeout", detail="reached its limit")]
     payload = snapshot.dashboard_payload(snap, runtime={"capabilities": LIVE_CAPABILITIES, "runs": runs})
     report = _run_harness(tmp, payload, snap, (f"{cid}|dev/tasks/open-one|go-three", f"{cid}|dev/tasks/open-one|wait",
-                                               f"run-fail|{cid}|dev/tasks/open-one"))
+                                               f"run-fail|{cid}|dev/tasks/open-one", "run-live"))
     report["revision"] = next(t["revision"] for t in payload["tasks"] if t["id"] == "dev/tasks/open-one")
     report["pid"] = cid
     report["root"] = str(devroot / "alpha")
@@ -480,7 +484,7 @@ def test_with_runs_available_queue_retry_and_recheck_are_live_and_the_rest_stay_
         for tag in _buttons(live[surface], "data-later"):
             assert " disabled" in tag and 'aria-disabled="true"' in tag, (surface, tag)
     later = {m for surface in ("mainOpen", "itemWithRun") for m in re.findall(r'data-later="(\w+)"', live[surface])}
-    assert {"cancel", "additem", "queueall"} <= later and not later & {"queue", "recheck"}
+    assert {"additem", "queueall"} <= later and not later & {"queue", "recheck", "cancel"}  # Cancel run is live now
     assert "Now running" in live["main"] and "Title of go-too" in live["main"]  # inside the collapsed activity section
     # A live run counts as in flight on its task's row; a queued one shows the queued chip.
     rows = _rows(live["main"])
@@ -499,17 +503,42 @@ def test_a_failed_run_offers_retry_and_a_running_one_shows_its_state(live):
 
 
 @needs_node
-def test_the_three_actions_post_with_the_revision_the_page_saw(live):
+def test_the_actions_post_with_the_revision_the_page_saw_except_cancel_which_carries_none(live):
     posts = live["posts"]
-    assert [p["method"] for p in posts] == ["POST", "POST", "POST"]
+    assert [p["method"] for p in posts] == ["POST", "POST", "POST", "POST"]
     pid = live["pid"]
     prefix = f"/api/v1/items/{pid}/dev%2Ftasks%2Fopen-one"
     assert posts[0]["url"] == f"{prefix}/go-three/queue"
     assert posts[1]["url"] == f"{prefix}/wait/recheck"
     assert posts[2]["url"] == "/api/v1/runs/run-fail/retry"
+    assert posts[3]["url"] == "/api/v1/runs/run-live/cancel"
     for post in posts:
         assert post["headers"] == {"X-Task-Kit-Token": "test-token", "Content-Type": "application/json"}
+    for post in posts[:3]:
         assert json.loads(post["body"]) == {"expected_revision": live["revision"]}
+    assert json.loads(posts[3]["body"]) == {}  # process control on a run id: no task revision
+
+
+@needs_node
+def test_cancel_run_is_live_for_a_live_run_and_labels_say_cancelling_and_cancelled(live):
+    main = live["main"]  # the Now running cards sit inside the collapsed activity section
+    live_card = main[main.index("Title of go-too"):]
+    live_card = live_card[:live_card.index("</div></div>")]
+    assert re.search(r'<button[^>]*data-action="cancel"[^>]*data-key="run-live"', live_card)
+    assert "disabled" not in re.search(r'<button[^>]*data-action="cancel"[^>]*>', live_card).group(0)
+    stopping = main[main.index("Title of mid"):]
+    stopping = stopping[:stopping.index("</div></div>")]
+    assert "Cancelling" in main and 'data-action="cancel"' not in stopping  # no second cancel for a stopping run
+    assert re.search(r'<button[^>]*disabled[^>]*data-idle="cancel"[^>]*>', stopping) and "Cancelling</button>" in stopping
+    queued = main[main.index("Title of c1"):]
+    assert re.search(r'data-action="cancel"[^>]*data-key="run-queued"', queued[:queued.index("</div></div>")])  # a queued run too
+    recent = live["payload"]["recent_runs"]
+    cancelled = next(r for r in recent if r["id"] == "run-cancelled")
+    assert cancelled["retryable"] and not cancelled["cancellable"] and cancelled["state"] == "cancelled"
+    stopping_row = next(r for r in live["payload"]["runs"] if r["id"] == "run-stopping")
+    assert stopping_row["state"] == "cancelling" and not stopping_row["cancellable"] and not stopping_row["retryable"]
+    assert "Cancelled" in live["mainOpen"] + live["main"] + live["itemWithRun"]
+    assert 'data-later="cancel"' not in live["main"]  # nothing is drawn as "arrives later" any more
 
 
 @needs_node
@@ -530,3 +559,26 @@ def test_the_item_detail_run_log_toggle_shows_the_same_log_inline(live):
     assert "Latest run" in before and "Run log" in before and "log line" not in before
     after = _item_detail(live["itemRunLog"])
     assert "Hide run log" in after and "log line" in after
+
+
+@pytest.fixture(scope="module")
+def no_llm(tmp_path_factory):
+    """llm-kit went away while a run was live: Queue and Retry are off, Cancel run is still on."""
+    tmp = tmp_path_factory.mktemp("ui-no-llm")
+    devroot = _world(tmp)
+    snap = Inventory(parents=(devroot,), min_interval=0).snapshot()
+    cid = _checkout(snap, "open-one")
+    capabilities = {
+        "read": True,
+        "run": {"available": False, "reason": "llm-kit is not importable", "state": "absent"},
+        "mutations": {"available": True, "actions": ["queue", "retry", "recheck", "cancel"], "reason": "live"},
+    }
+    runs = [_run_row(2, "run-live", cid, "running", "go-too"), _run_row(1, "run-fail", cid, "failed", "go", code="x", detail="y")]
+    payload = snapshot.dashboard_payload(snap, runtime={"capabilities": capabilities, "runs": runs})
+    return _run_harness(tmp, payload, snap)
+
+
+@needs_node
+def test_cancel_run_does_not_depend_on_llm_kit_being_available(no_llm):
+    assert 'data-action="cancel"' in no_llm["main"]  # the live card in Now running
+    assert 'data-action="queue"' not in no_llm["mainOpen"] and 'data-action="retry"' not in no_llm["main"]

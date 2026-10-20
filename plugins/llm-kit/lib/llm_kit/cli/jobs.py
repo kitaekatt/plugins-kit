@@ -1,7 +1,8 @@
-"""``llm-kit jobs``: run, inspect, resume and resolve durable agent jobs.
+"""``llm-kit jobs``: run, inspect, resume, resolve and cancel durable agent jobs.
 
 Carries the legacy job-kit verbs (``run``, ``status``, ``resume``, ``resolve``,
-``events``, ``gc``) with their arguments, JSON output and exit codes unchanged.
+``events``, ``gc``) with their arguments, JSON output and exit codes unchanged,
+and adds ``cancel`` (ledger schema 13).
 The CLI is the composition root for backends: ``run`` and ``resume`` receive the
 configured backend factory (:func:`llm_kit.cli._compose.configured_factory`)
 instead of letting the jobs runner pick its own.
@@ -44,11 +45,13 @@ EXIT_WAITING = 4
 _EXIT_EPILOG = """Exit codes:
   0 -- every job accepted, or the verb succeeded (GC refusals are reported)
   1 -- the verb ran but a job was not accepted (rejected / failed / halted / unroutable /
-       operator_rejected / expired), or `resolve` refused the resolution
+       operator_rejected / expired / cancelled), or `resolve` refused the resolution
   2 -- usage error (argparse exits with this code)
-  3 -- the runner itself failed (unreadable jobs file, missing store, unknown run or
+  3 -- the runner itself failed (unreadable jobs file, missing store, unknown run, job or
        interrupt, or unexpected exception), or `events` refused (a run without an
-       event log, or an existing --out file)
+       event log, or an existing --out file); `cancel` exits 3 for an unknown run or
+       job or a missing store, and 0 otherwise (a job that had already ended is
+       reported `already-terminal`)
   4 -- `run` or `resume` ended with no failure but at least one job waiting on an
        interrupt: healthy, not done; `resolve` it, then `resume`
 """
@@ -120,6 +123,26 @@ def _parser() -> argparse.ArgumentParser:
     )
     resolve.add_argument("--reason", help="the operator's reason; only with --reject")
     resolve.add_argument("--store", type=Path)
+
+    cancel = subcommands.add_parser(
+        "cancel",
+        help="cancel a run's jobs (the run process must already be stopped)",
+        description=(
+            "Mark every job of a run that has not ended (pending, running or "
+            "waiting), or only --job, cancelled: its open interrupt, live "
+            "continuation and live reservation are closed as cancelled and a "
+            "terminal event is recorded, in one transaction. A job that had "
+            "already ended is left untouched and reported already-terminal, so "
+            "repeating a cancel is safe. PRECONDITION: the process running the "
+            "jobs must already be stopped; llm-kit holds no lease on a ledger "
+            "and cannot stop a live runner. Writes ledger schema 13, which an "
+            "older llm-kit or job-kit refuses to open."
+        ),
+    )
+    cancel.add_argument("run")
+    cancel.add_argument("--store", type=Path)
+    cancel.add_argument("--reason", required=True, help="why the jobs are cancelled")
+    cancel.add_argument("--job", help="cancel only this job id")
 
     events = subcommands.add_parser(
         "events",
@@ -358,6 +381,35 @@ def _resolve(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _cancel(args: argparse.Namespace) -> int:
+    """Handle the cancel subcommand.
+
+    The ledger must exist (``create=False``); an unknown run or job and a
+    missing store reach the runner-failure exit through ``run``.
+    """
+    if not args.reason.strip():
+        raise ValueError("--reason must not be empty")
+    store = JobStore(_store_path(args.store), create=False)
+    outcomes = store.cancel_jobs(args.run, args.reason, job_id=args.job)
+    print(
+        json.dumps(
+            {
+                "run": args.run,
+                "jobs": [
+                    {
+                        "id": item.job.id,
+                        "state": item.job.state.value,
+                        "outcome": item.outcome,
+                    }
+                    for item in outcomes
+                ],
+            },
+            sort_keys=True,
+        )
+    )
+    return EXIT_OK
+
+
 def _events(args: argparse.Namespace) -> int:
     """Handle the events subcommand."""
     from llm_kit.jobs import events as event_support
@@ -410,8 +462,8 @@ def run(argv: Sequence[str]) -> int:
     """Run one ``jobs`` verb and return its documented exit status.
 
     Returns 0 when every job is accepted or a verb succeeds, 1 when a run job
-    is rejected, failed, halted, unroutable, operator-rejected or expired (or
-    `resolve` refuses), 3 when the runner itself fails, and 4 when `run` or
+    is rejected, failed, halted, unroutable, operator-rejected, expired or
+    cancelled (or `resolve` refuses), 3 when the runner itself fails, and 4 when `run` or
     `resume` leaves a job waiting on an interrupt and none failed. Argparse
     exits with 2 for usage errors.
     """
@@ -428,6 +480,8 @@ def run(argv: Sequence[str]) -> int:
             return _resume(args)
         if args.command == "resolve":
             return _resolve(args)
+        if args.command == "cancel":
+            return _cancel(args)
         if args.command == "events":
             return _events(args)
         if args.command == "gc":

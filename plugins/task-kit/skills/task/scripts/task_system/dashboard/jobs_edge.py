@@ -11,8 +11,11 @@ every probe distinguishes the three runtime states an ``import`` cannot:
   missing (a stale or older shared copy; the two read the same);
 - ``ok``.
 
-The newest thing relied on is a job option mapping that carries
-``disallowed_tools`` (the Claude deny floor) through ``Job``. Neither failure
+The newest things relied on are the ledger's ``cancelled`` job state with
+``JobStore.mark_cancelled``, and the ``llm-kit jobs cancel`` verb that records it
+(run cancellation and crash recovery close a ledger through that verb), on top of
+a job option mapping that carries ``disallowed_tools`` (the Claude deny floor)
+through ``Job``. Neither failure
 state falls back to anything: the autonomous controls report the message and
 stay off, and the rest of the dashboard is unaffected.
 
@@ -23,7 +26,9 @@ it: install when absent, update when too old.
 
 from __future__ import annotations
 
+import contextlib
 import importlib
+import io
 import sys
 import time
 from dataclasses import dataclass
@@ -33,7 +38,7 @@ OK = "ok"
 ABSENT = "absent"
 TOO_OLD = "too-old"
 
-MIN_LLM_KIT_VERSION = "0.1.8"  # first release carrying llm_kit.cli.jobs and Job options.disallowed_tools
+MIN_LLM_KIT_VERSION = "0.3.0"  # first release carrying JobState.CANCELLED, JobStore.mark_cancelled and `jobs cancel`
 
 ABSENT_MESSAGE = (
     "Autonomous runs need the llm-kit plugin (version " + MIN_LLM_KIT_VERSION + " or newer), which is not "
@@ -63,6 +68,36 @@ class EdgeStatus:
         return self.state == OK
 
 
+# Job states llm-kit never leaves (its TERMINAL_STATES, with the cancelled state this module needs).
+TERMINAL_JOB_STATES = frozenset({
+    "accepted", "rejected", "failed", "halted", "unroutable", "operator_rejected", "expired", "cancelled",
+})
+
+
+@dataclass(frozen=True)
+class LedgerView:
+    """What the dashboard reads of a run's ledger: its jobs and their recorded states."""
+
+    run_id: str
+    jobs: tuple[tuple[str, str], ...]  # (job id, state)
+
+    @property
+    def states(self) -> tuple[str, ...]:
+        return tuple(state for _id, state in self.jobs)
+
+    @property
+    def terminal(self) -> bool:
+        return bool(self.jobs) and all(state in TERMINAL_JOB_STATES for state in self.states)
+
+    @property
+    def phase(self) -> str:
+        """One word for the run: the single job's state, or a count when there are several."""
+        states = self.states
+        if not states:
+            return "empty"
+        return states[0] if len(set(states)) == 1 else "mixed"
+
+
 @dataclass(frozen=True)
 class EntryInfo:
     id: str
@@ -73,6 +108,16 @@ class EntryInfo:
     @property
     def adapter(self) -> str | None:
         return SUPPORTED_HARNESSES.get(self.harness or "")
+
+
+def _require_cancel_verb(cli_jobs) -> None:
+    """Raise AttributeError unless ``llm-kit jobs cancel <run> --reason R`` parses."""
+    parser = cli_jobs._parser()
+    with contextlib.redirect_stderr(io.StringIO()):
+        try:
+            parser.parse_args(["cancel", "probe", "--reason", "probe"])
+        except SystemExit as exc:
+            raise AttributeError("llm-kit has no `jobs cancel` verb") from exc
 
 
 class JobsEdge:
@@ -118,9 +163,49 @@ class JobsEdge:
             )
             if probe.options.get("disallowed_tools") != "Bash(probe:*)":
                 raise AttributeError("Job drops options.disallowed_tools")
+            store = importlib.import_module("llm_kit.jobs.store")
+            cli_jobs = importlib.import_module("llm_kit.cli.jobs")
+            getattr(model.JobState, "CANCELLED")
+            for owner, name in ((store.JobStore, "mark_cancelled"), (store, "LedgerReader"), (store, "StoreNotFoundError"),
+                                (store, "UnknownRunError")):
+                getattr(owner, name)
+            _require_cancel_verb(cli_jobs)
         except (ImportError, AttributeError, TypeError, ValueError) as exc:
             return EdgeStatus(TOO_OLD, TOO_OLD_MESSAGE.format(why=f"{type(exc).__name__}: {exc}"))
         return EdgeStatus(OK, "llm-kit is available")
+
+    def cancel_argv(self, store: Path, run_id: str, reason: str) -> list[str]:
+        """The command that closes ``run_id``'s ledger as cancelled (the run process must already be stopped).
+
+        Exit 0 prints ``{"run", "jobs": [{"id", "state", "outcome"}]}``; exit 3 means the store has no such run.
+        """
+        return [sys.executable, "-m", "llm_kit.cli", "jobs", "cancel", run_id, "--store", str(store), "--reason", reason]
+
+    def ledger_snapshot(self, store: Path, run_id: str) -> LedgerView | None:
+        """A read-only view of the run's ledger, or None when there is no ledger or no such run yet.
+
+        This is the ONLY ledger read while a run is live: ``LedgerReader`` opens the file read-only
+        and never migrates it, so it can never disturb the process that owns the ledger.
+        """
+        ledger = importlib.import_module("llm_kit.jobs.store")
+        try:
+            snapshot = ledger.LedgerReader(store).snapshot(run_id)
+        except (ledger.StoreNotFoundError, ledger.UnknownRunError):
+            return None
+        except Exception as exc:  # noqa: BLE001 -- llm-kit raises several ledger error types (future schema, locked, corrupt)
+            raise EdgeError(f"the ledger {store} could not be read: {type(exc).__name__}: {exc}") from exc
+        return LedgerView(run_id=run_id, jobs=tuple((record.id, record.state.value) for record in snapshot.jobs))
+
+    def ledger_events(self, store: Path, run_id: str) -> list[dict]:
+        """The run's execution events. Only after the run process has exited: reading them opens the
+        ledger through a connection that may migrate it, which would make a second writer."""
+        ledger = importlib.import_module("llm_kit.jobs.store")
+        try:
+            return list(ledger.JobStore(store, create=False).list_events(run_id))
+        except (ledger.StoreNotFoundError, ledger.UnknownRunError):
+            return []
+        except Exception as exc:  # noqa: BLE001
+            raise EdgeError(f"the events of {run_id} in {store} could not be read: {type(exc).__name__}: {exc}") from exc
 
     def entry(self, name: str) -> EntryInfo | None:
         """The registry entry called ``name``, or None when no such entry exists."""

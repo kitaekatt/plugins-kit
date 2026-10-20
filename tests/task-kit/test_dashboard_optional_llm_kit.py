@@ -9,6 +9,7 @@ command (install when absent, update when too old).
 from __future__ import annotations
 
 import importlib
+from pathlib import Path
 import subprocess
 import sys
 import urllib.parse
@@ -193,7 +194,7 @@ def test_the_rest_of_the_dashboard_still_works_and_says_why_runs_are_off(rig):
     assert status == 200 and payload["tasks"] and payload["capabilities"]["read"] is True
     run = payload["capabilities"]["run"]
     assert run["available"] is False and run["state"] == "absent" and "claude plugin install llm-kit@plugins-kit" in run["reason"]
-    assert payload["capabilities"]["mutations"]["actions"] == ["queue", "retry", "recheck"]
+    assert payload["capabilities"]["mutations"]["actions"] == ["queue", "retry", "recheck", "cancel"]
     # Re-check is a task-folder action, not an llm-kit one, so it works.
     status, _h, body = rig.srv.post(rig.path("recheck"), {"expected_revision": folder_revision(rig.folder)})
     assert status == 200 and body["changed"] is False
@@ -208,3 +209,40 @@ def test_too_old_and_absent_are_refused_with_their_own_messages_and_recovery_nee
     status, _h, body = rig.srv.post(rig.path("queue"), {"expected_revision": folder_revision(rig.folder)})
     assert status == 202 and body["run"]["state"] == "queued"
     assert rig.srv.settle(body["run"]["id"]).state == "accepted"  # and it really runs, so no process outlives the test
+
+
+# -- the cancelled-state frontier ------------------------------------------------------------
+
+
+def test_a_copy_without_the_cancel_store_method_reads_as_too_old(real_llm_kit, monkeypatch):
+    from llm_kit.jobs import store
+
+    monkeypatch.delattr(store.JobStore, "mark_cancelled")
+    status = JobsEdge(ttl_s=0).status()
+    assert status.state == TOO_OLD and "mark_cancelled" in status.detail
+    assert jobs_edge.MIN_LLM_KIT_VERSION in status.detail and "claude plugin update llm-kit@plugins-kit" in status.detail
+
+
+def test_a_copy_without_the_cancel_verb_reads_as_too_old(real_llm_kit, monkeypatch):
+    import argparse
+
+    from llm_kit.cli import jobs as cli_jobs
+
+    def parser_without_cancel():
+        parser = argparse.ArgumentParser(prog="llm-kit jobs")
+        sub = parser.add_subparsers(dest="command", required=True)
+        sub.add_parser("run")
+        return parser
+
+    monkeypatch.setattr(cli_jobs, "_parser", parser_without_cancel)
+    status = JobsEdge(ttl_s=0).status()
+    assert status.state == TOO_OLD and "jobs cancel" in status.detail
+
+
+def test_the_cancel_command_is_the_verb_the_ledger_owner_documents(real_llm_kit):
+    argv = JobsEdge(ttl_s=0).cancel_argv(Path("/x/ledger.sqlite3"), "run-1", "why")
+    assert argv[1:] == ["-m", "llm_kit.cli", "jobs", "cancel", "run-1", "--store", "/x/ledger.sqlite3", "--reason", "why"]
+    from llm_kit.cli import jobs as cli_jobs
+
+    parsed = cli_jobs._parser().parse_args(argv[4:])  # the verb, its positional and its flags all parse
+    assert (parsed.command, parsed.run, parsed.reason) == ("cancel", "run-1", "why")

@@ -23,9 +23,14 @@ Nothing here makes a network call or starts a model: job backends are fakes.
 What is proved
 --------------
 
-* Job ledger (schema 12): a ledger created and partly run by one side is
-  resumed by the other to the same terminal state, with the earlier event rows
-  untouched and the rest equal to a run done entirely on one side. Handover is
+* Job ledger (schema 12 for legacy job-kit, 13 for llm-kit): a ledger created
+  and partly run by legacy is resumed by llm-kit (which upgrades it to schema
+  13) to the same terminal state, with the earlier event rows untouched and the
+  rest equal to a run done entirely on one side. The reverse is the deliberate
+  difference (user ruling 2026-10-19, llm-kit may change its frozen formats for
+  ``jobs cancel``): legacy job-kit refuses a schema-13 ledger, loudly and before
+  it writes anything, so a rollback after llm-kit has opened a ledger is pinned
+  as that refusal (``TestJobLedgerRollbackRefusal``). Handover is
   one process at a time, per the registered one-process-per-ledger rule; the
   tests never run two writers on one job ledger and assert no new lock or
   ownership artifact exists.
@@ -87,6 +92,25 @@ TRIPLES = [
     (FINAL, LEGACY, FINAL),
 ]
 MIXED_TRIPLES = [t for t in TRIPLES if len(set(t)) > 1]
+
+
+def _rolls_back(stages: Sequence[str]) -> bool:
+    """Whether a legacy stage follows an llm-kit stage (llm-kit has then written schema 13)."""
+    seen_final = False
+    for side in stages:
+        if side == FINAL:
+            seen_final = True
+        elif seen_final:
+            return True
+    return False
+
+
+#: Job-ledger handovers that stay readable: legacy first, llm-kit after.
+JOB_FORWARD_TRIPLES = [t for t in MIXED_TRIPLES if not _rolls_back(t)]
+#: Job-ledger handovers a schema-13 ledger refuses at the legacy stage.
+JOB_ROLLBACK_TRIPLES = [t for t in MIXED_TRIPLES if _rolls_back(t)]
+JOB_PAIRS = [p for p in PAIRS if not _rolls_back(p)]
+JOB_ROLLBACK_PAIRS = [p for p in PAIRS if _rolls_back(p)]
 
 
 def _label(sides: Sequence[str]) -> str:
@@ -432,8 +456,15 @@ def job_handover(base: Path, stages: Sequence[str], *, create_first: bool = Fals
         "log": log.read_text(encoding="utf-8"),
         "finished": ok(finished["jobs_resume"]),
         "state": ok(finished["jobs_state"]),
-        "ledger": _norm_ledger(after["tables"], scrub),
-        "schema": after["schema"],
+        # The schema_version table is left out of the compared ledger and the
+        # schema dump is a private key: legacy ends at 12, llm-kit at 13
+        # (``TestJobLedgerRollbackRefusal`` and ``test_the_schema_versions_*``).
+        "ledger": {
+            table: rows
+            for table, rows in _norm_ledger(after["tables"], scrub).items()
+            if table != "schema_version"
+        },
+        "_schema": after["schema"],
         "events": [scrub.text(line) for line in ok(finished["jobs_events"])["lines"]],
         "files": ok(finished["files"])["files"],
         "_before_rows": before["tables"],
@@ -470,7 +501,8 @@ class TestJobLedgerHandover:
             assert ref["waiting"]["states"] == {"a": "accepted", "release": "waiting", "c": "accepted"}
             assert ref["finished"]["exit_code"] == 0
             assert ref["state"]["states"] == {"a": "accepted", "release": "accepted", "c": "accepted"}
-            assert ref["schema"]["schema_version"] == [12]
+            # Deliberate difference: legacy job-kit stays at schema 12, llm-kit is at 13.
+            assert ref["_schema"]["schema_version"] == [12 if side == LEGACY else 13]
             assert ref["document"] and ref["log"] == "--resolution--\n" + ref["document"] + "\n"
             kinds = [e for e in ref["events"] if "continuation" in e or "interrupt" in e]
             assert kinds, "the scenario recorded no interrupt or continuation event"
@@ -478,17 +510,19 @@ class TestJobLedgerHandover:
     def test_both_sides_agree_when_each_runs_alone(self, job_reference):
         assert_same(_public(job_reference[FINAL]), _public(job_reference[LEGACY]), "final vs legacy")
 
-    @pytest.mark.parametrize("stages", MIXED_TRIPLES, ids=_label)
+    @pytest.mark.parametrize("stages", JOB_FORWARD_TRIPLES, ids=_label)
     def test_a_ledger_handed_across_reaches_the_same_terminal_state_and_event_bytes(
         self, stages, tmp_path, job_reference
     ):
-        """Forward (legacy first), rollback (llm-kit first) and ping-pong handovers.
+        """Forward handover: legacy starts the run, llm-kit (which upgrades the ledger) finishes it.
 
         One process at a time owns the ledger: each stage ends before the next
-        starts, which is the registered handover rule.
+        starts, which is the registered handover rule. The handovers that put a
+        legacy stage after an llm-kit stage are refused (``TestJobLedgerRollbackRefusal``).
         """
         crossed = job_handover(tmp_path / "crossed", stages)
         assert_same(_public(crossed), _public(job_reference[LEGACY]), "handover vs one-side run")
+        assert crossed["_schema"]["schema_version"] == [13]
         # The facts the first stage recorded are untouched, byte for byte (raw
         # rows, timestamps included), by whichever side finishes the run.
         before = crossed["_before_rows"]["events"]
@@ -499,8 +533,8 @@ class TestJobLedgerHandover:
         # The document one side wrote and the other's continuation read is the committed one.
         assert crossed["document"] == _expected("job_resolution_document.json")
 
-    @pytest.mark.parametrize("stages", [(LEGACY, FINAL, FINAL), (FINAL, LEGACY, LEGACY)], ids=_label)
-    def test_a_ledger_created_by_one_side_and_never_run_is_run_by_the_other(
+    @pytest.mark.parametrize("stages", [(LEGACY, FINAL, FINAL)], ids=_label)
+    def test_a_ledger_created_by_legacy_and_never_run_is_run_by_llm_kit(
         self, stages, tmp_path, job_pending_reference
     ):
         crossed = job_handover(tmp_path / "crossed", stages, create_first=True)
@@ -513,13 +547,17 @@ class TestJobLedgerHandover:
             _public(job_pending_reference[FINAL]), _public(job_pending_reference[LEGACY]), "pending"
         )
 
-    @pytest.mark.parametrize("stages", MIXED_TRIPLES, ids=_label)
+    @pytest.mark.parametrize("stages", JOB_FORWARD_TRIPLES, ids=_label)
     def test_handover_adds_no_lock_or_ownership_artifact(self, stages, tmp_path, job_reference):
         """No new lock, refusal or ownership protocol: the ledger directory is what it always was."""
         crossed = job_handover(tmp_path / "crossed", stages)
         assert crossed["files"] == job_reference[LEGACY]["files"]
         assert set(crossed["files"]) <= {"runs.sqlite3", "runs.sqlite3-wal", "runs.sqlite3-shm"}
-        assert crossed["schema"] == job_reference[LEGACY]["schema"]
+        # Same tables, indexes and triggers as an llm-kit ledger (the rowid order of
+        # sqlite_master differs for an upgraded ledger, so compare the sets).
+        objects = lambda dump: {(row[0], row[1]) for row in dump["sqlite_master"]}  # noqa: E731
+        assert objects(crossed["_schema"]) == objects(job_reference[FINAL]["_schema"])
+        assert crossed["_schema"]["journal_mode"] == job_reference[FINAL]["_schema"]["journal_mode"]
 
     def test_neither_job_store_takes_a_process_lifetime_os_lock(self):
         """The one-process-per-ledger rule is operational: no code enforces or detects it."""
@@ -533,6 +571,94 @@ class TestJobLedgerHandover:
         for path in scanned:
             hit = forbidden.search(path.read_text(encoding="utf-8"))
             assert hit is None, f"{path} mentions an OS lock primitive: {hit.group(0) if hit else ''}"
+
+
+# --------------------------------------------------------------------------
+# Rollback to legacy job-kit is refused (the schema-13 deliberate difference)
+# --------------------------------------------------------------------------
+
+
+def _is_refusal(item: dict) -> bool:
+    shape = raised(item)
+    return shape["mro"][0] == "StoreError" and "newer than this" in shape["message"] and "max 12" in shape["message"]
+
+
+class TestJobLedgerRollbackRefusal:
+    """Legacy job-kit stays at schema 12 and refuses a ledger llm-kit has opened.
+
+    The refusal is the future-schema check job-kit already had: loud, typed, and
+    before anything is written. The legacy stage is where the handover stops; an
+    llm-kit stage after it still finishes the run.
+    """
+
+    @pytest.mark.parametrize("stages", JOB_ROLLBACK_TRIPLES, ids=_label)
+    def test_a_legacy_stage_after_an_llm_kit_stage_is_refused_and_writes_nothing(
+        self, stages, tmp_path
+    ):
+        base = tmp_path / "scenario"
+        base.mkdir()
+        home = base / "home"
+        home.mkdir()
+        jobs_file, _log = _write_jobs(base)
+        ledger = base / "ledger" / "runs.sqlite3"
+        work = base / "workers"
+        args = _job_args(jobs_file, ledger)
+        first, second, third = stages
+        ok(run_worker(first, home, work, [op("jobs_run", clock_epoch_s=0, **args)])["jobs_run"])
+        resolve = op(
+            "jobs_resolve",
+            run_id="r",
+            store_path=str(ledger),
+            interrupt_id=1,
+            decision="answer",
+            input=_ANSWER,
+            now=_NOW,
+        )
+        resume = op("jobs_resume", run_id="r", store_path=str(ledger), clock_epoch_s=3600)
+        for side, step, label in ((second, resolve, "jobs_resolve"), (third, resume, "jobs_resume")):
+            refused = side == LEGACY
+            before = ledger.read_bytes()
+            item = run_worker(side, home, work, [step])[label]
+            if refused:
+                assert _is_refusal(item), item
+                assert ledger.read_bytes() == before
+            else:
+                ok(item)
+
+    def test_llm_kit_still_finishes_a_run_after_legacy_was_refused(self, tmp_path):
+        base = tmp_path / "scenario"
+        base.mkdir()
+        home = base / "home"
+        home.mkdir()
+        jobs_file, _log = _write_jobs(base)
+        ledger = base / "ledger" / "runs.sqlite3"
+        work = base / "workers"
+        ok(run_worker(FINAL, home, work, [op("jobs_run", clock_epoch_s=0, **_job_args(jobs_file, ledger))])["jobs_run"])
+        legacy = run_worker(
+            LEGACY,
+            home,
+            work,
+            [op("jobs_state", run_id="r", store_path=str(ledger))],
+        )
+        assert _is_refusal(legacy["jobs_state"])
+        state = ok(run_worker(FINAL, home, work, [op("jobs_state", run_id="r", store_path=str(ledger))])["jobs_state"])
+        assert state["states"] == {"a": "accepted", "release": "waiting", "c": "accepted"}
+
+    @pytest.mark.parametrize("pair", JOB_ROLLBACK_PAIRS, ids=_label)
+    def test_a_resolution_made_by_llm_kit_cannot_be_replayed_by_legacy(self, pair, tmp_path):
+        answerer, replayer = pair
+        base = tmp_path / "scenario"
+        base.mkdir()
+        home = base / "home"
+        home.mkdir()
+        jobs_file, _log = _write_jobs(base)
+        ledger = base / "ledger" / "runs.sqlite3"
+        work = base / "workers"
+        ok(run_worker(answerer, home, work, [op("jobs_run", clock_epoch_s=0, **_job_args(jobs_file, ledger))])["jobs_run"])
+        resolve = dict(run_id="r", store_path=str(ledger), interrupt_id=1, now=_NOW + 5)
+        ok(run_worker(answerer, home, work, [op("jobs_resolve", decision="answer", input=_ANSWER, **resolve)])["jobs_resolve"])
+        replay = run_worker(replayer, home, work, [op("jobs_resolve", "replay", decision="answer", input=_ANSWER, **resolve)])
+        assert _is_refusal(replay["replay"])
 
 
 # --------------------------------------------------------------------------
@@ -550,7 +676,7 @@ class TestJobInterrupts:
         for side in SIDES:
             assert job_reference[side]["document"] == expected, side
 
-    @pytest.mark.parametrize("pair", PAIRS, ids=_label)
+    @pytest.mark.parametrize("pair", JOB_PAIRS, ids=_label)
     def test_a_resolution_made_by_one_side_is_replayed_by_the_other(self, pair, tmp_path):
         """Same answer replays (``replayed`` set, same document); a different one conflicts."""
         answerer, replayer = pair
@@ -596,9 +722,12 @@ class TestJobInterrupts:
         run_worker(
             replayer, home, work, [op("jobs_resume", run_id="r", store_path=str(ledger), clock_epoch_s=60)]
         )
+        # A legacy answerer cannot reopen the ledger once llm-kit has upgraded it to
+        # schema 13 (``TestJobLedgerRollbackRefusal``), so llm-kit replays late.
+        late_side = replayer if (answerer, replayer) == (LEGACY, FINAL) else answerer
         late = ok(
             run_worker(
-                answerer,
+                late_side,
                 home,
                 work,
                 [op("jobs_resolve", decision="answer", input=_ANSWER, **resolve)],

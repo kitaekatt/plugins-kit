@@ -33,8 +33,13 @@ open a task in Claude Code; it does not run them.
 
 Queue runs one item as one unattended Claude job and needs the llm-kit plugin;
 without it the autonomous actions refuse with the reason and the rest keeps
-working. Queue, Retry and Re-check are live; other controls are drawn but
-disabled. The contract (eligibility, blocked-run resolution, holds, the
+working. Queue, Retry, Re-check and Cancel run are live; other controls are drawn but
+disabled. Cancel run stops the run's whole process tree and closes its ledger as
+cancelled; the run is then retryable, and its partial work stays in the shared tree
+for you to look at. A run is never retried by itself: if the dashboard server
+restarts, the running work is adopted again from its run directory, and a runner
+that vanished leaves the task blocked for inspection (the recovery table is at
+the top of `skills/task/scripts/task_system/dashboard/scheduler.py`). The contract (eligibility, blocked-run resolution, holds, the
 `dashboard:` settings in `~/.claude/task.local.yaml`) is owned by the dashboard
 capability in `skills/task/SKILL.md`.
 

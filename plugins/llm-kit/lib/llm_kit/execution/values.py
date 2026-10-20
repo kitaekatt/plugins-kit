@@ -60,7 +60,8 @@ def canonical_json(value: object) -> str:
 class InterruptResolution:
     """The one immutable resolution of one interrupt.
 
-    ``outcome`` is ``answered``, ``rejected`` or ``expired``. ``input`` is
+    ``outcome`` is ``answered``, ``rejected`` or ``expired``, or -- in a job
+    ledger of schema 13 or later only -- ``cancelled``. ``input`` is
     the operator's answer (answered only) and ``reason`` the operator's free
     text (rejected only). ``replayed`` is not stored: it is true when a
     resolve call matched the existing resolution and wrote nothing.

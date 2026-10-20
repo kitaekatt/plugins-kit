@@ -288,7 +288,7 @@ def dashboard_payload(
         for run in runtime["runs"]:  # newest first
             if run.project_id not in shown:
                 continue
-            row = run_json(run, names.get(run.project_id, ""))
+            row = run_json(run, names.get(run.project_id, ""), (runtime.get("phases") or {}).get(run.id))
             latest.setdefault((run.project_id, run.task_ref, run.item_id), row)
             if run.state in LIVE_RUN_STATES:
                 runs_json.append(row)
@@ -413,12 +413,19 @@ def item_detail(task: TaskEntry, item_id: str) -> dict | None:
     }
 
 
-LIVE_RUN_STATES = ("queued", "starting", "running")
+LIVE_RUN_STATES = ("queued", "starting", "running", "cancelling")
+CANCELLABLE_RUN_STATES = ("queued", "starting", "running")
+RETRYABLE_RUN_STATES = ("failed", "timeout", "cancelled")
 RECENT_RUNS_LIMIT = 15
 
 
-def run_json(run, project_name: str) -> dict:
-    """One run as the API serves it (``run`` is a :class:`runtime.Run`)."""
+def run_json(run, project_name: str, phase: str | None = None) -> dict:
+    """One run as the API serves it (``run`` is a :class:`runtime.Run`).
+
+    ``phase`` is the live ledger's state word for an active run (read-only; None when the run has no
+    ledger yet or is not active). ``cancellable`` is whether a cancel request would be accepted now;
+    a run that is already ``cancelling`` accepts one too but has nothing left to ask for.
+    """
     options = run.options
     return {
         "id": run.id,
@@ -438,5 +445,7 @@ def run_json(run, project_name: str) -> dict:
         "worker": options.get("worker"),
         "entry": options.get("entry"),
         "retry_of": run.retry_of,
-        "retryable": run.state in ("failed", "timeout"),
+        "retryable": run.state in RETRYABLE_RUN_STATES,
+        "cancellable": run.state in CANCELLABLE_RUN_STATES,
+        "phase": phase,
     }

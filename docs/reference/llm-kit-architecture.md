@@ -10,7 +10,7 @@ Status: signed off by the user 2026-10-16 (all 14 decisions).
 - Keep completion contracts and capability types below concrete adapters, capability tables, factories, and account probes.
 - Route pipeline backend construction through dispatch while preserving every constructor option and injection seam.
 - Keep flat jobs and leased pipeline execution separate above shared execution and storage mechanics.
-- Preserve job schema 12, pipeline schema 10, spend-ledger schema 1, DDL, pragmas, and event bytes during coexistence.
+- Preserve job schema 12 (as the common prefix; llm-kit's job ledger is schema 13, see "Job ledger schema 13"), pipeline schema 10, spend-ledger schema 1, DDL, pragmas, and event bytes during coexistence.
 - Preserve job-kit's unsupported, undetected one-process-per-ledger stance; preserve pipeline leases and fencing; retain the verdict file's last-writer-wins semantics.
 - Publish only llm_kit; keep the old plugins published, installable, and feature-frozen for at least two llm-kit minor versions.
 - Migrate qualified skill, agent, workflow, launch-flag, and resumable references before retiring any registration.
@@ -85,7 +85,7 @@ Public symbols are exported from their owning component, never the root.
 | llm_kit.execution | Bootstrap event/interrupt adapters, shared schema-validator loading, common request/resolution values, lapse delegation, bounded-pool control. | Bootstrap contract shape or common bounded-execution semantics change. | Jobs and pipeline execution reuse it without sharing state machines. |
 | llm_kit.adapters | OpenAI-compatible, Claude, Codex, OpenCode, harness, swapper, process, usage-source and account-probe integrations; endpoint profiles and adapter capability tables. | An SDK, CLI, wire request, filesystem source, process protocol, account endpoint, or endpoint specialization changes. | Dispatch and frontdoor reuse integrations; completion-only consumers import none. |
 | llm_kit.dispatch | Declaration/run policy, configured backend factory, reachability, seats, pacing cache, observer, review-lane service, and policy-facing re-exports. | Selection, construction, reachability, pacing, or invocation policy changes. | Measured direct LLM consumers need no job or pipeline product. |
-| llm_kit.jobs | Flat jobs, schema-12 ledger and migration loop, selection, runner, workers, acceptance, workspaces, events, interrupts. | Flat-job, workspace, acceptance, or job-ledger policy changes. | skills-kit's emitter needs jobs without leased pipeline execution. |
+| llm_kit.jobs | Flat jobs, schema-13 ledger (schema 12 plus cancellation) and migration loop, selection, runner, workers, acceptance, workspaces, events, interrupts. | Flat-job, workspace, acceptance, or job-ledger policy changes. | skills-kit's emitter needs jobs without leased pipeline execution. |
 | llm_kit.pipeline.core | Stages, work units, gates, convergence, seeding, validator/rejection contracts, extension ports. | Pipeline unit, stage, validation, or port meaning changes. | Runtime, artifacts, execution, and analysis reuse it. |
 | llm_kit.pipeline.artifacts | Stores, unsupported registry, freshness, delivery, round trip, provider assembly, Git/null adapters. | Artifact identity, precedence, freshness, correction, or delivery changes. | Runtime, pipeline execution, and analysis reuse it. |
 | llm_kit.pipeline.runtime | Factory binding, retry/backpressure/cache/cost/budget/validate loop, spend ledger, YAML extraction. | Pipeline call economics, retry, cache, validation, or spend policy changes. | Inline callers and yaml-data-editor-kit need no leased reporting or flat jobs. |
@@ -279,9 +279,9 @@ Barrier-synchronized old/new process tests cover same-session and different-sess
 
 ### SQLite compatibility, ownership, and handover
 
-llm-kit preserves job schema 12, pipeline schema 10, spend-ledger schema 1, canonical JSON, interrupt documents, DDL, pragma order, and event bytes. Product migration loops stay in jobs and pipeline.execution; spend ledger keeps its one create schema, autocommit, and configurable synchronous value.
+llm-kit preserves job schema 12 as the prefix of its schema-13 job ledger, pipeline schema 10, spend-ledger schema 1, canonical JSON, interrupt documents, DDL, pragma order, and event bytes. Product migration loops stay in jobs and pipeline.execution; spend ledger keeps its one create schema, autocommit, and configurable synchronous value.
 
-llm_kit.jobs is a byte-identical schema-12 copy of job-kit. It retains job-kit's one-process-per-ledger operating rule without adding detection or enforcement: two active processes on one ledger remain unsupported and undetected, including when one is job-kit and one is llm-kit. Each write verb still uses its existing BEGIN IMMEDIATE transaction, but there is no process-lifetime OS lock, refusal signal, or new ownership protocol. Operational handover stops one process before starting the other; rollback starts the unchanged frozen job-kit against unchanged bytes.
+llm_kit.jobs is a copy of job-kit whose first twelve migration steps are byte-identical; step 13 is the one deliberate change ("Job ledger schema 13"). It retains job-kit's one-process-per-ledger operating rule without adding detection or enforcement: two active processes on one ledger remain unsupported and undetected, including when one is job-kit and one is llm-kit. Each write verb still uses its existing BEGIN IMMEDIATE transaction, but there is no process-lifetime OS lock, refusal signal, or new ownership protocol. Operational handover stops one process before starting the other. Legacy to llm-kit starts llm-kit against the legacy bytes, which it upgrades to schema 13. Rollback starts the unchanged frozen job-kit against a ledger llm-kit has never opened; against a ledger llm-kit has opened, frozen job-kit refuses ("Job ledger schema 13").
 
 The pipeline execution store keeps its existing ownership model. Many short-lived worker processes use transactional unit claims with expiring leases and monotonically increasing fencing tokens. At most one dispatcher process holds the existing dispatcher lease and fence for a run; a different live holder is refused, expiry or release permits a higher fence, and stale dispatcher or unit fences are rejected. SQLite serializes the short writes. This permits separate pipeline runs and workers to proceed concurrently and adds no job-style ledger lock or new pipeline ownership policy. Old content-pipeline and llm-kit implementations must preserve these schema-10 lease, fence, and transaction semantics.
 
@@ -291,10 +291,22 @@ Compatibility tests preserve the existing concurrency stance and the persisted f
 - Old and new pipeline dispatchers for one run: one live lease wins; release or expiry permits takeover with a higher fence.
 - Pipeline workers: valid concurrent claims proceed, while stale unit and dispatcher fences refuse mutation.
 - Distinct pipeline runs proceed concurrently under their own dispatcher leases.
-- llm-kit-to-old rollback resumes new-created nonterminal job and pipeline records with identical events and terminal state.
+- llm-kit-to-old rollback resumes new-created nonterminal pipeline records with identical events and terminal state. For job ledgers it is the pinned refusal in "Job ledger schema 13": frozen job-kit refuses a ledger llm-kit has opened.
 - Fresh-create and every migration prefix compare sqlite_master, version rows, pragmas, isolation posture, events, interrupts, and canonical JSON.
 
-No schema change is allowed during coexistence. A change requires a separate dual-readable format, conversion, ownership, and rollback decision.
+No schema change is allowed during coexistence beyond the one recorded below. Any other change requires a separate dual-readable format, conversion, ownership, and rollback decision.
+
+### Job ledger schema 13
+
+Decision: the user ruled "(8) llm-kit (unpublished) may change its frozen formats for a per-job timeout and `jobs cancel`" (task-kit dashboard, Increment 3). The ruling is the authority for this one exception to the schema freeze; the user is the only user of every plugin.
+
+- Owner: llm_kit.jobs (`llm_kit.jobs.store`, migration step 13). Frozen job-kit stays at schema 12 and is not changed.
+- Format: the job state `cancelled` (terminal) and a fourth interrupt-resolution outcome `cancelled`. Everything else a schema-12 ledger holds is unchanged, and the execution-event schema is unchanged: a cancel writes the existing `result` (status `lost`), `job-kit:continuation-result` and `terminal` (`state: cancelled`, `reason`) events. No `interrupt` event closes a cancelled interrupt, because the event schema's interrupt phases (requested, resolved, rejected, expired) have no cancelled phase.
+- Conversion: step 13 rebuilds `interrupt_resolutions` with `CHECK (outcome IN ('answered', 'rejected', 'expired', 'cancelled'))` because SQLite cannot alter a CHECK. It drops the three triggers that name the table, copies every row with its id, drops the old table, renames the new one, and recreates the three triggers byte for byte, all inside the migration's one transaction. A schema-12 ledger upgrades in place on the first verb that opens it through the store (`run`, `resume`, `resolve`, `cancel`, `events`, `gc`); `status` reads through the read-only ledger reader and never migrates.
+- Deliberate old-reader refusal: the existing future-schema check (`database schema version 13 is newer than this ... supports (max 12)`) makes frozen job-kit, and any llm-kit older than the schema-13 release, refuse a schema-13 ledger loudly and before it writes anything. This is intended: an older reader cannot represent a `cancelled` job, so it must not open the ledger. A llm-kit-to-job-kit rollback of a job ledger is therefore the refusal, not a resume. The cost is that a ledger llm-kit has opened cannot be handed back to job-kit; the remedy is to keep using llm-kit.
+- Ownership: unchanged. `jobs cancel` requires the run process to be stopped already; llm-kit adds no lease, lock or refusal signal to detect a live runner.
+- Visible status changes: `counts` in the status payload gains a `cancelled` key, and a run with a cancelled job exits 1 from `run`/`resume` like any job that did not end accepted.
+- Tests: `tests/llm-kit/test_jobs_cancelled_state.py` covers the state, the cancel from every non-terminal state, idempotence, the migration and the refusal; `test_jobs_parity.py` (`TestLedgerSchema`, `TestDeliberateDifferences`) pins the schema-12 prefix and the frozen-job-kit refusal; `test_cross_state_parity.py` (`TestJobLedgerRollbackRefusal`) pins the handover directions.
 
 ## Python, bootstrap, marketplace, and guard changes
 

@@ -32,7 +32,7 @@ from pathlib import Path
 
 from ..validate import validate_ref
 from . import findings as findings_mod
-from . import blocker, task_result, vcs
+from . import blocker, runfiles, task_result, vcs
 from .mutation import TaskMutator, raw_items
 
 EXIT_ACCEPTED = 0
@@ -62,6 +62,11 @@ def _read(path: Path) -> str:
         return path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         raise RuntimeError(f"acceptance cannot read {path}: {exc}") from exc
+
+
+def write_receipt(path: Path, receipt: dict) -> None:
+    """Write the receipt atomically: the scheduler reads it as the only proof of a verdict, so it is never half there."""
+    runfiles.write_json(path, receipt)
 
 
 def judge(spec: dict, answer: str, *, start_head: str | None, start_branch: str | None) -> tuple[Verdict, dict]:
@@ -166,7 +171,7 @@ def main(argv: list[str], answer: str) -> int:
         "verdict": {"outcome": verdict.outcome, "code": verdict.code, "detail": verdict.detail},
         "block": block, **facts,
     }
-    (run_path / RECEIPT_FILE).write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_receipt(run_path / RECEIPT_FILE, receipt)
     print(json.dumps({"outcome": verdict.outcome, "code": verdict.code, "detail": blocker.concise(verdict.detail)}))
     return verdict.exit_code
 

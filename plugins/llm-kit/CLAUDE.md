@@ -108,17 +108,24 @@ like a leftover is a deliberate compatibility choice
   pinned read returns it without recomputing. The file is pacing state, not
   authorization, accounting or reservation; do not add locking or merge logic
   without a separate decision.
-- **Schemas and event bytes** are frozen: job ledger schema 12, pipeline
-  execution schema 10, spend-ledger schema 1, canonical JSON, interrupt
+- **Schemas and event bytes** are frozen: job ledger schema 13 (schema 12 plus
+  the `cancelled` state, the one recorded exception: user ruling 2026-10-19, "(8)
+  llm-kit (unpublished) may change its frozen formats for a per-job timeout and
+  `jobs cancel`"; `docs/reference/llm-kit-architecture.md`, "Job ledger schema
+  13"), pipeline execution schema 10, spend-ledger schema 1, canonical JSON, interrupt
   documents, DDL, pragma order, and event bytes. Event owners and envelope
   literals keep their historical identity (`job-kit:` event types such as
   `job-kit:run-created`, `job-kit.interrupt-request/v1`, the `content-pipeline-kit`
   event-extension owner, the `llm-scripting-kit.json-schema-subset/v1` validator
   subset marker). Changing any of them needs a separate dual-readable format,
-  conversion, ownership and rollback decision.
+  conversion, ownership and rollback decision. Schema 13 is deliberately NOT
+  readable by a ledger reader that predates it (the retired job runner, or an
+  llm-kit older than `cancel`): the future-schema check refuses it, so a job
+  ledger llm-kit has opened cannot be handed back.
 - **Ledger ownership**: the job ledger keeps its unsupported, undetected
   one-process-per-ledger rule, with no process-lifetime lock and no refusal
-  signal. The pipeline execution store keeps transactional unit claims with
+  signal; `jobs cancel` requires the run process to be stopped already and adds
+  no lease to check it. The pipeline execution store keeps transactional unit claims with
   expiring leases and monotonically increasing fencing tokens, and at most one
   dispatcher lease holder per run. Neither stance changes without a design
   decision.
@@ -806,6 +813,15 @@ ledger (the SQLite store); it adds no second home for state.
 
 Razor verdict for base, ceiling and jitter: a deliberate code-level default; a caller
 wanting another curve passes its own `BackpressurePolicy`.
+
+**Cancel is a ledger edit, not a signal.** `JobStore.cancel_jobs` (and `mark_cancelled`
+for one job) moves pending, running and waiting jobs to the terminal `cancelled` state in one
+transaction: it resolves the open interrupt (the schema-13 `cancelled` resolution outcome), the
+live continuation and the live reservation, and records `result` (`lost`) and `terminal`
+events. A terminal job is untouched, so it is idempotent. The CLI is `llm-kit jobs cancel`
+(exit 0, or 3 for an unknown run or job or a missing store). It cannot stop a live runner;
+the precondition that the run process is already stopped is the caller's. Do not add an
+`interrupt` event phase for it: the phases belong to `bootstrap_lib.execution_event`.
 
 The job ledger keeps its one-process-per-ledger rule (see "Persisted state keeps its
 historical names"); per-attempt worktrees are opt-in (`workspace.isolate: true`), and the

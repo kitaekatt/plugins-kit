@@ -26,7 +26,7 @@ import json
 import sqlite3
 import time
 from contextlib import contextmanager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterator, Mapping, Optional, Sequence
 
@@ -144,12 +144,36 @@ class ResolutionInputError(StoreError):
         super().__init__(message)
 
 
+#: The two outcomes :meth:`JobStore.cancel_jobs` reports for one job.
+CANCELLED_OUTCOME = "cancelled"
+ALREADY_TERMINAL_OUTCOME = "already-terminal"
+
+
+@dataclass(frozen=True)
+class CancelOutcome:
+    """What :meth:`JobStore.cancel_jobs` did to one job.
+
+    ``outcome`` is ``cancelled`` when this call moved the job to the
+    ``cancelled`` state, or ``already-terminal`` when the job had already
+    ended (in any terminal state, ``cancelled`` included) and was left
+    untouched. ``job`` is the job as the call left it.
+    """
+
+    job: JobRecord
+    outcome: str
+
+
 #: The lowest ledger schema :class:`LedgerReader` reads: the ledger the
 #: published job-kit 0.9.1 writes (its last step adds ``pace_readings_json``).
 READER_MIN_SCHEMA = 10
 
 #: The first ledger schema that has the interrupt tables.
 INTERRUPT_SCHEMA = 12
+
+#: The first ledger schema that can hold a cancelled job and the ``cancelled``
+#: interrupt resolution. A reader built before it refuses such a ledger
+#: through the future-schema check; that refusal is deliberate.
+CANCEL_SCHEMA = 13
 
 _MIGRATIONS: list[list[str]] = [
     [
@@ -371,6 +395,50 @@ _MIGRATIONS: list[list[str]] = [
         # The revision each event row was built under; NULL (rows written
         # before this step) renders as v1.
         "ALTER TABLE events ADD COLUMN schema TEXT",
+    ],
+    [
+        # Cancellation. A cancelled job may own an unresolved interrupt, and
+        # SQLite cannot alter a CHECK constraint, so interrupt_resolutions is
+        # rebuilt with the fourth outcome 'cancelled'; every row, and every
+        # rowid, is copied. The triggers that name the table are dropped
+        # first (the rename re-parses the schema and would refuse a trigger
+        # that names a dropped table) and recreated, byte for byte, after.
+        "DROP TRIGGER interrupts_one_open_per_job",
+        "DROP TRIGGER resolutions_immutable_update",
+        "DROP TRIGGER resolutions_immutable_delete",
+        """
+        CREATE TABLE interrupt_resolutions_v13 (
+            interrupt_id INTEGER PRIMARY KEY REFERENCES interrupts(id),
+            outcome TEXT NOT NULL
+                CHECK (outcome IN ('answered', 'rejected', 'expired', 'cancelled')),
+            input_json TEXT,
+            reason TEXT,
+            resolved_at REAL NOT NULL
+        )
+        """,
+        "INSERT INTO interrupt_resolutions_v13(interrupt_id, outcome, input_json, "
+        "reason, resolved_at) SELECT interrupt_id, outcome, input_json, reason, "
+        "resolved_at FROM interrupt_resolutions",
+        "DROP TABLE interrupt_resolutions",
+        "ALTER TABLE interrupt_resolutions_v13 RENAME TO interrupt_resolutions",
+        """
+        CREATE TRIGGER interrupts_one_open_per_job BEFORE INSERT ON interrupts
+            WHEN EXISTS (
+                SELECT 1 FROM interrupts AS open
+                WHERE open.run_id = NEW.run_id AND open.job_id = NEW.job_id
+                  AND NOT EXISTS (
+                      SELECT 1 FROM interrupt_resolutions AS r
+                      WHERE r.interrupt_id = open.id))
+            BEGIN SELECT RAISE(ABORT, 'job already has an unresolved interrupt'); END
+        """,
+        """
+        CREATE TRIGGER resolutions_immutable_update BEFORE UPDATE ON interrupt_resolutions
+            BEGIN SELECT RAISE(ABORT, 'interrupt resolutions are immutable'); END
+        """,
+        """
+        CREATE TRIGGER resolutions_immutable_delete BEFORE DELETE ON interrupt_resolutions
+            BEGIN SELECT RAISE(ABORT, 'interrupt resolutions are immutable'); END
+        """,
     ],
 ]
 
@@ -1215,6 +1283,159 @@ class JobStore:
     ) -> JobRecord:
         """Terminalize a job failure that happened before seam invocation."""
         return self._transition(run_id, job_id, JobState.FAILED, reason, at=at)
+
+    def mark_cancelled(
+        self,
+        run_id: str,
+        job_id: str,
+        reason: str,
+        *,
+        at: Optional[float] = None,
+    ) -> JobRecord:
+        """Cancel one job: the ledger half of ``llm-kit jobs cancel``.
+
+        See :meth:`cancel_jobs`. A job that already ended is returned
+        untouched, so a repeated cancel is a no-op and never raises
+        :class:`TerminalStateError`.
+        """
+        return self.cancel_jobs(run_id, reason, job_id=job_id, at=at)[0].job
+
+    def cancel_jobs(
+        self,
+        run_id: str,
+        reason: str,
+        *,
+        job_id: Optional[str] = None,
+        at: Optional[float] = None,
+    ) -> tuple[CancelOutcome, ...]:
+        """Cancel one job (``job_id``) or every non-terminal job of a run.
+
+        PRECONDITION: the process that runs the jobs has already stopped.
+        llm-kit holds no lease on a ledger, so nothing here can stop a live
+        runner, and a runner that outlives the cancel would write to jobs
+        this call closed.
+
+        One transaction covers every job. For each job that has not ended
+        (``pending``, ``running`` or ``waiting``) it resolves the job's
+        unresolved interrupt as ``cancelled``, ends its live continuation as
+        ``cancelled``, resolves its live reservation as ``cancelled`` (a
+        ``result`` event with status ``lost`` records the attempt that never
+        finished), sets the job ``cancelled`` with ``reason`` as its error
+        message, and records the ``terminal`` event
+        (``state: cancelled``, ``reason``). A job that already ended is left
+        untouched and reported ``already-terminal``. Returns one outcome per
+        job considered, in ledger order.
+        """
+        text = str(reason).strip()
+        if not text:
+            raise ValueError("a cancel needs a non-empty reason")
+        when = time.time() if at is None else float(at)
+        results: list[tuple[str, str]] = []
+        with self._writer() as conn:
+            self._require_run(conn, run_id)
+            if job_id is not None:
+                rows = [self._require_job(conn, run_id, job_id)]
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM jobs WHERE run_id = ? ORDER BY ordinal", (run_id,)
+                ).fetchall()
+            for row in rows:
+                if JobState(row["state"]) in TERMINAL_STATES:
+                    results.append((str(row["id"]), ALREADY_TERMINAL_OUTCOME))
+                    continue
+                self._cancel_one(conn, row, text, when)
+                results.append((str(row["id"]), CANCELLED_OUTCOME))
+            outcomes = tuple(
+                CancelOutcome(
+                    job=_row_to_job(
+                        conn.execute(
+                            "SELECT * FROM jobs WHERE run_id = ? AND id = ?",
+                            (run_id, identifier),
+                        ).fetchone()
+                    ),
+                    outcome=outcome,
+                )
+                for identifier, outcome in results
+            )
+        return outcomes
+
+    def _cancel_one(
+        self, conn: sqlite3.Connection, job_row: sqlite3.Row, reason: str, when: float
+    ) -> None:
+        """Close one non-terminal job's open facts as cancelled, inside the caller's transaction."""
+        run_id = str(job_row["run_id"])
+        job_id = str(job_row["id"])
+        message = reason[:ERROR_LIMIT]
+        at = _events.event_at(when)
+        for interrupt_row in self._open_interrupt_rows(conn, run_id, job_id):
+            # The interrupt vocabulary of the execution-event schema has no
+            # cancelled phase, so no interrupt event is written: the terminal
+            # event below carries the cancel.
+            conn.execute(
+                "INSERT INTO interrupt_resolutions(interrupt_id, outcome, "
+                "input_json, reason, resolved_at) VALUES (?, 'cancelled', NULL, ?, ?)",
+                (int(interrupt_row["id"]), message, when),
+            )
+        for continuation in conn.execute(
+            "SELECT * FROM continuations WHERE run_id = ? AND job_id = ? "
+            "AND disposition IS NULL ORDER BY id",
+            (run_id, job_id),
+        ).fetchall():
+            conn.execute(
+                "UPDATE continuations SET ended_at = ?, disposition = 'cancelled' "
+                "WHERE id = ?",
+                (when, int(continuation["id"])),
+            )
+            self._record_continuation_event(
+                conn,
+                run_id=run_id,
+                job_id=job_id,
+                attempt_no=int(continuation["attempt_no"]),
+                event=f"{_events.PLUGIN}:continuation-result",
+                at=at,
+                payload={
+                    "status": "cancelled",
+                    "continuation_no": int(continuation["continuation_no"]),
+                },
+            )
+        for reservation in conn.execute(
+            "SELECT * FROM reservations WHERE run_id = ? AND job_id = ? "
+            "AND disposition IS NULL ORDER BY id",
+            (run_id, job_id),
+        ).fetchall():
+            armed = reservation["invoke_armed_at"] is not None
+            conn.execute(
+                "UPDATE reservations SET disposition = 'cancelled', resolved_at = ?, "
+                "lost_at = ?, loss_reason = ? WHERE id = ?",
+                (str(when), str(when) if armed else None, message, int(reservation["id"])),
+            )
+            self._record_event(
+                conn,
+                run_id=run_id,
+                event="result",
+                at=at,
+                job_id=job_id,
+                attempt_no=int(reservation["attempt_no"]),
+                adapter=str(reservation["backend"]),
+                model=str(reservation["model"]),
+                payload={"status": "lost", "reason": _events.reason_text(message)},
+            )
+        conn.execute(
+            "UPDATE jobs SET state = ?, error_message = ?, updated_at = ? "
+            "WHERE run_id = ? AND id = ?",
+            (JobState.CANCELLED.value, message, when, run_id, job_id),
+        )
+        self._record_event(
+            conn,
+            run_id=run_id,
+            event="terminal",
+            at=at,
+            job_id=job_id,
+            payload={
+                "state": JobState.CANCELLED.value,
+                "reason": _events.reason_text(message),
+            },
+        )
 
     @staticmethod
     def _reservation_budget_count(
@@ -2926,6 +3147,7 @@ class LedgerReader:
 
 __all__ = [
     "DEFAULT_BUSY_TIMEOUT_MS",
+    "CANCEL_SCHEMA",
     "INTERRUPT_SCHEMA",
     "READER_MIN_SCHEMA",
     "StoreError",
@@ -2934,6 +3156,9 @@ __all__ = [
     "UnknownJobError",
     "DuplicateJobError",
     "TerminalStateError",
+    "CancelOutcome",
+    "CANCELLED_OUTCOME",
+    "ALREADY_TERMINAL_OUTCOME",
     "EventsNotRecordedError",
     "UnknownInterruptError",
     "ResolutionConflictError",

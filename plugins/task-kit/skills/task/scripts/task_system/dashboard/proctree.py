@@ -77,6 +77,51 @@ def descendants(pid: int) -> list[ProcIdent]:
     return found
 
 
+def session_members(leader: ProcIdent) -> list[ProcIdent]:
+    """Processes still in the session ``leader`` started, however far they were orphaned (POSIX).
+
+    A command started with its own session keeps that session's id after its parent dies
+    and its children are re-parented, so walking children can no longer find them but the
+    session still can. The leader's PID cannot be reused while any member lives, and a
+    process that began before the leader cannot be its member, which together keep an
+    unrelated process that happens to reuse the number out. A member that called ``setsid``
+    itself has left the session and is only found if it was recorded earlier.
+    """
+    if os.name != "posix":
+        return []
+    found = []
+    for proc in psutil.process_iter():
+        try:
+            if proc.pid == leader.pid or os.getsid(proc.pid) != leader.pid:
+                continue
+            created = proc.create_time()
+            if created + CREATE_TIME_TOLERANCE_S < leader.create_time:
+                continue
+            found.append(ProcIdent(proc.pid, created))
+        except (psutil.NoSuchProcess, psutil.AccessDenied, ProcessLookupError, PermissionError):
+            continue
+    return found
+
+
+def reachable(recorded: list[ProcIdent], child: ProcIdent | None) -> list[ProcIdent]:
+    """Everything of a dead runner's command that is still around.
+
+    The recorded idents (``child.json`` and ``tree.json``), whatever descends from any of
+    them that is still alive, and the command's leftover session. Each member is verified
+    again by PID and creation time before it is signalled (see :func:`stop_idents`).
+    """
+    roots = ([child] if child is not None else []) + list(recorded)
+    members: dict[int, ProcIdent] = {r.pid: r for r in roots}
+    for root in roots:
+        if live(root) is not None:
+            for item in descendants(root.pid):
+                members.setdefault(item.pid, item)
+    if child is not None:
+        for item in session_members(child):
+            members.setdefault(item.pid, item)
+    return [m for m in members.values() if live(m) is not None]
+
+
 def _depths(idents: list[ProcIdent]) -> dict[int, int]:
     """Depth of each process below the shallowest member (deepest = leaves)."""
     parents: dict[int, int | None] = {}

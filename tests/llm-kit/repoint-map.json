@@ -267,6 +267,18 @@
       "old": "NAMED_INVOCATION = 'name: \"content-pipeline-kit:run-ready-wave\"'",
       "new": "NAMED_INVOCATION = 'name: \\\\\"llm-kit:run-ready-wave\\\\\"'",
       "reason": "The workflow is registered as llm-kit:run-ready-wave (architecture: final qualified names); the skill's example sits inside a YAML double-quoted action, so its quotes are escaped."
+    },
+    {
+      "file": "tests/job-kit/test_store.py",
+      "old": "    assert version == len(_MIGRATIONS) == 12\n",
+      "new": "    assert version == len(_MIGRATIONS) == 13\n",
+      "reason": "llm-kit's job ledger is schema 13 (the cancelled job state and the cancelled interrupt resolution; user ruling 2026-10-19), one step above the frozen job-kit schema 12 the legacy test pins. The schema-12 prefix is pinned by test_jobs_parity.TestLedgerSchema."
+    },
+    {
+      "file": "tests/job-kit/test_ledger_reader.py",
+      "old": "@pytest.mark.parametrize(\"version\", [9, 13])\n",
+      "new": "@pytest.mark.parametrize(\"version\", [9, 14], ids=[\"9\", \"13\"])\n",
+      "reason": "llm-kit's reader supports schema 13, so the first unsupported (newer) version is 14, not 13; the legacy test pins job-kit's 13. The test id stays [13] so the mirror collects the same node ids as the legacy suite."
     }
   ],
   "packages": {

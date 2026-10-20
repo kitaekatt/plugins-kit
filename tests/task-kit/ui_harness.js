@@ -1,13 +1,13 @@
 // Runs the dashboard's app.js against a fake DOM and canned API responses, and
 // prints what it rendered as JSON. Used by test_dashboard_ui_contract.py.
 // Usage: node ui_harness.js <app.js> <dashboard.json> <item-detail.json> <item-key> <task-key>
-//        [<queue-item-key> <recheck-item-key> <retry-key>]
+//        [<queue-item-key> <recheck-item-key> <retry-key> [<cancel-run-id>]]
 // <task-key> must be an open task; the harness derives a second open task from the payload to
 // exercise the one-at-a-time expansion.
 'use strict';
 const fs = require('fs');
 const vm = require('vm');
-const [, , appPath, payloadPath, detailPath, itemKey, taskKey, queueKey, recheckKey, retryKey] = process.argv;
+const [, , appPath, payloadPath, detailPath, itemKey, taskKey, queueKey, recheckKey, retryKey, cancelRunId] = process.argv;
 const payload = JSON.parse(fs.readFileSync(payloadPath, 'utf8'));
 const detail = JSON.parse(fs.readFileSync(detailPath, 'utf8'));
 
@@ -140,6 +140,10 @@ function click(attrs) {
     await flush();
     click({ 'data-action': 'retry', 'data-key': retryKey });
     await flush();
+    if (cancelRunId) {
+      click({ 'data-action': 'cancel', 'data-key': cancelRunId });
+      await flush();
+    }
     click({ 'data-action': 'togglerun', 'data-key': retryKey.split('|')[0] });
     await flush();
     report.runInline = els.main.innerHTML;

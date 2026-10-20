@@ -897,6 +897,7 @@ def gc_workspaces(
                     "process_lost",
                     "process_lost_before_invoke",
                     "pre_invoke_failure",
+                    "cancelled",
                 }
                 or reservation.workspace_path is None
             ):

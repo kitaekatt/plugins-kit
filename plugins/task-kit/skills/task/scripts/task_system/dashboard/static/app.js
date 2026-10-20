@@ -3,12 +3,14 @@
  * Plain JavaScript, no framework and no build step. It talks only to the
  * server that served it: every request is a relative /api/v1/ path carrying the
  * per-instance token that arrived in the URL fragment. The only state-changing
- * calls are Queue, Retry and Re-check, sent by send(), each carrying the
- * expected_revision the page last saw. The actions the server does not back yet
- * (Cancel run, Defer, Queue all, New task, Add item, Pause worker, the run
- * option controls) are drawn disabled through laterButton(), so they are
- * visible and cannot be clicked. Queue and Retry also stay disabled, with the
- * server's reason, whenever the server reports autonomous runs unavailable.
+ * calls are Queue, Retry, Re-check and Cancel run, sent by send(); the first
+ * three carry the expected_revision the page last saw, Cancel run does not (it
+ * is process control on a run id, and the task revision moves while a run
+ * works). The actions the server does not back yet (Defer, Queue all, New
+ * task, Add item, Pause worker, the run option controls) are drawn disabled
+ * through laterButton(), so they are visible and cannot be clicked. Queue and
+ * Retry also stay disabled, with the server's reason, whenever the server
+ * reports autonomous runs unavailable; Cancel run does not depend on llm-kit.
  *
  * One flat task list across projects: a row per task (priority, title,
  * <repo>:<task>, item count, age) with a needs-you marker and an in-flight
@@ -161,9 +163,25 @@ function runPill(label, action, key) {
 }
 
 var RUN_LABEL = {
-  queued: 'Queued', starting: 'Starting', running: 'Running', accepted: 'Accepted', blocked: 'Blocked',
-  failed: 'Failed', timeout: 'Timed out', crashed: 'Crashed', skipped: 'Dropped'
+  queued: 'Queued', starting: 'Starting', running: 'Running', cancelling: 'Cancelling', accepted: 'Accepted', blocked: 'Blocked',
+  failed: 'Failed', timeout: 'Timed out', cancelled: 'Cancelled', crashed: 'Crashed', skipped: 'Dropped'
 };
+function isLiveRun(r) { return !!r && (r.state === 'queued' || r.state === 'starting' || r.state === 'running' || r.state === 'cancelling'); }
+/* Cancel run: live whenever the server backs it and the run can still be cancelled; a run already
+ * cancelling shows a disabled "Cancelling" so a second click cannot be mistaken for progress. With no
+ * run (or a server that does not back it) the button is drawn disabled. */
+function cancelControl(run, cls) {
+  if (run && run.state === 'cancelling') {
+    return '<button type="button" class="btn ' + cls + '" disabled aria-disabled="true" data-idle="cancel" title="The run is being stopped">' +
+      ic('stop') + 'Cancelling</button>';
+  }
+  if (canDo('cancel') && run && run.cancellable) return liveButton('Cancel run', cls, 'stop', 'cancel', run.id);
+  if (canDo('cancel')) {
+    return '<button type="button" class="btn ' + cls + '" disabled aria-disabled="true" data-idle="cancel" title="No run is queued or running here">' +
+      ic('stop') + 'Cancel run</button>';
+  }
+  return laterButton('Cancel run', cls, 'stop', 'cancel');
+}
 
 var STATE_LABEL = {
   'available': 'Available', 'in-flight': 'In flight', 'blocked': 'Needs you',
@@ -257,8 +275,8 @@ function renderBanners() {
   var h = '';
   if (S.snap && runCap().available) {
     h += '<div class="callout info"><strong>Autonomous runs are on</strong><p>Queue starts one unattended Claude run for one item; ' +
-      'a blocked run marks its task as needing you. Cancel run, Defer, Queue all, New task, Add item and Pause worker ' +
-      'are shown disabled: they arrive in a later increment. &ldquo;Resolve in Claude Code&rdquo; only shows commands to copy.</p></div>';
+      'a blocked run marks its task as needing you, and Cancel run stops it and everything it started. Defer, Queue all, New task, ' +
+      'Add item and Pause worker are shown disabled: they arrive in a later increment. &ldquo;Resolve in Claude Code&rdquo; only shows commands to copy.</p></div>';
   } else if (S.snap) {
     h += '<div class="callout info"><strong>Autonomous runs are unavailable</strong><p>' + esc(runCap().reason || 'This server cannot start runs.') +
       ' Viewing tasks, Re-check and &ldquo;Resolve in Claude Code&rdquo; still work.</p></div>';
@@ -305,7 +323,7 @@ function renderProjectSelect() {
 
 /* ---- sorting: exactly one is active ---- */
 function needN(t) { return (t.needs || []).length; }
-function isRunning(it) { return it.ui_state === 'in-flight' || !!(it.run && (it.run.state === 'running' || it.run.state === 'starting')); }
+function isRunning(it) { return it.ui_state === 'in-flight' || !!(it.run && (it.run.state === 'running' || it.run.state === 'starting' || it.run.state === 'cancelling')); }
 function runN(t) { return t.items.filter(isRunning).length; }
 function queN(t) { return t.items.filter(function (it) { return !isRunning(it) && it.run && it.run.state === 'queued'; }).length; }
 function priOf(t) { return t.priority || 'P9'; }
@@ -352,9 +370,10 @@ function renderRuns() {
     h += '<div class="run-card"><div class="proj"><span>' + esc(identOf(r.project_name, r.task)) + '</span><span class="live">' +
       esc(RUN_LABEL[r.state] || r.state) + '</span></div><div class="ttl">' + esc(r.item_title) + '</div>' +
       '<div class="sub">' + esc(r.worker || '') + (r.entry ? ' (' + esc(r.entry) + ')' : '') +
-      (r.started_at ? ' - running for ' + esc(elapsed(r.started_at)) : ' - waiting to start') + '</div>' +
+      (r.started_at ? ' - running for ' + esc(elapsed(r.started_at)) : ' - waiting to start') +
+      (r.phase ? ' - ledger ' + esc(r.phase) : '') + '</div>' +
       '<div class="row"><button type="button" class="btn sm" data-action="togglerun" data-key="' + esc(r.id) + '" aria-expanded="' + !!S.runOpen[r.id] + '">' + ic('eye') + (S.runOpen[r.id] ? 'Hide log' : 'Log') + '</button>' +
-      laterButton('Cancel run', 'sm danger', 'stop', 'cancel') + '</div>' + (S.runOpen[r.id] ? runDetailHtml(r) : '') + '</div>';
+      cancelControl(r, 'sm danger') + '</div>' + (S.runOpen[r.id] ? runDetailHtml(r) : '') + '</div>';
   });
   return h + '</div>';
 }
@@ -407,7 +426,7 @@ function nodeHtml(task, item) {
   var k = ikey(task, item), sel = S.sel === k, sub = '';
   switch (item.ui_state) {
     case 'available':
-      if (item.run && (item.run.state === 'queued' || item.run.state === 'starting' || item.run.state === 'running')) {
+      if (isLiveRun(item.run)) {
         sub = '<span class="t-run">' + esc((RUN_LABEL[item.run.state] || item.run.state).toLowerCase()) + '</span>';
       } else if (item.run && item.run.retryable) {
         sub = '<span class="t-warn">' + esc((RUN_LABEL[item.run.state] || item.run.state).toLowerCase()) + '</span>';
@@ -550,7 +569,8 @@ function runDetailHtml(run) {
   h += '<div class="acts">';
   if (run.retryable) h += runButton('Retry', '', 'retry', 'retry', run.id + '|' + run.checkout + '|' + run.task);
   if (run.state === 'blocked' || run.state === 'crashed') h += '<span class="hint">Resolve it in Claude Code, then Re-check the item.</span>';
-  if (run.state === 'queued' || run.state === 'starting' || run.state === 'running') h += laterButton('Cancel run', 'sm danger', 'stop', 'cancel');
+  if (isLiveRun(run)) h += cancelControl(run, 'sm danger');
+  if (run.state === 'cancelled') h += '<span class="hint">Stopped on request. Partial work may be in the shared tree; look at it before you Retry.</span>';
   return h + '</div><div class="sec-title">Run log</div>' + logPre(run.id) + '</div>';
 }
 function updatesHtml(task) {
@@ -590,7 +610,7 @@ function itemDetailHtml(task, it) {
     left += '<p class="fs13">' + esc(it.note) + '</p>';
   }
   left += '<div class="acts"><button type="button" class="btn warn" data-action="resolve" data-key="' + esc(key) + '" aria-expanded="' + !!S.resolve[key] + '">' + ic('term') + 'Resolve in Claude Code</button>';
-  var live = it.run && (it.run.state === 'queued' || it.run.state === 'starting' || it.run.state === 'running');
+  var live = isLiveRun(it.run);
   if (ui === 'available' && !live) left += runButton('Queue', 'primary', 'play', 'queue', key) + laterButton('Defer', '', null, 'defer');
   if (ui === 'available' && live) left += '<span class="chip">' + esc(RUN_LABEL[it.run.state]) + '</span>';
   if (ui === 'available' && it.run && it.run.retryable) left += runButton('Retry', '', 'retry', 'retry', it.run.id + '|' + task.checkout + '|' + task.id);
@@ -602,9 +622,9 @@ function itemDetailHtml(task, it) {
     '<dt>Model</dt><dd><span class="seg" role="group" aria-label="Model"><button type="button" disabled aria-disabled="true" data-later="model">Claude</button><button type="button" disabled aria-disabled="true" data-later="model">Codex</button></span></dd>' +
     '<dt>Effort</dt><dd><select disabled aria-label="Effort" data-later="effort"><option>medium</option></select></dd>' +
     '<dt>Runs in</dt><dd class="mono fs12">' + esc(task.working_root) + '</dd></dl>' +
-    '<div class="acts">' + laterButton('Cancel run', 'sm danger', 'stop', 'cancel') + '</div>' +
+    '<div class="acts">' + cancelControl(live ? it.run : null, 'sm danger') + '</div>' +
     '<p class="hint">Model, effort and run options arrive in a later increment: a run uses the machine defaults from ' +
-    'task.local.yaml. Cancel run arrives with them; a run ends by itself or at its time limit.</p></div>';
+    'task.local.yaml. Cancel run stops the run and everything it started; a run also ends by itself or at its time limit.</p></div>';
   var right = '';
   if (it.run) {
     right += '<div class="sec-title">Latest run</div><div class="card"><dl class="kv mb0"><dt>State</dt><dd>' + esc(RUN_LABEL[it.run.state] || it.run.state) +
@@ -710,6 +730,10 @@ function doRetry(el) {
   send('/api/v1/runs/' + encodeURIComponent(parts[0]) + '/retry', { expected_revision: task.revision })
     .then(function (r) { actionResult('Retry', r); pollNow(); });
 }
+function doCancel(el) {
+  send('/api/v1/runs/' + encodeURIComponent(el.getAttribute('data-key')) + '/cancel', {})
+    .then(function (r) { actionResult('Cancel', r); pollNow(); });
+}
 function toggleTask(el) {
   var k = el.getAttribute('data-key'), was = S.openTask;
   S.openTask = was === k ? null : k;
@@ -728,6 +752,7 @@ var ACTIONS = {
   queue: doQueue,
   recheck: doRecheck,
   retry: doRetry,
+  cancel: doCancel,
   togglerun: function (el) { toggleRun(el.getAttribute('data-key')); },
   select: function (el) { toggleItem(el.getAttribute('data-key')); },
   selecttask: function (el) { openTaskInList(el.getAttribute('data-key'), false); },

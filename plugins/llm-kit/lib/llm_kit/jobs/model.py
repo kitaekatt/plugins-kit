@@ -285,6 +285,9 @@ class JobState(str, Enum):
     OPERATOR_REJECTED = "operator_rejected"
     # The job's interrupt lapsed before anyone answered it.
     EXPIRED = "expired"
+    # An operator or a supervising caller stopped the job (``llm-kit jobs
+    # cancel``). Written only by ledger schema 13.
+    CANCELLED = "cancelled"
 
 
 TERMINAL_STATES = frozenset(
@@ -296,6 +299,7 @@ TERMINAL_STATES = frozenset(
         JobState.UNROUTABLE,
         JobState.OPERATOR_REJECTED,
         JobState.EXPIRED,
+        JobState.CANCELLED,
     }
 )
 
@@ -1355,7 +1359,7 @@ class Continuation:
     """One re-run of an attempt's contract after its interrupt was answered.
 
     ``disposition`` is ``None`` while live, then ``completed``,
-    ``interrupted`` or ``process_lost``. A continuation makes no model call
+    ``interrupted``, ``process_lost`` or ``cancelled``. A continuation makes no model call
     and holds no reservation, so it never spends the attempt budget.
     """
 

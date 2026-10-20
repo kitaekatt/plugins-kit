@@ -838,6 +838,21 @@ _PYTHON_ALLOWLIST.update({
     if path in _TRACKED_PYTHON
 })
 
+_PYTHON_ALLOWLIST.update({
+    "plugins/task-kit/skills/task/scripts/task_system/dashboard/floor.py": AllowlistEntry(
+        '"uv run python scripts/publish.py"',
+        "string literal in the disallowed-tools floor list: a command the "
+        "unattended dashboard worker is FORBIDDEN to run, not a spawn"),
+    "plugins/task-kit/skills/task/scripts/task_system/dashboard/scheduler.py": AllowlistEntry(
+        "self._python = python or sys.executable",
+        "parameter name `python` (an interpreter path argument defaulting to "
+        "sys.executable), not a bare interpreter spawn"),
+    "plugins/task-kit/skills/task/scripts/task_system/dashboard/translate.py": AllowlistEntry(
+        "py = python or sys.executable",
+        "local/parameter names `py` and `python` (interpreter path defaulting "
+        "to sys.executable), not a bare interpreter spawn"),
+})
+
 
 def test_tracked_python_outside_tests_bare_python_is_allowlisted_or_pending():
     """Every bare-python hit in a tracked Python source file outside tests/

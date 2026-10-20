@@ -395,7 +395,9 @@ Server-backed actions map as follows:
 | Add item / add and queue | `POST /api/v1/tasks/<project>/<task>/items` |
 | Create task | `POST /api/v1/projects/<project>/tasks` |
 | Poll log tail | `GET /api/v1/runs/<run-id>/log?after=` |
-Every mutation carries `expected_revision`; v1 has no redundant idempotency key. Stale input is
+Every mutation carries `expected_revision`, except Cancel run: it is process control on an immutable run id
+and the task revision moves while a worker runs, so the server validates the run's own state under the
+scheduler lock instead (409 `not-cancellable`). v1 has no redundant idempotency key. Stale input is
 409 with current revision; validation/translation refusal is 422 with typed
 reasons; unavailable llm-kit is 503 with the exact remedy. Selection, drawer
 close, copy, disclosure expansion, and form cancel are client-only and have no

@@ -7,7 +7,14 @@ the agent's answer on stdin, exactly as llm-kit does, and prints a JSON run
 snapshot. No model is called.
 
 Behaviors: done, done-no-removal, blocked, no-result, duplicate-result,
-branch-switch, commit, hang, lingering, exit-1, attempt-timeout.
+branch-switch, commit, hang, lingering, exit-1, attempt-timeout, slow-done
+(sleeps ``sleep_s`` from behavior.json, then behaves as ``done``), hang-after-done
+(finishes the item and writes the acceptance receipt, then hangs).
+
+``fake_llm.py --cancel <store> <run-id> <reason>`` plays ``llm-kit jobs cancel``
+against the stand-in ledger ``fake-ledger.json`` beside the store: exit 0 and a
+JSON outcome (``cancelled`` or ``already-terminal``), or exit 3 when the run has no
+ledger. Every call is appended to ``cancel-calls.jsonl`` next to the ledger.
 """
 
 from __future__ import annotations
@@ -20,6 +27,36 @@ from pathlib import Path
 
 import yaml
 
+LEDGER_TERMINAL = {"accepted", "rejected", "failed", "halted", "unroutable", "operator_rejected", "expired", "cancelled"}
+
+
+def _ledger_path(store) -> Path:
+    return Path(store).parent / "fake-ledger.json"
+
+
+def _cancel_main(store: str, run_id: str, reason: str) -> int:
+    path = _ledger_path(store)
+    with open(path.parent / "cancel-calls.jsonl", "a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"run": run_id, "reason": reason}) + "\n")
+    if not path.is_file():
+        print(f"no run {run_id} in {store}", file=sys.stderr)
+        return 3
+    ledger = json.loads(path.read_text(encoding="utf-8"))
+    out = []
+    for job in ledger["jobs"]:
+        if job["state"] in LEDGER_TERMINAL:
+            out.append({"id": job["id"], "state": job["state"], "outcome": "already-terminal"})
+        else:
+            job["state"], job["reason"] = "cancelled", reason
+            out.append({"id": job["id"], "state": "cancelled", "outcome": "cancelled"})
+    path.write_text(json.dumps(ledger), encoding="utf-8")
+    print(json.dumps({"run": run_id, "jobs": out}))
+    return 0
+
+
+if sys.argv[1] == "--cancel":
+    raise SystemExit(_cancel_main(*sys.argv[2:5]))
+
 JOB_FILE, STORE, RUN_ID = sys.argv[1:4]
 RUN_DIR = Path(JOB_FILE).parent
 BEHAVIOR = json.loads((RUN_DIR / "behavior.json").read_text(encoding="utf-8"))["behavior"]
@@ -29,6 +66,13 @@ SPEC = json.loads((RUN_DIR / "spec.json").read_text(encoding="utf-8"))
 FOLDER = Path(SPEC["folder"])
 ROOT = Path(SPEC["project_root"])
 ITEM = SPEC["item_id"]
+
+
+def set_ledger(state: str) -> None:
+    _ledger_path(STORE).write_text(json.dumps({"run": RUN_ID, "jobs": [{"id": JOB["id"], "state": state}]}), encoding="utf-8")
+
+
+set_ledger("running")
 
 
 def result_block(status: str, **over) -> str:
@@ -60,6 +104,7 @@ def run_contract(answer: str) -> int:
     )
     (RUN_DIR / "contract.out").write_text(proc.stdout + proc.stderr, encoding="utf-8")
     state = "accepted" if proc.returncode == 0 else "rejected"
+    set_ledger(state)
     print(json.dumps({"run": RUN_ID, "jobs": [{"id": JOB["id"], "state": state, "acceptance": {"exit_code": proc.returncode}}]}))
     return 0 if proc.returncode == 0 else 1
 
@@ -95,6 +140,14 @@ if BEHAVIOR == "commit":
 if BEHAVIOR == "hang":
     grandchild()
     time.sleep(600)
+if BEHAVIOR == "slow-done":
+    time.sleep(float(json.loads((RUN_DIR / "behavior.json").read_text(encoding="utf-8")).get("sleep_s", 3)))
+    finish_item()
+    sys.exit(run_contract("All done.\n" + result_block("done")))
+if BEHAVIOR == "hang-after-done":
+    finish_item()
+    run_contract(result_block("done"))
+    time.sleep(600)
 if BEHAVIOR == "lingering":
     grandchild()
     finish_item()
@@ -106,9 +159,11 @@ if BEHAVIOR == "attempt-timeout":
     snapshot = {"attempts": [{"attempt_no": 1, "status": "timeout", "error": {
         "code": "execution", "message": "claude -p exceeded 30.0s timeout (elapsed 30s; likely rate-limit backoff at the CLI layer).\nstderr tail:\n<empty>"}}],
         "jobs": [{"id": JOB["id"], "state": "failed", "error": None}]}
+    set_ledger("failed")
     print(json.dumps(snapshot))
     sys.exit(1)
 if BEHAVIOR == "exit-1":
+    set_ledger("failed")
     print("model unavailable", file=sys.stderr)
     sys.exit(1)
 raise SystemExit(f"unknown behavior {BEHAVIOR!r}")

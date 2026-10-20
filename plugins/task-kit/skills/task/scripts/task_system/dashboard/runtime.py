@@ -10,11 +10,16 @@ One server owns the database. Access is serialized by a lock around a single
 connection; a project lease is taken in one conditional UPDATE, so two ticks
 cannot start two runs in the same project.
 
-Run states: ``queued`` (waiting), ``starting`` / ``running`` (the lease is
-held), then one terminal state: ``accepted``, ``blocked`` (the task folder now
-says why), ``failed`` / ``timeout`` (no acceptance verdict; Retry may follow),
-``crashed`` (the runner vanished; the task is blocked for inspection),
-``skipped`` (the task changed under the queue entry, so it was dropped).
+Run states: ``queued`` (waiting), ``starting`` / ``running`` / ``cancelling``
+(the lease is held; ``cancelling`` is a stop request the runner has not finished
+carrying out), then one terminal state: ``accepted``, ``blocked`` (the task
+folder now says why), ``failed`` / ``timeout`` / ``cancelled`` (no acceptance
+verdict; Retry may follow, and the shared tree may hold partial work),
+``crashed`` (crash inspection: the runner vanished, or what it left could not be
+trusted; the task is blocked for a person to inspect), ``skipped`` (the task
+changed under the queue entry, so it was dropped).
+
+The schema stays 1: the new states are values of an existing text column.
 """
 
 from __future__ import annotations
@@ -32,14 +37,15 @@ from . import proctree
 SCHEMA_VERSION = 1
 DB_FILE = "dashboard.sqlite3"
 
-QUEUED, STARTING, RUNNING = "queued", "starting", "running"
-ACCEPTED, BLOCKED, FAILED, TIMEOUT, CRASHED, SKIPPED = (
-    "accepted", "blocked", "failed", "timeout", "crashed", "skipped",
+QUEUED, STARTING, RUNNING, CANCELLING = "queued", "starting", "running", "cancelling"
+ACCEPTED, BLOCKED, FAILED, TIMEOUT, CRASHED, SKIPPED, CANCELLED = (
+    "accepted", "blocked", "failed", "timeout", "crashed", "skipped", "cancelled",
 )
-ACTIVE_STATES = (STARTING, RUNNING)
-LIVE_STATES = (QUEUED, STARTING, RUNNING)
-TERMINAL_STATES = (ACCEPTED, BLOCKED, FAILED, TIMEOUT, CRASHED, SKIPPED)
-RETRYABLE_STATES = (FAILED, TIMEOUT)
+ACTIVE_STATES = (STARTING, RUNNING, CANCELLING)
+LIVE_STATES = (QUEUED, STARTING, RUNNING, CANCELLING)
+TERMINAL_STATES = (ACCEPTED, BLOCKED, FAILED, TIMEOUT, CRASHED, SKIPPED, CANCELLED)
+RETRYABLE_STATES = (FAILED, TIMEOUT, CANCELLED)
+CANCELLABLE_STATES = (QUEUED, STARTING, RUNNING)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -241,9 +247,21 @@ class RuntimeDB:
             )
             self.add_event(run_id, state, (code + ": " if code else "") + (detail or ""))
 
+    def transition(self, run_id: str, expected: tuple[str, ...], state: str, *, code: str | None = None,
+                   detail: str | None = None, runner: proctree.ProcIdent | None = None) -> bool:
+        """``set_state`` only if the run is still in one of ``expected`` states; whether it moved."""
+        with self._lock:
+            current = self.get(run_id)
+            if current is None or current.state not in expected:
+                return False
+            self.set_state(run_id, state, code=code, detail=detail, runner=runner)
+            return True
+
     def release_to_queue(self, run_id: str) -> None:
         with self._lock:
-            self._conn.execute("UPDATE runs SET state=?, started_at=NULL WHERE id=? AND state=?", (QUEUED, run_id, STARTING))
+            if self._conn.execute("UPDATE runs SET state=?, started_at=NULL WHERE id=? AND state=?",
+                                  (QUEUED, run_id, STARTING)).rowcount:
+                self.add_event(run_id, "requeued", "the server stopped before it spawned a runner; the run is queued again")
 
     # -- events -------------------------------------------------------------
 

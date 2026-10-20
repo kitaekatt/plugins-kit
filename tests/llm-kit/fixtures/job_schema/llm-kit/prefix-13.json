@@ -1,0 +1,170 @@
+{
+  "journal_mode": "wal",
+  "schema_version": [
+    13
+  ],
+  "sqlite_master": [
+    [
+      "table",
+      "schema_version",
+      "schema_version",
+      "CREATE TABLE schema_version (\n            version INTEGER NOT NULL\n        )"
+    ],
+    [
+      "table",
+      "runs",
+      "runs",
+      "CREATE TABLE runs (\n            id TEXT PRIMARY KEY,\n            created_at REAL NOT NULL,\n            jobs_path TEXT,\n            max_parallel INTEGER NOT NULL,\n            workspace_root TEXT\n        , workspace_base_refs_json TEXT, disallowed_tools TEXT, events_recorded INTEGER NOT NULL DEFAULT 0)"
+    ],
+    [
+      "index",
+      "sqlite_autoindex_runs_1",
+      "runs",
+      null
+    ],
+    [
+      "table",
+      "jobs",
+      "jobs",
+      "CREATE TABLE jobs (\n            run_id TEXT NOT NULL REFERENCES runs(id),\n            id TEXT NOT NULL,\n            ordinal INTEGER NOT NULL,\n            definition_json TEXT NOT NULL,\n            state TEXT NOT NULL,\n            created_at REAL NOT NULL,\n            updated_at REAL NOT NULL, error_message TEXT,\n            PRIMARY KEY (run_id, id)\n        )"
+    ],
+    [
+      "index",
+      "sqlite_autoindex_jobs_1",
+      "jobs",
+      null
+    ],
+    [
+      "index",
+      "idx_jobs_run_state",
+      "jobs",
+      "CREATE INDEX idx_jobs_run_state ON jobs(run_id, state)"
+    ],
+    [
+      "table",
+      "attempts",
+      "attempts",
+      "CREATE TABLE attempts (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            run_id TEXT NOT NULL,\n            job_id TEXT NOT NULL,\n            attempt_no INTEGER NOT NULL,\n            endpoint TEXT NOT NULL,\n            backend TEXT NOT NULL,\n            model TEXT NOT NULL,\n            status TEXT NOT NULL,\n            error_code TEXT,\n            error_message TEXT,\n            halt_kind TEXT,\n            dropped_params_json TEXT,\n            execution_controls_applied_json TEXT,\n            started_at TEXT,\n            ended_at TEXT,\n            input_tokens INTEGER,\n            output_tokens INTEGER,\n            cache_hit_tokens INTEGER,\n            total_tokens INTEGER,\n            response_text TEXT,\n            workspace TEXT,\n            acceptance_json TEXT, base_ref TEXT, workspace_status TEXT NOT NULL DEFAULT 'none', workspace_reason TEXT, workspace_removed_at REAL, workspace_removal_forced INTEGER NOT NULL DEFAULT 0, forwarded_params_json TEXT, reasoning TEXT, finish_reason TEXT, pace_readings_json TEXT,\n            FOREIGN KEY (run_id, job_id) REFERENCES jobs(run_id, id)\n        )"
+    ],
+    [
+      "table",
+      "sqlite_sequence",
+      "sqlite_sequence",
+      "CREATE TABLE sqlite_sequence(name,seq)"
+    ],
+    [
+      "index",
+      "idx_attempts_run_job",
+      "attempts",
+      "CREATE INDEX idx_attempts_run_job ON attempts(run_id, job_id, id)"
+    ],
+    [
+      "table",
+      "reservations",
+      "reservations",
+      "CREATE TABLE reservations (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            run_id TEXT NOT NULL,\n            job_id TEXT NOT NULL,\n            attempt_no INTEGER NOT NULL,\n            budget_no INTEGER NOT NULL,\n            endpoint TEXT NOT NULL,\n            backend TEXT NOT NULL,\n            model TEXT NOT NULL,\n            workspace_path TEXT,\n            reserved_at TEXT NOT NULL,\n            invoke_armed_at TEXT,\n            disposition TEXT,\n            resolved_at TEXT,\n            lost_at TEXT,\n            loss_reason TEXT,\n            workspace_status TEXT NOT NULL DEFAULT 'none',\n            workspace_reason TEXT,\n            workspace_removed_at REAL,\n            workspace_removal_forced INTEGER NOT NULL DEFAULT 0,\n            FOREIGN KEY (run_id, job_id) REFERENCES jobs(run_id, id),\n            UNIQUE (run_id, job_id, attempt_no)\n        )"
+    ],
+    [
+      "index",
+      "sqlite_autoindex_reservations_1",
+      "reservations",
+      null
+    ],
+    [
+      "index",
+      "idx_reservations_run_job",
+      "reservations",
+      "CREATE INDEX idx_reservations_run_job ON reservations(run_id, job_id, id)"
+    ],
+    [
+      "index",
+      "idx_attempts_run_job_no",
+      "attempts",
+      "CREATE UNIQUE INDEX idx_attempts_run_job_no ON attempts(run_id, job_id, attempt_no)"
+    ],
+    [
+      "table",
+      "events",
+      "events",
+      "CREATE TABLE events (\n            seq INTEGER PRIMARY KEY AUTOINCREMENT,\n            run_id TEXT NOT NULL REFERENCES runs(id),\n            job_id TEXT,\n            attempt_no INTEGER,\n            event TEXT NOT NULL,\n            at TEXT NOT NULL,\n            adapter TEXT,\n            model TEXT,\n            payload_json TEXT NOT NULL\n        , schema TEXT)"
+    ],
+    [
+      "index",
+      "idx_events_run_seq",
+      "events",
+      "CREATE INDEX idx_events_run_seq ON events(run_id, seq)"
+    ],
+    [
+      "table",
+      "interrupts",
+      "interrupts",
+      "CREATE TABLE interrupts (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            run_id TEXT NOT NULL,\n            job_id TEXT NOT NULL,\n            attempt_no INTEGER NOT NULL,\n            continuation_no INTEGER NOT NULL,\n            envelope TEXT NOT NULL,\n            kind TEXT NOT NULL,\n            request_schema_json TEXT NOT NULL,\n            payload_json TEXT NOT NULL,\n            created_at REAL NOT NULL,\n            expires_at REAL,\n            FOREIGN KEY (run_id, job_id) REFERENCES jobs(run_id, id),\n            FOREIGN KEY (run_id, job_id, attempt_no)\n                REFERENCES attempts(run_id, job_id, attempt_no),\n            UNIQUE (run_id, job_id, attempt_no, continuation_no)\n        )"
+    ],
+    [
+      "index",
+      "sqlite_autoindex_interrupts_1",
+      "interrupts",
+      null
+    ],
+    [
+      "index",
+      "idx_interrupts_run_job",
+      "interrupts",
+      "CREATE INDEX idx_interrupts_run_job ON interrupts(run_id, job_id, id)"
+    ],
+    [
+      "table",
+      "continuations",
+      "continuations",
+      "CREATE TABLE continuations (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            run_id TEXT NOT NULL,\n            job_id TEXT NOT NULL,\n            attempt_no INTEGER NOT NULL,\n            continuation_no INTEGER NOT NULL,\n            interrupt_id INTEGER NOT NULL REFERENCES interrupts(id),\n            started_at REAL NOT NULL,\n            ended_at REAL,\n            disposition TEXT,\n            acceptance_json TEXT,\n            FOREIGN KEY (run_id, job_id, attempt_no)\n                REFERENCES attempts(run_id, job_id, attempt_no),\n            UNIQUE (run_id, job_id, attempt_no, continuation_no)\n        )"
+    ],
+    [
+      "index",
+      "sqlite_autoindex_continuations_1",
+      "continuations",
+      null
+    ],
+    [
+      "index",
+      "idx_continuations_run_job",
+      "continuations",
+      "CREATE INDEX idx_continuations_run_job ON continuations(run_id, job_id, id)"
+    ],
+    [
+      "trigger",
+      "interrupts_immutable_update",
+      "interrupts",
+      "CREATE TRIGGER interrupts_immutable_update BEFORE UPDATE ON interrupts\n            BEGIN SELECT RAISE(ABORT, 'interrupt records are immutable'); END"
+    ],
+    [
+      "trigger",
+      "interrupts_immutable_delete",
+      "interrupts",
+      "CREATE TRIGGER interrupts_immutable_delete BEFORE DELETE ON interrupts\n            BEGIN SELECT RAISE(ABORT, 'interrupt records are immutable'); END"
+    ],
+    [
+      "table",
+      "interrupt_resolutions",
+      "interrupt_resolutions",
+      "CREATE TABLE \"interrupt_resolutions\" (\n            interrupt_id INTEGER PRIMARY KEY REFERENCES interrupts(id),\n            outcome TEXT NOT NULL\n                CHECK (outcome IN ('answered', 'rejected', 'expired', 'cancelled')),\n            input_json TEXT,\n            reason TEXT,\n            resolved_at REAL NOT NULL\n        )"
+    ],
+    [
+      "trigger",
+      "interrupts_one_open_per_job",
+      "interrupts",
+      "CREATE TRIGGER interrupts_one_open_per_job BEFORE INSERT ON interrupts\n            WHEN EXISTS (\n                SELECT 1 FROM interrupts AS open\n                WHERE open.run_id = NEW.run_id AND open.job_id = NEW.job_id\n                  AND NOT EXISTS (\n                      SELECT 1 FROM interrupt_resolutions AS r\n                      WHERE r.interrupt_id = open.id))\n            BEGIN SELECT RAISE(ABORT, 'job already has an unresolved interrupt'); END"
+    ],
+    [
+      "trigger",
+      "resolutions_immutable_update",
+      "interrupt_resolutions",
+      "CREATE TRIGGER resolutions_immutable_update BEFORE UPDATE ON interrupt_resolutions\n            BEGIN SELECT RAISE(ABORT, 'interrupt resolutions are immutable'); END"
+    ],
+    [
+      "trigger",
+      "resolutions_immutable_delete",
+      "interrupt_resolutions",
+      "CREATE TRIGGER resolutions_immutable_delete BEFORE DELETE ON interrupt_resolutions\n            BEGIN SELECT RAISE(ABORT, 'interrupt resolutions are immutable'); END"
+    ]
+  ]
+}

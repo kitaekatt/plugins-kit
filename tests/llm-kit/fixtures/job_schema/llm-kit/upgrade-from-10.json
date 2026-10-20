@@ -1,7 +1,7 @@
 {
   "journal_mode": "wal",
   "schema_version": [
-    12
+    13
   ],
   "sqlite_master": [
     [
@@ -114,12 +114,6 @@
     ],
     [
       "table",
-      "interrupt_resolutions",
-      "interrupt_resolutions",
-      "CREATE TABLE interrupt_resolutions (\n            interrupt_id INTEGER PRIMARY KEY REFERENCES interrupts(id),\n            outcome TEXT NOT NULL\n                CHECK (outcome IN ('answered', 'rejected', 'expired')),\n            input_json TEXT,\n            reason TEXT,\n            resolved_at REAL NOT NULL\n        )"
-    ],
-    [
-      "table",
       "continuations",
       "continuations",
       "CREATE TABLE continuations (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            run_id TEXT NOT NULL,\n            job_id TEXT NOT NULL,\n            attempt_no INTEGER NOT NULL,\n            continuation_no INTEGER NOT NULL,\n            interrupt_id INTEGER NOT NULL REFERENCES interrupts(id),\n            started_at REAL NOT NULL,\n            ended_at REAL,\n            disposition TEXT,\n            acceptance_json TEXT,\n            FOREIGN KEY (run_id, job_id, attempt_no)\n                REFERENCES attempts(run_id, job_id, attempt_no),\n            UNIQUE (run_id, job_id, attempt_no, continuation_no)\n        )"
@@ -138,12 +132,6 @@
     ],
     [
       "trigger",
-      "interrupts_one_open_per_job",
-      "interrupts",
-      "CREATE TRIGGER interrupts_one_open_per_job BEFORE INSERT ON interrupts\n            WHEN EXISTS (\n                SELECT 1 FROM interrupts AS open\n                WHERE open.run_id = NEW.run_id AND open.job_id = NEW.job_id\n                  AND NOT EXISTS (\n                      SELECT 1 FROM interrupt_resolutions AS r\n                      WHERE r.interrupt_id = open.id))\n            BEGIN SELECT RAISE(ABORT, 'job already has an unresolved interrupt'); END"
-    ],
-    [
-      "trigger",
       "interrupts_immutable_update",
       "interrupts",
       "CREATE TRIGGER interrupts_immutable_update BEFORE UPDATE ON interrupts\n            BEGIN SELECT RAISE(ABORT, 'interrupt records are immutable'); END"
@@ -153,6 +141,18 @@
       "interrupts_immutable_delete",
       "interrupts",
       "CREATE TRIGGER interrupts_immutable_delete BEFORE DELETE ON interrupts\n            BEGIN SELECT RAISE(ABORT, 'interrupt records are immutable'); END"
+    ],
+    [
+      "table",
+      "interrupt_resolutions",
+      "interrupt_resolutions",
+      "CREATE TABLE \"interrupt_resolutions\" (\n            interrupt_id INTEGER PRIMARY KEY REFERENCES interrupts(id),\n            outcome TEXT NOT NULL\n                CHECK (outcome IN ('answered', 'rejected', 'expired', 'cancelled')),\n            input_json TEXT,\n            reason TEXT,\n            resolved_at REAL NOT NULL\n        )"
+    ],
+    [
+      "trigger",
+      "interrupts_one_open_per_job",
+      "interrupts",
+      "CREATE TRIGGER interrupts_one_open_per_job BEFORE INSERT ON interrupts\n            WHEN EXISTS (\n                SELECT 1 FROM interrupts AS open\n                WHERE open.run_id = NEW.run_id AND open.job_id = NEW.job_id\n                  AND NOT EXISTS (\n                      SELECT 1 FROM interrupt_resolutions AS r\n                      WHERE r.interrupt_id = open.id))\n            BEGIN SELECT RAISE(ABORT, 'job already has an unresolved interrupt'); END"
     ],
     [
       "trigger",

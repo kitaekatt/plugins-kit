@@ -36,7 +36,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from . import proctree, redact, snapshot
 from .codehash import DASHBOARD_PACKAGE, code_hash
 from .inventory import Inventory
-from .jobs_edge import JobsEdge
+from .jobs_edge import EdgeError, JobsEdge
 from .mutation import TaskMutator
 from .runtime import DB_FILE, LIVE_STATES, TERMINAL_STATES, RuntimeDB
 from .scheduler import QueueRefused, Scheduler
@@ -226,7 +226,8 @@ class DashboardServer:
             return None
         live = scheduler.db.runs(LIVE_STATES)
         recent = scheduler.db.runs(TERMINAL_STATES, limit=RUNS_IN_SNAPSHOT, newest_first=True)
-        return {"capabilities": scheduler.capabilities(), "runs": sorted(live + recent, key=lambda r: -r.seq)}
+        phases = {r.id: p for r in live if (p := scheduler.ledger_phase(r)) is not None}
+        return {"capabilities": scheduler.capabilities(), "runs": sorted(live + recent, key=lambda r: -r.seq), "phases": phases}
 
     def server_info(self) -> dict:
         return {"instance": self.nonce, "code_hash": self.code_hash[:12]}
@@ -461,7 +462,13 @@ class _Handler(BaseHTTPRequestHandler):
             if method not in ("GET", "HEAD"):
                 self._error(405, "method_not_allowed", "Use GET.")
                 return
-            self._json(200, {"run": snapshot.run_json(run, ""), "events": scheduler.db.events(run.id)})
+            detail = {"run": snapshot.run_json(run, ""), "events": scheduler.db.events(run.id)}
+            try:
+                detail["ledger_events"] = scheduler.ledger_events(run)
+            except EdgeError as exc:  # said, not hidden: the dashboard's own events above are still complete
+                detail["ledger_events"] = []
+                detail["ledger_events_error"] = str(exc)
+            self._json(200, detail)
             return
         if route[2] == "log":
             if method not in ("GET", "HEAD"):
@@ -472,6 +479,22 @@ class _Handler(BaseHTTPRequestHandler):
                 self._error(422, "bad_cursor", "after must be a non-negative integer.")
                 return
             self._json(200, scheduler.log_tail(run, int(after)))
+            return
+        if route[2] == "cancel":
+            if method != "POST":
+                self._error(405, "method_not_allowed", "Use POST.")
+                return
+            # Process control on an immutable run id: the body is not read for a task revision (see
+            # Scheduler.cancel); it must still be a JSON object, like every other mutation.
+            if self._read_json_body() is None:
+                return
+            try:
+                cancelled = scheduler.cancel(run.id)
+            except QueueRefused as exc:
+                self._refused(exc)
+                return
+            self.app.log(f"cancel of {run.id}: {cancelled.state}")
+            self._json(202, {"run": snapshot.run_json(cancelled, "")})
             return
         if route[2] == "retry":
             if method != "POST":

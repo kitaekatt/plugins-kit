@@ -13,6 +13,7 @@ llm-kit jobs run jobs.yaml [--store PATH] [--timeout SECONDS] [--run-id ID] [--m
 llm-kit jobs status <run-id> [--store PATH]
 llm-kit jobs resume <run-id> [--store PATH] [--timeout SECONDS] [--max-parallel N]
 llm-kit jobs resolve <run-id> <interrupt-id> (--input JSON | --input-file PATH | --reject [--reason TEXT]) [--store PATH]
+llm-kit jobs cancel <run-id> --reason TEXT [--job ID] [--store PATH]
 llm-kit jobs events <run-id> [--store PATH] [--out PATH]
 llm-kit jobs gc [<run-id>] [--store PATH] [--accepted-only] [--force]
 ```
@@ -24,10 +25,10 @@ poll. `--timeout` is the runner's own per-attempt budget and defaults to 900
 seconds.
 
 Exit codes: **0** every job accepted (or the verb succeeded), **1** a job was
-rejected, failed, halted, could not be routed, was rejected by an operator or
-expired (or `resolve` refused a resolution), **2** a usage error, **3** the
-runner itself failed (including an unknown run or interrupt), or `events`
-refused an export, **4** `run` or `resume` ended with no failure but at least
+rejected, failed, halted, could not be routed, was rejected by an operator,
+expired or was cancelled (or `resolve` refused a resolution), **2** a usage
+error, **3** the runner itself failed (including an unknown run, job or
+interrupt, or a missing store), or `events` refused an export, **4** `run` or `resume` ended with no failure but at least
 one job waiting on an interrupt. An unattended caller should branch on 1 versus
 3: the first is a result about the work, the second is a result about the runner.
 Exit 4 is neither: the run is healthy and waiting on a person (see "Durable
@@ -279,6 +280,53 @@ because a caller that needs a different curve passes its own policy and no
 user-facing workflow depends on it. The runner's writes go only to its
 ledger.
 
+## Cancelling a run
+
+`llm-kit jobs cancel <run-id> --reason TEXT` stops the work a run still owes:
+every job that has not ended (`pending`, `running` or `waiting`) becomes
+`cancelled`, a terminal state. `--job ID` cancels only that job.
+
+```bash
+llm-kit jobs cancel nightly-2026-10-19 --reason "operator stopped the run"
+llm-kit jobs cancel nightly-2026-10-19 --job build --reason "superseded" --store ./runs.sqlite3
+```
+
+**Stop the run process first.** `cancel` edits the ledger; it does not signal
+anything, and llm-kit holds no lease on a ledger, so it cannot tell whether a
+runner is still alive. A runner that outlives a cancel writes to jobs `cancel`
+already closed. Stop the `run` or `resume` process (and the agents it started),
+then cancel.
+
+It prints one JSON object, `{"run": ID, "jobs": [{"id", "state", "outcome"}]}`,
+with one entry per job considered, in ledger order. `outcome` is `cancelled`
+when this call ended the job and `already-terminal` when the job had already
+ended in any terminal state (including `cancelled`), in which case it is left
+exactly as it was. Repeating a cancel is therefore safe and writes nothing.
+Exit **0** on success; **3** for an unknown run or job or a missing store
+(nothing is created); **2** when `--reason` is missing.
+
+For each job it ends, one transaction:
+
+- resolves the job's open interrupt as `cancelled` (a fourth resolution outcome
+  beside answered, rejected and expired), so `status` does not list it as
+  waiting for an answer, and a later `resolve` of that interrupt is refused as a
+  conflict;
+- ends a live continuation as `cancelled`;
+- resolves a live reservation as `cancelled` (its `lost_at` is set when the
+  invocation had been armed), so `resume` has nothing left to recover;
+- sets the job `cancelled` with the reason as its error message.
+
+A per-attempt worktree is kept; `llm-kit jobs gc` reclaims it like any other
+terminal job's. A run whose jobs are all terminal is `completed`; `run` and
+`resume` exit 1 for a run that holds a cancelled job, and `status` counts it
+under `counts.cancelled`.
+
+`cancel` writes ledger **schema 13**. A ledger it has opened cannot be read by
+the retired job runner, or by an llm-kit older than the release that added
+`cancel`; they refuse it with "database schema version 13 is newer than this ...
+supports".
+That refusal is deliberate (see the "What reads and what migrates" section).
+
 ## Execution events
 
 Every ledger transition also records an execution event in the common
@@ -297,6 +345,7 @@ that already exists.
 | attempt appended | `usage` when usage is known; `result` (`status`, and `error_code`, `halt_kind`, `acceptance` when present); `terminal` when the attempt ends the job |
 | reservation resolved before invocation | `result` (`status: not-invoked`, `reason`), then `terminal` (`state: failed`) |
 | reservation lost to a dead process | `result` (`status: lost`, `reason`), then `terminal` when the loss spends the last attempt |
+| job cancelled | `result` (`status: lost`, `reason`) for a live reservation, `job-kit:continuation-result` (`status: cancelled`) for a live continuation, then `terminal` (`state: cancelled`, `reason`); no `interrupt` event closes a cancelled interrupt |
 | job marked unroutable, halted or failed | `terminal` (`state`, `reason`) |
 | interrupt requested with an attempt | `interrupt` (`phase: requested`, `interrupt_id`, `kind`, `expires_at`, `continuation_no`) after the attempt's `result` |
 | interrupt answered | `interrupt` (`phase: resolved`) |
@@ -349,6 +398,7 @@ plugin-dev skill's `references/interrupt-contract.md`.
 | `waiting` | a valid interrupt request is open; not terminal |
 | `operator_rejected` | an operator rejected the request; terminal |
 | `expired` | the request lapsed before it was resolved; terminal |
+| `cancelled` | `llm-kit jobs cancel` ended the job; terminal (ledger schema 13) |
 | `failed` | the job failed; terminal |
 | `halted` | provider-halted (auth, rate limit, credit or spent quota); terminal |
 
@@ -488,9 +538,11 @@ changes on every re-run and is a counter, not a key.
 `llm-kit jobs status` is read-only: it opens the ledger read-only, sets no journal
 mode and never migrates it, so it can be pointed at a ledger written by an
 older runner (schema 10 or later) without upgrading it. Below schema 12 it
-reports no interrupts. Every other verb (`run`, `resume`, `resolve`, `events`,
-`gc`) opens the ledger read-write, migrating it when needed, and a ledger opened
-by a newer runner is refused by an older one. `status` reports
+reports no interrupts. Every other verb (`run`, `resume`, `resolve`, `cancel`,
+`events`, `gc`) opens the ledger read-write, migrating it when needed (a schema
+12 ledger becomes schema 13, in place, on its first such open), and a ledger
+opened by a newer runner is refused by an older one -- which is how the retired
+job runner and an llm-kit that predates `cancel` refuse a schema-13 ledger. `status` reports
 `effective_state` per job, `interrupts` (with request schema, payload and
 resolution) and `continuations` per run, and `read_at`. The request payload
 and schema appear in `status` because the operator needs them to answer; they
