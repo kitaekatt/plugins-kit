@@ -141,7 +141,7 @@ Use `http.server.ThreadingHTTPServer`, `sqlite3`, `json`, and other standard lib
 - Runtime records keep task ref, item id, and a source revision; they do not
   override a changed or missing task item.
 ### Configuration seams
-Use `~/.claude/task.local.yaml` for user/machine choices already in that domain: `dashboard.max_parallel_projects` (default 2), `default_timeout_s` (7200), Claude/Codex model entry defaults, effort defaults, Codex network (false), and `dashboard.endpoint_helpers` (empty; see Endpoint helpers). Per-queue model, effort, network, and timeout override these defaults, are disclosed in the UI, and are stored only in runtime state.
+Use `~/.claude/task.local.yaml` for user/machine choices already in that domain: `dashboard.max_parallel_projects` (default 2), `default_timeout_s` (7200), Claude/Codex model entry defaults, effort defaults, Codex network (false), `dashboard.endpoint_helpers` (empty; see Endpoint helpers), and `dashboard.subagents` (`enabled` true, `max_concurrent` 3, `recheck_days` 7; see Orchestrator and sub-agents). Per-queue model, effort, network, and timeout override these defaults, are disclosed in the UI, and are stored only in runtime state.
 These seams pass the plugin-opinion razor because concurrency, wall time,
 subscription choice, network access, and external-provider use each carry a
 real cost. Loopback binding, one active item per project, no automatic commits,
@@ -309,15 +309,18 @@ a fresh run after in-harness resolution.
   `llm-kit completion`. Path-inexpressible delete rules deny the command family.
 - The same single comma-joined argument carries tool-level denials after the Bash
   patterns: `Workflow`, `EnterWorktree`, `RemoteTrigger`, `CronCreate` and
-  `ScheduleWakeup` in every run, and `Agent` while native sub-agents are off (the
-  only state a run can have). These are Claude Code's documented deny channel
+  `ScheduleWakeup` in every run, and `Agent` while native sub-agents are off (a run
+  has them on only under a current characterization record; see Orchestrator and
+  sub-agents). These are Claude Code's documented deny channel
   (`--disallowedTools` takes the same rule syntax as `permissions.deny`); a name a
   later CLI does not offer is reported by the observation below, not an error.
   `translate.worker_job_options` is the one builder of the value.
 - Every run's environment sets `CLAUDE_CODE_DISABLE_WORKFLOWS=1` (documented;
   turning workflows off also makes ultracode unavailable) and
   `TASK_KIT_AGENT_DEPTH=0` (the marker below). `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=0`
-  is not used: the CLI ignores a zero.
+  is not used: the CLI ignores a zero. A run with native sub-agents ON adds
+  `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1` and `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=<max_concurrent>`
+  and keeps every other denial and the workflow switch.
 - Refuse launch if the installed Claude CLI cannot represent the floor; do not
   silently drop a deny rule. The CLI is observed once per binary (real path, mtime,
   size) per server life, on a server-owned thread that never runs under a
@@ -337,8 +340,8 @@ a fresh run after in-harness resolution.
 - The observation spawns the `claude` binary three times per new binary (two
   stopped at the init event, one haiku call) from a scratch directory under the
   dashboard root with an empty strict MCP config and `--setting-sources local`.
-- Each run's `spec.json` records `subagents` (state off, the denied tools) and the
-  observation summary.
+- Each run's `spec.json` records `subagents` (the run's decision: state, code,
+  reason, limits, the denied tools) and the observation summary.
 ### Tripwires, not confinement
 Every nested-run guard is a tripwire against a cooperating or careless worker, the
 same class as the deny floor under `bypassPermissions` (grill ruling 6). None of
@@ -351,6 +354,7 @@ it is confinement.
 | deny floor prefixes (git, deletes, publish, `claude -p`, `codex exec`, `task-kit`, `llm-kit jobs/pipeline/completion`) | tripwire (Claude CLI rules) | the plain command forms | wrappers (`bash -c`, `env`, `xargs`), absolute paths, interpreters running inline code, tools whose own subprocess starts a CLI |
 | tool denials `Agent` (while off), `Workflow`, `EnterWorktree`, `RemoteTrigger`, `CronCreate`, `ScheduleWakeup` in the one comma-joined floor argument | documented CLI control, the exact argument observed per binary | those tools | nothing known |
 | `CLAUDE_CODE_DISABLE_WORKFLOWS=1` (every run) | documented CLI control | dynamic workflows; ultracode | nothing known |
+| `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1`, `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=<max_concurrent>` (ON runs only) | documented CLI controls, per session | nesting; more than `max_concurrent` sub-agents at once | a resumed finished sub-agent takes a slot unchecked (documented); total launches (no CLI cap since Claude Code 2.1.224); a server-side flag that can skip the at-once check (binary evidence, undocumented) |
 | helper broker (`endpoint_helper.py`) | enforced by the server | widening a run's offers or budgets, an unconsented helper, forged or edited run state, a call after the run ended | direct endpoint calls by importing the model library or `curl` with keys readable in the user's data directory |
 | `floor.check_worker_models` at dispatch | second gate behind translation | a job naming a transport (text-only) entry as a worker | n/a |
 | Codex workers | refused until the Codex floor is proved | all Codex runs | n/a |
@@ -383,15 +387,71 @@ with the user in the harness.
 ## Orchestrator and sub-agents
 - The one top-level job is the Claude or Codex orchestrator and owns the result.
 - Claude uses its native Agent tool; Codex uses its native spawn-agent tool.
-- Native sub-agents are OFF in every run: the `Agent` tool and the
-  workflow, worktree, remote and scheduled-agent tools are denied (see Claude
-  worker), and the worker's prompt says so. Enable that instruction only after a
-  live headless characterization test for the exact CLI proves the tool is
-  callable and permissions are inherited.
-- If the test fails, the orchestrator works alone and the UI discloses that
+- Native sub-agents are OFF unless a current characterization record turns them on
+  (Claude only; Codex workers are refused). Off means the `Agent` tool is denied
+  with the workflow, worktree, remote and scheduled-agent tools (see Claude
+  worker), and the worker's prompt says so. A missing, stale or failed record never
+  refuses a run: the run proceeds with the tool denied and the page says why, with
+  the command that fixes it.
+- `task-kit characterize [--worker claude] [--entry NAME]` runs three real Claude
+  sessions with the exact worker argv llm-kit emits and the ON deny list (every
+  denial but `Agent`), changing only the output format to stream-json so events can
+  be read, and judges them from CLI-authored telemetry alone: `tool_use` and
+  `tool_result` blocks, `task_started` events (which carry `spawn_depth`),
+  `permission_denials`, and files the sessions did or did not create. The model's
+  answer is never evidence, and a missing event is `inconclusive`, never a pass.
+  Leg A (depth limit 1) asks the orchestrator for a harmless command, a denied
+  `rm`, the helper client's `--check` and one child that writes a file, runs its own
+  denied `rm` and tries to launch a grandchild. Leg B (depth limit 1, one at once)
+  asks for two launches in one message. The control leg repeats A with no depth
+  limit. Checks: `agent_callable`, `floor_orchestrator`, `floor_inherited`,
+  `depth_cap`, `concurrent_cap`, and the informational `helper_command_allowed`.
+  The command prints every check, writes the record whatever the verdict and exits
+  0 (1 when it cannot run, 2 for `--worker codex`, 6 inside a run).
+- On Claude Code 2.1.304 a child at the depth limit is not offered the sub-agent
+  tool at all, so there is no CLI-authored refusal to read; `depth_cap` therefore
+  needs the control: it passes when the child started at `spawn_depth` 1, no
+  grandchild started, and the same request without the limit launched a grandchild
+  (`task_started` at `spawn_depth` 2). A CLI refusal that names the nesting limit
+  is accepted as evidence on its own. The concurrency limit does arrive as a
+  refusal (`Concurrent subagent limit reached`). Sub-agents are asynchronous in
+  `claude -p` (the launch returns at once and the child reports after the
+  orchestrator's first result), so a leg is read to the end of the stream.
+- The record (`<dashboard root>/subagents.json`) is bound to the binary's SHA-256
+  digest and `--version`, to the characterization's `PROBE_VERSION`, and expires:
+  ON ends at the earlier of the record's own `expires_at` and `checked_at` plus
+  `recheck_days` (default 7), so a shorter setting acts at once and a longer one
+  does not extend a record already written. Evidence is the probe directory under
+  `<dashboard root>/characterize/<stamp>/`. A record that exists but cannot be used
+  is named corrupt, never read as absent. `subagents.decide` is the one place the
+  question is answered: Codex off; `enabled: false` off; a binary the per-binary
+  denial check saw ignore a denial refused (that refusal is the Claude worker
+  section's, whatever the record says); no, corrupt, stale-digest, stale-version,
+  other-probe-version or expired record off; any gating check not `pass` off;
+  otherwise ON.
+- ON is bounded only by Claude Code's documented per-session controls: depth 1
+  (children launch, grandchildren cannot) and `max_concurrent` (default 3) at once,
+  set in the run's environment. The workflow switch and every denial but `Agent`
+  stay, and a sub-agent has the orchestrator's permissions and the same denied
+  commands. The prompt then tells the agent the limits (true to the decision) and
+  that it alone reports the task result.
+- Disclosed residuals, shown in the page and in capabilities under ON: a resumed
+  finished sub-agent takes a slot without the at-once limit being checked
+  (documented); there is no limit on the total number of sub-agents (Claude Code
+  removed its per-session cap in 2.1.224); and Claude Code can lift the at-once
+  limit from its servers (binary evidence, undocumented, which is why ON expires).
+  Closed by a documented control: ultracode, which is exempt from the limit, is
+  unavailable because every run switches workflows off.
+- A re-observation every Nth start is not done: it needs a paid multi-minute session
+  that launches sub-agents, a run cannot be observed passively (llm-kit's Claude
+  transport reads only the final JSON envelope), and the open residuals vary per
+  session. What recurs cheaply is the per-binary denial observation, the per-run
+  documented environment and the expiry.
+- The earlier limit of 6 child launches per job is dropped: Claude Code has no
+  control for it since 2.1.224, and enforcing it would need a per-run PreToolUse hook
+  and an llm-kit change. The run timeout and the at-once limit bound the work.
+- If characterization fails, the orchestrator works alone and the UI discloses that
   native sub-agents are unavailable; it never substitutes another top-level model.
-- Maximum native depth is 1, maximum concurrent children is 3, and maximum
-  child launches per job is 6. Children may not launch children or jobs.
 - `TASK_KIT_AGENT_DEPTH` is set to 0 in a run's environment. In-process
   sub-agents share the orchestrator's environment, so the variable cannot differ
   for children: it marks a dashboard run's process tree, and the launcher refuses
@@ -666,7 +726,9 @@ Tests: `test_dashboard_project_scheduler.py`,
 Red check: a helper selected as the top-level worker or a depth-2 launch refuses.
 Ships as three releases: scheduler fairness, the explicit sub-work deny with its
 per-binary observation and the nested-run tripwires first; the endpoint helper
-broker second; native sub-agents ON with their expiring characterization last.
+broker second; native sub-agents ON with their expiring characterization last
+(`test_dashboard_subagent_gate.py` offline against a fake CLI, `test_dashboard_headless_subagents_live.py`
+live with `TASK_KIT_LIVE_CLAUDE=1`).
 ### Increment 6 - release hardening
 Exercise Windows/macOS/Linux launcher behavior, browser failures, security,
 optional-edge diagnoses, packaging, bootstrap declarations, and publication choice.
@@ -702,10 +764,15 @@ None open. New task defaults to `dev/tasks`; endpoint-helper consent is per repo
   directory and one-prompt/one-contract ledger. The agentic Claude deny floor must
   live in `Job.options.disallowed_tools`, not JobFile/run-level floor; v1 uses
   run-wide timeout, rejected blocks, existing events, and one cancelled-state change.
-- UNTESTED - a headless `claude -p` job can call Agent and `codex exec` can call
-  its native spawn-agent mechanism end to end. Source advertises/recognizes the
-  tools, but no cited live job proves invocation and permission inheritance.
-  Until it does, sub-agents are denied, not merely unmentioned.
+- CONFIRMED for Claude (live, Claude Code 2.1.304, 2026-10-20) - a headless
+  `claude -p` job can call the sub-agent tool and the children inherit the Bash
+  floor (a child's denied `rm` was refused and listed in `permission_denials`);
+  with `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1` a child launched at `spawn_depth` 1
+  and was not offered the tool to launch a grandchild, while the same request without
+  the variable launched one at `spawn_depth` 2; with `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=1`
+  the second of two launches in one message was refused with `Concurrent subagent
+  limit reached`. Sub-agents are asynchronous in `claude -p`. UNTESTED for Codex:
+  its native spawn-agent mechanism is not exercised, so Codex workers stay refused.
 - CONFIRMED (Claude Code documentation; observed on 2.1.304) - denying the
   sub-agent tool is a documented control (`--disallowedTools Agent`; the tool is
   named `Task` in the init event and `Task(...)` rules alias to `Agent`), and the
@@ -728,7 +795,7 @@ None open. New task defaults to `dev/tasks`; endpoint-helper consent is per repo
 
 ## Disagreements with review
 
-- Finding 7's outcome is accepted, but its evidence calls `list_events` read-only. It is `JobStore.list_events`, and even `create=False` constructs `JobStore` then always migrates (`$DEVROOT/plugins-kit3/plugins/llm-kit/lib/llm_kit/jobs/store.py:740,759-763,817-829,2537`; caller `$DEVROOT/plugins-kit3/plugins/llm-kit/lib/llm_kit/cli/jobs.py:361-366`). Only `LedgerReader.snapshot` is explicitly read-only (`$DEVROOT/plugins-kit3/plugins/llm-kit/lib/llm_kit/jobs/store.py:2850,2910`). V1 still drops the new tail flag; live runs use `LedgerReader.snapshot` and events are read only after runner exit (round 2, N1).
+- Finding 7's outcome is accepted, but its evidence calls `list_events` read-only. It is `JobStore.list_events`, and even `create=False` constructs `JobStore` then always migrates (`$DEVROOT/plugins-kit3/plugins/llm-kit/lib/llm_kit/jobs/store.py:740,759-763,817-829,2537`; caller `$DEVROOT/plugins-kit3/plugins/llm-kit/lib/llm_kit/cli/jobs.py:361-366`). Only `LedgerReader.snapshot` is explicitly read-only (`$DEVROOT/plugins-kit3/plugins/llm-kit/lib/llm_kit/jobs/store.py:2850,2910`). V1 still drops the tail flag; live runs use `LedgerReader.snapshot` and events are read only after runner exit (round 2, N1).
 
 ## Revision log
 
@@ -738,7 +805,7 @@ None open. New task defaults to `dev/tasks`; endpoint-helper consent is per repo
 - 4 fixed - Claude floor is only `Job.options.disallowed_tools`; argv tests required.
 - 5 fixed - run-wide timeout retained; acceptance starvation is a typed block.
 - 6 fixed - blocked contracts reject; v1 has no interrupt/waiting leg.
-- 7 fixed - new tail CLI removed; evidence detail is disagreed above.
+- 7 fixed - tail CLI removed; evidence detail is disagreed above.
 - 8 fixed - runner owns verified tree stop; llm-kit owns only cancelled ledger state.
 - 9 fixed - matching live runners are re-adopted across server restart.
 - 10 fixed - runtime root honors redirected data root and resolved marketplace.
@@ -765,3 +832,4 @@ None open. New task defaults to `dev/tasks`; endpoint-helper consent is per repo
 - 31 fixed - "harness changes are never overwritten" narrowed: hold refusal, per-file compare, no folder atomicity, the stated residual race.
 - 32 fixed - fair start order, one start per tick, waiting reasons; a translation block is refused while a run works the folder; sub-work is explicitly denied (Agent, Workflow, EnterWorktree, RemoteTrigger, CronCreate, ScheduleWakeup) with the exact emitted argument observed per CLI binary off the tick lock; the launcher refuses inside a run (marker and ancestry); guards are tripwires, not confinement.
 - 33 fixed - endpoint helpers are brokered by the server: consent by repository identity, offers and per-helper budgets in two additive runtime tables, a run-scoped token revoked in the transaction that ends the run, atomic authorize-and-reserve, size counted over input plus system, and a text-only call made through llm-kit; the run's directory decides nothing.
+- 34 fixed - native sub-agents turn ON only under a current characterization record (`task-kit characterize`): bound to the binary's digest and version, expiring after `recheck_days`, judged from CLI-authored telemetry only, bounded by the documented depth and at-once variables, with the resume, no-total-limit and server-flag residuals disclosed and the 6-launches-per-job limit dropped (no CLI control since 2.1.224); a missing, stale or failed record never refuses a run.

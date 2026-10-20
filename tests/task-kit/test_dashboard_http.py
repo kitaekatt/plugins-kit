@@ -221,8 +221,10 @@ def test_dashboard_payload_shape_and_filters(srv):
     assert body["capabilities"]["run"]["available"] is False
     assert body["capabilities"]["run"]["state"] == "absent"  # llm-kit is not on the task-kit test path
     assert body["capabilities"]["mutations"]["actions"] == ["queue", "retry", "recheck", "cancel", "newtask", "additem", "defer", "undefer", "queueall", "remove", "runoptions"]
-    sub = body["capabilities"]["subagents"]["claude"]  # native sub-agents are off in every run; the check state is always named
-    assert (sub["state"], sub["reason"]) == ("off", "denied by the dashboard floor") and sub["cli_check"]["state"] == "unchecked"
+    sub = body["capabilities"]["subagents"]["claude"]  # off without a characterization record; the check state is always named
+    assert (sub["state"], sub["code"]) == ("off", "no-record") and "task-kit characterize" in sub["reason"]
+    assert sub["command"] == "task-kit characterize" and sub["limits"] is None and sub["cli_check"]["state"] == "unchecked"
+    assert "Agent" in sub["deny_tools"] and "Workflow" in sub["deny_tools"] and len(sub["residuals"]) == 3
     assert {p["name"] for p in body["projects"]} == {"alpha", "beta"}
     assert {t["id"] for t in body["tasks"]} == {"dev/tasks/open-one", "dev/tasks/other"}
     assert [n["kind"] for n in body["needs"]] == ["item-blocked"]

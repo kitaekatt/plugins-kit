@@ -232,17 +232,46 @@ function runLabel(r) {
 function waitingText(r) {
   return r.state === 'queued' && r.waiting && r.waiting.detail ? 'waiting: ' + r.waiting.detail : '';
 }
-/* The sub-agent line of the run controls: sub-work is off (denied) in every run, and the per-binary check says whether the
- * installed Claude Code was seen to honor that. Only an `ignored` check refuses runs. */
+/* The sub-agent lines of the run controls. Off: why, and the command that turns them on when a characterization is what is
+ * missing. On: the limits, when and on which Claude Code they were checked, when the check expires, and what Claude Code
+ * documents as outside the two limits. The per-binary denial check (cli_check) adds its own sentence; only `ignored` refuses runs. */
+var RECHECK_CODES = ['no-record', 'corrupt', 'stale-binary', 'stale-version', 'probe-version', 'expired', 'check-failed'];
+function dayOf(stamp) { return stamp ? String(stamp).slice(0, 10) : '?'; }
+function sentenceList(items) {
+  if (items.length < 2) return items.join('');
+  return items.slice(0, -1).join(', ') + ', and ' + items[items.length - 1];
+}
 function subagentsHtml() {
   var sub = (caps().subagents || {}).claude;
   if (!sub) return '';
-  var chk = sub.cli_check || {}, extra = '';
+  var chk = sub.cli_check || {}, extra = '', on = sub.state === 'on', head;
   if (chk.state === 'ignored') extra = ' Claude runs are refused: the installed Claude Code does not honor the denials (' + (chk.detail || '') + ').';
   else if (chk.state === 'observed') extra = ' Checked on this Claude Code: the denials take effect.';
   else if (chk.state === 'checking') extra = ' Checking the installed Claude Code...';
   else if (chk.state === 'unobserved' || chk.state === 'vacuous') extra = ' Not observed: ' + (chk.detail || 'the check did not conclude') + '.';
-  return '<p class="hint" data-subagents="' + esc(sub.state || 'off') + '">Native sub-agents: ' + esc(sub.state || 'off') + ' (denied).' + esc(extra) + '</p>';
+  if (on) {
+    var lim = sub.limits || {}, bin = sub.binary || {};
+    head = 'Native sub-agents: on (at most ' + lim.concurrent + ' at once, no nesting; checked ' + dayOf(sub.checked_at) + ' on ' +
+      (bin.version || 'this Claude Code') + ', recheck by ' + dayOf(sub.expires_at) + ').';
+  } else {
+    head = 'Native sub-agents: off -- ' + (sub.reason || 'denied by the dashboard floor') + '.';
+  }
+  var html = '<p class="hint" data-subagents="' + (on ? 'on' : 'off') + '">' + esc(head + extra) + '</p>';
+  if (on) {
+    html += '<p class="hint" data-subagents-disclosure="1">' + esc('Claude Code enforces these per session; ' + sentenceList(sub.residuals || []) + '. ' +
+      (sub.closed || []).join(' ')) + '</p>';
+  } else if (sub.command && RECHECK_CODES.indexOf(sub.code) >= 0) {
+    html += cmdBox({ commands: [{ label: 'Turn native sub-agents on', command: sub.command }] });
+  }
+  return html;
+}
+/* A started run's recorded sub-agent decision, as one row of its Latest run card. */
+function runSubagentsRow(run) {
+  var sub = run && run.subagents;
+  if (!sub || !sub.state) return '';
+  var lim = sub.limits || {};
+  return '<dt>Sub-agents</dt><dd data-run-subagents="' + esc(sub.state) + '">' +
+    esc(sub.state === 'on' ? 'on (at most ' + lim.concurrent + ' at once, no nesting)' : 'off -- ' + (sub.reason || 'denied')) + '</dd>';
 }
 /* The endpoint helper line of the run controls: which helpers this repository's runs are offered (consent is by repository). */
 function helpersHtml(task) {
@@ -835,7 +864,7 @@ function itemDetailHtml(task, it) {
   if (it.run) {
     right += '<div class="sec-title">Latest run</div><div class="card"><dl class="kv mb0"><dt>State</dt><dd>' + esc(RUN_LABEL[it.run.state] || it.run.state) +
       esc(waitingText(it.run) ? ' -- ' + waitingText(it.run) : '') +
-      '</dd><dt>Result</dt><dd>' + esc(it.run.code || '') + (it.run.detail ? ' - ' + esc(it.run.detail) : '') + '</dd></dl>' +
+      '</dd><dt>Result</dt><dd>' + esc(it.run.code || '') + (it.run.detail ? ' - ' + esc(it.run.detail) : '') + '</dd>' + runSubagentsRow(it.run) + '</dl>' +
       '<div class="acts"><button type="button" class="btn sm" data-action="togglerun" data-key="' + esc(it.run.id) + '" aria-expanded="' + !!S.runOpen[it.run.id] + '">' + ic('eye') +
       (S.runOpen[it.run.id] ? 'Hide run log' : 'Run log') + '</button></div>' + (S.runOpen[it.run.id] ? helperCallsHtml(it.run.id) + logPre(it.run.id) : '') + '</div>';
   }

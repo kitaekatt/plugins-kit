@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 
 from . import findings as findings_mod
-from . import plan_sections
+from . import plan_sections, runfiles
 from .inventory import (
     NEEDS_CLASSIFICATIONS,
     InventorySnapshot,
@@ -308,7 +308,8 @@ def dashboard_payload(
                 continue
             row = run_json(run, names.get(run.project_id, ""), (runtime.get("phases") or {}).get(run.id),
                            queue_position=(queue_view.get(run.id) or (None, None))[0],
-                           waiting=(queue_view.get(run.id) or (None, None))[1])
+                           waiting=(queue_view.get(run.id) or (None, None))[1],
+                           subagents=_run_subagents(run))
             latest.setdefault((run.project_id, run.task_ref, run.item_id), row)
             if run.state in LIVE_RUN_STATES:
                 runs_json.append(row)
@@ -441,14 +442,47 @@ RETRYABLE_RUN_STATES = ("failed", "timeout", "cancelled")
 RECENT_RUNS_LIMIT = 15
 
 
+_RECORDED_SUBAGENTS: dict[tuple[str, str], dict | None] = {}
+
+
+def recorded_subagents(run) -> dict | None:
+    """The sub-agent decision a run started with, from its ``spec.json`` (None until it has one).
+
+    The file is written once, before the runner is spawned, so a run's answer is read once and kept for this process.
+    """
+    if not run.run_dir:
+        return None
+    cache_key = (run.id, run.run_dir)
+    if cache_key in _RECORDED_SUBAGENTS:
+        return _RECORDED_SUBAGENTS[cache_key]
+    status, spec = runfiles.read_json(Path(run.run_dir) / runfiles.SPEC_FILE)
+    if status == runfiles.MISSING:
+        return None
+    if status == runfiles.UNREADABLE:
+        return {"state": "unreadable", "reason": f"the run's spec.json cannot be read ({spec})"}
+    found = spec.get("subagents")
+    found = found if isinstance(found, dict) else None
+    _RECORDED_SUBAGENTS[cache_key] = found
+    return found
+
+
+def _run_subagents(run) -> dict | None:
+    """The part of a run's recorded decision the page shows: on or off, why, and the limits."""
+    found = recorded_subagents(run)
+    if found is None:
+        return None
+    return {"state": found.get("state"), "reason": found.get("reason"), "limits": found.get("limits")}
+
+
 def run_json(run, project_name: str, phase: str | None = None, queue_position: int | None = None,
-             waiting: dict | None = None) -> dict:
+             waiting: dict | None = None, subagents: dict | None = None) -> dict:
     """One run as the API serves it (``run`` is a :class:`runtime.Run`).
 
     ``phase`` is the live ledger's state word for an active run (read-only; None when the run has no
     ledger yet or is not active). ``cancellable`` is whether a cancel request would be accepted now;
     a run that is already ``cancelling`` accepts one too but has nothing left to ask for. ``waiting`` is
-    ``{"code", "detail"}`` for a queued run that cannot start now (and why), else None.
+    ``{"code", "detail"}`` for a queued run that cannot start yet (and why), else None. ``subagents`` is the
+    decision the run started with (state, reason, limits), else None.
     """
     options = run.options
     return {
@@ -476,4 +510,5 @@ def run_json(run, project_name: str, phase: str | None = None, queue_position: i
         "retryable": run.state in RETRYABLE_RUN_STATES,
         "cancellable": run.state in CANCELLABLE_RUN_STATES,
         "phase": phase,
+        "subagents": subagents,
     }

@@ -43,7 +43,6 @@ from pathlib import Path
 from typing import Callable
 
 from . import floor, proctree
-from .translate import worker_job_options
 
 OBSERVED, IGNORED, VACUOUS, UNOBSERVED = "observed", "ignored", "vacuous", "unobserved"
 
@@ -302,6 +301,8 @@ class CliObserver:
                 self._log(f"claude cli check ({key.realpath}): {observation.state}: {observation.detail}")
 
     def _observe(self, key: ClaudeKey) -> DenyObservation:
+        from .translate import worker_job_options  # translate imports subagents, which imports this module
+
         config = self._load_config()
         entry, effort = config.claude_entry, config.effort
         denials = floor.deny_tools()
@@ -357,89 +358,111 @@ class CliObserver:
     # -- processes ------------------------------------------------------------
 
     def _version(self, executable: str) -> str:
-        try:
-            done = subprocess.run([executable, "--version"], capture_output=True, text=True, timeout=self.version_timeout_s,
-                                  stdin=subprocess.DEVNULL, env=floor.run_environment())
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            return f"unknown ({type(exc).__name__})"
-        return (done.stdout or done.stderr).strip().splitlines()[0] if (done.stdout or done.stderr).strip() else "unknown"
+        return claude_version(executable, self.version_timeout_s)
 
     def _stream(self, argv: list[str], prompt: str, cwd: Path, *, until: str, timeout_s: float) -> StreamRun:
-        """Run ``argv`` with ``prompt`` on stdin, collecting stream-json events until ``init`` or ``result``."""
-        run = StreamRun()
-        try:
-            proc = subprocess.Popen(argv, cwd=str(cwd), env=floor.run_environment(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                    stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace",
-                                    start_new_session=(os.name == "posix"))
-        except OSError as exc:
-            run.problem = f"spawn: {exc}"
-            return run
-        lines: queue.Queue = queue.Queue()
+        return run_stream(argv, prompt, cwd, until=until, timeout_s=timeout_s, env=floor.run_environment(), closed=self._closed.is_set)
 
-        def read() -> None:
-            try:
-                for line in proc.stdout:  # type: ignore[union-attr]
-                    lines.put(line)
-            except (OSError, ValueError):
-                pass
-            lines.put(None)
 
-        threading.Thread(target=read, name="cli-check-reader", daemon=True).start()
-        try:
-            try:
-                proc.stdin.write(prompt)  # type: ignore[union-attr]
-                proc.stdin.close()  # type: ignore[union-attr]
-            except (OSError, ValueError):
-                pass
-            deadline = time.monotonic() + timeout_s
-            while True:
-                if self._closed.is_set():
-                    run.problem = "closed"
-                    break
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    run.problem = "timeout"
-                    break
-                try:
-                    line = lines.get(timeout=min(remaining, 0.2))
-                except queue.Empty:
-                    continue
-                if line is None:
-                    run.problem = run.problem or ("exited" if (run.init_tools is None or (until == "result" and run.result is None)) else None)
-                    break
-                try:
-                    event = json.loads(line)
-                except ValueError:
-                    continue
-                if not isinstance(event, dict):
-                    continue
-                run.events.append(event)
-                if event.get("type") == "system" and event.get("subtype") == "init":
-                    run.init_tools = tool_names(event)
-                    if until == "init":
-                        break
-                elif event.get("type") == "result":
-                    run.result = event
-                    if until == "result":
-                        break
-        finally:
-            self._stop(proc)
+def claude_version(executable: str, timeout_s: float = VERSION_TIMEOUT_S) -> str:
+    """The first line ``<executable> --version`` prints (``unknown (...)`` when it cannot be run)."""
+    try:
+        done = subprocess.run([executable, "--version"], capture_output=True, text=True, timeout=timeout_s,
+                              stdin=subprocess.DEVNULL, env=floor.run_environment())
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"unknown ({type(exc).__name__})"
+    return (done.stdout or done.stderr).strip().splitlines()[0] if (done.stdout or done.stderr).strip() else "unknown"
+
+
+def identify_binary(key: ClaudeKey, executable: str | None = None) -> ClaudeBinary:
+    """The identity a characterization record is bound to: the binary's SHA-256 digest and its ``--version``."""
+    return ClaudeBinary(key, key.realpath, _digest(key.realpath), claude_version(executable or key.realpath))
+
+
+def run_stream(argv: list[str], prompt: str, cwd: Path, *, until: str, timeout_s: float, env: dict,
+               closed: Callable[[], bool] = lambda: False) -> StreamRun:
+    """Run ``argv`` with ``prompt`` on stdin, collecting stream-json events.
+
+    ``until`` is ``init`` (stop at the CLI's system/init event), ``result`` (stop at the first result event) or
+    ``exit`` (read to the end of the stream: a run whose sub-agents report after the first result). The process
+    tree is always stopped before this returns. ``problem`` says why a run ended early: ``timeout``, ``closed``,
+    ``exited`` (the stream ended before the event asked for), or ``spawn: ...``.
+    """
+    run = StreamRun()
+    try:
+        proc = subprocess.Popen(argv, cwd=str(cwd), env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace",
+                                start_new_session=(os.name == "posix"))
+    except OSError as exc:
+        run.problem = f"spawn: {exc}"
         return run
+    lines: queue.Queue = queue.Queue()
 
-    @staticmethod
-    def _stop(proc: subprocess.Popen) -> None:
-        ident = proctree.ident_of(proc.pid)
-        if ident is not None and proc.poll() is None:
-            proctree.stop_tree(ident, grace_s=STOP_GRACE_S)
+    def read() -> None:
         try:
-            proc.wait(timeout=STOP_GRACE_S)
-        except subprocess.TimeoutExpired:
-            pass
-        try:
-            if proc.stdout is not None:
-                proc.stdout.close()
+            for line in proc.stdout:  # type: ignore[union-attr]
+                lines.put(line)
         except (OSError, ValueError):
             pass
+        lines.put(None)
+
+    threading.Thread(target=read, name="cli-check-reader", daemon=True).start()
+    try:
+        try:
+            proc.stdin.write(prompt)  # type: ignore[union-attr]
+            proc.stdin.close()  # type: ignore[union-attr]
+        except (OSError, ValueError):
+            pass
+        deadline = time.monotonic() + timeout_s
+        while True:
+            if closed():
+                run.problem = "closed"
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                run.problem = "timeout"
+                break
+            try:
+                line = lines.get(timeout=min(remaining, 0.2))
+            except queue.Empty:
+                continue
+            if line is None:
+                if until != "exit":
+                    run.problem = run.problem or ("exited" if (run.init_tools is None or (until == "result" and run.result is None)) else None)
+                break
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            run.events.append(event)
+            if event.get("type") == "system" and event.get("subtype") == "init":
+                run.init_tools = tool_names(event)
+                if until == "init":
+                    break
+            elif event.get("type") == "result":
+                run.result = event
+                if until == "result":
+                    break
+    finally:
+        _stop(proc)
+    return run
+
+
+def _stop(proc: subprocess.Popen) -> None:
+    ident = proctree.ident_of(proc.pid)
+    if ident is not None and proc.poll() is None:
+        proctree.stop_tree(ident, grace_s=STOP_GRACE_S)
+    try:
+        proc.wait(timeout=STOP_GRACE_S)
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        if proc.stdout is not None:
+            proc.stdout.close()
+    except (OSError, ValueError):
+        pass
 
 
 def _digest(path: str) -> str:

@@ -17,6 +17,9 @@ Rules it enforces:
   entry that cannot start says why (``wait_reason``), and the UI shows it.
 - A Claude run needs its binary observed once (``cli_check``): the observation runs on its own thread,
   never under the tick lock, and the entry waits with reason ``cli-check`` until it ends.
+- A Claude run gets native sub-agents only when ``subagents.decide`` says so (a current characterization record for the
+  installed binary): the decision is made at each start from the observation the tick already waited for plus one small
+  file, never spawns anything, and a missing, stale or failed record only leaves the sub-agent tool denied.
 - Every start translates the item again from the current folder. A changed but
   still job-ready item runs with fresh text; an item that disappeared or is no
   longer available is dropped (``skipped``), not blocked, because someone else
@@ -126,7 +129,7 @@ from ..types import HAND_OFF
 from ..validate import validate_ref
 from . import authoring
 from . import findings as findings_mod
-from . import cli_check, endpoint_helper, floor, proctree, redact, repo_identity, runfiles, vcs
+from . import cli_check, endpoint_helper, floor, proctree, redact, repo_identity, runfiles, subagents, vcs
 from .blocker import BlockOutcome, concise, record_block, record_blocks
 from .config import DashboardConfig, DashboardConfigError, load_config
 from .inventory import project_id_for
@@ -362,9 +365,31 @@ class Scheduler:
                           "Pause worker arrives in a later increment.",
             },
             "run_options": self._run_options_capabilities(status),
-            "subagents": {"claude": {"state": "off", "reason": "denied by the dashboard floor",
-                                     "cli_check": self.cli_check_summary()}},
+            "subagents": {"claude": self._subagents_capability()},
         }
+
+    def subagent_decision(self, config: DashboardConfig, worker: str | None = "claude") -> subagents.Decision:
+        """Whether a run of ``worker`` gets native sub-agents: the characterization record against the installed Claude Code.
+
+        Never blocks and never spawns: the binary's identity (digest, version) comes from the per-binary observation
+        the tick has already waited for, and the record is one small file. A missing, stale or failed record is an
+        OFF decision, never a refusal.
+        """
+        key = cli_check.claude_key() if (self.observer is not None and worker == "claude") else None
+        found = self.observer.state_for(key) if key is not None else None
+        return subagents.decide(worker, config, found.binary if found is not None else None, subagents.read_record(self.root), found)
+
+    def _subagents_capability(self) -> dict:
+        """The ``subagents.claude`` capability: the decision a Claude run would get, plus what the per-binary check knows."""
+        try:
+            decision = self.subagent_decision(self.config())
+            body = decision.to_json()
+        except DashboardConfigError as exc:
+            body = {"state": "off", "code": "config", "reason": f"the dashboard configuration cannot be read ({exc})",
+                    "command": subagents.CHARACTERIZE_COMMAND, "limits": None, "residuals": list(subagents.RESIDUALS),
+                    "closed": list(subagents.CLOSED), "deny_tools": list(floor.deny_tools())}
+        body["cli_check"] = self.cli_check_summary()
+        return body
 
     def helper_names_by_checkout(self, roots: dict[str, str]) -> dict[str, list[str]]:
         """``{checkout id: names of the endpoint helpers offered there}`` for ``roots`` (checkout id -> working root).
@@ -1211,7 +1236,7 @@ class Scheduler:
         return translate(
             project_root=project_root, task_ref=task_ref, item_id=item_id, options=options, config=config, edge=self.edge,
             hold_for=self.hold_for, run_id=run_id, run_dir=run_dir, accept_script=ACCEPT_SCRIPT, python=self._python,
-            revision=revision,
+            revision=revision, subagents=self.subagent_decision(config, options.resolved(config).worker),
         )
 
     def _block_for(self, folder: Path, item_id: str, reasons: list[Reason], source: str, *, revision: str | None,
@@ -1253,6 +1278,7 @@ class Scheduler:
         # A run offered endpoint helpers gets ONE run-scoped token: the worker holds it, the database holds its
         # hash and the offers, and the terminal state of the run revokes it (RuntimeDB.set_state).
         run_env = dict(floor.RUN_ENV)
+        run_env.update(spec.subagent_env)  # an ON run adds the two documented sub-agent limits
         token = endpoint_helper.new_token() if spec.helper_offers else None
         if token is not None:
             run_env.update(endpoint_helper.grant_env(token, self.root))
@@ -1270,7 +1296,7 @@ class Scheduler:
                 "deadline_s": spec.timeout_s + RUNNER_SLACK_S, "grace_s": RUNNER_GRACE_S,
                 "env": run_env,
             },
-            "subagents": {"state": "off", "reason": "denied by the dashboard floor", "deny_tools": list(spec.deny_tools)},
+            "subagents": dict(spec.subagents),
             "cli_check": self.cli_check_summary() if spec.worker == "claude" else None,
         }
         if token is None:

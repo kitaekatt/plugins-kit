@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Mapping
 
@@ -34,7 +34,7 @@ import yaml
 from ..validate import validate_ref
 from . import endpoint_helper
 from . import findings as findings_mod
-from . import floor, plan_sections, repo_identity, vcs
+from . import floor, plan_sections, repo_identity, subagents as sub_agents, vcs
 from .config import DashboardConfig
 from .inventory import project_id_for
 from .mutation import raw_items, stored_status
@@ -107,6 +107,8 @@ class JobSpec:
     contract_argv: tuple[str, ...]
     network: bool = False
     deny_tools: tuple[str, ...] = ()  # the tool-level denials this run's disallowed_tools value carries
+    subagents: Mapping = field(default_factory=dict)  # the run's sub-agent decision, as recorded in spec.json
+    subagent_env: Mapping = field(default_factory=dict)  # the documented limits an ON run adds to its command environment
     helper_offers: tuple[dict, ...] = ()  # the endpoint helpers offered to this run (the server issues the grant from these)
 
 
@@ -128,7 +130,7 @@ class Translation:
 
 
 def _system_prompt(*, root: str, folder: str, task_ref: str, item_id: str, revision: str,
-                   helpers: str = "") -> str:
+                   helpers: str = "", work_alone: str = "", sub_agents: str = "") -> str:
     return "\n".join([
         "You are an unattended worker completing exactly ONE task item in a shared checkout.",
         f"Project root: {root}",
@@ -144,13 +146,14 @@ def _system_prompt(*, root: str, folder: str, task_ref: str, item_id: str, revis
         "- Never rewrite or discard work in the tree that you did not make.",
         "",
         "Working rules:",
-        "- Work alone: the Agent and Workflow tools are denied in this run.",
+        f"- {work_alone}",
         "- Do exactly the one item described below. Do not start sibling items.",
         "- When the item is complete, remove it from the task_items block in plan.md, add an Accomplished line",
         "  to plan.md, and append a dated log.md entry that names the item id, using the task folder's own conventions.",
         "- If you cannot finish (a decision is needed, access is missing, the instructions are unclear or conflict),",
         "  stop and report blocked instead of guessing. A person will resolve it in Claude Code and a fresh run follows.",
         "",
+        *([sub_agents, ""] if sub_agents else []),
         *([helpers, ""] if helpers else []),
         RESULT_DESCRIPTION,
     ])
@@ -201,13 +204,15 @@ def translate(
     accept_script: Path,
     python: str | None = None,
     revision: str,
+    subagents: "sub_agents.Decision | None" = None,
 ) -> Translation:
     """Decide whether ``item_id`` of ``task_ref`` can run now.
 
     ``revision`` is the task folder's current revision (the caller read it
     under its mutation rules); ``hold_for(folder)`` returns a description of an
     interactive hold on the task folder (an absolute path string), or None.
-    ``run_dir`` is only NAMED in the contract argv; nothing is created in it.
+    ``run_dir`` is only NAMED in the contract argv; nothing is created in it. ``subagents`` is the run's
+    native sub-agent decision (``subagents.decide``); without one the run has sub-agents off.
     """
     project_root = Path(project_root)
     folder = project_root / task_ref
@@ -293,13 +298,16 @@ def translate(
         py, str(Path(accept_script).resolve()), task_ref, item_id, run_id, revision,
         start.head or "-", start.branch or "-", str(Path(run_dir)),
     )
-    deny_tools = floor.deny_tools()
+    decision = subagents if subagents is not None else sub_agents.not_decided()
+    deny_tools = decision.deny_tools
+    work_alone, sub_agents_section = decision.prompt_lines()
     job_options = worker_job_options(adapter, options.effort, deny_tools)
     job = {
         "id": f"{_slug(task_ref)}--{item_id}--{run_id}",
         "prompt": {
             "system": _system_prompt(root=str(project_root), folder=str(folder), task_ref=task_ref, item_id=item_id, revision=revision,
-                                     helpers=endpoint_helper.prompt_section(offers, python=py)),
+                                     helpers=endpoint_helper.prompt_section(offers, python=py),
+                                     work_alone=work_alone, sub_agents=sub_agents_section),
             "user": _user_prompt(item=item, heading=section.heading or item_id, body=section.body, folder=str(folder), revision=revision),
         },
         "models": [options.entry],
@@ -315,7 +323,7 @@ def translate(
         task_ref=task_ref, folder=str(folder), item_id=item_id, item_title=str(item.get("title", item_id)),
         worker=options.worker, entry=options.entry or "", timeout_s=float(options.timeout_s),
         document=document, accept=accept, start=start, contract_argv=contract, network=options.network,
-        deny_tools=deny_tools, helper_offers=tuple(offers),
+        deny_tools=deny_tools, helper_offers=tuple(offers), subagents=decision.to_json(), subagent_env=decision.env,
     )
     return Translation(reasons=(), spec=spec)
 

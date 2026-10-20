@@ -32,6 +32,9 @@ DEFAULT_HELPER_MAX_INPUT_CHARS = 100_000
 MAX_HELPER_INPUT_CHARS = 1_000_000
 MAX_HELPER_PURPOSE_CHARS = 200
 
+DEFAULT_SUBAGENTS_MAX_CONCURRENT = 3
+DEFAULT_SUBAGENTS_RECHECK_DAYS = 7
+
 
 class DashboardConfigError(ValueError):
     """``task.local.yaml`` has an unusable ``dashboard`` section."""
@@ -59,6 +62,20 @@ class EndpointHelper:
 
 
 @dataclass(frozen=True)
+class SubagentsConfig:
+    """``dashboard.subagents``: native sub-agents for Claude runs.
+
+    ``enabled: false`` keeps them off whatever the characterization record says. ``max_concurrent`` is the
+    sub-agents running at once in one run; ``recheck_days`` is how long a passing characterization keeps them on.
+    Nesting depth is fixed at 1.
+    """
+
+    enabled: bool = True
+    max_concurrent: int = DEFAULT_SUBAGENTS_MAX_CONCURRENT
+    recheck_days: int = DEFAULT_SUBAGENTS_RECHECK_DAYS
+
+
+@dataclass(frozen=True)
 class DashboardConfig:
     max_parallel_projects: int = 2
     default_timeout_s: float = DEFAULT_TIMEOUT_S
@@ -68,6 +85,7 @@ class DashboardConfig:
     effort: str | None = None
     codex_network: bool = False
     endpoint_helpers: tuple[EndpointHelper, ...] = ()
+    subagents: SubagentsConfig = SubagentsConfig()
 
     def entry_for(self, worker: str) -> str:
         if worker == "claude":
@@ -79,9 +97,32 @@ class DashboardConfig:
 
 _KEYS = {
     "max_parallel_projects", "default_timeout_s", "default_worker",
-    "claude_entry", "codex_entry", "effort", "codex_network", "endpoint_helpers",
+    "claude_entry", "codex_entry", "effort", "codex_network", "endpoint_helpers", "subagents",
 }
 _HELPER_KEYS = {"models", "repositories", "purpose", "max_calls", "timeout_s", "max_input_chars"}
+_SUBAGENT_KEYS = {"enabled", "max_concurrent", "recheck_days"}
+
+
+def _subagents(path: Path, value) -> SubagentsConfig:
+    """``dashboard.subagents`` as validated settings (a mapping with ``enabled``, ``max_concurrent``, ``recheck_days``)."""
+    where = f"{path}: dashboard.subagents"
+    if value is None:
+        return SubagentsConfig()
+    if not isinstance(value, dict):
+        raise DashboardConfigError(f"{where} must be a mapping")
+    unknown = sorted(set(value) - _SUBAGENT_KEYS)
+    if unknown:
+        raise DashboardConfigError(f"{where}: unknown keys {unknown}; known keys: {sorted(_SUBAGENT_KEYS)}")
+    enabled = value.get("enabled", True)
+    if not isinstance(enabled, bool):
+        raise DashboardConfigError(f"{where}.enabled must be true or false")
+    numbers: dict[str, int] = {}
+    for key, default in (("max_concurrent", DEFAULT_SUBAGENTS_MAX_CONCURRENT), ("recheck_days", DEFAULT_SUBAGENTS_RECHECK_DAYS)):
+        number = value.get(key, default)
+        if isinstance(number, bool) or not isinstance(number, int) or number < 1:
+            raise DashboardConfigError(f"{where}.{key} must be a whole number of at least 1")
+        numbers[key] = number
+    return SubagentsConfig(enabled=enabled, **numbers)
 
 
 def _helpers(path: Path, value) -> tuple[EndpointHelper, ...]:
@@ -188,4 +229,5 @@ def load_config(path: Path | None = None) -> DashboardConfig:
         effort=pick("effort", str, None),
         codex_network=pick("codex_network", bool, False),
         endpoint_helpers=_helpers(path, section["endpoint_helpers"]) if "endpoint_helpers" in section else (),
+        subagents=_subagents(path, section["subagents"]) if "subagents" in section else SubagentsConfig(),
     )

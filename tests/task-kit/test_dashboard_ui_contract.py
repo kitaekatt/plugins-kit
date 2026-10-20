@@ -8,6 +8,7 @@ payload builders, and are skipped when Node is not installed.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 import shutil
@@ -604,21 +605,49 @@ AUTHORING_CAPABILITIES = {
             "codex": {"available": False, "entry": "sol", "efforts": [], "reason": "Codex workers are refused until a live test shows the floor"},
         },
     },
-    "subagents": {"claude": {"state": "off", "reason": "denied by the dashboard floor",
+    "subagents": {"claude": {"state": "off", "code": "no-record", "reason": "no characterization record; run `task-kit characterize`",
+                             "command": "task-kit characterize", "limits": None, "residuals": [], "closed": [],
                              "cli_check": {"state": "unobserved", "detail": "no init event in the baseline run (timeout)"}}},
+}
+SUBAGENT_RESIDUALS = ["a resumed sub-agent can exceed the at-once limit", "there is no total limit on sub-agents",
+                      "Claude Code can lift the at-once limit from its servers"]
+AUTHORING_CAPABILITIES_ON = {
+    **AUTHORING_CAPABILITIES,
+    "subagents": {"claude": {
+        "state": "on", "code": "on", "reason": "characterized on this Claude Code", "command": "task-kit characterize",
+        "limits": {"depth": 1, "concurrent": 3},
+        "binary": {"realpath": "/x/claude", "digest": "d" * 64, "version": "2.1.304 (Claude Code)"},
+        "checked_at": "2026-10-20T10:00:00+00:00", "expires_at": "2026-10-27T10:00:00+00:00",
+        "checks": {"agent_callable": "pass"}, "residuals": SUBAGENT_RESIDUALS,
+        "closed": ["Workflows and ultracode are off in dashboard runs."],
+        "cli_check": {"state": "observed", "detail": ""}}},
 }
 
 
 @pytest.fixture(scope="module")
 def authoring(tmp_path_factory):
     """The live page: an available item, a deferred one, a queued entry (Queued #1), driven through every form."""
-    tmp = tmp_path_factory.mktemp("ui-authoring")
+    return _drive_authoring(tmp_path_factory.mktemp("ui-authoring"), AUTHORING_CAPABILITIES)
+
+
+@pytest.fixture(scope="module")
+def authoring_on(tmp_path_factory):
+    """The same page while native sub-agents are ON, and a started run that recorded its decision."""
+    return _drive_authoring(tmp_path_factory.mktemp("ui-authoring-on"), AUTHORING_CAPABILITIES_ON)
+
+
+def _drive_authoring(tmp, capabilities):
     devroot = _world(tmp)
     snap = Inventory(parents=(devroot,), min_interval=0).snapshot()
     cid = _checkout(snap, "open-one")
     queued = _run_row(7, "run-q", cid, "queued", "go-too")
+    if capabilities["subagents"]["claude"]["state"] == "on":  # a run that recorded the decision it started with
+        (tmp / "recorded").mkdir()
+        (tmp / "recorded" / "spec.json").write_text(json.dumps({"subagents": {
+            "state": "on", "reason": "characterized on this Claude Code", "limits": {"depth": 1, "concurrent": 3}}}), encoding="utf-8")
+        queued = dataclasses.replace(queued, run_dir=str(tmp / "recorded"))
     waiting = {"code": "no-slot", "detail": "2 of 2 checkouts are running"}
-    payload = snapshot.dashboard_payload(snap, runtime={"capabilities": AUTHORING_CAPABILITIES, "runs": [queued], "held": set(), "run_active": set(),
+    payload = snapshot.dashboard_payload(snap, runtime={"capabilities": capabilities, "runs": [queued], "held": set(), "run_active": set(),
                                                          "queue_view": {"run-q": (1, waiting)},
                                                          "helpers_by_checkout": {cid: ["local-qwen", "ghost"]}})
     task = snap.find_task(cid, "dev/tasks/open-one")
@@ -752,8 +781,26 @@ def test_a_queued_entry_says_why_it_waits_and_the_run_controls_say_sub_agents_ar
     queued = authoring["optionsQueued"]
     assert "Queued #1" in queued and "waiting: 2 of 2 checkouts are running" in queued
     assert authoring["payload"]["runs"][0]["waiting"] == {"code": "no-slot", "detail": "2 of 2 checkouts are running"}
-    assert 'data-subagents="off"' in queued and "Native sub-agents: off (denied)." in queued
+    assert 'data-subagents="off"' in queued and "Native sub-agents: off -- no characterization record; run `task-kit characterize`." in queued
+    assert "task-kit characterize</code>" in queued and 'data-action="copy"' in queued  # the command to copy
+    assert "data-subagents-disclosure" not in queued  # the residuals are disclosed when sub-agents are on
     assert "Not observed: no init event in the baseline run (timeout)." in queued  # the check did not conclude: said so
+
+
+@needs_node
+def test_when_sub_agents_are_on_the_page_gives_the_limits_the_dates_and_the_residuals(authoring_on):
+    """R24. RED: drop the residual list from ``subagentsHtml`` and the disclosure line loses them."""
+    queued = authoring_on["optionsQueued"]
+    assert 'data-subagents="on"' in queued
+    assert ("Native sub-agents: on (at most 3 at once, no nesting; checked 2026-10-20 on 2.1.304 (Claude Code), recheck by 2026-10-27)."
+            in queued)
+    disclosure = re.search(r'<p class="hint" data-subagents-disclosure="1">(.*?)</p>', queued).group(1)
+    assert disclosure.startswith("Claude Code enforces these per session; ")
+    for residual in SUBAGENT_RESIDUALS:  # the resume, no-total-limit and server-flag residuals, each named
+        assert residual in disclosure
+    assert "Workflows and ultracode are off in dashboard runs." in disclosure
+    assert "task-kit characterize" not in queued  # nothing to copy while it is on
+    assert 'data-run-subagents="on"' in queued and "on (at most 3 at once, no nesting)" in queued  # the run's own record
 
 
 @needs_node

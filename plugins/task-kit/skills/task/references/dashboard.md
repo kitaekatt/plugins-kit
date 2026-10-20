@@ -40,8 +40,9 @@ A run that timed out or ended without a verdict is shown with Retry, which is al
 
 ## What a run may not do
 
-- A run cannot start other workers: the `Agent` (sub-agent), `Workflow`, `EnterWorktree`, `RemoteTrigger`,
-  `CronCreate` and `ScheduleWakeup` tools are denied, workflows are switched off (`CLAUDE_CODE_DISABLE_WORKFLOWS=1`),
+- A run cannot start other workers: the `Workflow`, `EnterWorktree`, `RemoteTrigger`, `CronCreate` and
+  `ScheduleWakeup` tools are denied, and so is `Agent` (the sub-agent tool) unless native sub-agents are on (see Native
+  sub-agents). Workflows are switched off in every run (`CLAUDE_CODE_DISABLE_WORKFLOWS=1`),
   and the Bash floor denies git history changes, deletes, publication and the nested drivers (`claude -p`, `codex
   exec`, `task-kit`, `llm-kit jobs`, `llm-kit pipeline`, `llm-kit completion`). These are tripwires against a careless
   worker, not confinement.
@@ -52,6 +53,37 @@ A run that timed out or ended without a verdict is shown with Retry, which is al
   run, or run another worker. The refusal checks the inherited `TASK_KIT_AGENT_DEPTH` marker and whether the process
   descends from a live runner of the dashboard it targets; a dashboard on another `--data-dir` is not refused, so
   task-kit's own tests can run inside a worker.
+
+## Native sub-agents
+
+A Claude run may launch sub-agents of its own only when a current characterization says the installed Claude Code keeps
+to the limits the dashboard relies on. Without one the sub-agent tool is denied, the run still starts, and the run
+controls say why and show the command to copy.
+
+- `task-kit characterize` runs three short real Claude sessions (`--entry` picks the model entry, default `dashboard.claude_entry`; a small one costs little) in a scratch directory under the dashboard root, and checks from the CLI's
+  own events and from files: a run can launch a sub-agent; the denied commands stay denied for the run and for its
+  sub-agent; a sub-agent cannot launch another (depth 1); and a second launch while one runs is refused (at most
+  `max_concurrent` at once). What the model says in its answer is never evidence, and a check the events do not settle is
+  `inconclusive`, not a pass. It prints every check, writes the record whatever the verdict and exits 0; it exits 1 when it
+  cannot run (no Claude Code on PATH, llm-kit missing) and 2 for `--worker codex`. Like every `task-kit` command it is
+  refused inside a dashboard run.
+- The record is tied to the Claude Code binary (its SHA-256 digest and version) and expires after `recheck_days`. A Claude
+  Code update, an edited record, a different version of the check or the passing of the expiry turns sub-agents off until
+  the command is run again; nothing re-runs it for you. A record that exists but cannot be read is reported as corrupt.
+- When on, a run gets two of Claude Code's documented per-session limits in its environment
+  (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1` and `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`), keeps every other denial, and its
+  prompt says what it may do. The page says what Claude Code documents as outside those limits: a resumed sub-agent can
+  exceed the at-once limit, there is no total limit, and Claude Code can lift the at-once limit from its servers.
+  Workflows and ultracode stay off.
+- A run's recorded decision (on or off, why, the limits) is shown in its latest-run card.
+
+```yaml
+dashboard:
+  subagents:
+    enabled: true        # false keeps sub-agents off whatever the record says
+    max_concurrent: 3    # sub-agents running at once in one run (at least 1); nesting depth is fixed at 1
+    recheck_days: 7      # how long a passing characterization keeps them on (at least 1)
+```
 
 ## Endpoint helpers
 
@@ -94,7 +126,7 @@ Runs survive the dashboard server: a restarted server adopts the live runner fro
 Machine settings live under `dashboard:` in `~/.claude/task.local.yaml`: `max_parallel_projects` (checkouts running at
 once, default 2), `default_timeout_s` (default 7200), `default_worker` (claude or codex, default claude),
 `claude_entry` (default opus), `codex_entry` (default sol), `effort` (default unset), `codex_network` (default false),
-`endpoint_helpers` (default none; see Endpoint helpers).
+`endpoint_helpers` (default none; see Endpoint helpers), `subagents` (see Native sub-agents).
 
 ## Related
 

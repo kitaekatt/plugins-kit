@@ -46,8 +46,10 @@ capability in `skills/task/SKILL.md` and `skills/task/references/dashboard.md`.
 
 Several checkouts run at once (`max_parallel_projects`, default 2). Queued entries start in a fair order:
 the checkout that started a run least recently goes first, and "Queued #n" is that order, with the reason an entry
-is still waiting beside it. A run works alone: the sub-agent, workflow, worktree, remote-agent and scheduling tools
-are denied in its Claude command, and `task-kit` itself refuses inside a run (exit 6). The first Claude run on each
+is still waiting beside it. A run works alone: the workflow, worktree, remote-agent and scheduling tools are denied in
+its Claude command, and so is the sub-agent tool unless `task-kit characterize` has shown the installed Claude Code keeps
+to the sub-agent limits (depth 1, a few at once; the record is tied to the binary and expires). `task-kit` itself refuses
+inside a run (exit 6). The first Claude run on each
 Claude Code binary waits for a one-time check that the binary honors those denials; a binary seen to ignore them
 refuses Claude runs. These are tripwires against a careless worker, not confinement.
 
@@ -67,6 +69,7 @@ task-kit               start (or reuse) the dashboard and open it in your browse
 task-kit status        report the running server
 task-kit stop          stop it
 task-kit restart       stop it and start it again
+task-kit characterize  check the installed Claude Code's sub-agent limits and record whether runs may use them
 task-kit --no-open     do not open the browser (also TASK_KIT_NO_OPEN=1)
 ```
 

@@ -12,9 +12,13 @@ instance nonce its health endpoint reports all match, and treats anything else
 that answers on the recorded port as foreign. A record it cannot parse stops
 the launcher; it never licenses starting a second server or stopping a stranger.
 
-Exit codes: 0 ok; 1 error; 2 usage; 3 ``status``: not running; 4 the server is
-up but the browser could not be opened; 5 refused because jobs are running;
+Exit codes: 0 ok; 1 error; 2 usage (``characterize --worker codex`` included); 3 ``status``: not
+running; 4 the server is up but the browser could not be opened; 5 refused because jobs are running;
 6 refused inside a dashboard run.
+
+``characterize`` runs real Claude sessions that check the limits native sub-agents rely on and writes the
+record that turns them on (``subagents.py``). It exits 0 whatever the verdict (the record says what passed),
+1 when it cannot run (no Claude Code, llm-kit missing or too old).
 
 Inside a dashboard run every command is refused (exit 6), ``status`` and ``serve``
 included. Two tripwires, checked before anything else is read or written: the
@@ -37,8 +41,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from . import proctree
+from . import proctree, subagents
 from .codehash import code_hash
+from .config import DashboardConfigError, load_config
+from .jobs_edge import EdgeError, JobsEdge
 from .server import EXIT_LOCK_HELD, TOKEN_HEADER
 from .server import run as run_server
 from .state import (
@@ -510,10 +516,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=["status", "stop", "restart", "serve"],
+        choices=["status", "stop", "restart", "serve", "characterize"],
         help="status: report the server; stop: stop it; restart: stop and start it; "
-        "serve: run the server in the foreground (used by the launcher)",
+        "serve: run the server in the foreground (used by the launcher); "
+        "characterize: check the installed Claude Code's sub-agent limits with a few short real sessions "
+        "and record whether runs may use native sub-agents",
     )
+    parser.add_argument("--worker", choices=["claude", "codex"], default=None,
+                        help="characterize: the worker to check (only claude has native sub-agents here)")
+    parser.add_argument("--entry", help="characterize: the model entry the sessions use (default: dashboard.claude_entry)")
     parser.add_argument("--no-open", action="store_true", help=f"do not open the browser (also {NO_OPEN_ENV}=1)")
     parser.add_argument("--force", action="store_true", help="stop/restart even if jobs are running or the server is unresponsive")
     parser.add_argument(
@@ -525,8 +536,25 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def run_characterize(args: argparse.Namespace, data_dir: Path, scripts_dir: Path) -> int:
+    """``task-kit characterize``: the sessions, the judgement, the record. Exit 0 whatever the verdict; 1 when it cannot run."""
+    if args.worker not in (None, "claude"):
+        print("task-kit: Codex workers are refused, so there is nothing to characterize for them", file=sys.stderr)
+        return EXIT_USAGE
+    try:
+        subagents.characterize(
+            root=runtime_root(data_dir), edge=JobsEdge(), config=load_config(), python=sys.executable,
+            helper_cli=Path(__file__).with_name("helper_cli.py"), scripts_dir=scripts_dir, entry=args.entry)
+    except (DashboardConfigError, subagents.CharacterizeError, EdgeError) as exc:
+        print(f"task-kit: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+    return EXIT_OK
+
+
 def main(argv: list[str] | None, *, scripts_dir: Path, entrypoint: Path) -> int:
     args = build_parser().parse_args(argv)
+    if args.command != "characterize" and (args.worker is not None or args.entry is not None):
+        build_parser().error("--worker and --entry apply only to the characterize command")
     if AGENT_DEPTH_ENV in os.environ:  # tripwire 1: the marker every run's command inherits
         print(NESTED_MESSAGE, file=sys.stderr)
         return EXIT_NESTED
@@ -540,6 +568,8 @@ def main(argv: list[str] | None, *, scripts_dir: Path, entrypoint: Path) -> int:
         return EXIT_NESTED
     if args.command == "serve":
         return run_server(data_dir, scripts_dir)
+    if args.command == "characterize":
+        return run_characterize(args, data_dir, scripts_dir)
     launcher = Launcher(data_dir=data_dir, scripts_dir=scripts_dir, entrypoint=entrypoint)
     open_url = not (args.no_open or os.environ.get(NO_OPEN_ENV) == "1")
     try:

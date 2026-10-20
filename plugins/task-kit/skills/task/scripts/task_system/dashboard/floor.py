@@ -59,7 +59,7 @@ PATTERNS: tuple[str, ...] = (
 #: policy forbids them, but this tool is invisible to the Bash patterns), and remote or scheduled agents
 #: that outlive the run's process tree. Claude Code's deny rule syntax takes a bare tool name.
 TOOLS_DENIED_ALWAYS: tuple[str, ...] = ("Workflow", "EnterWorktree", "RemoteTrigger", "CronCreate", "ScheduleWakeup")
-#: Denied while native sub-agents are off (sub-agents stay off until a characterization record turns them on). Claude Code's init event lists
+#: Denied while native sub-agents are off (a current characterization record turns them on). Claude Code's init event lists
 #: the sub-agent tool as ``Task`` on some builds; the deny rule name ``Agent`` covers both (``Task(...)`` is an alias).
 TOOLS_DENIED_WHEN_OFF: tuple[str, ...] = ("Agent",)
 #: The names the sub-agent tool carries in a CLI-authored tool list.
@@ -69,13 +69,24 @@ SUBAGENT_TOOL_NAMES: tuple[str, ...] = ("Agent", "Task")
 #: launcher refuses when it sees it); ``CLAUDE_CODE_DISABLE_WORKFLOWS`` is Claude Code's documented switch
 #: for dynamic workflows, and turning workflows off also makes ultracode unavailable.
 RUN_ENV: dict[str, str] = {"TASK_KIT_AGENT_DEPTH": "0", "CLAUDE_CODE_DISABLE_WORKFLOWS": "1"}
+#: Claude Code's documented per-session sub-agent controls (positive integers only; a zero is ignored). Only a run
+#: with native sub-agents ON sets them; a dashboard-built probe environment never inherits a user's own values.
+SUBAGENT_DEPTH_ENV = "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH"
+SUBAGENT_CONCURRENT_ENV = "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"
+#: Nesting depth of an ON run: children launch, grandchildren cannot.
+SUBAGENT_DEPTH = 1
 #: Variables a dashboard-built subprocess environment never inherits from the server's own environment.
-RUN_ENV_STRIPPED: tuple[str, ...] = ("TASK_KIT_AGENT_DEPTH", "TASK_KIT_RUN_TOKEN")
+RUN_ENV_STRIPPED: tuple[str, ...] = ("TASK_KIT_AGENT_DEPTH", "TASK_KIT_RUN_TOKEN", SUBAGENT_DEPTH_ENV, SUBAGENT_CONCURRENT_ENV)
 
 
 def deny_tools(*, sub_agents_on: bool = False) -> tuple[str, ...]:
     """The tool-level denials of one run: every run's list, plus the sub-agent tool while sub-agents are off."""
     return TOOLS_DENIED_ALWAYS if sub_agents_on else TOOLS_DENIED_ALWAYS + TOOLS_DENIED_WHEN_OFF
+
+
+def subagent_env(max_concurrent: int) -> dict[str, str]:
+    """The two documented controls an ON run adds to :data:`RUN_ENV`: nesting depth and sub-agents at once."""
+    return {SUBAGENT_DEPTH_ENV: str(SUBAGENT_DEPTH), SUBAGENT_CONCURRENT_ENV: str(max_concurrent)}
 
 
 def disallowed_tools_value(tools: tuple[str, ...] | list[str] = ()) -> str:

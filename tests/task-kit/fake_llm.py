@@ -124,7 +124,9 @@ if BEHAVIOR == "env-dump":
     import os
 
     (RUN_DIR / "env-dump.json").write_text(json.dumps({
-        "env": {name: os.environ.get(name) for name in ("TASK_KIT_AGENT_DEPTH", "CLAUDE_CODE_DISABLE_WORKFLOWS")},
+        "env": {name: os.environ.get(name) for name in ("TASK_KIT_AGENT_DEPTH", "CLAUDE_CODE_DISABLE_WORKFLOWS",
+                                                         "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH", "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS")},
+        "system": JOB["prompt"]["system"],
         "options": JOB["options"]}), encoding="utf-8")
     finish_item()
     sys.exit(run_contract("All done.\n" + result_block("done")))
