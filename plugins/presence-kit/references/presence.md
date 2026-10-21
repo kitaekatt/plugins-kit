@@ -111,7 +111,10 @@ Watcher) for progress. While owned work runs
 or a session cron is pending, end the turn with the last line
 `Waiting on <what>`, where `<what>` names the work. Never hold the main session
 with a foreground wait. The Stop hook checks this and nudges at most three
-times per prompt. With `waiting-guard` off, none of this applies.
+times per prompt. A task the harness armed itself (the live-updates monitor
+that an Artifact publish adds, marked `(auto-armed on publish)`) is not owned
+work: it needs no waiter and no `Waiting on` line. With `waiting-guard` off,
+none of this applies.
 
 ## While away
 

@@ -59,7 +59,7 @@ All default to `true`. Off means the behavior does not apply.
 | `afk-on-quiet` | Stop hook | No message of your own for `afk_quiet_minutes` enters afk | You stay present however long you are quiet |
 | `autonomous-on-handover` | `presence-kit:autonomous` | An explicit hand-over enters autonomous | Claude does not enter autonomous on its own; your own `/presence-kit:autonomous` still works |
 | `recap-on-return` | prompt hook, Stop hook, `presence.md` | Your first message after afk gets the return recap | You become present with no return recap and no nudge |
-| `waiting-guard` | Stop hook, `presence.md` | While owned work runs, non-agent jobs get a waiter agent and the turn ends with `Waiting on <what>` | No waiting check |
+| `waiting-guard` | Stop hook, `presence.md` | While owned work runs, non-agent jobs get a waiter agent and the turn ends with `Waiting on <what>`; a task the harness armed itself is not owned work | No waiting check |
 | `ending-recap` | Stop hook | An away turn with nothing running ends with one recap (in autonomy: or keeps working until the goal is done) | No ending recap is demanded |
 | `terse-while-away` | `presence.md` | Interim messages are short while you are away | Messages keep normal length |
 | `park-questions` | `presence.md` | Questions wait for the recap while independent work continues | Claude asks as it would when you are present |
@@ -150,6 +150,12 @@ when a departure word sets you afk (P3); everything else it says is read-only.
 | N4 | you, once per session | `waiting-guard,ending-recap` | skipped waiting and ending checks: the Stop payload's background_tasks is missing. (or: ... is not a list of objects.) |
 | N5 | you, once per session | `waiting-guard,ending-recap` | skipped owned-work checks: the Stop payload's session_crons is missing. (or: ... is not a list.) |
 | S6 | you | the condition's id | unresolved after 3 nudges: `<label>`. Labels: `return recap not run`; `no waiter agent covering the job`; ``turn did not end with `Waiting on <what>` ``; `no ending recap or goal check`. |
+
+Owned work, for C, W and E, is every listed background task and every session
+cron, except a task the harness armed itself: a `monitor` task whose description
+contains `(auto-armed on publish)`, which the harness lists after an Artifact
+publish. The agent did not arm it and cannot usefully stop it, so it holds no C
+or W and does not block E. A monitor with any other description counts.
 
 The Stop hook nudges at most three times per prompt, with every unmet
 condition in one nudge. After the third, it lets the turn end, shows S6, and

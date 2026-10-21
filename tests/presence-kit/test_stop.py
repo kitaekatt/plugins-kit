@@ -1058,6 +1058,61 @@ def test_status_key_missing_still_counts(s):
     assert s.stop(tasks=[{"type": "shell"}], last=WAITING_LAST).held == ("C",)
 
 
+# ============================================================ harness-armed monitor
+
+# Captured Stop payload, 21 Oct 2026: after an Artifact publish the harness lists
+# this task for the rest of the session. The agent did not arm it.
+ARTIFACT_MONITOR = {
+    "id": "si7wbhhk1",
+    "type": "monitor",
+    "status": "running",
+    "description": "live updates for artifact https://claude.ai/artifact/WspH5gzDTA2nGZYwqze7bF (auto-armed on publish)",
+}
+USER_MONITOR = {"id": "m2", "type": "monitor", "status": "running", "description": "watch the build log"}
+
+
+def test_artifact_monitor_alone_holds_no_c_or_w(s):
+    s.entry(PID, "sdk", NOW)
+    assert s.stop(tasks=[ARTIFACT_MONITOR], last="DONE").held == ()
+
+
+def test_artifact_monitor_alone_leaves_e_as_with_no_tasks(make):
+    outcomes = {}
+    for name, tasks in (("none", []), ("monitor", [ARTIFACT_MONITOR])):
+        sess = make(name=name)
+        sess.go_afk()
+        sess.entry(PID, "sdk", NOW)
+        outcomes[name] = sess.stop(tasks=tasks, last="DONE").held
+    assert outcomes == {"none": ("E",), "monitor": ("E",)}
+
+
+def test_artifact_monitor_with_a_shell_task_still_holds_c_and_w(s):
+    s.entry(PID, "sdk", NOW)
+    decision = s.stop(tasks=[ARTIFACT_MONITOR, SHELL], last="DONE")
+    assert decision.held == ("C", "W")
+
+
+def test_artifact_monitor_with_a_session_cron_still_holds_w(s):
+    s.entry(PID, "sdk", NOW)
+    assert s.stop(tasks=[ARTIFACT_MONITOR], crons=[{"id": "c"}], last="DONE").held == ("W",)
+
+
+def test_a_user_armed_monitor_still_counts(s):
+    s.entry(PID, "sdk", NOW)
+    assert s.stop(tasks=[USER_MONITOR], last="DONE").held == ("C", "W")
+
+
+@pytest.mark.parametrize("task", [
+    {"type": "shell", "description": "x (auto-armed on publish)"},
+    {"type": "monitor", "description": None},
+    {"type": "monitor"},
+    {"type": "monitor", "description": 7},
+])
+def test_only_a_monitor_with_the_marker_text_is_harness_armed(s, task):
+    s.entry(PID, "sdk", NOW)
+    assert s.stop(tasks=[task], last=WAITING_LAST).held == ("C",)
+
+
 # ================================================================ output shapes
 
 def test_decision_output_shapes():

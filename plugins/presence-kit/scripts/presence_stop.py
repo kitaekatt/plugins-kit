@@ -27,6 +27,13 @@ NUDGE_BUDGET = 3
 # (they show "working" by themselves); every other type is non-agent.
 AGENT_TYPES = ("subagent", "workflow")
 ENDING_RECAPS = ("afk-ending", "autonomous-done")
+# After an Artifact publish the harness lists a monitor task for the rest of the
+# session that the agent did not arm and cannot usefully stop. Observed Stop payload
+# (21 Oct 2026): {"id": "si7wbhhk1", "type": "monitor", "status": "running",
+# "description": "live updates for artifact https://claude.ai/artifact/<id>
+# (auto-armed on publish)"}. Such a task is not owned work (C, W, E).
+HARNESS_ARMED_MONITOR_TYPE = "monitor"
+HARNESS_ARMED_MARKER = "(auto-armed on publish)"
 _WAITING = re.compile(r"Waiting on \S")
 
 # Held-condition codes in nudge order, with the behavior id that owns each.
@@ -101,6 +108,23 @@ def _session_crons(payload: dict) -> tuple[list | None, str | None]:
 def _is_agent(task: dict) -> bool:
     task_type = task.get("type")
     return isinstance(task_type, str) and task_type in AGENT_TYPES
+
+
+def _is_harness_armed(task: dict) -> bool:
+    """A task the harness armed itself (see HARNESS_ARMED_MARKER), not the agent."""
+    description = task.get("description")
+    return (
+        task.get("type") == HARNESS_ARMED_MONITOR_TYPE
+        and isinstance(description, str)
+        and HARNESS_ARMED_MARKER in description
+    )
+
+
+def _owned_tasks(tasks: list[dict] | None) -> list[dict] | None:
+    """The listed tasks without the harness-armed ones; None stays None."""
+    if tasks is None:
+        return None
+    return [task for task in tasks if not _is_harness_armed(task)]
 
 
 def _needs_waiter(tasks: list[dict]) -> bool:
@@ -194,7 +218,10 @@ def _held_codes(
     crons: list | None,
     last_message: str | None,
 ) -> list[str]:
-    """Rows 5-7 over the document AFTER rows 3-4 (D8); codes in R, C, W, E order."""
+    """Rows 5-7 over the document AFTER rows 3-4 (D8); codes in R, C, W, E order.
+
+    Harness-armed tasks are dropped first: they are not owned work for C, W or E."""
+    tasks = _owned_tasks(tasks)
     recaps = doc["recaps"]
     waiting_guard = cfg.enabled("waiting-guard")
     owned_known = tasks is not None and crons is not None
