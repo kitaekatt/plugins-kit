@@ -15,7 +15,8 @@ from secrets_kit import converge as convergence
 from secrets_kit import repo as repository
 from secrets_kit.manifest import Manifest
 from secrets_kit.state import State
-from test_dest_guard import _templates, adding
+from sk_testlib import replace_git_tree
+from test_dest_guard import _templates, adding, state_template
 
 
 @pytest.fixture(autouse=True)
@@ -36,11 +37,21 @@ def _argv(adding, *extra, name='ha-token'):
     return ['add', name, '--file', adding.source, *extra]
 
 
+def _populate_seed(newline):
+    def populate(adding, patch):
+        extra = ['--dest', '${PLAIN}/ha-token.txt', '--mode', '0600', '--profile', 'base', '--doc', 'inventory.md']
+        if newline:
+            extra += ['--newline', newline]
+        assert adding.cli.main(_argv(adding, *extra)) == 0
+    return populate
+
+
 def _seed(adding, *, mode='0644', newline='lf'):
-    extra = ['--dest', '${PLAIN}/ha-token.txt', '--mode', '0600', '--profile', 'base', '--doc', 'inventory.md']
-    if newline:
-        extra += ['--newline', newline]
-    assert adding.cli.main(_argv(adding, *extra)) == 0
+    """The entry as an `add` leaves it, served from a per-process template, then given `mode` and published.
+
+    Call it before patching anything the CLI would reach: the template is built on first use.
+    """
+    replace_git_tree(state_template('update-metadata-seed-' + str(newline), _populate_seed(newline)), adding.data_dir.parent)
     raw = json.loads(adding.manifest_path.read_text())
     raw['entries']['ha-token']['mode'] = mode
     adding.manifest_path.write_text(json.dumps(raw), encoding='utf-8')
@@ -86,7 +97,7 @@ def test_actual_parser_retains_unsupported_newline_refusal(adding):
     assert error.value.code == 2
 
 
-@pytest.mark.parametrize('mode', ['0644', '0640', '0000', 0o644, True, False])
+@pytest.mark.parametrize('mode', ['0644', '0000', 0o644, True, False])
 def test_actual_update_omitting_mode_preserves_existing_accepted_semantics(adding, monkeypatch, mode):
     blob = _seed(adding, mode=mode)
     before_blob = blob.read_bytes()

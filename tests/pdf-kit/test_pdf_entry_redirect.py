@@ -60,7 +60,10 @@ def test_missing_redirected_venv_exits_2(tmp_path):
 def test_redirected_venv_is_the_interpreter_that_runs(tmp_path):
     data_root = tmp_path / "data"
     venv_dir = data_root / "plugins-kit" / "pdf-kit" / ".venv"
-    venv.EnvBuilder(with_pip=False).create(str(venv_dir))
+    # Symlinked on POSIX, as uv and bootstrap build it: EnvBuilder's default copies
+    # the interpreter binary, and a copied standalone python (macOS, the
+    # @executable_path/../lib libpython rpath) cannot find its library from bin/.
+    venv.EnvBuilder(with_pip=False, symlinks=os.name != "nt").create(str(venv_dir))
     site_packages = [p for p in venv_dir.rglob("site-packages") if p.is_dir()]
     assert site_packages, f"no site-packages under {venv_dir}"
     # A .pth import line runs at interpreter start: the marker appears only

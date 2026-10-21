@@ -231,7 +231,8 @@ schema_digest, schema_version)` and never carries the schema body.
   | Adapter | Delivery | Policies | Schema class |
   | --- | --- | --- | --- |
   | `codex-cli` | `native`: `--output-schema <temp schema file>` | all three | `openai-strict` |
-  | `openrouter`, `claude-cli`, `opencode-cli` | `prompt`: an exact schema instruction (`Respond with only one JSON value, with no prose and no code fence, that conforms to this JSON Schema:` plus the canonical schema) appended to the system text | `validated-result`, `text-only` | `json-schema-subset` |
+  | `claude-cli` | `native`: `--json-schema <canonical schema json>` inline; the answer is read from the envelope's `structured_output` field (compact JSON), else from `result` | all three | `json-schema-subset` |
+  | `openrouter`, `opencode-cli` | `prompt`: an exact schema instruction (`Respond with only one JSON value, with no prose and no code fence, that conforms to this JSON Schema:` plus the canonical schema) appended to the system text | `validated-result`, `text-only` | `json-schema-subset` |
 
   `openai-strict` means OpenAI strict mode: every object schema has
   `additionalProperties` false and lists exactly its property keys in

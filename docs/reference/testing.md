@@ -9,7 +9,7 @@ This document records the measurements and the reasons for those commands.
 
 `pytest-xdist` is in the `dev` extra. `-n` is deliberately NOT in `addopts`.
 `addopts` with `-n` creates a regression, not a convenience. Worker
-startup has a fixed ~1.6-2.9s toll. This toll is free on a 13-minute run but
+startup has a fixed ~1.6-2.9s toll. This toll is free on a full run but
 ruins a targeted run. Measured on a 24-core box,
 a single small bootstrap test file alone cost **0.40s serial, 2.03s at `-n 12`,
 3.33s at `-n auto`**. (That measurement was taken against
@@ -23,7 +23,9 @@ More workers are not always better. The suite is process-spawn-bound because
 tests run real `git`, `uv`, and Git Bash subprocesses. Past a point, extra
 workers contend for the same process spawns.
 
-Full-suite wall time on a 24-core non-Windows box:
+Full-suite wall time on a 24-core non-Windows box, measured before the
+2026-10-20 speedups (these rows are not comparable to the 2026-10-20 figures
+below):
 
 | Worker setting | Wall time |
 | --- | --- |
@@ -35,10 +37,28 @@ Full-suite wall time on a 24-core non-Windows box:
 Roughly half the core count is the sweet spot. `-n auto` is portable but not
 optimal on a many-core machine.
 
+### Current full-suite timing (macOS arm64, 2026-10-20)
+
+`uv run --extra dev pytest -n 12 -q` on Apple Silicon (arm64) took 975s (about
+16 min) before the 2026-10-20 speedups and 339s (about 5.5-6 min) after them,
+in the normal environment.
+
+### `--dist=worksteal` default
+
+`pyproject.toml` sets `addopts = ["--dist=worksteal"]`. The default xdist mode
+`load` pre-assigns contiguous chunks of the collection to each worker, so slow
+test blocks clustered on a few workers and left the rest idle. `worksteal`
+lets idle workers take pending tests from busy ones. Replaying the measured
+per-test durations at `-n 12` predicted 1012s under `load` and 436s under
+`worksteal`. `--dist=loadfile` was rejected: the same replay simulated 1925s.
+The option is inert without `-n`, so the targeted-run argument above still holds.
+
 ### Windows
 
-On Windows 11 with Git Bash, representative full-suite runs on 2026-10-07
-took 27:53 and 35:32 with `-n 12`. The worker-count sweep was not repeated on
+Windows was last measured at about 22 min (1340s plus about 60s for
+`tests/bootstrap`) on 2026-10-19, before the 2026-10-20 speedups, and has not
+been re-measured since. On Windows 11 with Git Bash, representative full-suite
+runs on 2026-10-07 took 27:53 and 35:32 with `-n 12`. The worker-count sweep was not repeated on
 Windows. The slow tests were mostly the `tests/secrets-kit` seed, entry,
 rotation-recovery, `operation_lock`, and `dest_guard` tests, plus
 `tests/repo-scripts/test_publish.py::TestMasterOnlyGuardAgainstAModel` cases.

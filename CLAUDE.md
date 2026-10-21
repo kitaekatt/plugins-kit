@@ -160,10 +160,10 @@ Only run the full suite when explicitly asked or before a release -- and when yo
 **parallelise it**, because the full suite is the only run where that pays:
 
 ```bash
-uv run --extra dev pytest -n 12 -q      # full suite: ~3 min (non-Windows), ~30 min (Windows)
+uv run --extra dev pytest -n 12 -q      # full suite: ~6 min (macOS arm64, measured 2026-10-20); ~22 min (Windows, before the 2026-10-20 speedups, not re-measured)
 ```
 
-`-n` is deliberately not in `addopts`: worker startup is a fixed toll that is free on the full run and ruinous on a targeted one. Full suite: `-n 12`, ~3 min on non-Windows hosts and ~30 min on Windows. Leak guards are only complete in a SERIAL run. **A test that fails only under `-n` is usually load, not your change -- and never write a bare `time.sleep` sized for an idle machine; poll for a causal observable instead.** Measurements, the worker-count table, the timing-sensitivity trap and the leak-guard explanation: [docs/reference/testing.md](docs/reference/testing.md).
+`-n` is deliberately not in `addopts`: worker startup is a fixed toll that is free on the full run and ruinous on a targeted one. `--dist=worksteal` IS in `addopts` (inert without `-n`; see [docs/reference/testing.md](docs/reference/testing.md)). Full suite: `-n 12`, ~6 min on macOS arm64 and ~22 min on Windows (not re-measured since the 2026-10-20 speedups). Leak guards are only complete in a SERIAL run. **A test that fails only under `-n` is usually load, not your change -- and never write a bare `time.sleep` sized for an idle machine; poll for a causal observable instead.** Measurements, the worker-count table, the timing-sensitivity trap and the leak-guard explanation: [docs/reference/testing.md](docs/reference/testing.md).
 
 **Interpreter: the repo is pinned to Python 3.12** via a repo-root `.python-version`, so bare `uv run` / `uv venv` select 3.12 everywhere -- no `-p 3.12` needed. Nothing needs 3.14 (four plugins exclude it: `requires-python ">=3.12,!=3.14.*"`); it used to leak in only as uv's global default when no pin was present.
 

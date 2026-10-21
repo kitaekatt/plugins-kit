@@ -210,6 +210,10 @@ def port(value):
         return {k: port(v) for k, v in value.items()}
     if isinstance(value, tuple):
         return tuple(port(v) for v in value)
+    if isinstance(value, str):
+        # the ported side speaks the final wording, as the legacy side does under
+        # ``legacy_wording`` (final_wording.RENAMES)
+        return to_final(value)
     return value
 
 
@@ -773,7 +777,7 @@ def test_capability_records_parity():
         c = S.capabilities
         out = []
         for name, rec in records(S).items():
-            out.append((f"{name}/json", ("ok", json.dumps(rec.to_json()))))
+            out.append((f"{name}/json", ("ok", norm(json.dumps(rec.to_json())))))
             out.append((f"{name}/dc", outcome(lambda r=rec: r)))
             for subject in (c.FILESYSTEM_WRITE, c.SHELL_EXEC, c.SUBAGENT_SPAWN, "other"):
                 out.append((f"{name}/denies/{subject}", outcome(rec.denies, subject)))

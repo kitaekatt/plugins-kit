@@ -33,6 +33,8 @@ from typing import Any, Callable, Iterator, Mapping, Optional, Sequence
 
 import pytest
 
+from final_wording import claude_contract_to_final
+
 REPO = Path(__file__).resolve().parents[2]
 LEGACY_LIBS = (
     REPO / "plugins" / "job-kit" / "lib",
@@ -121,12 +123,16 @@ _TIME_KEYS = frozenset({
 
 
 def scrub_json(value: Any) -> Any:
-    """``value`` with every wall-clock field replaced by a marker."""
+    """``value`` with every wall-clock field replaced by a marker.
+
+    A claude-cli ``structured_output`` record is put in the final form on both
+    sides (llm-kit delivers a contract natively; the legacy record by prompt).
+    """
     if isinstance(value, dict):
-        return {
+        return claude_contract_to_final({
             k: ("<t>" if (k in _TIME_KEYS or k.endswith("_at")) else scrub_json(v))
             for k, v in value.items()
-        }
+        })
     if isinstance(value, list):
         return [scrub_json(v) for v in value]
     return value

@@ -171,7 +171,11 @@ class TestEngineIntegration:
         with open(os.path.join(data_dir, "config.json"), "w") as f:
             json.dump(v0_config, f)
 
-        result = run_engine(data_dir, home=self._isolated_home(tmp_path))
+        # Minimal root: the migration runs before any self_setup probing, so the
+        # full bootstrap root's tool probes only add time.
+        fake_root = self._make_minimal_root(tmp_path)
+        result = run_engine(data_dir, plugin_root=fake_root,
+                            home=self._isolated_home(tmp_path))
         assert result.returncode == 0
 
         # Config should now be current version

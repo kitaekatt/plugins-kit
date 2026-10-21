@@ -66,7 +66,7 @@ from unittest import mock
 
 import pytest
 
-from final_wording import to_final
+from final_wording import claude_contract_to_final, to_final
 
 _REPO = Path(__file__).resolve().parents[2]
 _LEGACY_LIB = _REPO / "plugins" / "llm-scripting-kit" / "lib"
@@ -137,6 +137,17 @@ def _text(value: str) -> str:
     return to_final(value)
 
 
+def _drop_setting_sources(items: list) -> list:
+    """``items`` without the adjacent ``--setting-sources`` ``""`` argv pair that llm-kit's
+    claude-cli text-only mode adds (``final_wording.RENAMES`` covers the emitted text)."""
+    out: list = []
+    for item in items:
+        out.append(item)
+        if item == "" and len(out) >= 2 and out[-2] == "--setting-sources":
+            del out[-2:]
+    return out
+
+
 class _Out(tuple):
     """An ``outcome`` result: already normalised, so ``norm`` passes it through."""
 
@@ -148,6 +159,7 @@ def norm(value):
     if isinstance(value, BaseException):
         return _exc(value)
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        value = claude_contract_to_final(value)  # llm-kit delivers a claude contract natively
         out = {"__type__": type(value).__name__}
         for f in dataclasses.fields(value):
             item = getattr(value, f.name)
@@ -156,7 +168,7 @@ def norm(value):
     if isinstance(value, Mapping):
         return ("map", type(value).__name__, [(norm(k), norm(v)) for k, v in value.items()])
     if isinstance(value, (list, tuple)):
-        return (type(value).__name__, [norm(v) for v in value])
+        return (type(value).__name__, _drop_setting_sources([norm(v) for v in value]))
     if isinstance(value, (set, frozenset)):
         return (type(value).__name__, sorted((norm(v) for v in value), key=repr))
     if isinstance(value, Path):
@@ -1212,12 +1224,9 @@ def test_claude_cli_request_building(par, tmp_path):
             (json.dumps({"result": "", "api_error_status": 500}), "", 1),
             (json.dumps({"result": "", "api_error_status": 500}), "", 0),
         ], retry_max_attempts=2, retry_cooldown_s=0.0)
-        run("contract_validated", [(_envelope('{"a": 1}'), "", 0)],
-            options=opts(output_contract=_contract(S, "validated-result")))
-        run("contract_violation", [(_envelope("nope"), "", 0)],
-            options=opts(output_contract=_contract(S, "validated-result")))
-        run("contract_native", [(_envelope('{"a": 1}'), "", 0)],
-            options=opts(output_contract=_contract(S, "native-required")))
+        # A schema contract is delivered by prompt on the legacy side and natively
+        # (--json-schema) on the final side by design; the final side is asserted in
+        # test_claude_text_only_settings.py (test_claude_cli_native_contract_*).
         run("contract_text_only", [(_envelope("txt"), "", 0)],
             options=opts(output_contract=_contract(S, "text-only")))
         run("skill_context", [(_envelope(), "", 0)], options=opts(skill_context=_skill(S)))
@@ -1253,8 +1262,6 @@ def test_claude_cli_request_building(par, tmp_path):
     assert result["transient_once"]["res"][0] == "raise"
     assert result["transient_retry_then_ok"]["res"][1]["attempts"] == 2
     assert len(result["transient_exhausted"]["calls"]) == 2
-    assert result["contract_validated"]["res"][0] == "ok"
-    assert result["contract_violation"]["res"][0] == "raise"
     assert result["skill_context"]["res"][0] == "raise"
     assert result["misc"]["runner_default"] is True
     assert result["default_timeout"]["calls"][0]["kwargs"]

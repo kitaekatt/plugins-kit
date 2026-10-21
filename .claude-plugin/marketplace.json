@@ -9,7 +9,7 @@
     {
       "name": "unreal-kit",
       "description": "Unreal Engine automation: Python API for asset inspection and data extraction; MCP server for live Editor authoring (actors, Blueprints, materials, PIE)",
-      "version": "0.17.11",
+      "version": "0.17.12",
       "author": {
         "name": "Christina"
       },
@@ -45,7 +45,7 @@
     {
       "name": "p4-kit",
       "description": "Multi-agent code review for pending Perforce changelists (/p4-code-review) -- auto-shelves, reviews, cleans up.",
-      "version": "0.67.0",
+      "version": "0.67.1",
       "author": {
         "name": "Christina"
       },
@@ -58,7 +58,7 @@
     {
       "name": "git-kit",
       "description": "Multi-agent pre-push code review for git (/git-code-review) with per-finding validation and declined-findings memory.",
-      "version": "0.49.0",
+      "version": "0.49.1",
       "author": {
         "name": "Christina"
       },
@@ -111,7 +111,7 @@
     {
       "name": "llm-scripting-kit",
       "description": "Frozen legacy provider. Use llm-kit for LLM access, credentials, endpoint/model resolution, and completion.",
-      "version": "0.68.0",
+      "version": "0.68.1",
       "author": {
         "name": "Christina"
       },
@@ -150,7 +150,7 @@
     {
       "name": "content-pipeline-kit",
       "description": "Frozen legacy provider. Use llm-kit for the batch content pipeline library, skills, agent, and workflow.",
-      "version": "0.37.0",
+      "version": "0.37.1",
       "author": {
         "name": "Christina"
       },
@@ -176,7 +176,7 @@
     {
       "name": "workflow-kit",
       "description": "Incremental, native-preserving improvements on the native Workflow tool: a declarative .workflow.yaml compiler plus node strategies (deterministic script + OpenRouter model calls) that run as cheap, context-light nodes via a file-passing contract. Experimental.",
-      "version": "0.12.0",
+      "version": "0.12.1",
       "author": {
         "name": "Christina"
       },
@@ -243,7 +243,7 @@
     {
       "name": "llm-kit",
       "description": "LLM access, durable agent jobs and batch content pipelines in one library. Consolidation of llm-scripting-kit, job-kit and content-pipeline-kit.",
-      "version": "0.3.1",
+      "version": "0.3.2",
       "author": {
         "name": "Christina"
       },

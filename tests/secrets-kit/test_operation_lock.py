@@ -402,9 +402,39 @@ def test_actual_data_identity_fault_refuses_before_repo_work(adding, monkeypatch
     assert (identity.st_dev, identity.st_ino, identity.st_mode) == (final.st_dev, final.st_ino, final.st_mode)
 
 
-@pytest.mark.skipif(IS_WINDOWS, reason='fcntl.flock fault injection is POSIX; test_windows_kernel_categories_are_scoped_to_acquisition covers msvcrt')
+def _classified(module, directory, install):
+    """Run the lock call `_acquire` makes against a real guard fd with a faulted kernel call.
+
+    Returns the error the classifier raised, or None when it raised nothing.
+    """
+    descriptor = os.open(directory / 'operation.lock', os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        install()
+        try:module._acquire(descriptor, directory)
+        except module.OperationLockError as error:return error
+        return None
+    finally:os.close(descriptor)
+
+
+@pytest.mark.skipif(IS_WINDOWS, reason='fcntl.flock fault injection is POSIX; test_windows_kernel_categories_classified covers msvcrt')
 @pytest.mark.parametrize('number,busy', [(errno.EACCES, True), (errno.EAGAIN, True), (errno.ENOLCK, False), (errno.ENOSYS, False), (errno.EOPNOTSUPP, False), (errno.EIO, False), (errno.EINTR, False), (errno.EBADF, False)])
+def test_posix_kernel_fault_is_classified_busy_or_setup(tmp_path, monkeypatch, number, busy):
+    """Classifier unit test: only a lock conflict is busy; every other errno is a setup refusal."""
+    module = _lock_module()
+    import fcntl
+    observed = []
+    def fault(fd, operation):
+        observed.append(operation);raise OSError(number, 'dummy kernel fault token')
+    error = _classified(module, tmp_path, lambda: monkeypatch.setattr(fcntl, 'flock', fault))
+    assert observed == [fcntl.LOCK_EX | fcntl.LOCK_NB]
+    assert isinstance(error, module.OperationBusyError) is busy and isinstance(error, module.OperationLockSetupError) is not busy
+    assert ('active secrets operation' in str(error)) is busy and 'dummy kernel fault token' not in str(error)
+
+
+@pytest.mark.skipif(IS_WINDOWS, reason='fcntl.flock fault injection is POSIX; test_windows_kernel_categories_are_scoped_to_acquisition covers msvcrt')
+@pytest.mark.parametrize('number,busy', [(errno.EACCES, True), (errno.EIO, False)])
 def test_scoped_kernel_fault_category_through_actual_command(adding, monkeypatch, capsys, number, busy):
+    """One end-to-end command per category; the errno map is `test_posix_kernel_fault_is_classified_busy_or_setup`."""
     _seed_author(adding);_lock_module()
     import fcntl
     calls = _strict_crypto(adding, monkeypatch);calls.clear()
@@ -515,22 +545,49 @@ def test_controlled_terminal_transport_runs_real_guarded_child(adding, monkeypat
     assert before == after and first['code'] == 0 and peer['failures'] == [] and peer['values']['terminal-owner.txt'] == 'dummy terminal-owner value\n'
 
 
+def _windows_error(number, winerror):
+    error = OSError(number, 'dummy native raw token')
+    if winerror is not None:error.winerror = winerror
+    return error
+
+
+@pytest.mark.parametrize('number,winerror,busy', [
+    (errno.EACCES, 33, True),
+    (errno.EACCES, 5, False),
+    (errno.EACCES, None, True),
+    (errno.EAGAIN, None, True),
+    (errno.EDEADLK, None, True),
+    (errno.ENOSYS, 50, False),
+    (errno.EINTR, None, False),
+])
+def test_windows_kernel_categories_classified(tmp_path, monkeypatch, number, winerror, busy):
+    """Classifier unit test over the msvcrt lock call; a native code outranks the errno."""
+    module = _lock_module()
+    observed = []
+    error = _windows_error(number, winerror)
+    def locking(fd, mode, size):
+        observed.append((mode, size, os.lseek(fd, 0, os.SEEK_CUR)))
+        if mode == 2:raise error
+    def install():
+        monkeypatch.setitem(sys.modules, 'msvcrt', SimpleNamespace(LK_NBLCK=2, LK_UNLCK=0, locking=locking))
+        monkeypatch.setattr(module, 'IS_WINDOWS', True)
+    raised = _classified(module, tmp_path, install)
+    assert observed == [(2, 1, 0)]
+    assert isinstance(raised, module.OperationBusyError) is busy and isinstance(raised, module.OperationLockSetupError) is not busy
+    assert ('active secrets operation' in str(raised)) is busy and 'dummy native raw token' not in str(raised)
+
+
 @pytest.mark.parametrize('fault,number,winerror,busy', [
     ('locking', errno.EACCES, 33, True),
     ('locking', errno.EACCES, 5, False),
-    ('locking', errno.EACCES, None, True),
-    ('locking', errno.EAGAIN, None, True),
-    ('locking', errno.EDEADLK, None, True),
-    ('locking', errno.ENOSYS, 50, False),
-    ('locking', errno.EINTR, None, False),
     ('seek', errno.EACCES, 5, False),
 ])
 def test_windows_kernel_categories_are_scoped_to_acquisition(adding, monkeypatch, capsys, fault, number, winerror, busy):
+    """One end-to-end command per category; the errno map is `test_windows_kernel_categories_classified`."""
     _seed_author(adding);module = _lock_module()
     calls = _strict_crypto(adding, monkeypatch);calls.clear()
     observed = []
-    error = OSError(number, 'dummy native raw token')
-    if winerror is not None:error.winerror = winerror
+    error = _windows_error(number, winerror)
     def locking(fd, mode, size):
         observed.append((mode, size, os.lseek(fd, 0, os.SEEK_CUR)))
         if mode == 2:raise error

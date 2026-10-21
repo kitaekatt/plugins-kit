@@ -4,6 +4,7 @@ import json
 import os
 import stat
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -12,7 +13,46 @@ import pytest
 from secrets_kit import SecretsError, agefile, perms
 from secrets_kit import converge as convergence
 from secrets_kit.state import State
+from sk_testlib import copy_git_tree, replace_git_tree
 from test_init import _load_cli, _seeding_template, seeding  # noqa: F401
+
+
+@pytest.fixture(scope='session')
+def _initialized_template(git_template, _seeding_template):
+    """The `seeding` tree after a real `init`, built once per process.
+
+    Same wiring as the `seeding` fixture (fixed keygen and wrap stand-ins), so
+    the state is what the former per-test `seeding.cli.main(['init'])` left.
+    """
+    def build(target):
+        tree = copy_git_tree(_seeding_template, target / 'seeding')
+        config = target / 'secrets.json'
+        config.write_text(json.dumps({'repo': str(tree / 'remote.git'), 'machines': {'testbox': {'profiles': []}}}), encoding='utf-8')
+        previous = sys.modules.get('secrets_kit_cli')
+        try:
+            with pytest.MonkeyPatch.context() as patch:
+                cli = _load_cli()
+                patch.setattr(cli, 'CONFIG_PATH', config)
+                patch.setattr(cli, 'DATA_DIR', tree / 'data')
+                patch.setattr('secrets_kit.manifest.resolve_host', lambda: ['testbox'])
+                patch.setattr(agefile, 'keygen', lambda: ('AGE-SECRET-KEY-NEW', 'age1newrecipient'))
+                def wrap_identity(identity_text, out_path):
+                    Path(out_path).write_text('-----BEGIN AGE ENCRYPTED FILE-----\nZmFrZQ==\n-----END AGE ENCRYPTED FILE-----\n', encoding='utf-8')
+                    return 0
+                patch.setattr(agefile, 'wrap_identity', wrap_identity)
+                assert cli.main(['init']) == 0
+        finally:
+            if previous is None:
+                sys.modules.pop('secrets_kit_cli', None)
+            else:
+                sys.modules['secrets_kit_cli'] = previous
+    return git_template('private-output-initialized', build) / 'seeding'
+
+
+def _initialize(seeding, template):
+    """Put `seeding` in the state a real `init` leaves it; call before patching."""
+    replace_git_tree(template, seeding.data_dir.parent)
+    assert seeding.identity.read_bytes() == b'AGE-SECRET-KEY-NEW'
 
 
 @pytest.fixture
@@ -155,7 +195,7 @@ def test_actual_converge_protects_destination_and_state_then_skips_crypto(fleet,
 
 @pytest.mark.parametrize('operation', ['init', 'rotate-identity'])
 @pytest.mark.parametrize('windows', [False, True])
-def test_real_authoring_cache_protects_before_bytes_and_retains_order(seeding, monkeypatch, operation, windows):
+def test_real_authoring_cache_protects_before_bytes_and_retains_order(seeding, _initialized_template, monkeypatch, operation, windows):
     """Both identity-writing verbs publish first and cache the identity after.
 
     Rotation is held to the same order as seeding: the cache names the key
@@ -163,7 +203,7 @@ def test_real_authoring_cache_protects_before_bytes_and_retains_order(seeding, m
     justifies it is what leaves a machine reading a fleet that never rotated.
     """
     if operation == 'rotate-identity':
-        assert seeding.cli.main(['init']) == 0
+        _initialize(seeding, _initialized_template)
         seeding.identity.write_text('old dummy identity', encoding='utf-8')
         # A fixed keygen re-derives the seeded manifest byte for byte, so the
         # rotation would have nothing to publish and prove nothing here.
@@ -247,8 +287,8 @@ def test_actual_unwrap_protects_stdout_and_preserves_old_slots(private_root, mon
 
 
 @pytest.mark.parametrize('existing', [False, True])
-def test_actual_unlock_failed_child_keeps_prior_cache(seeding, monkeypatch, existing, capsys):
-    assert seeding.cli.main(['init']) == 0
+def test_actual_unlock_failed_child_keeps_prior_cache(seeding, _initialized_template, monkeypatch, existing, capsys):
+    _initialize(seeding, _initialized_template)
     if existing:
         seeding.identity.write_bytes(b'old cached dummy key')
     else:
@@ -538,9 +578,9 @@ def test_actual_converge_selective_writer_fault_preserves_prior_record(fleet, mo
 
 @pytest.mark.parametrize('operation', ['init', 'rotate-identity'])
 @pytest.mark.parametrize('fault', ['protection', 'replace'])
-def test_actual_authoring_cache_fault_preserves_old_cache_and_prior_effect_order(seeding, monkeypatch, operation, fault):
+def test_actual_authoring_cache_fault_preserves_old_cache_and_prior_effect_order(seeding, _initialized_template, monkeypatch, operation, fault):
     if operation == 'rotate-identity':
-        assert seeding.cli.main(['init']) == 0
+        _initialize(seeding, _initialized_template)
         monkeypatch.setattr(agefile, 'keygen', lambda: ('AGE-SECRET-KEY-ROTATED', 'age1rotatedrecipient'))
     seeding.identity.write_bytes(b'old dummy cache')
     publications = []
@@ -615,8 +655,8 @@ def test_actual_unwrap_zero_empty_output_remains_success(private_root, monkeypat
     assert target.read_bytes() == b''
 
 
-def test_actual_unlock_success_uses_protected_child_stdout(seeding, monkeypatch):
-    assert seeding.cli.main(['init']) == 0
+def test_actual_unlock_success_uses_protected_child_stdout(seeding, _initialized_template, monkeypatch):
+    _initialize(seeding, _initialized_template)
     events = _observe_private_bytes(monkeypatch, [seeding.identity])
     _dummy_unwrap(monkeypatch)
     assert seeding.cli.main(['unlock']) == 0
@@ -625,8 +665,8 @@ def test_actual_unlock_success_uses_protected_child_stdout(seeding, monkeypatch)
 
 
 @pytest.mark.parametrize('fault', ['protection', 'replace'])
-def test_actual_unlock_private_file_fault_reports_cache_operation(seeding, monkeypatch, fault, capsys):
-    assert seeding.cli.main(['init']) == 0
+def test_actual_unlock_private_file_fault_reports_cache_operation(seeding, _initialized_template, monkeypatch, fault, capsys):
+    _initialize(seeding, _initialized_template)
     seeding.identity.write_bytes(b'old dummy cache')
     calls = _dummy_unwrap(monkeypatch)
     real_tighten = perms.tighten

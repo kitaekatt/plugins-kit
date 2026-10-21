@@ -65,7 +65,7 @@ from typing import Any, Callable, Mapping, Optional
 
 import pytest
 
-from final_wording import floors_in_text_to_final, to_final
+from final_wording import claude_contract_deep, floors_in_text_to_final, to_final
 
 _REPO = Path(__file__).resolve().parents[2]
 _LEGACY_PATHS = [
@@ -286,6 +286,18 @@ def render_events(store: Any, run_id: str) -> list[str]:
         json.dumps(event, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
         for event in store.list_events(run_id)
     ]
+
+
+def _in_final_wording(value: Any) -> Any:
+    """``value`` with every string passed through ``final_wording.to_final``."""
+    value = claude_contract_deep(value)
+    if isinstance(value, str):
+        return to_final(value)
+    if isinstance(value, dict):
+        return {key: _in_final_wording(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(_in_final_wording(item) for item in value)
+    return value
 
 
 def first_difference(a: Any, b: Any, path: str = "$") -> Optional[str]:
@@ -2116,8 +2128,9 @@ class TestFactorySeamParity:
     @pytest.mark.parametrize("name", sorted(SEAM_SELECTIONS))
     def test_selections_agree_and_each_candidate_is_built_at_most_once(self, sides, hermetic, tmp_path, name):
         legacy, final = _both(sides, tmp_path, lambda side, base: _seam_select(side, base, SEAM_SELECTIONS[name]))
-        assert first_difference(final["outcome"], legacy["outcome"]) is None, first_difference(
-            final["outcome"], legacy["outcome"]
+        legacy_outcome = _in_final_wording(legacy["outcome"])
+        assert first_difference(final["outcome"], legacy_outcome) is None, first_difference(
+            final["outcome"], legacy_outcome
         )
         assert set(final["constructions"]) == set(legacy["constructions"])
         assert all(n == 1 for n in final["constructions"].values()), final["constructions"]

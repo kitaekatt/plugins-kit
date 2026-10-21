@@ -10,10 +10,27 @@ import pytest
 
 from secrets_kit import agefile, authoring
 from secrets_kit.manifest import Manifest
-from test_dest_guard import _templates, adding
+from test_dest_guard import _templates, adding, state_template
 from test_init import _seeding_template, seeding
 from sk_testlib import is_owner_only_file
-from test_seed_recovery import _consumer, _snapshot, pending_subject
+from test_seed_recovery import _activate, _consumer, _snapshot, assert_rebinding_is_identity, pending_subject, serve_pending
+from test_sync_view import _configure_machine, _configure_template
+
+
+OPERATIONS = ['add', 'update', 'remove']
+
+
+def _representatives(second_first: bool, *pairs: tuple[str, ...]) -> list[Any]:
+    """The kept (operation, other) pairs of a cross product, under the ids the full product gave them.
+
+    A cross product of operation x fault repeats a mechanism that sits in code
+    all three operations share (`_admit`, `_inspect_recovery`, `_reconcile_recovery`,
+    `_prove_publication`). These tests keep a representative subset; the id of each
+    kept test is unchanged (stacked parametrize joins the decorator nearest the
+    function first), so a kept test is still the same test.
+    """
+    return [pytest.param(operation, other, id=(other + '-' + operation) if second_first else (operation + '-' + other))
+            for operation, other in pairs]
 
 
 @pytest.fixture
@@ -141,8 +158,10 @@ def test_actual_entry_preparation_or_deletion_fault_restores_before_retry(
     assert 'Nothing was published' not in output.err
 
 
-@pytest.mark.parametrize('operation', ['add', 'update', 'remove'])
-@pytest.mark.parametrize('dirty', ['staged-change', 'unstaged-change', 'staged-delete', 'staged-untracking', 'untracked', 'index-lock', 'merge-head', 'rebase-state', 'foreign-active-hook'])
+# Admission is one function (`authoring._admit`) behind every verb; what it refuses is
+# pinned state by state in test_seed_recovery.test_admission_refuses_every_kind_of_foreign_work.
+# One end-to-end test per verb pins that the verb reaches it before any sync or crypto.
+@pytest.mark.parametrize('operation,dirty', _representatives(True, ('add', 'untracked'), ('update', 'index-lock'), ('remove', 'staged-change')))
 def test_entry_foreign_work_refuses_before_sync_or_crypto(
     entry_subject: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, operation: str, dirty: str,
 ) -> None:
@@ -183,8 +202,10 @@ def test_entry_foreign_work_refuses_before_sync_or_crypto(
     assert not (subject.data_dir / 'authoring-recovery').exists()
 
 
-@pytest.mark.parametrize('operation', ['add', 'update', 'remove'])
-@pytest.mark.parametrize('corruption', ['version', 'operation', 'phase', 'seed-output', 'null-manifest', 'duplicate-preimage', 'unsupported-path', 'reason', 'tree', 'foreign-artifact', 'modified-preimage'])
+MALFORMED = ['version', 'operation', 'phase', 'seed-output', 'null-manifest', 'duplicate-preimage', 'unsupported-path', 'reason', 'tree', 'foreign-artifact', 'modified-preimage']
+
+
+@pytest.mark.parametrize('operation,corruption', _representatives(True, *[('add', c) for c in MALFORMED], *[(o, c) for o in ('update', 'remove') for c in ('unsupported-path', 'duplicate-preimage', 'modified-preimage')]))
 def test_entry_malformed_private_record_refuses_without_clearing_evidence(
     entry_subject: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, operation: str, corruption: str,
 ) -> None:
@@ -223,7 +244,8 @@ def test_entry_malformed_private_record_refuses_without_clearing_evidence(
 
 
 
-def _pending_entry(subject: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, operation: str) -> dict[str, Any]:
+def _lose_report_entry(subject: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, operation: str) -> dict[str, Any]:
+    """Run `operation` with its push report lost and no proof: the pending-recovery state."""
     from test_seed_recovery import _lose_push_report
     with monkeypatch.context() as controlled:
         observations = _lose_push_report(subject, controlled, proof_failure=True)
@@ -232,8 +254,32 @@ def _pending_entry(subject: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, op
     return json.loads((subject.data_dir / 'authoring-recovery/marker.json').read_bytes())
 
 
-@pytest.mark.parametrize('operation', ['add', 'update', 'remove'])
-@pytest.mark.parametrize('change', ['bytes', 'mode', 'appearance', 'disappearance'])
+def _pending_template(operation: str, cached: bool) -> Path:
+    """The tree `_lose_report_entry` leaves, built once per process per operation.
+
+    `cached` says whether the identity cache existed when the operation ran;
+    the record keeps that receipt, so a locked machine is a different state.
+    """
+    def populate(subject: SimpleNamespace, patch: pytest.MonkeyPatch) -> None:
+        subject.force = True;subject.config_path = subject.cli.CONFIG_PATH
+        _configure_machine(subject)
+        _activate(subject, patch)
+        if not cached:
+            (subject.data_dir / 'identity.txt').unlink()
+        source = subject.data_dir.parent / 'replacement dummy source.txt'
+        source.write_bytes(b'dummy replacement entry value\n')
+        subject.entry_source = source
+        _lose_report_entry(subject, patch, operation)
+        assert_rebinding_is_identity(subject.data_dir)
+    return state_template('entry-pending-%s-%s' % (operation, 'cached' if cached else 'locked'), populate, after=_configure_template())
+
+
+def _pending_entry(subject: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, operation: str, *, cached: bool = True) -> dict[str, Any]:
+    """Put the subject in the pending-recovery state of `operation`: a served copy of a template."""
+    return serve_pending(_pending_template(operation, cached), subject)
+
+
+@pytest.mark.parametrize('operation,change', _representatives(True, *[('add', c) for c in ('bytes', 'mode', 'appearance', 'disappearance')], ('remove', 'bytes')))
 def test_entry_private_reconciliation_requires_exact_entry_cache(
     entry_subject: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, operation: str, change: str,
 ) -> None:
@@ -242,7 +288,7 @@ def test_entry_private_reconciliation_requires_exact_entry_cache(
     cache = subject.data_dir / 'identity.txt'
     original = cache.read_bytes(), cache.stat().st_mode & 0o777
     if change == 'appearance':cache.unlink()
-    _pending_entry(subject, monkeypatch, operation)
+    _pending_entry(subject, monkeypatch, operation, cached=change != 'appearance')
     if change in ['bytes', 'appearance']:cache.write_bytes(b'dummy incompatible cache\n');cache.chmod(0o600)
     elif change == 'mode':cache.chmod(0o400)
     else:cache.unlink()
@@ -346,8 +392,7 @@ def test_entry_staging_and_commit_faults_have_exact_tree_and_retry(
     assert not (subject.data_dir / 'authoring-recovery').exists()
 
 
-@pytest.mark.parametrize('operation', ['add', 'update', 'remove'])
-@pytest.mark.parametrize('fault', ['artifact-unlink', 'marker-remove', 'directory-remove'])
+@pytest.mark.parametrize('operation,fault', _representatives(True, *[('add', c) for c in ('artifact-unlink', 'marker-remove', 'directory-remove')]))
 def test_entry_published_cleanup_fault_is_privately_resumable_without_push(
     entry_subject: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, operation: str, fault: str,
 ) -> None:
@@ -523,8 +568,7 @@ def test_entry_literal_blob_filename_is_preserved_under_inherited_pathspec_optio
     assert peer['values']['third.txt'] == b'dummy replacement entry value\n'
 
 
-@pytest.mark.parametrize('operation', ['add', 'update', 'remove'])
-@pytest.mark.parametrize('slot', ['directory', 'symlink', 'hardlink'])
+@pytest.mark.parametrize('operation,slot', _representatives(True, *[('add', c) for c in ('directory', 'symlink', 'hardlink')]))
 def test_entry_unsupported_cache_slot_refuses_reconciliation_without_effects(
     entry_subject: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, operation: str, slot: str,
 ) -> None:
@@ -608,8 +652,7 @@ def test_entry_fast_forward_restoration_cas_failure_retains_then_resumes(
 
 
 
-@pytest.mark.parametrize('selected', ['blobs/nested/dummy.age', 'blobs/../dummy.age', '/dummy-absolute.age', './blobs/dummy.age', 'blobs//dummy.age', 'blobs/./dummy.age'])
-@pytest.mark.parametrize('operation', ['update', 'remove'])
+@pytest.mark.parametrize('operation,selected', _representatives(False, *[('update', c) for c in ('blobs/nested/dummy.age', 'blobs/../dummy.age', '/dummy-absolute.age', './blobs/dummy.age', 'blobs//dummy.age', 'blobs/./dummy.age')]))
 def test_entry_unsupported_selected_path_refuses_before_journal_or_crypto(
     entry_subject: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, selected: str, operation: str,
 ) -> None:
@@ -716,8 +759,7 @@ def test_entry_origin_change_is_rejected_before_push(
     assert not (subject.data_dir / 'authoring-recovery').exists()
 
 
-@pytest.mark.parametrize('operation', ['add', 'update', 'remove'])
-@pytest.mark.parametrize('fault', ['fetch-no-update', 'ancestry-query-failure', 'ancestry-malformed-output', 'non-ancestry'])
+@pytest.mark.parametrize('operation,fault', _representatives(True, *[('add', c) for c in ('fetch-no-update', 'ancestry-query-failure', 'ancestry-malformed-output', 'non-ancestry')], ('update', 'non-ancestry'), ('remove', 'fetch-no-update')))
 def test_entry_negative_or_stale_publication_proof_retains_evidence(
     entry_subject: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, operation: str, fault: str,
 ) -> None:

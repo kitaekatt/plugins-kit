@@ -138,7 +138,7 @@ def _skill_context_param(emits: "str | None" = None) -> ParamCapability:
 #: tests/llm-scripting-kit/test_completion_contract_conformance.py.
 _OPENROUTER_CONTRACT_EMITS = "messages[system] schema instruction"
 _CODEX_CONTRACT_EMITS = "--output-schema <temp schema file>"
-_CLAUDE_CONTRACT_EMITS = "--system-prompt schema instruction"
+_CLAUDE_CONTRACT_EMITS = "--json-schema <canonical schema json>"
 _OPENCODE_CONTRACT_EMITS = "stdin schema instruction"
 
 
@@ -268,9 +268,11 @@ OPENROUTER_CAPABILITIES = Capabilities(
 #
 # ClaudeCliBackend.complete builds argv directly. --effort and --disallowedTools
 # are conditional, and text-only mode swaps --permission-mode bypassPermissions
-# --allowedTools for _CLAUDE_TEXT_ONLY_ARGS. No caller-schema flag is emitted: the
-# --output-format json flag selects claude's TRANSPORT envelope, which the
-# adapter parses to reach data["result"], and is not a structured-output channel.
+# --allowedTools for _CLAUDE_TEXT_ONLY_ARGS. A caller's output contract is passed
+# natively as --json-schema and read from the envelope's structured_output field.
+# The --output-format json flag itself selects claude's TRANSPORT envelope, which
+# the adapter parses to reach data["result"], and is not a structured-output
+# channel.
 
 #: The claude-cli flag each ``system_prompt_mode`` emits, consumed by
 #: ClaudeCliBackend to BUILD the argv and by the record below to ADVERTISE the
@@ -300,6 +302,13 @@ _CLAUDE_SYSTEM_PROMPT_FLAGS = {
 #: asked to list every tool it could call and to run ``echo`` if it had a
 #: shell, the model answered ``NO_TOOLS`` in one turn with no permission
 #: denial.
+#:
+#: ``--setting-sources ""`` loads no user, project or local settings and no
+#: CLAUDE.md memory. Without it every call injected the user and project
+#: CLAUDE.md found from the cwd, which defeated prompt caching: measured
+#: 2026-10-21 (17 sonnet calls, cwd inside a repo) ~30.6k cache-write tokens
+#: per call against 571 with the flag, same 3,094-token system prompt read.
+#: ``--bare`` is not an option: it ignores OAuth login.
 _CLAUDE_TEXT_ONLY_ARGS = (
     "--tools",
     "",
@@ -307,6 +316,8 @@ _CLAUDE_TEXT_ONLY_ARGS = (
     "--mcp-config",
     '{"mcpServers":{}}',
     "--disable-slash-commands",
+    "--setting-sources",
+    "",
     "--permission-mode",
     "dontAsk",
 )
@@ -438,7 +449,8 @@ CLAUDE_CAPABILITIES = Capabilities(
             parameter=TEXT_ONLY_PARAMETER,
             when_value="true",
             note=(
-                "no tools, no MCP servers, no skills, and no permission "
+                "no tools, no MCP servers, no skills, no settings or "
+                "CLAUDE.md memory, and no permission "
                 "bypass. A guarantees requirement admits claude-cli through "
                 "this control and declaration.run arms it, so the caller "
                 "passes no flag. Measured 2026-10-07 on Claude Code 2.1.293: "
@@ -455,12 +467,11 @@ CLAUDE_CAPABILITIES = Capabilities(
             "adapter parses to reach data['result']; it is not a caller schema"
         ),
         # The output-contract path is separate from the transport envelope:
-        # the exact schema instruction is appended to the system prompt sent
-        # through the system-prompt flag and the answer is validated at the
-        # seam. No native schema flag exists here, so native-required is not
-        # listed.
-        policies=(POLICY_VALIDATED_RESULT, POLICY_TEXT_ONLY),
-        contract_delivery=DELIVERY_PROMPT,
+        # the canonical schema is passed inline as --json-schema, the CLI
+        # returns the answer in the envelope's structured_output field, and
+        # the answer is still validated at the seam (finalize_contract).
+        policies=(POLICY_NATIVE_REQUIRED, POLICY_VALIDATED_RESULT, POLICY_TEXT_ONLY),
+        contract_delivery=DELIVERY_NATIVE,
         contract_emits=_CLAUDE_CONTRACT_EMITS,
         contract_schema_class=SCHEMA_CLASS_SUBSET,
     ),

@@ -13,6 +13,7 @@ import urllib.parse
 import psutil
 import pytest
 from dashboard_support import FakeEdge, Running, dashboard_world, make_task, runner_environment
+from rig_support import processes_running, wait_for
 
 from task_system.dashboard import proctree, runtime, scheduler
 from task_system.dashboard.inventory import project_id_for
@@ -94,8 +95,15 @@ class AuthoringRig:
         return proc
 
     def freeze_scheduler(self) -> None:
-        """Stop the background tick loop: from here a run starts only when the test calls ``tick()``."""
-        self.srv.scheduler.stop()
+        """Stop the background tick loop: from here a run starts only when the test calls ``tick()``.
+
+        The server thread starts the scheduler thread, so a test that reaches here straight after building the rig
+        may find ``Scheduler.start`` has only assigned ``_thread``. ``join`` on an unstarted thread raises, so wait
+        until the thread is alive, as ``rig_support.freeze`` does.
+        """
+        sched = self.srv.scheduler
+        assert wait_for(lambda: sched._thread is not None and sched._thread.is_alive(), 10), "the scheduler thread never started"
+        sched.stop()
 
     def end_session(self, proc: subprocess.Popen) -> None:
         proc.kill()
@@ -132,6 +140,13 @@ def teardown_rig(rig: AuthoringRig) -> None:
             proc.kill()
         proc.wait()
     rig.srv.stop()
+    # Killing the runner leaves the job command it started (a stand-in model, say) running as an orphan:
+    # nothing a test started outlives it, as rig_support.Rig.close does.
+    for proc in processes_running(str(rig.tmp_path)):
+        try:
+            proc.kill()
+        except psutil.NoSuchProcess:
+            pass
 
 
 @pytest.fixture

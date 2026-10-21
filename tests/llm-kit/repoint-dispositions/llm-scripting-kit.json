@@ -154,7 +154,8 @@
       "disposition": "rewrite",
       "reason": "Re-pointed at llm-kit's final module names: import statements.",
       "rewrite_classes": [
-        "import"
+        "import",
+        "text-edit"
       ],
       "collection_count": 90,
       "baseline_failures": []
@@ -196,27 +197,68 @@
       "disposition": "rewrite",
       "reason": "Re-pointed at llm-kit's final module names: import statements.",
       "rewrite_classes": [
+        "declared-skip",
         "import"
       ],
       "collection_count": 9,
-      "baseline_failures": []
+      "baseline_failures": [],
+      "declared_differences": {
+        "llm-scripting-kit/test_completion_contract_adapters.py::test_claude_refuses_any_contract_before_runner_call[native-required]": {
+          "mirror_status": "skipped",
+          "reason": "llm-kit lists native-required for claude-cli (delivered by --json-schema), so the call is no longer refused; the acceptance is asserted in tests/llm-kit/test_claude_text_only_settings.py."
+        }
+      }
     },
     {
       "path": "tests/llm-scripting-kit/test_completion_contract_conformance.py",
       "disposition": "rewrite",
       "reason": "Re-pointed at llm-kit's final module names: import statements.",
       "rewrite_classes": [
-        "import"
+        "import",
+        "text-edit"
       ],
       "collection_count": 38,
-      "baseline_failures": []
+      "baseline_failures": [],
+      "declared_differences": {
+        "llm-scripting-kit/test_completion_contract_conformance.py::test_conformance[claude-cli-native-required-unsatisfiable]": {
+          "mirror_status": "skipped",
+          "injected": false,
+          "reason": "llm-kit's claude-cli delivers an output contract natively (--json-schema; llm-kit 0.3.2) and lists native-required, so the case ids and the native-required refusal differ from the frozen legacy record, which delivers by prompt. Legacy case only: claude-cli no longer refuses native-required."
+        },
+        "llm-scripting-kit/test_completion_contract_conformance.py::test_conformance[claude-cli-prompt-exact]": {
+          "mirror_status": "skipped",
+          "injected": false,
+          "reason": "llm-kit's claude-cli delivers an output contract natively (--json-schema; llm-kit 0.3.2) and lists native-required, so the case ids and the native-required refusal differ from the frozen legacy record, which delivers by prompt. Legacy case only: the mirror asserts the --json-schema delivery as claude-cli-schema-file-exact."
+        },
+        "llm-scripting-kit/test_completion_contract_conformance.py::test_conformance[claude-cli-schema-file-exact]": {
+          "mirror_status": "skipped",
+          "injected": false,
+          "reason": "llm-kit's claude-cli delivers an output contract natively (--json-schema; llm-kit 0.3.2) and lists native-required, so the case ids and the native-required refusal differ from the frozen legacy record, which delivers by prompt. Mirror-only case (runs and passes): the native delivery assertion."
+        },
+        "llm-scripting-kit/test_completion_contract_conformance.py::test_conformance[claude-cli-native-required-valid]": {
+          "mirror_status": "skipped",
+          "injected": false,
+          "reason": "llm-kit's claude-cli delivers an output contract natively (--json-schema; llm-kit 0.3.2) and lists native-required, so the case ids and the native-required refusal differ from the frozen legacy record, which delivers by prompt. Mirror-only case (runs and passes)."
+        },
+        "llm-scripting-kit/test_completion_contract_conformance.py::test_conformance[claude-cli-native-required-mismatch]": {
+          "mirror_status": "skipped",
+          "injected": false,
+          "reason": "llm-kit's claude-cli delivers an output contract natively (--json-schema; llm-kit 0.3.2) and lists native-required, so the case ids and the native-required refusal differ from the frozen legacy record, which delivers by prompt. Mirror-only case (runs and passes)."
+        },
+        "llm-scripting-kit/test_completion_contract_conformance.py::test_conformance[claude-cli-native-required-unparseable]": {
+          "mirror_status": "skipped",
+          "injected": false,
+          "reason": "llm-kit's claude-cli delivers an output contract natively (--json-schema; llm-kit 0.3.2) and lists native-required, so the case ids and the native-required refusal differ from the frozen legacy record, which delivers by prompt. Mirror-only case (runs and passes)."
+        }
+      }
     },
     {
       "path": "tests/llm-scripting-kit/test_completion_contract_strict.py",
       "disposition": "rewrite",
       "reason": "Re-pointed at llm-kit's final module names: import statements.",
       "rewrite_classes": [
-        "import"
+        "import",
+        "text-edit"
       ],
       "collection_count": 21,
       "baseline_failures": []
@@ -299,7 +341,8 @@
       "disposition": "rewrite",
       "reason": "Re-pointed at llm-kit's final module names: import statements.",
       "rewrite_classes": [
-        "import"
+        "import",
+        "text-edit"
       ],
       "collection_count": 22,
       "baseline_failures": []
@@ -692,7 +735,8 @@
       "disposition": "rewrite",
       "reason": "Re-pointed at llm-kit's final module names: import statements.",
       "rewrite_classes": [
-        "import"
+        "import",
+        "text-edit"
       ],
       "collection_count": 8,
       "baseline_failures": []

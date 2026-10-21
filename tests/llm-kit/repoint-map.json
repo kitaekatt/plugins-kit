@@ -101,6 +101,42 @@
       "reason": "The validator floor is the first llm-kit release that ships schema.json_schema (final_wording.FLOORS)."
     },
     {
+      "file": "tests/llm-scripting-kit/test_text_only_mode.py",
+      "old": "        \"--disable-slash-commands --permission-mode dontAsk\"\n",
+      "new": "        \"--disable-slash-commands --setting-sources \\\"\\\" --permission-mode dontAsk\"\n",
+      "reason": "llm-kit's claude-cli text-only argv also carries --setting-sources \"\" (no settings or CLAUDE.md memory, which defeated prompt caching; measured 2026-10-21); the frozen legacy argv does not."
+    },
+    {
+      "file": "tests/llm-scripting-kit/test_completion_contract_conformance.py",
+      "old": "    \"claude-cli\": (\"validated-result\", \"text-only\"),\n",
+      "new": "    \"claude-cli\": (\"native-required\", \"validated-result\", \"text-only\"),\n",
+      "reason": "llm-kit's claude-cli delivers an output contract natively (--json-schema, answer read from the envelope's structured_output; llm-kit 0.3.2) and lists native-required; the frozen legacy record delivers by prompt."
+    },
+    {
+      "file": "tests/llm-scripting-kit/test_completion_contract_conformance.py",
+      "old": "    if case.kind == \"schema-file-exact\":\n        schema_policies = sorted(set(structured.policies) & set(SCHEMA_POLICIES))\n        assert schema_policies\n",
+      "new": "    if case.kind == \"schema-file-exact\":\n        schema_policies = sorted(set(structured.policies) & set(SCHEMA_POLICIES))\n        assert schema_policies\n        if adapter == \"claude-cli\":\n            # Native delivery through --json-schema: the canonical schema, inline;\n            # the system prompt carries no instruction.\n            for policy in schema_policies:\n                _, rec = _run(adapter, tmp_path, monkeypatch, policy=policy)\n                assert rec.calls == 1\n                assert rec.argv[rec.argv.index(\"--json-schema\") + 1] == canonical_schema_json(_contract(policy))\n                assert rec.argv[rec.argv.index(\"--system-prompt\") + 1] == SYSTEM\n                assert rec.stdin == USER\n                assert SCHEMA_INSTRUCTION_PREFIX not in rec.text()\n            return\n",
+      "reason": "llm-kit's claude-cli delivers an output contract natively (--json-schema, answer read from the envelope's structured_output; llm-kit 0.3.2) and lists native-required; the frozen legacy record delivers by prompt. The native case asserts the --json-schema value instead of a schema file."
+    },
+    {
+      "file": "tests/llm-scripting-kit/test_completion_contract_strict.py",
+      "old": "    # A native-required non-strict contract has no eligible adapter at all.\n    native_loose = OutputContract(\"t.strict\", POLICY_NATIVE_REQUIRED, NON_STRICT)\n    assert not any(\n        match_capabilities(cap, contract_requirements(native_loose))\n        for cap in ADAPTER_CAPABILITIES.values()\n    )\n",
+      "new": "    # A native-required non-strict contract is eligible only for claude-cli.\n    native_loose = OutputContract(\"t.strict\", POLICY_NATIVE_REQUIRED, NON_STRICT)\n    assert [\n        name for name, cap in ADAPTER_CAPABILITIES.items()\n        if match_capabilities(cap, contract_requirements(native_loose))\n    ] == [\"claude-cli\"]\n",
+      "reason": "llm-kit's claude-cli delivers an output contract natively (--json-schema, answer read from the envelope's structured_output; llm-kit 0.3.2) and lists native-required; the frozen legacy record delivers by prompt."
+    },
+    {
+      "file": "tests/llm-scripting-kit/test_completion_skill_context_adapters.py",
+      "old": "    contract = OutputContract(\"t.skill\", POLICY_NATIVE_REQUIRED, _SCHEMA)\n    with pytest.raises(OutputContractUnsatisfiable):\n        backend.complete(\n            \"sys\", \"usr\", model=\"m\",\n            options=BackendOptions(skill_context=context, output_contract=contract),\n        )\n",
+      "new": "    contract = OutputContract(\"t.skill\", POLICY_NATIVE_REQUIRED, _SCHEMA)\n    with pytest.raises(OutputContractUnsatisfiable):\n        backend.complete(\n            \"sys\", \"usr\", model=\"m\",\n            options=BackendOptions(\n                skill_context=context, output_contract=contract,\n                extras={\"response_format\": {}},\n            ),\n        )\n",
+      "reason": "llm-kit's claude-cli delivers an output contract natively (--json-schema, answer read from the envelope's structured_output; llm-kit 0.3.2) and lists native-required; the frozen legacy record delivers by prompt. The contract refusal is provoked with a legacy schema extra instead of the policy."
+    },
+    {
+      "file": "tests/llm-scripting-kit/test_completion_capabilities.py",
+      "old": "    \"claude-cli\": (\n        (\"validated-result\", \"text-only\"),\n        \"prompt\",\n        \"--system-prompt schema instruction\",\n    ),\n",
+      "new": "    \"claude-cli\": (\n        (\"native-required\", \"validated-result\", \"text-only\"),\n        \"native\",\n        \"--json-schema <canonical schema json>\",\n    ),\n",
+      "reason": "llm-kit's claude-cli delivers an output contract natively (--json-schema, answer read from the envelope's structured_output; llm-kit 0.3.2) and lists native-required; the frozen legacy record delivers by prompt."
+    },
+    {
       "file": "tests/llm-scripting-kit/test_cli_json_repair.py",
       "old": "        monkeypatch.setattr(cli, name, forbidden)",
       "new": "        monkeypatch.setattr(cli, name, forbidden, raising=False)",

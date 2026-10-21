@@ -6,6 +6,11 @@ command line for iterating on one suite:
     uv run --extra dev python tests/llm-kit/repoint.py compare job-kit
     uv run --extra dev python tests/llm-kit/repoint.py mirror-only job-kit
 
+``compare`` is the full differential (legacy run versus mirror run) and is the
+on-demand audit. The test suite runs the cheaper mirror-only differential
+(``compare_mirror_only``): the legacy suite already runs in the main suite, so
+the test collects the legacy node ids instead of running the legacy tests again.
+
 The legacy suite runs from ``tests/<suite>`` and the re-pointed suite from the
 ignored mirror ``tmp/<suite>``, each in its own pytest process. The mirror
 process starts with the mirror directory on PYTHONPATH so that the generated
@@ -231,6 +236,19 @@ def declared_differences(ledger: Mapping) -> dict[str, dict]:
     return out
 
 
+class _Declared(dict):
+    """Declared differences are keyed by node id without parameters, or by the
+    exact parametrized node id when only one parameter differs."""
+
+    def __contains__(self, node):
+        return dict.__contains__(self, str(node)) or dict.__contains__(self, str(node).split("[", 1)[0])
+
+    def __getitem__(self, node):
+        if dict.__contains__(self, str(node)):
+            return dict.__getitem__(self, str(node))
+        return dict.__getitem__(self, str(node).split("[", 1)[0])
+
+
 def compare(suite: str, legacy: Mapping[str, Outcome], mirror: Mapping[str, Outcome],
             ledger: Mapping) -> list[str]:
     """Problems found comparing the legacy run with the mirror run (empty when equal)."""
@@ -241,20 +259,7 @@ def compare(suite: str, legacy: Mapping[str, Outcome], mirror: Mapping[str, Outc
         return nodeid.split("::", 1)[0].split("/", 1)[1] in mirrored_files
 
     old = {k: v for k, v in legacy.items() if in_scope(k)}
-    declared_base = declared_differences(ledger)
-
-    class _Declared(dict):
-        """Declared differences are keyed by node id without parameters, or by the
-        exact parametrized node id when only one parameter differs."""
-        def __contains__(self, node):
-            return str(node) in declared_base or declared_base.__contains__(str(node).split("[", 1)[0])
-
-        def __getitem__(self, node):
-            if str(node) in declared_base:
-                return declared_base[str(node)]
-            return declared_base[str(node).split("[", 1)[0]]
-
-    declared = _Declared()
+    declared = _Declared(declared_differences(ledger))
 
     # 1. the collected node ids must be the same set
     missing = sorted(set(old) - set(mirror))
@@ -337,6 +342,136 @@ def compare_suite(suite: str, workdir: Path) -> tuple[list[str], SuiteRun, Suite
             for node in rerun_flaky(suite, run, flaky, workdir, mirror=is_mirror):
                 print(f"flaky node recovered on re-run ({'mirror' if is_mirror else 'legacy'}): {node}", file=sys.stderr)
     return compare(suite, legacy.outcomes, mirror.outcomes, ledger), legacy, mirror
+
+
+# --------------------------------------------------------------------------
+# the mirror-only differential (what the test suite runs)
+# --------------------------------------------------------------------------
+
+# Upper bound on mirrored tests per chunk. A suite's mirror runs as several
+# independent chunks so that xdist can spread them over its workers.
+CHUNK_TESTS = 500
+
+
+def mirror_chunks(ledger: Mapping) -> list[list[str]]:
+    """The ledger's rewrite files split into balanced, deterministic chunks (file names)."""
+    rows = [(r["collection_count"], Path(r["path"]).name)
+            for r in ledger["rows"] if r["disposition"] == "rewrite"]
+    count = max(1, -(-sum(c for c, _ in rows) // CHUNK_TESTS))
+    bins: list[list] = [[0, []] for _ in range(count)]
+    for size, name in sorted(rows, key=lambda r: (-r[0], r[1])):
+        smallest = min(bins, key=lambda b: b[0])
+        smallest[0] += size
+        smallest[1].append(name)
+    return [sorted(b[1]) for b in bins if b[1]]
+
+
+def collect_legacy_ids(suite: str, files: Optional[Iterable[str]] = None) -> list[str]:
+    """Suite-relative node ids the legacy suite collects (all of it, or just ``files``)."""
+    targets = [f"tests/{suite}/{f}" for f in files] if files else [f"tests/{suite}"]
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", *targets, "--collect-only", "-q", "-p", "no:cacheprovider"],
+        cwd=REPO, env=_clean_env({"PYTHONPATH": ""}), capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=600,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"collecting {targets} failed (exit {proc.returncode})\n"
+                           f"{proc.stdout[-3000:]}\n{proc.stderr[-3000:]}")
+    return [normalize_nodeid(line[len("tests/"):])
+            for line in proc.stdout.splitlines() if line.startswith("tests/") and "::" in line]
+
+
+def run_mirror_files(suite: str, files: Iterable[str], workdir: Path, *, tag: str = "mirror") -> SuiteRun:
+    """Run only ``files`` of the mirror in one pytest process."""
+    workdir.mkdir(parents=True, exist_ok=True)
+    junit = workdir / f"{tag}-{suite}.xml"
+    targets = [f"tmp/{suite}/{f}" for f in files]
+    proc = run_pytest(targets[0], junit, mirror=True, extra_args=targets[1:])
+    if not junit.is_file():
+        raise RuntimeError(
+            f"{targets}: pytest produced no junit file (exit {proc.returncode})\n"
+            f"{proc.stdout[-3000:]}\n{proc.stderr[-3000:]}")
+    lines = [l for l in proc.stdout.splitlines() if l.strip()]
+    return SuiteRun(suite, parse_junit(junit, suite), proc.returncode,
+                    lines[-1] if lines else "", "\n".join(lines[-40:]))
+
+
+def run_legacy_files(suite: str, files: Iterable[str], workdir: Path) -> dict[str, Outcome]:
+    """Run only ``files`` of the legacy suite in one pytest process; their outcomes."""
+    workdir.mkdir(parents=True, exist_ok=True)
+    junit = workdir / f"legacy-{suite}.xml"
+    targets = [f"tests/{suite}/{f}" for f in files]
+    proc = run_pytest(targets[0], junit, mirror=False, extra_args=targets[1:])
+    if not junit.is_file():
+        raise RuntimeError(f"{targets}: pytest produced no junit file (exit {proc.returncode})\n"
+                           f"{proc.stdout[-3000:]}\n{proc.stderr[-3000:]}")
+    return parse_junit(junit, suite)
+
+
+def compare_mirror_only(suite: str, files: list[str], legacy_ids: Iterable[str],
+                        mirror: Mapping[str, Outcome], ledger: Mapping, workdir: Path) -> list[str]:
+    """Problems found comparing a mirror run with the legacy node ids (empty when equal).
+
+    The legacy outcomes are not re-run. They are the main suite's business
+    (``tests/<suite>`` runs there), and the ledger records no baseline failure, so
+    a legacy test is expected to pass unless a skip says otherwise:
+
+    * the mirror must collect the same node ids as the legacy originals;
+    * a mirror test that is declared differs as declared, and any other mirror
+      failure or error is a difference;
+    * a mirror skip the ledger does not declare is checked by running the same
+      legacy files, where that test must skip too (a repoint that quietly skips a
+      test the legacy suite runs would otherwise pass as green). The files run
+      together because a skip can depend on what earlier files imported.
+    """
+    problems: list[str] = []
+    if any(row.get("baseline_failures") for row in ledger["rows"]):
+        return [f"{suite}: the ledger records baseline failures, which a mirror-only run cannot "
+                f"compare; run `repoint.py compare {suite}`"]
+    old = set(legacy_ids)
+    declared = _Declared(declared_differences(ledger))
+
+    for n in sorted(old - set(mirror)):
+        if n not in declared:
+            problems.append(f"collected by legacy, absent from the mirror: {n}")
+    for n in sorted(set(mirror) - old):
+        if n not in declared:
+            problems.append(f"collected only by the mirror: {n}")
+
+    undeclared_skips: list[str] = []
+    for node in sorted(old & set(mirror)):
+        b = mirror[node]
+        if node in declared:
+            want = declared[node]
+            if (b.status, b.kind) != (want["mirror_status"], want.get("mirror_kind", "")):
+                problems.append(
+                    f"declared difference no longer holds: {node}: mirror is {b.status}/{b.kind}, "
+                    f"ledger says {want['mirror_status']}/{want.get('mirror_kind', '')}")
+        elif b.status in ("failed", "error"):
+            problems.append(f"mirror {b.status}, legacy passes: {node}\n   mirror: {b}")
+        elif b.status == "skipped":
+            undeclared_skips.append(node)
+
+    if undeclared_skips:
+        legacy = run_legacy_files(suite, files, workdir)
+        for node in undeclared_skips:
+            got = legacy.get(node)
+            if got is None or got.status != "skipped":
+                problems.append(f"skip differs: {node}: mirror skipped, legacy {got.status if got else 'not run'}")
+    return problems
+
+
+def compare_mirror_chunk(suite: str, files: list[str], workdir: Path) -> tuple[list[str], SuiteRun]:
+    """Run one chunk of ``suite``'s mirror and compare it with the legacy node ids of the same files."""
+    load_generator().cmd_mirror(None)
+    ledger = load_ledger(suite)
+    legacy_ids = collect_legacy_ids(suite, files)
+    run = run_mirror_files(suite, files, workdir)
+    flaky = flaky_nodes(ledger)
+    if flaky:
+        for node in rerun_flaky(suite, run, flaky, workdir, mirror=True):
+            print(f"flaky node recovered on re-run (mirror): {node}", file=sys.stderr)
+    return compare_mirror_only(suite, files, legacy_ids, run.outcomes, ledger, workdir), run
 
 
 def _main(argv: list[str]) -> int:

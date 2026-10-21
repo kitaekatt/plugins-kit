@@ -15,6 +15,7 @@ by the architecture and compared byte for byte.
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from typing import NamedTuple
 
@@ -39,6 +40,69 @@ class Rename(NamedTuple):
     final: str
     legacy_src: str = ""
     final_src: str = ""
+
+
+_TEXT_ONLY_EMITS_LEGACY = (
+    '--tools "" --strict-mcp-config --mcp-config {"mcpServers":{}} '
+    "--disable-slash-commands --permission-mode dontAsk"
+)
+_TEXT_ONLY_EMITS_FINAL = (
+    '--tools "" --strict-mcp-config --mcp-config {"mcpServers":{}} '
+    '--disable-slash-commands --setting-sources "" --permission-mode dontAsk'
+)
+_TEXT_ONLY_ARGV_LEGACY_SRC = '"--disable-slash-commands",\n    "--permission-mode",'
+_TEXT_ONLY_ARGV_FINAL_SRC = (
+    '"--disable-slash-commands",\n    "--setting-sources",\n    "",\n    "--permission-mode",'
+)
+
+#: llm-kit's claude-cli delivers an output contract natively (--json-schema, read
+#: from the envelope's structured_output); the frozen legacy record delivers it by
+#: prompt. The advertised fields differ in three places; see claude_contract_to_final.
+CLAUDE_CONTRACT_EMITS_LEGACY = "--system-prompt schema instruction"
+CLAUDE_CONTRACT_EMITS_FINAL = "--json-schema <canonical schema json>"
+CLAUDE_CONTRACT_POLICIES_FINAL = ("native-required", "validated-result", "text-only")
+CLAUDE_CONTRACT_DELIVERY_FINAL = "native"
+
+
+def claude_contract_to_final(value):
+    """A claude-cli ``structured_output`` record, as a dataclass or a dict, in the final form.
+
+    Recognised by its ``contract_emits`` (legacy or final) and idempotent, so a
+    harness may pass both sides through it.
+    """
+    if isinstance(value, dict):
+        if value.get("contract_emits") in (CLAUDE_CONTRACT_EMITS_LEGACY, CLAUDE_CONTRACT_EMITS_FINAL):
+            return {
+                **value,
+                "policies": list(CLAUDE_CONTRACT_POLICIES_FINAL),
+                "contract_delivery": CLAUDE_CONTRACT_DELIVERY_FINAL,
+                "contract_emits": CLAUDE_CONTRACT_EMITS_FINAL,
+            }
+        return value
+    if (
+        dataclasses.is_dataclass(value)
+        and not isinstance(value, type)
+        and getattr(value, "contract_emits", None)
+        in (CLAUDE_CONTRACT_EMITS_LEGACY, CLAUDE_CONTRACT_EMITS_FINAL)
+    ):
+        return dataclasses.replace(
+            value,
+            policies=CLAUDE_CONTRACT_POLICIES_FINAL,
+            contract_delivery=CLAUDE_CONTRACT_DELIVERY_FINAL,
+            contract_emits=CLAUDE_CONTRACT_EMITS_FINAL,
+        )
+    return value
+
+
+def claude_contract_deep(value):
+    """``value`` with every claude-cli ``structured_output`` dict in the final form."""
+    if isinstance(value, dict):
+        return claude_contract_to_final({k: claude_contract_deep(v) for k, v in value.items()})
+    if isinstance(value, list):
+        return [claude_contract_deep(v) for v in value]
+    if isinstance(value, tuple):
+        return tuple(claude_contract_deep(v) for v in value)
+    return value
 
 
 RENAMES: tuple[Rename, ...] = (
@@ -216,6 +280,38 @@ RENAMES: tuple[Rename, ...] = (
         _LSK + "declaration.py", " record-halt <entry>`",
         _KIT + "dispatch/declaration.py", " models record-halt <entry>`",
         "{cli_command()} record-halt <entry>", "{cli_command()} models record-halt <entry>",
+    ),
+    # llm-kit's claude-cli text-only mode also passes --setting-sources "" (no
+    # settings or CLAUDE.md memory, which defeated prompt caching; 0.3.2). The
+    # whole emitted string is the legacy text so that the plain form and the
+    # JSON-escaped form (a record dumped as JSON) each get their own quoting.
+    Rename(
+        "claude text-only argv passes an empty --setting-sources",
+        _LSK + "completion/adapter_capabilities.py",
+        _TEXT_ONLY_EMITS_LEGACY,
+        _KIT + "adapters/capabilities.py",
+        _TEXT_ONLY_EMITS_FINAL,
+        _TEXT_ONLY_ARGV_LEGACY_SRC,
+        _TEXT_ONLY_ARGV_FINAL_SRC,
+    ),
+    Rename(
+        "claude text-only argv passes an empty --setting-sources (JSON-escaped)",
+        _LSK + "completion/adapter_capabilities.py",
+        _TEXT_ONLY_EMITS_LEGACY.replace('"', '\\"'),
+        _KIT + "adapters/capabilities.py",
+        _TEXT_ONLY_EMITS_FINAL.replace('"', '\\"'),
+        _TEXT_ONLY_ARGV_LEGACY_SRC,
+        _TEXT_ONLY_ARGV_FINAL_SRC,
+    ),
+    Rename(
+        "claude output contract is delivered by --json-schema",
+        _LSK + "completion/adapter_capabilities.py", CLAUDE_CONTRACT_EMITS_LEGACY,
+        _KIT + "adapters/capabilities.py", CLAUDE_CONTRACT_EMITS_FINAL,
+    ),
+    Rename(
+        "claude text-only note names the settings and memory it drops",
+        _LSK + "completion/adapter_capabilities.py", "no skills, and no permission bypass",
+        _KIT + "adapters/capabilities.py", "no skills, no settings or CLAUDE.md memory, and no permission bypass",
     ),
 )
 

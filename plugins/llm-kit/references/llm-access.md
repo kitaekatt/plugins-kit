@@ -604,7 +604,7 @@ guarantee gets the unchanged argv.
 
 | Adapter | Text-only argv | Guarantee declared |
 | --- | --- | --- |
-| `claude-cli` | `--tools "" --strict-mcp-config --mcp-config {"mcpServers":{}} --disable-slash-commands --permission-mode dontAsk`, in place of `--permission-mode bypassPermissions --allowedTools` | all three |
+| `claude-cli` | `--tools "" --strict-mcp-config --mcp-config {"mcpServers":{}} --disable-slash-commands --setting-sources "" --permission-mode dontAsk`, in place of `--permission-mode bypassPermissions --allowedTools` | all three |
 | `codex-cli` | `exec --ignore-user-config -s read-only`, no network flag, `-c` pairs that turn off the shell, unified exec, multi-agent, apps, plugins, image, browser, computer-use, code-mode host, web search and MCP servers, and `-c model_catalog_json='<file>'` | all three |
 
 Codex needs the catalog file because the MODEL CATALOG, not the config, gives a

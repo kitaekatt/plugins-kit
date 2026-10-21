@@ -621,7 +621,8 @@ class ClaudeCliBackend:
             via ``shutil.which`` at call time.
         runner: The subprocess runner -- test seam; production is
             :func:`.claude_runner.run_claude_streaming`.
-        text_only: Run with no tools, no MCP servers, no skills and no
+        text_only: Run with no tools, no MCP servers, no skills, no settings
+            or CLAUDE.md memory and no
             permission bypass (``_CLAUDE_TEXT_ONLY_ARGS`` replaces
             ``--permission-mode bypassPermissions --allowedTools``). Not a
             caller flag: :func:`~.requirements.arm_requirements` sets it when a
@@ -728,6 +729,11 @@ class ClaudeCliBackend:
             cmd.extend(["--disallowedTools", opts.disallowed_tools])
         if opts.effort is not None:
             cmd.extend(["--effort", opts.effort])
+        # Native contract delivery: the canonical schema document goes to the
+        # CLI's own structured-output channel, inline. The answer is still
+        # judged at the seam by finalize_contract.
+        if contract_plan is not None and contract_plan.schema_json is not None:
+            cmd.extend(["--json-schema", contract_plan.schema_json])
 
         started_at = utc_now_iso()
         start = time.monotonic()
@@ -829,8 +835,21 @@ class ClaudeCliBackend:
 
         usage = data.get("usage") or {}
         wall_ms = int((time.monotonic() - start) * 1000)
+        text = data["result"]
+        if contract_plan is not None and contract_plan.schema_json is not None:
+            # With --json-schema the CLI puts the schema-shaped answer in the
+            # envelope's ``structured_output`` (observed 2026-10-21 on Claude
+            # Code 2.1.306; ``result`` held the same JSON text there but is not
+            # the contract channel). Hand the seam that value as compact JSON;
+            # when the field is absent the model never produced a structured
+            # answer, and ``result`` goes to finalize_contract to be judged.
+            structured_output = data.get("structured_output")
+            if structured_output is not None:
+                text = json.dumps(
+                    structured_output, separators=(",", ":"), ensure_ascii=False
+                )
         response = LLMResponse(
-            text=data["result"],
+            text=text,
             model=model,
             input_tokens=int(usage.get("input_tokens", 0) or 0),
             output_tokens=int(usage.get("output_tokens", 0) or 0),

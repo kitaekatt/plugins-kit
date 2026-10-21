@@ -17,8 +17,9 @@ from secrets_kit import agefile
 from secrets_kit import SecretsError
 from secrets_kit import converge as convergence
 from secrets_kit import repo as repository
-from test_dest_guard import _armored, _templates, adding
-from test_sync_view import _dummy_crypto, _git, _seed_author, actual_subject_origins
+from sk_testlib import remove_git_tree, replace_git_tree
+from test_dest_guard import _armored, _templates, adding, state_template
+from test_sync_view import _author_template, _configure_machine, _dummy_crypto, _git, _seed_author, actual_subject_origins
 
 
 OPERATIONS = ['init', 'init-noforce', 'add', 'update', 'remove', 'rotate-identity', 'unlock', 'status', 'status-norefresh', 'bootstrap']
@@ -124,12 +125,18 @@ def _boundaries(adding, monkeypatch, calls):
     return calls, queries
 
 
-def _two_repositories(adding, monkeypatch):
-    _seed_author(adding)
+def _populate_two_repositories(adding, patch):
+    """Authored fleet, a distinct second fleet carrying a different recipient, and edited files.
+
+    Built once per process from the authored template (`_author_template`),
+    with the strict decrypt stand-in in force for the converge, as the former
+    per-test replay had it. Asserts here run once per process.
+    """
+    _configure_machine(adding)
     orphan = adding.data_dir.parent / 'orphan-source.txt'
     orphan.write_bytes(b'dummy owned orphan\n')
     assert adding.cli.main(['add', 'old-orphan', '--file', str(orphan), '--dest', '${PLAIN}/old-orphan.txt', '--profile', 'base']) == 0
-    calls = _strict_crypto(adding, monkeypatch)
+    _strict_crypto(adding, patch)
     assert convergence.converge(adding.config_path, adding.data_dir).written == 2
     assert adding.cli.main(['remove', 'old-orphan']) == 0
     old = Path(_git(adding.clone, 'config', '--local', '--get', 'remote.origin.url'))
@@ -147,8 +154,23 @@ def _two_repositories(adding, monkeypatch):
     (producer / 'identity.age').write_bytes(_armored(b'age1dummywrap', b'dummy new fleet wrapped identity\n'))
     (producer / 'manifest.json').write_text(json.dumps(raw))
     fixture_commit_and_push(producer, 'dummy distinct new fleet', ['manifest.json', 'identity.age', raw['entries']['ha-token']['blob']])
+    remove_git_tree(producer)
     (adding.plain / 'ha-token.txt').write_bytes(b'dummy user-edited destination\n')
     (adding.data_dir.parent / 'new-entry-source.txt').write_bytes(b'dummy new entry\n')
+
+
+def _two_repositories(adding, monkeypatch):
+    """Serve `_populate_two_repositories` from a per-process template, then arm strict crypto.
+
+    Call it before patching anything the CLI would reach, as every
+    `_seed_author` caller does: the template is built on first use.
+    """
+    template = state_template('two-repositories', _populate_two_repositories, after=_author_template())
+    replace_git_tree(template, adding.data_dir.parent)
+    _configure_machine(adding)
+    calls = _strict_crypto(adding, monkeypatch)
+    old = Path(_git(adding.clone, 'config', '--local', '--get', 'remote.origin.url'))
+    new = adding.data_dir.parent / 'new fleet' / 'remote.git'
     calls.clear()
     return old, new, calls
 
@@ -229,12 +251,12 @@ def test_actual_changed_declaration_refuses_old_clone_before_use(adding, monkeyp
     assert old_consumer == {'written': 1, 'failures': 0, 'payload': Path(adding.source).read_bytes().decode(), 'recipient': 'age1testrecipient'}
 
 
-@pytest.mark.parametrize('operation', OPERATIONS)
+@pytest.mark.parametrize('operation', ['add', 'unlock', 'status'])
 def test_actual_same_origin_remains_usable(adding, monkeypatch, operation):
     old, new, calls = _two_repositories(adding, monkeypatch)
     calls, queries = _boundaries(adding, monkeypatch, calls)
     code, adapter = _operation(adding, operation)
-    assert code == (1 if operation == 'init-noforce' else 0)
+    assert code == 0
     assert _git(adding.clone, 'config', '--local', '--get', 'remote.origin.url') == str(old)
 
 

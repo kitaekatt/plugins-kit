@@ -6,6 +6,7 @@ the repo-root pytest. plugins/skills-kit is also on pyproject pythonpath; it
 is added here too so this suite stays self-contained.
 """
 
+import importlib
 import os
 import sys
 from pathlib import Path
@@ -63,3 +64,38 @@ def outside_a_run(monkeypatch):
     """
     for name in ("TASK_KIT_AGENT_DEPTH", "TASK_KIT_RUN_TOKEN"):
         monkeypatch.delenv(name, raising=False)
+
+
+_LLM_KIT_LIB = (_REPO_ROOT / "plugins" / "llm-kit" / "lib").resolve()
+
+
+def _is_llm_kit_module(name: str) -> bool:
+    return name == "llm_kit" or name.startswith("llm_kit.")
+
+
+@pytest.fixture(autouse=True)
+def llm_kit_is_absent_unless_a_test_adds_it():
+    """Every task-kit test starts with ``llm_kit`` unimportable, whatever ran before it on the worker.
+
+    llm-kit is an OPTIONAL edge of task-kit, and the dashboard tests assert what it reports when the
+    package is absent. Another suite's conftest (``tests/llm-kit/conftest.py``) puts
+    ``plugins/llm-kit/lib`` on ``sys.path`` while pytest collects, and any test may leave ``llm_kit``
+    modules in ``sys.modules``; both are process-global, so under a full run (collection loads every
+    conftest in every xdist worker) the "absent" probes found the real package. A test that wants
+    llm-kit adds the library itself (``monkeypatch.syspath_prepend``) and purges what it imported;
+    this fixture hides the rest for the test and puts back exactly what it found.
+    """
+    saved_path = list(sys.path)
+    hidden = {name: module for name, module in sys.modules.items() if _is_llm_kit_module(name)}
+    sys.path[:] = [entry for entry in saved_path if not (entry and Path(entry).resolve() == _LLM_KIT_LIB)]
+    for name in hidden:
+        del sys.modules[name]
+    importlib.invalidate_caches()
+    try:
+        yield
+    finally:
+        for name in [n for n in sys.modules if _is_llm_kit_module(n)]:
+            del sys.modules[name]
+        sys.modules.update(hidden)
+        sys.path[:] = saved_path
+        importlib.invalidate_caches()

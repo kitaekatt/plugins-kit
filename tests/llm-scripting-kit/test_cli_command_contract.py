@@ -27,7 +27,9 @@ the test would silently only ever check this host's own platform.
 
 from __future__ import annotations
 
+import contextlib
 import importlib
+import os
 import sys
 from pathlib import Path
 
@@ -45,6 +47,36 @@ _WINDOWS_LEAF = "Scripts/llm-scripting-kit.exe"
 _POSIX_LEAF = "bin/llm-scripting-kit"
 
 
+@contextlib.contextmanager
+def _real_home():
+    """Run a reload of ``constants`` under the REAL home.
+
+    ``constants.USER_ENV_FILE`` is ``Path.home()`` evaluated at module-exec
+    time, so a ``reload`` run under the autouse ``_isolated_host_state``
+    HOME freezes that test's temp home into the shared module for every later
+    test in the process (observed: tests/llm-kit/test_registry_parity.py's
+    byte-for-byte USER_ENV_FILE comparison failed after this file ran). Every
+    reload here goes through this guard so the module always re-execs under
+    the home it was first imported with."""
+    names = ("HOME", "USERPROFILE")
+    saved = {n: os.environ.get(n) for n in names}
+    for n in names:
+        os.environ[n] = str(_REAL_HOME)
+    try:
+        yield
+    finally:
+        for n, v in saved.items():
+            if v is None:
+                os.environ.pop(n, None)
+            else:
+                os.environ[n] = v
+
+
+def _reload_constants():
+    with _real_home():
+        return importlib.reload(constants)
+
+
 def _cli_command_for(platform: str) -> str:
     """``CLI_COMMAND`` as the module's own derivation computes it for
     ``platform``, with the module left reloaded under the REAL platform again.
@@ -58,10 +90,10 @@ def _cli_command_for(platform: str) -> str:
     real = sys.platform
     try:
         sys.platform = platform
-        return importlib.reload(constants).CLI_COMMAND
+        return _reload_constants().CLI_COMMAND
     finally:
         sys.platform = real
-        importlib.reload(constants)
+        _reload_constants()
 
 
 def test_cli_command_branches_on_win32():
@@ -107,14 +139,14 @@ def test_redirected_command_branches_on_win32_like_the_contract():
     try:
         for platform, leaf in (("win32", _WINDOWS_LEAF), ("linux", _POSIX_LEAF)):
             sys.platform = platform
-            module = importlib.reload(constants)
+            module = _reload_constants()
             assert module.REDIRECTED_CLI_COMMAND == (
                 '"${CLAUDE_BOOTSTRAP_DATA_ROOT:-$HOME/.claude/plugins/data}"'
                 "/plugins-kit/llm-scripting-kit/.venv/" + leaf
             )
     finally:
         sys.platform = real
-        importlib.reload(constants)
+        _reload_constants()
 
 
 _VENV_DIR = (

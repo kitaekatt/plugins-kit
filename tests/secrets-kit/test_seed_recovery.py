@@ -2,6 +2,7 @@
 
 import argparse
 import base64
+import functools
 import hashlib
 import json
 import os
@@ -20,10 +21,11 @@ from secrets_kit import converge as convergence
 from secrets_kit import repo as repository
 from secrets_kit.manifest import Manifest
 from sk_testlib import AUTHORED_NEW_IDENTITY_CACHE, grant_everyone
-from test_dest_guard import _armored, _templates, adding
+from sk_testlib import replace_git_tree
+from test_dest_guard import _armored, _templates, adding, state_template
 from test_init import _load_cli, _seeding_template, seeding
 from test_repo_binding import _strict_crypto
-from test_sync_view import _git, _seed_author
+from test_sync_view import _configure_machine, _configure_template, _git, _seed_author, _seed_configured
 
 
 @pytest.fixture(params=[False, True], ids=['seed', 'force-seed'])
@@ -38,10 +40,22 @@ def pending_subject(adding, monkeypatch):
 
 
 def _configure_subject(subject, force, monkeypatch):
+    _prepare_state(subject, force)
+    _activate(subject, monkeypatch)
+    return subject
+
+
+def _prepare_state(subject, force):
+    """The tree state a seed or entry test starts from. Call it BEFORE patching.
+
+    The force branch serves the configured state (authored fleet, a second entry
+    `second-old`, both converged) from a per-process template, in place of the
+    CLI replay it used to run per test.
+    """
     subject.force = force
     subject.config_path = subject.cli.CONFIG_PATH
     if subject.force:
-        _seed_author(subject)
+        _seed_configured(subject)
     else:
         subject.plain = subject.data_dir.parent / 'plain seed'
         subject.plain.mkdir()
@@ -50,6 +64,10 @@ def _configure_subject(subject, force, monkeypatch):
         raw = json.loads(subject.config_path.read_text())
         raw['vars'] = {'PLAIN': str(subject.plain)}
         subject.config_path.write_text(json.dumps(raw))
+
+
+def _activate(subject, monkeypatch):
+    """Stand in for crypto, then check the subject runs the code under test."""
     def dummy_encrypt(recipient, payload, output):
         output = Path(output);output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(_armored(recipient.encode(), payload))
@@ -72,22 +90,14 @@ def _configure_subject(subject, force, monkeypatch):
     monkeypatch.setattr(agefile, 'wrap_identity', encoded_wrap)
     monkeypatch.setattr(agefile, 'unwrap_identity', encoded_unwrap)
 
-    if subject.force:
-        second = subject.data_dir.parent / 'second dummy source.txt'
-        second.write_bytes(b'dummy second old value\n')
-        assert subject.cli.main(['add', 'second-old', '--file', str(second), '--dest', '${PLAIN}/second.txt', '--profile', 'base']) == 0
-        assert convergence.converge(subject.config_path, subject.data_dir).written == 2
     guard.require_guard(subject.clone)
     with subject.cli.operation_lock(subject.data_dir):
         pass
     root = Path(__file__).resolve().parents[2]
     assert Path(subject.cli.__file__).resolve() == root / 'plugins/secrets-kit/scripts/secrets_kit_cli.py'
-    records = []
     for name, module in list(sys.modules.items()):
         if name == 'secrets_kit' or name.startswith('secrets_kit.'):
-            path = Path(module.__file__).resolve()
-            assert path.parent == root / 'plugins/secrets-kit/lib/secrets_kit'
-            records.append({'module': name, 'path': path.relative_to(root).as_posix(), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()})
+            assert Path(module.__file__).resolve().parent == root / 'plugins/secrets-kit/lib/secrets_kit'
     for name in ['sk_testlib', 'test_init', 'test_dest_guard', 'test_sync_view', 'test_repo_binding']:
         assert Path(sys.modules[name].__file__).resolve() == root / 'tests/secrets-kit' / (name + '.py')
     for function in [subject.cli.cmd_init, subject.cli.main, repository.sync]:
@@ -95,13 +105,88 @@ def _configure_subject(subject, force, monkeypatch):
     assert not hasattr(repository, 'commit_and_push')
     for name in ['_commit_owned', '_publish_owned', '_prove_publication']:
         assert Path(getattr(repository, name).__code__.co_filename).resolve() == root / 'plugins/secrets-kit/lib/secrets_kit/repo.py'
+    _print_origin_evidence()
+
+
+@functools.cache
+def _print_origin_evidence():
+    """Hash every loaded module and the whole plugin closure: once per process.
+
+    The paths are checked per subject in `_activate`; the digests are evidence
+    of WHICH bytes ran, and a process runs one set.
+    """
+    root = Path(__file__).resolve().parents[2]
+    records = []
+    for name, module in list(sys.modules.items()):
+        if name == 'secrets_kit' or name.startswith('secrets_kit.'):
+            path = Path(module.__file__).resolve()
+            records.append({'module': name, 'path': path.relative_to(root).as_posix(), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()})
     closure = []
     for path in sorted((root / 'plugins/secrets-kit').rglob('*')):
         if path.is_file() and '__pycache__' not in path.parts and path.suffix != '.pyc':
             closure.append({'file': path.relative_to(root).as_posix(), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()})
     print('SEED_RECOVERY_SUBJECT_ORIGINS ' + json.dumps(records))
     print('SEED_RECOVERY_COMPLETE_CLOSURE ' + json.dumps(closure))
-    return subject
+
+
+def _physical(path):
+    info = path.stat()
+    return [info.st_dev, info.st_ino]
+
+
+def rebound_record(data_dir, record):
+    """`record` with every field that names a physical object or a path re-derived.
+
+    A recovery record binds the inodes of the clone, its .git, the recovery
+    directory, the marker itself and the blob slots, plus the digest of the
+    clone's recorded origin. A filesystem copy of a tree holding a record keeps
+    the bytes and changes all of those, so a served copy needs them re-derived
+    from the copy. Applied to the tree that wrote the record it is the identity
+    (`assert_rebinding_is_identity`), which is what keeps this list honest.
+    """
+    from secrets_kit import authoring
+    clone = data_dir / 'repo';directory = data_dir / 'authoring-recovery'
+    rebound = dict(record)
+    rebound['clone_identity'] = _physical(clone)
+    rebound['git_identity'] = _physical(clone / '.git')
+    rebound['directory_identity'] = _physical(directory)
+    rebound['marker_identity'] = _physical(directory / 'marker.json')
+    for key in ('entry_blob_parent', 'created_blob_parent'):
+        if rebound.get(key) is not None:rebound[key] = _physical(clone / 'blobs')
+    if rebound.get('blob_receiving_identity') is not None:rebound['blob_receiving_identity'] = _physical(directory / 'proposed-blob')
+    rebound['declared_repo_digest'] = authoring._digest(repository._recorded_origin(clone).encode('utf-8'))
+    return rebound
+
+
+def assert_rebinding_is_identity(data_dir):
+    """Template build check: the record production wrote already holds what rebinding derives."""
+    record = json.loads((data_dir / 'authoring-recovery/marker.json').read_bytes())
+    assert rebound_record(data_dir, record) == record
+
+
+def serve_pending(template, subject):
+    """Swap the subject's tree for a copy of a pending-recovery template, rebound to the copy."""
+    replace_git_tree(template, subject.data_dir.parent)
+    marker = subject.data_dir / 'authoring-recovery/marker.json'
+    record = rebound_record(subject.data_dir, json.loads(marker.read_bytes()))
+    with marker.open('r+b') as stream:
+        stream.write(json.dumps(record, sort_keys=True).encode());stream.truncate()
+    # A served record that production refuses would make every refusal a test
+    # asserts pass for the wrong reason, so its validity is part of serving it.
+    from secrets_kit import authoring
+    authoring._inspect_recovery(subject.data_dir)
+    return record
+
+
+def _pending_seed_template():
+    def populate(subject, patch):
+        subject.force = True;subject.config_path = subject.cli.CONFIG_PATH
+        _configure_machine(subject)
+        _activate(subject, patch)
+        _lose_push_report(subject, patch, proof_failure=True)
+        assert _invoke(subject)['code'] == 1
+        assert_rebinding_is_identity(subject.data_dir)
+    return state_template('seed-pending-uncertain', populate, after=_configure_template())
 
 
 def _read_only_git(path, *args):
@@ -264,25 +349,66 @@ def test_actual_successful_push_with_lost_report_uses_fresh_proof(seed_subject, 
 DIRTY_CASES = ['staged-change', 'unstaged-change', 'staged-delete', 'staged-untracking', 'untracked', 'index-lock', 'merge-head', 'rebase-state', 'foreign-active-hook']
 
 
+def _foreign_work(clone, dirty, path, baseline):
+    """Put one kind of foreign work into `clone` around tracked file `path`.
+
+    Returns the controlled path for the kinds that add one (None for the kinds
+    that edit `path` itself), so a caller can take the foreign work out again.
+    """
+    controlled = None
+    if dirty in ['staged-change', 'unstaged-change']:
+        (clone / path).write_bytes(b'dummy unrelated changed text\n')
+        if dirty == 'staged-change':_git(clone, 'add', '--', path)
+    elif dirty == 'staged-delete':_git(clone, 'rm', '--quiet', '--', path)
+    elif dirty == 'staged-untracking':_git(clone, 'rm', '--cached', '--quiet', '--', path)
+    else:
+        controlled = clone / {'untracked': 'unowned.age', 'index-lock': '.git/index.lock', 'merge-head': '.git/MERGE_HEAD', 'rebase-state': '.git/rebase-merge', 'foreign-active-hook': '.git/hooks/prepare-commit-msg'}[dirty]
+        if dirty == 'rebase-state':controlled.mkdir()
+        else:
+            controlled.write_bytes((baseline + '\n').encode() if dirty == 'merge-head' else b'#!/bin/sh\nexit 0\n' if dirty == 'foreign-active-hook' else b'dummy unrelated fixture bytes\n')
+            if dirty == 'foreign-active-hook':controlled.chmod(0o700)
+    return controlled
+
+
+ADMISSION_REFUSALS = {'staged-change': 'unrelated changes', 'unstaged-change': 'unrelated changes', 'staged-delete': 'unrelated changes',
+                      'staged-untracking': 'unrelated changes', 'untracked': 'unrelated changes', 'index-lock': 'conflicting Git lock',
+                      'merge-head': 'unfinished Git operation', 'rebase-state': 'unfinished Git operation', 'foreign-active-hook': 'foreign active Git hook'}
+
+
+def test_admission_accepts_a_clean_authored_clone(adding):
+    from secrets_kit import authoring
+    _seed_author(adding)
+    raw = json.loads(adding.config_path.read_text())
+    assert authoring._admit(adding.clone, raw['repo']) == 'refs/heads/main'
+
+
 @pytest.mark.parametrize('dirty', DIRTY_CASES)
+def test_admission_refuses_every_kind_of_foreign_work(adding, dirty):
+    """`authoring._admit` is the one function every verb's foreign-work refusal runs through.
+
+    The end-to-end tests below pin that each verb reaches it before any fetch or
+    crypto; this one pins what it refuses, state by state, in process.
+    """
+    from secrets_kit import authoring
+    _seed_author(adding)
+    raw = json.loads(adding.config_path.read_text())
+    baseline = _git(adding.clone, 'rev-parse', 'HEAD')
+    _foreign_work(adding.clone, dirty, 'manifest.json', baseline)
+    before = (_git(adding.clone, 'rev-parse', 'HEAD'), _read_only_git(adding.clone, 'status', '--porcelain=v1', '-z', '--untracked-files=all'))
+    with pytest.raises(SecretsError) as refusal:
+        authoring._admit(adding.clone, raw['repo'])
+    assert ADMISSION_REFUSALS[dirty] in str(refusal.value)
+    assert before == (_git(adding.clone, 'rev-parse', 'HEAD'), _read_only_git(adding.clone, 'status', '--porcelain=v1', '-z', '--untracked-files=all'))
+
+
+@pytest.mark.parametrize('seed_subject,dirty', [(False, 'staged-change'), (True, 'foreign-active-hook')], indirect=['seed_subject'], ids=['seed-staged-change', 'force-seed-foreign-active-hook'])
 def test_actual_seed_refuses_foreign_work_before_sync_or_crypto(seed_subject, monkeypatch, capsys, dirty):
     subject = seed_subject;readme = subject.clone / 'README.md'
     if not readme.exists():
         readme.write_bytes(b'dummy foreign baseline\n')
         fixture_commit_and_push(subject.clone, 'dummy tracked baseline', ['README.md'])
     baseline = _git(subject.clone, 'rev-parse', 'HEAD');original = readme.read_bytes()
-    controlled = None
-    if dirty in ['staged-change', 'unstaged-change']:
-        readme.write_bytes(b'dummy unrelated changed text\n')
-        if dirty == 'staged-change':_git(subject.clone, 'add', '--', 'README.md')
-    elif dirty == 'staged-delete':_git(subject.clone, 'rm', '--quiet', '--', 'README.md')
-    elif dirty == 'staged-untracking':_git(subject.clone, 'rm', '--cached', '--quiet', '--', 'README.md')
-    else:
-        controlled = subject.clone / {'untracked': 'unowned.age', 'index-lock': '.git/index.lock', 'merge-head': '.git/MERGE_HEAD', 'rebase-state': '.git/rebase-merge', 'foreign-active-hook': '.git/hooks/prepare-commit-msg'}[dirty]
-        if dirty == 'rebase-state':controlled.mkdir()
-        else:
-            controlled.write_bytes((baseline + '\n').encode() if dirty == 'merge-head' else b'#!/bin/sh\nexit 0\n' if dirty == 'foreign-active-hook' else b'dummy unrelated fixture bytes\n')
-            if dirty == 'foreign-active-hook':controlled.chmod(0o700)
+    controlled = _foreign_work(subject.clone, dirty, 'README.md', baseline)
     before = _snapshot(subject);subject.calls.clear();real_git = repository._git;queries = []
     with monkeypatch.context() as observing:
         def git(args, *, cwd, timeout):
@@ -660,9 +786,7 @@ cli.main(["init", "--force"])
 def test_private_reconciliation_refuses_incomplete_or_substituted_evidence(pending_subject, monkeypatch, change):
     from secrets_kit import authoring
     subject = pending_subject
-    with monkeypatch.context() as controlled:
-        _lose_push_report(subject, controlled, proof_failure=True)
-        assert _invoke(subject)['code'] == 1
+    serve_pending(_pending_seed_template(), subject)
     recovery = subject.data_dir / 'authoring-recovery';marker = recovery / 'marker.json'
     if change == 'missing-cipher':(recovery / 'proposed-identity').unlink()
     elif change == 'changed-cipher':(recovery / 'proposed-identity').write_bytes(b'dummy foreign ciphertext')

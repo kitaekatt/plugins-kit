@@ -30,6 +30,7 @@ from secrets_kit import DecryptError, SecretsError, agefile, authoring
 from secrets_kit import repo as repository
 from test_dest_guard import _armored, _templates, adding  # noqa: F401
 from test_init import _seeding_template, seeding  # noqa: F401
+from test_private_output import _initialize, _initialized_template  # noqa: F401
 from test_sync_view import _author_snapshot, _dummy_crypto, _git, _seed_author
 
 OLD_RECIPIENT = 'age1testrecipient'
@@ -99,7 +100,7 @@ def _concurrent_entry(adding: SimpleNamespace) -> str:
 
 
 def test_actual_rotation_publication_rejection_preserves_the_identity_cache(
-    seeding: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+    seeding: SimpleNamespace, _initialized_template: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A refused rotation must not leave a cached key the fleet cannot read.
 
@@ -110,7 +111,7 @@ def test_actual_rotation_publication_rejection_preserves_the_identity_cache(
     already re-encrypted, so the machine reports healthy while the fleet is
     unrotated.
     """
-    assert seeding.cli.main(['init']) == 0
+    _initialize(seeding, _initialized_template)
     seeded_cache = seeding.identity.read_bytes()
     seeded_head = _git(seeding.remote, 'rev-parse', 'HEAD')
 
