@@ -196,14 +196,17 @@ class TestWriteChunks:
     def test_writes_files_and_returns_index(self, tmp_path):
         chunks = [
             {"text": "chunk0 text\n", "files": ["//d/a.cpp"], "bytes": 12},
-            {"text": "chunk1 text\n", "files": ["//d/b.cpp", "//d/c.cpp"], "bytes": 12},
+            {"text": "chunk1 text\n", "files": ["//d/b.cpp", "//d/c.cpp"], "bytes": 12,
+             "lines": 1, "longest_line_bytes": 11, "page_lines": 800},
         ]
         index = write_chunks(chunks, tmp_path)
         assert (tmp_path / "chunks" / "chunk-000.diff").read_text() == "chunk0 text\n"
         assert (tmp_path / "chunks" / "chunk-001.diff").read_text() == "chunk1 text\n"
         assert index == [
-            {"index": 0, "path": "chunks/chunk-000.diff", "files": ["//d/a.cpp"], "bytes": 12},
-            {"index": 1, "path": "chunks/chunk-001.diff", "files": ["//d/b.cpp", "//d/c.cpp"], "bytes": 12},
+            {"index": 0, "path": "chunks/chunk-000.diff", "files": ["//d/a.cpp"], "bytes": 12,
+             "lines": 1, "longest_line_bytes": 11, "page_lines": 800},
+            {"index": 1, "path": "chunks/chunk-001.diff", "files": ["//d/b.cpp", "//d/c.cpp"], "bytes": 12,
+             "lines": 1, "longest_line_bytes": 11, "page_lines": 800},
         ]
 
     def test_removes_stale_chunks_from_prior_run(self, tmp_path):

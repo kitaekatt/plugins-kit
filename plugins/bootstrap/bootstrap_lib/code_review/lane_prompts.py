@@ -36,11 +36,13 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from bootstrap_lib.code_review.mechanical import LEGACY_CHECK_IDS, check_phrase
+from bootstrap_lib.code_review.sections import main, section_for_quote  # noqa: F401
 from bootstrap_lib.model_declaration import CORE_IDS
 
 
@@ -378,14 +380,17 @@ it, no Markdown code fence. Each element is an object with exactly these keys:
 Return [] when there is nothing to report."""
 
 
-# The Read tool returns a bounded page per call and appends a "[Truncated:
-# PARTIAL view ... offset=<n> limit=<m>" notice. A reviewer that stops at the
-# first page reviews only part of its input, so the rule is stated once here
-# and embedded in every reviewer prompt.
+# The Read tool refuses a page over about 25,000 tokens, so a reviewer that
+# guesses a page size hits "file content exceeds maximum" errors and retries.
+# prepare_review measures each chunk (`lines`, `page_lines`) and the
+# orchestrator appends both values to the lane input. The rule is stated once
+# here and embedded in every reviewer prompt.
 FULL_READ_RULE = """\
-Read in full. Read the assigned chunk diff, and every CLAUDE.md you are
-directed to read, in full: when Read returns a partial view, continue with the
-offset it names until the last line. Never review from a partial page."""
+Read in full. Read the assigned chunk diff from line 1 with `limit: <page_lines>`,
+then each next page with `offset` advanced by that limit, until you have read
+line <lines>; both numbers are supplied with the chunk path. Read every CLAUDE.md
+you are directed to read in full: when Read returns a partial view, continue with
+the offset it names until the last line. Never review from a partial page."""
 
 
 @dataclass(frozen=True)
@@ -696,6 +701,7 @@ def build_user_message(
 
 
 __all__ = [
+    "section_for_quote",
     "AGENT_MODEL_ALIASES",
     "ENDPOINT_ELIGIBLE_LANES",
     "GUARDRAILS",
@@ -716,3 +722,7 @@ __all__ = [
     "is_agent_alias",
     "parse_issue_array",
 ]
+
+
+if __name__ == "__main__":
+    sys.exit(main())

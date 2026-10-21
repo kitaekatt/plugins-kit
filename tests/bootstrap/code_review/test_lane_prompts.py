@@ -583,8 +583,9 @@ class TestMechanicalFindingsInPrompt:
 
 
 def test_full_read_rule_in_every_canonical_prompt() -> None:
-    sentence = "continue with the offset it names until the last line"
+    sentence = "until you have read line <lines>"
     for lane, prompt in lp.LANE_PROMPTS.items():
         flat = " ".join(prompt.system.split())
+        assert "from line 1 with `limit: <page_lines>`" in flat, lane
         assert sentence in flat, lane
         assert "Never review from a partial page." in flat, lane

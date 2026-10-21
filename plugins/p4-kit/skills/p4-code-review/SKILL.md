@@ -325,7 +325,10 @@ technique_skill:
             Then launch one subagent per (reviewer x chunk) pair in parallel via
             a single message with R x K Agent calls, where R = len(profile.reviewers) and
             K = len(bundle.diff_chunks). Each subagent gets the chunk's absolute diff path
-            (`<bundle.bundle_dir>/<diff_chunks[i].path>`), the depot paths of the files
+            (`<bundle.bundle_dir>/<diff_chunks[i].path>`), that chunk's `lines` and `page_lines`
+            (`diff_chunks[i].lines`, `diff_chunks[i].page_lines`; the lane prompt's Read rule
+            names them as `<lines>` and `<page_lines>`, so state both numbers next to the path),
+            the depot paths of the files
             in that chunk (`diff_chunks[i].files`), and -- for reviewer_a -- the CLAUDE.md
             mapping restricted to those files. EVERY reviewer (reviewer_a, reviewer_b and
             reviewer_c) also gets the repo-relative PATHS of every `bundle.claimed_files`
@@ -397,6 +400,12 @@ technique_skill:
             The selected profile's `validator_models[reason]` (from the RESOLVED table fetched in
             step 0) is an ordered list of one or more `{id, effort}` entries, chosen per issue by
             its reason. Read it in declared order.
+            - Build each validator's input. For a `claude_md` issue, run `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" -m bootstrap_lib.code_review.sections
+              --claude-md <path of the CLAUDE.md that governs the issue's file, from step 4> --quote '<issue.citation>'`
+              (single-quote the citation) and pass its stdout (the section containing the quoted
+              rule) plus that CLAUDE.md path, never the whole file. When the citation is missing or the command exits 3 (quote not found),
+              pass the full CLAUDE.md and say in the input that the section could not be located. A
+              `bug` issue needs no CLAUDE.md.
             - Dispatch the first Agent entry. An Agent entry's `id` is one of `sonnet`, `opus`,
               `haiku`, `fable`: launch an Agent with `subagent_type: p4-kit:review-lane-<entry effort>`
               and `model: <id>`, using that entry's own stated effort, and give it the `validator`
@@ -759,14 +768,14 @@ technique_skill:
     - name: reviewer_a_claude_md_compliance
       subagent_type: "p4-kit:review-lane-<entry effort> (step 6 entry-harness rule)"
       scope: CLAUDE.md compliance only, restricted to the files in one chunk
-      input: "absolute path to ONE chunk .diff file, the depot paths of the files in that chunk, the per-file CLAUDE.md mapping restricted to those files, the full text of each relevant CLAUDE.md (read in step 4), and the paths of every claimed file (paths only -- their content belongs to the subject-lens reviewer)"
+      input: "absolute path to ONE chunk .diff file with its `lines` and `page_lines`, the depot paths of the files in that chunk, the per-file CLAUDE.md mapping restricted to those files, the full text of each relevant CLAUDE.md (read in step 4), and the paths of every claimed file (paths only -- their content belongs to the subject-lens reviewer)"
       canonical_prompt_note: |
         This lane can run EITHER as an Agent subagent or, when its chosen entry is not a
         `claude` entry, as a plain completion (see the step-6 entry-harness rule). Both paths must
         review by the same standard, so the prompt below is the single source: it is rendered
         here from bootstrap_lib.code_review.lane_prompts, which is also what the endpoint
         runner sends. When launching this lane as an Agent, use it as the subagent's
-        instructions verbatim, then append the chunk path, file list, and (per step 4) the
+        instructions verbatim, then append the chunk path, its `lines` and `page_lines`, file list, and (per step 4) the
         per-file CLAUDE.md mapping and text. Do not paraphrase it.
       canonical_prompt: |
         You are reviewing one chunk of a code change for violations of the project's own
@@ -807,9 +816,11 @@ technique_skill:
         Restrictions. Only report issues in files that appear in this diff, and only for
         what this change introduces -- a pre-existing violation is not yours to report.
 
-        Read in full. Read the assigned chunk diff, and every CLAUDE.md you are
-        directed to read, in full: when Read returns a partial view, continue with the
-        offset it names until the last line. Never review from a partial page.
+        Read in full. Read the assigned chunk diff from line 1 with `limit: <page_lines>`,
+        then each next page with `offset` advanced by that limit, until you have read
+        line <lines>; both numbers are supplied with the chunk path. Read every CLAUDE.md
+        you are directed to read in full: when Read returns a partial view, continue with
+        the offset it names until the last line. Never review from a partial page.
 
         Only flag an issue when it is one of these:
         - code that will fail to compile or parse (syntax errors, type errors, missing
@@ -843,20 +854,20 @@ technique_skill:
 
         Return [] when there is nothing to report.
       restrictions:
-        - "Read the assigned chunk diff in full: when Read returns a partial view, continue with the offset it names until the last line. Do not Read other chunks."
+        - "Read the assigned chunk diff from line 1 with `limit: <page_lines>`, then each next page with `offset` advanced by that limit, until you have read line <lines>. Do not Read other chunks."
         - "Only consider CLAUDE.md files that share a path with the file being reviewed (use the per-file mapping when supplied; do not cross-apply)."
         - "Only flag issues in files present in your chunk -- files in other chunks are someone else's responsibility."
     - name: reviewer_b_diff_only_bugs
       subagent_type: "p4-kit:review-lane-<entry effort> (step 6 entry-harness rule)"
       scope: obvious bugs visible in one chunk's diff alone
-      input: "absolute path to ONE chunk .diff file, the depot paths of the files in that chunk, the CL description, and the paths of every claimed file (paths only -- their content belongs to the subject-lens reviewer)"
+      input: "absolute path to ONE chunk .diff file with its `lines` and `page_lines`, the depot paths of the files in that chunk, the CL description, and the paths of every claimed file (paths only -- their content belongs to the subject-lens reviewer)"
       canonical_prompt_note: |
         This lane can run EITHER as an Agent subagent or, when its chosen entry is not a
         `claude` entry, as a plain completion (see the step-6 entry-harness rule). Both paths must
         review by the same standard, so the prompt below is the single source: it is rendered
         here from bootstrap_lib.code_review.lane_prompts, which is also what the endpoint
         runner sends. When launching this lane as an Agent, use it as the subagent's
-        instructions verbatim, then append the chunk path, file list, and claimed-file paths. Do not paraphrase it.
+        instructions verbatim, then append the chunk path, its `lines` and `page_lines`, file list, and claimed-file paths. Do not paraphrase it.
       canonical_prompt: |
         You are reviewing one chunk of a code change for obvious bugs that are visible
         in the diff alone. You are one of several independent reviewers; other files
@@ -881,9 +892,11 @@ technique_skill:
         do not reason about code you cannot see, and do not report an issue in a file
         that does not appear in this diff.
 
-        Read in full. Read the assigned chunk diff, and every CLAUDE.md you are
-        directed to read, in full: when Read returns a partial view, continue with the
-        offset it names until the last line. Never review from a partial page.
+        Read in full. Read the assigned chunk diff from line 1 with `limit: <page_lines>`,
+        then each next page with `offset` advanced by that limit, until you have read
+        line <lines>; both numbers are supplied with the chunk path. Read every CLAUDE.md
+        you are directed to read in full: when Read returns a partial view, continue with
+        the offset it names until the last line. Never review from a partial page.
 
         Only flag an issue when it is one of these:
         - code that will fail to compile or parse (syntax errors, type errors, missing
@@ -917,21 +930,21 @@ technique_skill:
 
         Return [] when there is nothing to report.
       restrictions:
-        - "Read the assigned chunk diff in full: when Read returns a partial view, continue with the offset it names until the last line. MUST NOT use Read for anything beyond that chunk."
+        - "Read the assigned chunk diff from line 1 with `limit: <page_lines>`, then each next page with `offset` advanced by that limit, until you have read line <lines>. MUST NOT use Read for anything beyond that chunk."
         - "Only flag won't-compile, syntax/type errors, missing imports, unresolved references, definitely-wrong logic regardless of inputs."
         - "For data/doc files (data_only profile): focus on malformed syntax, duplicate keys, schema or column-count violations, and broken cross-file references."
         - "Only flag issues in files present in your chunk."
     - name: reviewer_c_introduced_code
       subagent_type: "p4-kit:review-lane-<entry effort> (step 6 entry-harness rule)"
       scope: bugs/security/logic problems in the introduced code that need broader context, restricted to one chunk's files
-      input: "absolute path to ONE chunk .diff file, the depot paths of the files in that chunk, local paths for those files, the CL description, and the paths of every claimed file (paths only -- their content belongs to the subject-lens reviewer)"
+      input: "absolute path to ONE chunk .diff file with its `lines` and `page_lines`, the depot paths of the files in that chunk, local paths for those files, the CL description, and the paths of every claimed file (paths only -- their content belongs to the subject-lens reviewer)"
       canonical_prompt_note: |
         This lane can run EITHER as an Agent subagent or, when its chosen entry is not a
         `claude` entry, as a plain completion (see the step-6 entry-harness rule). Both paths must
         review by the same standard, so the prompt below is the single source: it is rendered
         here from bootstrap_lib.code_review.lane_prompts, which is also what the endpoint
         runner sends. When launching this lane as an Agent, use it as the subagent's
-        instructions verbatim, then append the chunk path, file list, local paths, claimed-file
+        instructions verbatim, then append the chunk path, its `lines` and `page_lines`, file list, local paths, claimed-file
         paths, and change description. Do not paraphrase it.
       canonical_prompt: |
         You are reviewing one chunk of a code change for bugs in the code it
@@ -973,9 +986,11 @@ technique_skill:
         cannot settle it -- do not report it. The silenced-error rule is the one
         exception.
 
-        Read in full. Read the assigned chunk diff, and every CLAUDE.md you are
-        directed to read, in full: when Read returns a partial view, continue with the
-        offset it names until the last line. Never review from a partial page.
+        Read in full. Read the assigned chunk diff from line 1 with `limit: <page_lines>`,
+        then each next page with `offset` advanced by that limit, until you have read
+        line <lines>; both numbers are supplied with the chunk path. Read every CLAUDE.md
+        you are directed to read in full: when Read returns a partial view, continue with
+        the offset it names until the last line. Never review from a partial page.
 
         Only flag an issue when it is one of these:
         - code that will fail to compile or parse (syntax errors, type errors, missing
@@ -1009,7 +1024,7 @@ technique_skill:
 
         Return [] when there is nothing to report.
       restrictions:
-        - "Read the assigned chunk diff first, in full: when Read returns a partial view, continue with the offset it names until the last line."
+        - "Read the assigned chunk diff from line 1 with `limit: <page_lines>`, then each next page with `offset` advanced by that limit, until you have read line <lines>. Read the chunk first."
         - "MAY use Read to look at surrounding context in the changed files (the LOCAL paths you were given) when needed."
         - "MAY find and Read the consumers of an input the change newly admits, outside the chunk's files, for the silenced-error rule in the canonical prompt only."
         - "Examples: concurrency issues, lifetime bugs, security holes, an input that used to be refused and is now accepted and ignored."
@@ -1017,11 +1032,11 @@ technique_skill:
     - name: validator
       subagent_type: "p4-kit:review-lane-<entry effort> (step 7)"
       scope: confirm or reject one candidate issue with high confidence
-      input: "the issue (JSON), the chunk diff, [if claude_md: relevant CLAUDE.md contents]"
+      input: "the issue (JSON), the chunk diff path with its `lines` and `page_lines`, [if claude_md: the CLAUDE.md section that contains the issue's `citation` quote, plus that CLAUDE.md's path]"
       output_format: "exactly one line: 'CONFIRMED: <one-sentence reason>' or 'REJECTED: <one-sentence reason>'"
       restrictions:
         - "Validator does not see who flagged the issue. Independence is the value."
-        - "Read the chunk diff, and each supplied CLAUDE.md, in full: when Read returns a partial view, continue with the offset it names until the last line. Never judge from a partial page. Do not Read other chunks."
+        - "Read the assigned chunk diff from line 1 with `limit: <page_lines>`, then each next page with `offset` advanced by that limit, until you have read line <lines>. Never judge from a partial page. Do not Read other chunks. The supplied CLAUDE.md section is the rule's whole context: do not Read the CLAUDE.md file unless the input says the section could not be located."
         - "For a silenced-error issue (an input the change newly admits that a consumer ignores), MAY Read the consumer the description names. CONFIRMED when no consumer acts on the admitted input; it is not an input-dependent issue."
   false_positive_guardrails:
     only_flag:

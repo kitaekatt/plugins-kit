@@ -117,6 +117,29 @@ def partition_sections_into_chunks(
     return chunks
 
 
+# The Read tool refuses a page larger than about 25,000 tokens (roughly 100,000
+# bytes) and a reader that does not know a chunk's line widths guesses a page
+# size and fails. 800 lines is the ceiling for short lines.
+READ_PAGE_MAX_LINES = 800
+READ_PAGE_MAX_BYTES = 100_000
+
+
+def chunk_read_geometry(data: bytes) -> tuple[int, int, int]:
+    """Return (lines, longest_line_bytes, page_lines) for one written chunk.
+
+    `lines` counts a final line that has no terminator. Line widths exclude the
+    line terminator. `page_lines` is the largest `limit` for a Read call that
+    keeps `page_lines * longest_line_bytes` within READ_PAGE_MAX_BYTES, capped
+    at READ_PAGE_MAX_LINES and never below 1.
+    """
+    parts = data.split(b"\n")
+    if parts and parts[-1] == b"":
+        parts.pop()
+    longest = max((len(p.rstrip(b"\r")) for p in parts), default=0)
+    page = max(1, min(READ_PAGE_MAX_LINES, READ_PAGE_MAX_BYTES // max(longest, 1)))
+    return len(parts), longest, page
+
+
 def write_chunks(chunks: list[dict], bundle_dir: Path) -> list[dict]:
     """Write chunks to <bundle_dir>/chunks/ and return the JSON index.
 
@@ -125,8 +148,10 @@ def write_chunks(chunks: list[dict], bundle_dir: Path) -> list[dict]:
     produces fewer chunks.
 
     Each index entry: {"index": int, "path": "chunks/chunk-NNN.diff",
-    "files": [identifier...], "bytes": int}. `path` is relative to
-    `bundle_dir`.
+    "files": [identifier...], "bytes": int, "lines": int,
+    "longest_line_bytes": int, "page_lines": int}. `path` is relative to
+    `bundle_dir`. The last three are measured on the written file so a
+    reader can page it with `Read(limit=page_lines)` and stop at line `lines`.
     """
     chunks_dir = bundle_dir / "chunks"
     if chunks_dir.exists():
@@ -137,7 +162,16 @@ def write_chunks(chunks: list[dict], bundle_dir: Path) -> list[dict]:
     for i, c in enumerate(chunks):
         rel = f"chunks/chunk-{i:03d}.diff"
         (bundle_dir / rel).write_text(c["text"], encoding="utf-8")
+        lines, longest, page = chunk_read_geometry((bundle_dir / rel).read_bytes())
         index.append(
-            {"index": i, "path": rel, "files": list(c["files"]), "bytes": c["bytes"]}
+            {
+                "index": i,
+                "path": rel,
+                "files": list(c["files"]),
+                "bytes": c["bytes"],
+                "lines": lines,
+                "longest_line_bytes": longest,
+                "page_lines": page,
+            }
         )
     return index
