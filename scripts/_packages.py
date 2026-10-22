@@ -450,15 +450,23 @@ def _require_major_for_removed_names(repo: Repo, ref: str, entry, version: str,
 
 
 def same_src(repo: Repo, x: str, b: str, dist: str) -> bool:
-    """same_src(X, B): equal build inputs S, and no diff under them."""
+    """same_src(X, B): equal build inputs S, and no diff under them.
+
+    packages/registry.toml is an input only through `dist`'s own entry (and the
+    repository URL), so it is compared parsed, not by file diff: registering
+    another package must not read as a change to this one.
+    """
     try:
-        sx = read_registry(repo, x).entry(dist).inputs()
+        rx = read_registry(repo, x)
+        sx = rx.entry(dist).inputs()
     except (rb.BuildError, Refusal):
         return False
-    sb = read_registry(repo, b).entry(dist).inputs()
-    if sx != sb:
+    rbk = read_registry(repo, b)
+    sb = rbk.entry(dist).inputs()
+    if sx != sb or rx.entry(dist) != rbk.entry(dist) or rx.repository != rbk.repository:
         return False
-    result = repo.run("diff", "--quiet", x, b, "--", *sb)
+    paths = [p for p in sb if p != REGISTRY_PATH]
+    result = repo.run("diff", "--quiet", x, b, "--", *paths)
     if result.returncode not in (0, 1):
         raise PackageError("git diff failed:\n"
                            + result.stderr.decode(errors="replace").strip())

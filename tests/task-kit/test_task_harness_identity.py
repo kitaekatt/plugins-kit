@@ -1,7 +1,6 @@
 """Who is calling: the harness identity, the machine, the exact process stamp, the lock, the data directory.
 
-These modules sit in ``task_system`` itself (not the dashboard package) so ``task.py`` can use them; the
-import-graph guard in ``test_dashboard_non_interference.py`` scans them with the rest of the package.
+These modules sit in ``task_system`` so ``task.py`` can use them.
 """
 
 from __future__ import annotations
@@ -20,7 +19,6 @@ from dashboard_support import SCRIPTS_DIR
 from fake_claude import FakeClaude, bash_available
 
 from task_system import datadir, harness, machine, oslock, procstamp
-from task_system.dashboard import state as dstate
 
 needs_bash = pytest.mark.skipif(not bash_available(), reason="the Bash tool process shape needs bash")
 
@@ -338,15 +336,6 @@ def test_try_lock_reports_a_held_lock_without_waiting(tmp_path):
         oslock.unlock(first)
         assert oslock.try_lock(second)
         oslock.unlock(second)
-
-
-# -- the moved data-directory resolver ------------------------------------------------------------------
-
-
-def test_the_dashboard_state_module_re_exports_the_moved_resolver():
-    assert dstate.resolve_data_dir is datadir.resolve_data_dir
-    assert dstate.DATA_ROOT_ENV == datadir.DATA_ROOT_ENV
-    assert issubclass(dstate.DashboardStateError, datadir.DataDirError)  # one handler covers both
 
 
 # -- Windows gate: registration is refused until process verification is measured there ---------------------

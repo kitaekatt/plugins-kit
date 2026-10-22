@@ -1,7 +1,7 @@
 # Shared library packaging: implementation plan
 
 Status: plan approved with amendments by the Sol advisor (binding), with the Astra advisor concurring.
-One decision is open: the release channel (see "Release channel"). Owning task: `shared-lib-packaging`.
+The release channel was ruled public PyPI; both distributions are released at 1.0.0 (`packages/released.json`). Owning task: `shared-lib-packaging`.
 Predecessor: `recommendation.md` (timing NO-GO, superseded by the user's ruling below). Every
 measurement cited is a scratch measurement, 2026-10-22 (uv 0.12.5, CPython 3.12.9, macOS arm64); no
 tracked plugin, version, tag or consumer was changed to take it.
@@ -56,15 +56,15 @@ llm-kit has no dependencies; `sdk` (openai) is needed for the OpenRouter HTTP pa
 
 ## Architecture
 
-### Release channel (open decision)
+### Release channel (ruled: public PyPI)
 
 Distribution names. The bare name `llm-kit` is taken on PyPI by an unrelated project (HTTP 200); the
 names below returned 404 (free) on 2026-10-22.
 
 | Distribution | Import | Executable |
 |---|---|---|
-| `plugins-kit-llm-kit` | `llm_kit` | `llm-kit` |
-| `plugins-kit-contracts` | `plugins_kit_contracts` | none |
+| `katsoft-llm-kit` | `llm_kit` | `llm-kit` |
+| `katsoft-contracts` | `katsoft_contracts` | none |
 
 Names on a public index are permanent once published, so reserving them is the first step.
 
@@ -88,16 +88,16 @@ preseeded uv cache.
 Three stdlib-only modules move into one distribution owned by bootstrap, source under
 `plugins/bootstrap/packages/`: `execution_event`, `interrupt_contract`, `model_declaration`.
 
-- One canonical implementation under the `plugins_kit_contracts` namespace. The
+- One canonical implementation under the `katsoft_contracts` namespace. The
   `bootstrap_lib.<module>` files become shims that re-export the same objects. Frozen literals,
   messages and event bytes are preserved; tests cover the old import paths and module-qualified
   serialized identities.
-- llm-kit declares `plugins-kit-contracts` by name with a version range. The contracts distribution
+- llm-kit declares `katsoft-contracts` by name with a version range. The contracts distribution
   has its own version and a package-version bump gate.
 - Closure obligation. A shim does not carry its dependency into a consumer venv. Every environment
   that imports a shim must also install the contracts distribution. Importers: bootstrap, llm-kit,
   awesome-kit, workflow-kit, and the frozen legacy plugins. The activating release either adds
-  `plugins-kit-contracts` to every affected plugin pyproject, or each consumer keeps its full
+  `katsoft-contracts` to every affected plugin pyproject, or each consumer keeps its full
   modules until it migrates.
 - Rejected: a generated copy inside `llm_kit` (a dead end given the end state) and moving the
   modules into `llm_kit` (bootstrap would depend on llm-kit).
@@ -151,7 +151,7 @@ Order is binding. Each step has a done-check; the task item id follows in parent
    to the chosen channel. Done when a clean machine installs from the real channel (not a local
    path) and the step-2 closure test passes against it.
 5. Activate the plugin side (`activate-plugin-deps`). Only after step 4. Ship the plugin
-   pyproject dependency on `plugins-kit-contracts` for every shim importer, `.pth` revocation, and
+   pyproject dependency on `katsoft-contracts` for every shim importer, `.pth` revocation, and
    the shims. Done when each plugin venv imports the shims with contracts installed and module
    origin is the installed distribution.
 6. Revise Mode 4 (`mode4-doc-revision`). Update
@@ -163,15 +163,29 @@ Order is binding. Each step has a done-check; the task item id follows in parent
 
 ## Databench handoff
 
-- One `.venv` containing databench, `plugins-kit-llm-kit[sdk,jobs,config]` and
-  `plugins-kit-contracts`, pinned exactly (`==`); launch llm-kit from that venv's interpreter.
-- Replace `bootstrap_lib.execution_event` with the contracts import; read the llm-kit version through
-  `importlib.metadata`, not `~/.claude/plugins/installed_plugins.json` (`generate_config.py:157-165`).
-- Set a `MODEL_ENDPOINTS_REGISTRY` default; pass the key through `OPENROUTER_API_KEY`.
+Released on public PyPI at 1.0.0 (`packages/released.json`): `katsoft-contracts` (import
+`katsoft_contracts`) and `katsoft-llm-kit` (import `llm_kit`).
+
+- One `.venv` containing databench, `katsoft-llm-kit[sdk,jobs,config]==1.0.0` and
+  `katsoft-contracts==1.0.0` from PyPI; launch llm-kit from that venv's interpreter. Extras defined by
+  the distribution: `config`, `sdk`, `local`, `frontdoor`, `jobs`, `pipeline`.
+- Replace `bootstrap_lib.execution_event` with `katsoft_contracts.execution_event`; read the llm-kit
+  version through `importlib.metadata`, not `~/.claude/plugins/installed_plugins.json`
+  (`generate_config.py:157-165`).
+- Pass the key through `OPENROUTER_API_KEY`. Package-mode llm-kit with no model registry uses the
+  shipped default model list (`llm_kit/registry/models.py`, `package_mode_model_config`); setting
+  `MODEL_ENDPOINTS_REGISTRY` to a registry file is optional and overrides it.
 - Remove `shared_lib_imports` from `.claude/bootstrap.json`, delete the stale `.pth`, and rewrite the
   "claude plugin install" messages.
-- During development, local wheels or full-SHA URLs for both packages are fine; the released
-  dependency state is the channel.
+- CLI behaviors to handle (goldens under `tests/llm-kit/goldens/cli/`):
+  - `llm-kit models describe` with no usable target writes its error JSON to stderr and leaves stdout
+    empty (`models_describe_mismatch.json`).
+  - The `completion complete` envelope key is `endpoint`, not `entry` (`complete_ok.json`).
+  - `--request-file` combined with `--prompt` exits 4 (`complete_request_file_conflict.json`).
+- The plugins-kit side verified the released wheels with
+  `WHEEL_CLOSURE_SOURCE=pypi uv run --extra dev pytest tests/packaging` (35 passed, 2026-10-22).
+  Databench's acceptance is its own clean-machine run of its verbs in a fresh `.venv` with no bootstrap
+  or plugins-kit.
 - The npm design must still settle Python 3.12 provisioning, platform support, upgrade and uninstall
   behavior, and whether it downloads or bundles the wheels.
 

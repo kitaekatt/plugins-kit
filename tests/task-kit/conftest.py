@@ -62,18 +62,6 @@ def symlinked_root(tmp_path: Path) -> tuple[Path, Path]:
     return project_root, link_target
 
 
-@pytest.fixture
-def outside_a_run(monkeypatch):
-    """A test that calls the task-kit launcher in-process runs as if outside any dashboard run.
-
-    A worker that runs these very tests inherits ``TASK_KIT_AGENT_DEPTH`` from its dashboard run, and the launcher
-    refuses on it. The variables are removed for THIS test only; nothing is deleted globally. A test that builds a
-    subprocess environment uses ``dashboard_support.clean_env`` instead.
-    """
-    for name in ("TASK_KIT_AGENT_DEPTH", "TASK_KIT_RUN_TOKEN"):
-        monkeypatch.delenv(name, raising=False)
-
-
 _LLM_KIT_LIB = (_REPO_ROOT / "plugins" / "llm-kit" / "lib").resolve()
 
 
@@ -85,7 +73,7 @@ def _is_llm_kit_module(name: str) -> bool:
 def llm_kit_is_absent_unless_a_test_adds_it():
     """Every task-kit test starts with ``llm_kit`` unimportable, whatever ran before it on the worker.
 
-    llm-kit is an OPTIONAL edge of task-kit, and the dashboard tests assert what it reports when the
+    llm-kit is an OPTIONAL edge of task-kit (the review verb's summary repair), and the tests assert what it reports when the
     package is absent. Another suite's conftest (``tests/llm-kit/conftest.py``) puts
     ``plugins/llm-kit/lib`` on ``sys.path`` while pytest collects, and any test may leave ``llm_kit``
     modules in ``sys.modules``; both are process-global, so under a full run (collection loads every

@@ -783,7 +783,7 @@ repository's index pages stale"; that overstated it.
    key `_fingerprint_settings` produces, with fixed values). It extracts the base commit's
    `src/databench` with `git archive` into a scratch directory (removed in a `finally`), runs
    `index_pages_worktree.generator_fingerprint` once for the base tree and once for the working
-   tree in separate `python -I` subprocesses whose `sys.path` puts the same llm-kit root first
+   tree in separate isolated-mode interpreter subprocesses (`-I`) whose `sys.path` puts the same llm-kit root first
    (`--kit-root`, default the `llm_kit` the databench venv links), and prints for each side the
    member list (stable name, sha256) and the digest. It exits 0 when the digests match, 1 with
    the differing members when they do not, and 2 when the two sides resolved different llm-kit

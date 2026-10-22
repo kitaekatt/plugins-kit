@@ -214,8 +214,8 @@
     },
     {
       "name": "task-kit",
-      "description": "Provides the task skill (a file-backed task-folder system with a CLI for creating, listing, working, closing, archiving, and moving task folders and task_list references) and the task-kit dashboard, a local browser view over every configured project's tasks that can also run one queued item at a time as an unattended Claude job when llm-kit is available.",
-      "version": "0.15.1",
+      "description": "Provides the task skill (a file-backed task-folder system with a CLI for creating, listing, working, closing, archiving, and moving task folders and task_list references) and task-kit export, the task facts databench's tasks view reads; bare task-kit opens that view.",
+      "version": "0.16.0",
       "author": {
         "name": "Christina"
       },

@@ -55,8 +55,8 @@ Queue means: a unit of work to do when capacity allows. Four rules define it:
 - **Never in the main thread.** The session that took the request does not do
   the work itself.
 
-The `queue` capability below is the agent behavior; the dashboard's Queue
-(references/dashboard.md) is the existing mechanism that runs it.
+The `queue` capability below is the agent behavior; a background worker
+launched per awesome-kit:orchestrate is the mechanism that runs it.
 
 ## Invoking the CLI
 
@@ -87,7 +87,7 @@ capability_skill:
       - "Enumerating a task's open items (plan.md's task_items unit) with their states -- the item-level menu below the task level"
       - "Lifecycle transitions: close, reopen, archive, delete, and move (with task_list reference rewriting)"
       - "Working-session registrations: which Claude Code session, on which machine, is working a task -- registered by work, released by the hand-off step, shown by list, show, status and the sessions verb"
-      - "Launching the task dashboard: /task dashboard runs the task-kit launcher (a live browser view over every configured project that can also run queued items)"
+      - "Opening the task view: /task dashboard runs bare `task-kit`, which opens databench's tasks view (references/dashboard.md)"
       - "Queued work: the definition (section Queued work) and the agent behavior when the user queues work (the queue capability)"
       - "Filling in scaffolded task folders per the hand-off template (references/handoff-template.md)"
     excludes:
@@ -130,13 +130,11 @@ capability_skill:
     - id: work
       keywords: [work on task, start task, dispatch]
       user_objective: "Work an explicitly named task and load its working context."
-      operation: task.py work <ref> [--init] [--root PATH]  (preceded by the dashboard handshake, task_hold.py <ref> --session "${CLAUDE_SESSION_ID}")
+      operation: task.py work <ref> [--init] [--root PATH]
       steps:
         - n: 1
-          action: "Run the dashboard handshake first, once: `task_hold.py <ref> --session \"${CLAUDE_SESSION_ID}\"`, invoked exactly like task.py (same venv Python, `scripts/task_hold.py`, same project root). It never fails and never blocks the work verb. If it printed a line on stderr, relay it to the user in one sentence; then continue to step 2 either way. What it does and prints: references/dashboard.md, \"The /task work handshake\"."
-        - n: 2
           action: "Run the work verb. It validates first: ANY error OR warning blocks (exit non-zero, findings on stderr, initialization block not emitted). A remote ref (tmp + other host) cannot be worked locally. If no folder exists at the ref, work ERRORS -- treat that as a mistyped path (run list) rather than a task to create; --init opts into scaffolding the folder and working it, and is for a ref you meant to promote. Once the gate passes, inside a Claude Code session, the verb also REGISTERS this session as working the task and publishes the record: it commits this machine's file under the task root's .sessions/ directory on the checked-out branch, then fetches the upstream and fast-forwards or merges it into the checked-out HEAD and working tree (as a pull would; a merge that stops on conflicts is aborted), then pushes only when the net change from the upstream is session files. It never force-pushes, rebases, stashes or switches branches; `sessions: {record: false}` in ~/.claude/task.local.yaml turns it off. Registering adds `session:` lines on stderr and changes neither stdout nor the exit code. Relay any `session:` line to the user in one sentence; a `session: kept:` line names the release command for another session's registration, which you run only if the user asks."
-        - n: 3
+        - n: 2
           action: "On success the script prints ONE initialization block to stdout: a '== task init ... ==' header, a Skill(skill: \"<name>\") line for every skill the task needs (the always-required baseline the script emits, followed by the task's own skills_to_invoke, deduped), an agent_hint: <type> line when set, and a closing '== then: start ... ==' directive. AGENT BEHAVIOR: invoke EVERY emitted Skill(...) line via the Skill tool now, in the order printed, before any other tool use -- the emitted list is the whole required set, so there is nothing to remember from elsewhere. Then act on the closing directive: START the work in this turn. Route planning and implementation through orchestrate's rendered policy, honoring the agent_hint type when eligible. The script only emits these lines; acting on them is your job."
       gotchas:
         - "A registration lasts from work until the hand_off capability's release step runs; exiting or crashing the harness does not end it, and it shows as `not running` on this machine and `unverified` elsewhere until released (`sessions release <ref> --all-local` is the explicit cleanup). `sessions: {record: false}` in ~/.claude/task.local.yaml turns registration off."
@@ -242,27 +240,27 @@ capability_skill:
         - "Summary-maintenance log entries do not advance last_update. Later substantive task changes invalidate the stored summary fingerprint and cause the next default review to regenerate it."
     - id: dashboard
       keywords: [task dashboard, dashboard, /task dashboard, open the dashboard, task-kit, browser view of tasks]
-      user_objective: "Open the live browser dashboard over every configured project's task folders."
-      operation: "/task dashboard -- agent-side routing; no task.py verb. Runs the task-kit launcher: bash \"${CLAUDE_PLUGIN_ROOT}/bin/task-kit\" [status|stop|restart] [--no-open]"
+      user_objective: "Open the browser view over every configured project's task folders."
+      operation: "/task dashboard -- agent-side routing; no task.py verb. Runs bare task-kit: bash \"${CLAUDE_PLUGIN_ROOT}/bin/task-kit\""
       steps:
         - n: 1
-          action: "Run `bash \"${CLAUDE_PLUGIN_ROOT}/bin/task-kit\"` (what typing `task-kit` in a terminal does once bootstrap has put it on PATH). It starts the dashboard server, or reuses the running one, restarts it when its code changed, and opens the user's browser. Report the command's exit status and its printed URL, or its stderr when it fails."
+          action: "Run `bash \"${CLAUDE_PLUGIN_ROOT}/bin/task-kit\"` (what typing `task-kit` in a terminal does once bootstrap has put it on PATH). It runs `databench --view tasks`, which serves databench's tasks view over task-kit's export. Report the command's exit status and its output, or its stderr when it fails."
       gotchas:
-        - "The dashboard contract (what Queue, Retry, Re-check, Cancel and the authoring actions do and refuse, eligibility, holds, the start order and what a queued entry waits for, the denied tools and the nested-run refusal, `dashboard:` settings in `~/.claude/task.local.yaml`) is in references/dashboard.md: load it before answering a question about the dashboard beyond launching it."
-        - "The launcher's exit codes and `--no-open` (or TASK_KIT_NO_OPEN=1) are in references/dashboard.md, \"Launcher exit codes\". Relay any launcher message as printed; do not delete the server record or kill a process to get past a refusal."
+        - "task-kit no longer has a dashboard of its own. When databench is not on PATH, bare `task-kit` exits 1 and says databench provides the task view; relay that message as printed and do not install databench unasked. What databench shows and how it reads tasks: references/dashboard.md."
+        - "`task-kit stop [--force]` stops a dashboard server an earlier task-kit version started, and refuses while that server has jobs running unless `--force`. Relay its message as printed; do not delete the server record or kill a process to get past a refusal."
     - id: queue
       keywords: [queue, queued work, queue this, queue it, queue up, add to the queue, put in the queue, run unattended, do this when you can]
       user_objective: "Take a unit of work the user queues, make it runnable unattended, and hand it to a runner other than the main thread."
-      operation: "queue <work> -- agent-side; no CLI verb. Uses the dashboard Queue (references/dashboard.md) or a background worker per awesome-kit:orchestrate."
+      operation: "queue <work> -- agent-side; no CLI verb. Hands the unit to a background worker per awesome-kit:orchestrate."
       steps:
         - n: 1
           action: "Clarify. Apply the definition in section Queued work: ask the user every question the unit needs to complete with no user involvement (scope, inputs, access, the check that shows it is done), batched in one message. Ask only what the unit cannot run without. Do not queue until the answers are in."
         - n: 2
-          action: "Make the unit a task item when it belongs to a dev/tasks task: add the plan.md task_items entry and its `### <id> -- <title>` section with the clarified brief (and `accept:` when a check exists), so the item is eligible (references/dashboard.md, Actions). The dashboard's Queue or Add item and queue then starts it. The CLI has no queue verb; report which item is ready and that Queue is the remaining step."
+          action: "Make the unit a task item when it belongs to a dev/tasks task: add the plan.md task_items entry and its `### <id> -- <title>` section with the clarified brief (and `accept:` when a check exists), so the brief survives the session. The CLI has no queue verb."
         - n: 3
-          action: "When the dashboard does not fit (no dev/tasks task, llm-kit unavailable, or the unit is not a task item), launch a background worker with the clarified brief per awesome-kit:orchestrate (run_in_background), and keep the main thread free."
+          action: "Launch a background worker with the clarified brief per awesome-kit:orchestrate (run_in_background), and keep the main thread free."
       gotchas:
-        - "Never do the queued work in the main thread, and never `/task work` a task to do its queued item inline: a session that works a task holds it, and the dashboard yields (`held`) until the hand-off."
+        - "Never do the queued work in the main thread, and never `/task work` a task to do its queued item inline."
         - "Do not restate the definition elsewhere; it lives in section Queued work only. Do not add queue verbs, routes or states."
     - id: show
       keywords: [show task, task details, read fields, inspect]
@@ -347,8 +345,8 @@ references:
     summary: "How to fill in and maintain a hand-off-type task folder: the seven-section CLAUDE.md contract (Immediate Priorities = references to item ids), plan.md's task_items block + rotation discipline (completion = removal; promotion rule), the enforced document size budgets (note at the healthy target, blocking warning at the ceiling; log.md exempt), the one-time pre-contract-folder conversion procedure, log.md filter, the durable-outputs rule (does this document belong in the folder at all -- declare at authoring time, archive verifies), anti-patterns, self-verify. Load when populating or updating a scaffolded folder, when validate emits a size finding, or when archive refuses on durable outputs."
   - id: dashboard_reference
     path: references/dashboard.md
-    keywords: [task dashboard, dashboard contract, queue, queued work, retry, re-check, cancel run, run options, waiting reason, start order, parallel checkouts, denied tools, sub-agents, nested run, exit code 6, max_parallel_projects, task.local.yaml dashboard]
-    summary: "The task-kit dashboard's operating contract: what it shows and writes, what Queue and the other actions accept and refuse, how queued runs are ordered and why one waits, what a run may not do (denied tools, nested launches), how a run ends, and the machine settings. Load when the dashboard capability is routed and the question goes beyond launching it."
+    keywords: [task dashboard, dashboard, databench, task view, task-kit export, task-kit stop, legacy dashboard, task-export, databench export, export contract, task-export.schema.json]
+    summary: "Where the task view lives now: databench's tasks view over task-kit's export, what bare `task-kit` runs, and `task-kit stop` for a server an earlier version started. Load when the dashboard capability is routed and the question goes beyond launching it."
   - id: example_claude_md
     path: references/example-claude-md.md
     keywords: [worked example, produced CLAUDE.md, template made concrete]

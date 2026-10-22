@@ -2,40 +2,61 @@
 
 Two copies of this file exist, and the same code serves both:
 
-- In the plugin (the working copy, or the plugin cache), the dashboard code is
-  beside it: ``../skills/task/scripts/task_system/dashboard``. It puts that
-  scripts directory on ``sys.path``, moves into the plugin venv when it is not
-  already there, and hands over to the dashboard launcher.
-- ``task-kit export ...`` (the task export databench reads) is dispatched
-  before any dashboard import: it runs ``task_system.export_cli`` and never
-  loads dashboard code. Every outcome, including a failure to start it,
-  writes one JSON document to stdout (``task-export-protocol.md``).
+- In the plugin (the working copy, or the plugin cache), the task system is
+  beside it: ``../skills/task/scripts/task_system``. It puts that scripts
+  directory on ``sys.path`` and dispatches the command.
 - In task-kit's data directory ``bin/`` (the copy bootstrap syncs there and
-  puts on PATH, so ``task-kit`` works in any terminal) no dashboard code is
+  puts on PATH, so ``task-kit`` works in any terminal) no task system is
   beside it. The bundle is thin on purpose: it locates the newest installed
   task-kit version in the plugin cache at run time and runs THAT copy's
   entrypoint, so a plugin update needs no PATH or bundle change.
 
-Stdlib only until the dashboard launcher is imported.
+Commands:
+
+- ``task-kit export ...`` runs ``task_system.export_cli``, the task export
+  databench reads. Every outcome, including a failure to start it, writes one
+  JSON document to stdout (``task-export-protocol.md``).
+- ``task-kit`` with no command runs ``databench --view tasks`` when databench
+  is on PATH, and otherwise exits 1 saying databench provides the task view.
+- ``task-kit stop [--force]`` stops a dashboard server an earlier version
+  started (``task_system.legacy_stop``). It stays for one task-kit minor.
+
+Stdlib only until the task system is imported.
 """
 from __future__ import annotations
 
 import json
 import re
 import runpy
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
 PLUGIN = "task-kit"
 ENTRYPOINT_RELATIVE = ("bin", "task_kit_entrypoint.py")
 SCRIPTS_RELATIVE = ("skills", "task", "scripts")
-DASHBOARD_RELATIVE = SCRIPTS_RELATIVE + ("task_system", "dashboard")
+TASK_SYSTEM_RELATIVE = SCRIPTS_RELATIVE + ("task_system",)
 _VERSION = re.compile(r"^\d+(?:\.\d+)*$")
 
+DATABENCH = "databench"
+DATABENCH_VIEW = ("--view", "tasks")
+DATABENCH_MISSING_EXIT = 1
+USAGE_EXIT = 2
+DATABENCH_MISSING_MESSAGE = (
+    "task-kit: databench provides the task view, and `databench` is not on PATH. Install databench "
+    "(https://github.com/kitaekatt/databench) so that `databench` runs in a terminal, then run `task-kit` again."
+)
+RETIRED_MESSAGE = (
+    "task-kit: the task-kit dashboard is retired; databench provides the task view (run `task-kit` with no "
+    "arguments). Remaining commands: `task-kit export ...` and `task-kit stop [--force]` (stops a dashboard "
+    "server an earlier version started)."
+)
 
-def has_dashboard(root: Path) -> bool:
-    """True when ``root`` is a task-kit plugin root that carries the dashboard."""
-    return root.joinpath(*DASHBOARD_RELATIVE).is_dir()
+
+def has_task_system(root: Path) -> bool:
+    """True when ``root`` is a task-kit plugin root that carries the task system."""
+    return root.joinpath(*TASK_SYSTEM_RELATIVE).is_dir()
 
 
 def version_key(name: str) -> tuple[int, ...]:
@@ -57,13 +78,13 @@ def installed_plugin_root(bundle_root: Path) -> Path:
             if (
                 entry.is_dir()
                 and _VERSION.match(entry.name)
-                and has_dashboard(entry)
+                and has_task_system(entry)
                 and entry.joinpath(*ENTRYPOINT_RELATIVE).is_file()
             ):
                 candidates.append((version_key(entry.name), entry))
     if not candidates:
         raise SystemExit(
-            f"task-kit: no installed task-kit with the dashboard was found in {cache}. "
+            f"task-kit: no installed task-kit was found in {cache}. "
             f"Install or update the plugin ({marketplace}:{PLUGIN}) and start a new "
             "Claude Code session so bootstrap can provision it."
         )
@@ -71,6 +92,7 @@ def installed_plugin_root(bundle_root: Path) -> Path:
 
 
 EXPORT_COMMAND = "export"
+STOP_COMMAND = "stop"
 EXPORT_PROTOCOL = 1  # the highest export protocol; a start-up failure document names it
 EXPORT_INTERNAL_EXIT = 1
 
@@ -94,7 +116,7 @@ def export_start_failure(root: Path, message: str) -> int:
 
 
 def run_export(root: Path, argv: list[str]) -> int:
-    """``task-kit export ...``: the export CLI, reached without importing the dashboard."""
+    """``task-kit export ...``: the export CLI."""
     from bootstrap_guard import reexec_under_plugin_venv  # noqa: PLC0415
 
     try:
@@ -110,31 +132,48 @@ def run_export(root: Path, argv: list[str]) -> int:
     return export_cli.main(argv)
 
 
+def run_databench() -> int:
+    """Bare ``task-kit``: ``databench --view tasks``, or exit 1 saying databench provides the task view."""
+    located = shutil.which(DATABENCH)
+    if located is None:
+        print(DATABENCH_MISSING_MESSAGE, file=sys.stderr)
+        return DATABENCH_MISSING_EXIT
+    return subprocess.call([located, *DATABENCH_VIEW])
+
+
+def run_stop(argv: list[str]) -> int:
+    """``task-kit stop``: stop a dashboard server an earlier version started."""
+    from bootstrap_guard import reexec_under_plugin_venv, require_bootstrap  # noqa: PLC0415
+
+    reexec_under_plugin_venv(PLUGIN)
+    try:
+        from task_system import legacy_stop  # noqa: PLC0415
+    except ImportError as exc:
+        print(f"[task-kit] underlying error: {type(exc).__name__}: {exc}", file=sys.stderr)
+        require_bootstrap(PLUGIN, feature="stop", missing="psutil/pyyaml/skills_kit_lib", force=True)
+        return 3
+    return legacy_stop.main(argv)
+
+
 def main() -> int:
     here = Path(__file__).resolve()
     root = here.parent.parent
-    if not has_dashboard(root):
+    if not has_task_system(root):
         located = installed_plugin_root(root).joinpath(*ENTRYPOINT_RELATIVE)
         runpy.run_path(str(located), run_name="__main__")
         return 0
     scripts = root.joinpath(*SCRIPTS_RELATIVE)
     if str(scripts) not in sys.path:
         sys.path.insert(0, str(scripts))
-    if sys.argv[1:2] == [EXPORT_COMMAND]:
-        return run_export(root, sys.argv[2:])
-    from bootstrap_guard import reexec_under_plugin_venv, require_bootstrap  # noqa: PLC0415
-
-    reexec_under_plugin_venv(PLUGIN)
-    try:
-        from task_system.dashboard import launcher  # noqa: PLC0415
-    except ImportError as exc:
-        # The failed import is itself proof the provisioned venv (psutil, PyYAML,
-        # the skills_kit_lib link) is not what is running; print the real error
-        # first so an unrelated ImportError stays diagnosable.
-        print(f"[task-kit] underlying error: {type(exc).__name__}: {exc}", file=sys.stderr)
-        require_bootstrap(PLUGIN, feature="dashboard", missing="psutil/pyyaml/skills_kit_lib", force=True)
-        return 3
-    return launcher.main(sys.argv[1:], scripts_dir=scripts, entrypoint=here)
+    argv = sys.argv[1:]
+    if argv[:1] == [EXPORT_COMMAND]:
+        return run_export(root, argv[1:])
+    if not argv:
+        return run_databench()
+    if argv[0] == STOP_COMMAND:
+        return run_stop(argv[1:])
+    print(RETIRED_MESSAGE, file=sys.stderr)
+    return USAGE_EXIT
 
 
 if __name__ == "__main__":

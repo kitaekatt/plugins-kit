@@ -699,18 +699,38 @@ class TestLedgerAndDev:
         assert not [c for c in world.calls if c[0] == "build"]
 
 
+def registry_text_extra() -> str:
+    return entry_text("other-lib", "other", surface="yes")
+
+
 # --- same_src ------------------------------------------------------------------
 
 class TestSameSrc:
     @pytest.mark.parametrize("path", ["packages/_build/constraints.txt",
                                       "packages/_build/hatch_build.py",
-                                      "packages/registry.toml",
                                       f"packages/{DIST}/pyproject.toml",
                                       "libs/alpha/__init__.py"])
     def test_same_src_covers_hook_and_constraints(self, root, path):
         before = git(root, "rev-parse", "dev")
         (root / path).write_text((root / path).read_text() + "\n# changed\n")
         after = commit_all(root, f"change {path}")
+        assert not _packages.same_src(_packages.Repo(root), before, after, DIST)
+
+    def test_other_package_registered_keeps_same_src(self, root):
+        before = git(root, "rev-parse", "dev")
+        reg = root / "packages" / "registry.toml"
+        reg.write_text(reg.read_text() + registry_text_extra())
+        write(root, "packages/released.json", '{"other-lib": {}}\n')
+        after = commit_all(root, "register another package, ledger entry")
+        assert _packages.same_src(_packages.Repo(root), before, after, DIST)
+
+    def test_own_registry_entry_change_breaks_same_src(self, root):
+        before = git(root, "rev-parse", "dev")
+        reg = root / "packages" / "registry.toml"
+        reg.write_text(reg.read_text().replace('sources = ["libs/alpha"]',
+                                               'sources = ["libs/alpha", "libs/extra"]'))
+        assert reg.read_text() != git(root, "show", f"{before}:packages/registry.toml")
+        after = commit_all(root, "change own entry")
         assert not _packages.same_src(_packages.Repo(root), before, after, DIST)
 
     def test_unrelated_change_keeps_same_src(self, root):

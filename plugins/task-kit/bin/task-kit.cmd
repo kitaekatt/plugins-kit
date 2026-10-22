@@ -1,13 +1,13 @@
 @echo off
-rem task-kit -- Windows shim that launches the task dashboard.
+rem task-kit -- Windows shim for the task-kit command (task view via databench, export, stop).
 rem
 rem Interpreter preference:
 rem   1. the plugin venv bootstrap provisions -- it carries PyYAML, psutil and the
-rem      shared-lib links (skills_kit_lib) the dashboard imports.
+rem      shared-lib links (skills_kit_lib) the task system imports.
 rem   2. the standalone Python bootstrap installs, only through BOOTSTRAP_PYTHON
 rem      and only when it resolves inside that install directory.
 rem   3. anything on PATH.
-rem The target is bin\task_kit_entrypoint.py: beside the dashboard code in the plugin,
+rem The target is bin\task_kit_entrypoint.py: beside the task system in the plugin,
 rem and a thin locator in the data-dir copy bootstrap puts on PATH.
 setlocal enabledelayedexpansion
 set "SCRIPT_DIR=%~dp0"

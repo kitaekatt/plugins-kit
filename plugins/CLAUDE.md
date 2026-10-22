@@ -279,17 +279,18 @@ unconfigurable opinion whose test passes is a finding.
   preference a team can hold two of at once, and a seam here would mean two
   incompatible YAML dialects.
 
-- **task-kit's dashboard lists `dev/tasks` tasks only; `tmp/` tasks are not shown.** The
-  dashboard identifies a project as a git repository (the `origin` remote URL basename,
-  else the directory name) and merges every checkout of one repository into one project,
-  showing a task as `<repo>:<stub>`. A `tmp/` task is per-checkout scratch: two checkouts
+- **task-kit's export lists `dev/tasks` tasks only; `tmp/` tasks are not exported, so
+  databench's task view does not show them.** The export identifies a project as a git
+  repository (the `origin` remote URL basename, else the directory name) and groups every
+  checkout of one repository into one project, naming a task `<repo>:<stub>`. A `tmp/` task is per-checkout scratch: two checkouts
   can each hold an unrelated `tmp/<stub>` with the same name, so it has no repository-level
   identity to merge on. A team that keeps active work in `tmp/` will reasonably want it
   shown; we decline a flag because it would reintroduce per-checkout projects beside
   repository projects in one list. Such a team promotes the task with
   `task move <ref> dev/tasks`. The task CLI (list, review, work) is unaffected and still
   sees `tmp/` tasks. User ruling 2026-10-19: "let's say we don't support tmp/ tasks at all
-  in the dashboard I think that's the easiest thing to do".
+  in the dashboard I think that's the easiest thing to do" (the task view was task-kit's
+  dashboard when ruled; databench now provides it).
 
 - **task-kit's working-session registration lasts until hand-off; exiting the harness does
   not release it.** `/task work` registers the Claude Code session as working a task and
@@ -300,7 +301,7 @@ unconfigurable opinion whose test passes is a finding.
   turn a session's absence into a statement that the work stopped, which only the human who
   hands off can make, and a kill, a crash or a laptop sleep would then silently drop a claim
   that other machines rely on. Such a user releases with `/task hand-off`,
-  `task sessions release <ref> --all-local`, or a dashboard dismissal, or turns recording
+  or `task sessions release <ref> --all-local`, or turns recording
   off with `sessions: {record: false}` in `~/.claude/task.local.yaml`. User ruling
   2026-10-21: "the /task hand-off procedure should include unregistering that you are
   working on a task. The /task work procedure should include registering that you are
@@ -308,10 +309,10 @@ unconfigurable opinion whose test passes is a finding.
   I don't think that should count as interrupting working on a task."
 
 - **task-kit commits and publishes working-session registrations to the task root's
-  upstream.** A registration (and a dashboard dismissal) is committed on the checked-out
+  upstream.** A registration (and a release) is committed on the checked-out
   branch of the task root's repository, the upstream is fetched and fast-forwarded or
   merged into the checked-out HEAD and working tree, and the file is pushed: at `/task work`,
-  and by a running dashboard about once a minute. The integration changes the user's
+  at each release, and at a resumed or cleared session's start for the records the SessionStart hook updated; `task sessions publish` pushes records committed but not yet pushed. The integration changes the user's
   working tree like a pull, and the push publishes to a remote. A user will reasonably want
   a tool that never touches their branch or remote on their behalf; we decline a narrower
   mode because a registration kept only on one machine cannot tell another machine that a
@@ -321,7 +322,7 @@ unconfigurable opinion whose test passes is a finding.
   the machine-wide `sessions: {record: false}` in `~/.claude/task.local.yaml`, which
   registers and publishes nothing. User rulings 2026-10-21: "if the data isn't in the task
   file, wherever it goes still needs to be commited, because we run this dashboard on
-  multiple machines" and "No it definitely changes it in git. Why wouldn't it. We need a
+  multiple machines" (the dashboard was retired in task-kit 0.16.0) and "No it definitely changes it in git. Why wouldn't it. We need a
   way of reconciling truth that is git."
 
 An opinion that FAILS the test needs neither a register entry nor a seam -- it is simply a

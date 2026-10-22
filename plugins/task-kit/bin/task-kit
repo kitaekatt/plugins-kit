@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# task-kit -- shim that launches the task dashboard.
+# task-kit -- shim for the task-kit command (task view via databench, export, stop).
 #
 # Interpreter preference:
 #   1. the plugin venv bootstrap provisions -- it carries PyYAML, psutil and the
-#      shared-lib links (skills_kit_lib) the dashboard imports.
+#      shared-lib links (skills_kit_lib) the task system imports.
 #   2. the standalone Python bootstrap installs, only through BOOTSTRAP_PYTHON
 #      and only when it resolves inside that install directory.
 #   3. anything on PATH.
-# The target is bin/task_kit_entrypoint.py: beside the dashboard code in the plugin,
+# The target is bin/task_kit_entrypoint.py: beside the task system in the plugin,
 # and a thin locator in the data-dir copy bootstrap puts on PATH.
 
 set -uo pipefail

@@ -41,9 +41,9 @@ def resolve_data_dir(
         raise DataDirError(f"cannot resolve the venv path {venv}: {exc}") from exc
     if venv.name != VENV_DIRNAME or venv.parent.name != PLUGIN_NAME:
         raise DataDirError(
-            "the task-kit dashboard must run under its bootstrap-provisioned venv "
+            "the task-kit data directory is resolved from its bootstrap-provisioned venv "
             f"(<data root>/<marketplace>/{PLUGIN_NAME}/{VENV_DIRNAME}); this interpreter's "
-            f"prefix is {venv}. Start it with the task-kit launcher, or pass --data-dir."
+            f"prefix is {venv}. Run `task-kit` (its launcher), or pass --data-dir."
         )
     data_dir = venv.parent
     redirected = env.get(DATA_ROOT_ENV)
@@ -54,6 +54,6 @@ def resolve_data_dir(
             raise DataDirError(
                 f"{DATA_ROOT_ENV} redirects the data tree to {redirected}, but this "
                 f"interpreter belongs to the data directory {data_dir}; refusing to use "
-                "the dashboard state of another data tree."
+                "the state of another data tree."
             )
     return data_dir

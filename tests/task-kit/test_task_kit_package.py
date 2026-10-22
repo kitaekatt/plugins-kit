@@ -1,4 +1,4 @@
-"""task-kit's packaging for the dashboard: manifests, skill routing, PATH exposure.
+"""task-kit's packaging: manifests, skill routing, PATH exposure.
 
 These pin the facts that make `task-kit` typed in any terminal reach the
 launcher and that `/task dashboard` routes to it without colliding with the
@@ -76,30 +76,42 @@ def test_dashboard_is_not_a_task_py_verb():
     assert "dashboard" not in cli.lower()
 
 
-def test_the_dashboard_adds_no_llm_kit_install_edge():
+def test_task_kit_adds_no_llm_kit_install_edge():
     """No plugin dependency and no auto/manual install entry for llm-kit. (llm_kit may
-    appear in shared_lib_imports for the pre-existing summary-repair import.)
+    appear in shared_lib_imports for the summary-repair import.)
 
-    llm-kit is published, but optional: without it task-kit still lists and manages tasks, and only the
-    autonomous run actions REFUSE. So there is no ``install: "auto"`` edge and no ``plugin.json`` dependency.
-    The refusal message names ``claude plugin install llm-kit@plugins-kit``, and that message is the
-    discoverability, so there is no ``install: "manual"`` entry either.
+    llm-kit is published, but optional: without it task-kit still lists and manages tasks, and only the review
+    verb's summary repair REFUSES with a diagnostic. So there is no ``install: "auto"`` edge and no ``plugin.json``
+    dependency, and no ``install: "manual"`` entry either.
     """
     assert not any("llm-kit" in p["ref"] for p in BOOTSTRAP["plugins"])
     assert "llm-kit" not in PLUGIN_JSON["dependencies"]
 
 
-def test_the_work_capability_runs_the_handshake_first_and_never_waits_on_it():
-    """Step 1 of ``work`` is the dashboard handshake; it cannot gate step 2, the work verb itself.
+def test_the_work_capability_starts_with_the_work_verb_and_no_surface_names_task_hold():
+    """Step 1 of ``work`` is the work verb: no scheduler remains to yield to, so there is no handshake before it.
 
-    Red: delete step 1 (or its command) from the ``work`` capability.
+    Red: put a step that runs ``task_hold.py`` back in front of the work verb, or name it in any capability or
+    in a reference.
     """
     steps = skill_capabilities()["work"]["steps"]
-    assert [step["n"] for step in steps][:2] == [1, 2]
-    handshake, work = steps[0]["action"], steps[1]["action"]
-    assert 'task_hold.py <ref> --session "${CLAUDE_SESSION_ID}"' in handshake
-    assert "never fails and never blocks the work verb" in handshake
-    assert "continue to step 2" in handshake
-    assert "Run the work verb" in work
-    reference = (PLUGIN_ROOT / "skills" / "task" / "references" / "dashboard.md").read_text(encoding="utf-8")
-    assert "## The /task work handshake" in reference and "## Launcher exit codes" in reference
+    assert [step["n"] for step in steps] == [1, 2]
+    assert steps[0]["action"].startswith("Run the work verb")
+    assert not (PLUGIN_ROOT / "skills" / "task" / "scripts" / "task_hold.py").exists()
+    surfaces = {"SKILL.md": SKILL}
+    for reference in (PLUGIN_ROOT / "skills" / "task" / "references").glob("*.md"):
+        surfaces[reference.name] = reference.read_text(encoding="utf-8")
+    assert [name for name, text in surfaces.items() if "task_hold" in text] == []
+
+
+def test_no_plugin_file_imports_the_retired_dashboard_package():
+    """The dashboard package is gone; nothing under the plugin may import it (docstrings may name it).
+
+    Red: add ``from task_system.dashboard import state`` (or ``from .dashboard import x``) to any plugin .py file.
+    """
+    pattern = re.compile(r"^\s*(?:from\s+(?:task_system\.dashboard|\.+dashboard)\b|from\s+task_system\s+import\s+.*\bdashboard\b"
+                         r"|import\s+task_system\.dashboard\b)", re.M)
+    offenders = [str(path.relative_to(PLUGIN_ROOT)) for path in PLUGIN_ROOT.rglob("*.py")
+                 if "__pycache__" not in path.parts and pattern.search(path.read_text(encoding="utf-8"))]
+    assert offenders == []
+    assert not (PLUGIN_ROOT / "skills" / "task" / "scripts" / "task_system" / "dashboard").exists()
