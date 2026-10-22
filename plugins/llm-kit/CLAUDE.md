@@ -1026,10 +1026,86 @@ background lane refuses under an open dispatch, and the workflow lane has no req
 (do not describe it as refusing). User docs: `references/pipeline-library.md` and step 9 of
 `skills/content-pipeline-domain/references/building-a-pipeline.md`.
 
+## Cost classes and consent
+
+Every declared entry has a cost class, and a caller that opts in with `allow=` switches
+off the classes it may not use. Classes are `free`, `usage` and `spend`; classification
+(`llm_kit.registry.cost.classify`) fails closed, so an entry that cannot be shown to be
+`free` or `usage` is `spend`.
+
+- **`free`**: a transport whose `billing.mode` is `unmetered`, and a front-door entry
+  whose every tier (the transports with the same `routing.group`) is unmetered. The front
+  door's own `billing` does not count, and a front door with no tiers is `spend`.
+- **`usage`**: a `claude` or `codex` harness running on a subscription session pool. Its
+  authentication is probed, never assumed (`llm_kit.adapters.harness_auth`):
+  - `claude`: any billing-diverting variable set and non-empty (`ANTHROPIC_API_KEY`,
+    `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_CUSTOM_HEADERS`,
+    `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `AWS_BEARER_TOKEN_BEDROCK`,
+    `ANTHROPIC_VERTEX_PROJECT_ID`) is metered. Otherwise `claude auth status` must report
+    `authMethod` `claude.ai` and `apiProvider` `firstParty`; another login is metered.
+  - `codex`: `CODEX_API_KEY` or `OPENAI_API_KEY` set is metered, and `CODEX_ACCESS_TOKEN`
+    alone is unknown. Otherwise `codex doctor --json` runs in the call's working directory
+    and environment, and only provider `openai`, ChatGPT auth and no stored API key is a
+    subscription. Another provider (from any configuration layer, including managed ones) or
+    another auth mode is metered. No file-reading fallback exists.
+  - A probe that cannot run, times out, exits non-zero or returns an unrecognized report is
+    unknown, and unknown is `spend`. A harness other than `claude` and `codex` is always
+    `spend`. A probe reason names fields and variables, never a secret value.
+- **`spend`**: everything else, including a metered transport, an entry with no registry
+  entry, and an unknown kind.
+
+**Per-machine consent.** The file is
+`~/.claude/plugins/data/plugins-kit/llm-kit/consent.json` (resolved on each call), with
+`{"schema": 1, "usage": bool, "spend": bool, "updated_at": ...}`. `free` is always allowed.
+`llm-kit consent show [--json]` prints `usage`, `spend`, `source` (`file`, `absent` or
+`unreadable`), `path` and `note`. `llm-kit consent set [--usage on|off] [--spend on|off]`
+changes only the flags given and exits 2 when given neither; it states that operations that
+opt in send their inputs unredacted to the providers of those models.
+`llm_kit.registry.consent.load_consent()` returns `Consent` with `usage`, `spend`, `source`,
+`path`, `note` and `allowed` (the frozenset of allowed classes). An absent, unreadable or
+malformed file (anything but real booleans and schema 1) means free-only, with `note`
+saying why. `save_consent` writes atomically and propagates errors.
+
+**Opt-in is per caller, and the default is no filtering.** `describe(..., allow=...)` and
+`run(..., allow=...)` take an iterable of class names (an unknown name raises `ValueError`).
+Pass the consent's classes to opt in:
+
+```python
+consent = load_consent()
+if consent.note:
+    print(consent.note)        # the caller prints it; the library never does
+result = run(names, request, allow=consent.allowed)
+```
+
+Without `allow` (`None`), nothing is classified or probed and the output is byte-identical to
+a call without the argument. With it:
+
+- An entry whose class is not allowed gets the disposition `switched-off`, with its
+  `cost_class` and the detail `<class> not allowed: <reason>`. Switched-off entries are SHOWN,
+  not hidden: `Ranking.switched_off` lists them, `render()` adds a `Switched off: <id> (<class>)`
+  line and `to_json()` a `switched_off` key (both only when there are any), and the floor
+  (`NoUsableRoutingTarget.switched_off_ids`) itemises them. They are never dispatched to.
+- The check follows the unroutable checks and precedes the requirements match and every
+  probe, so a switched-off entry is never probed for reachability.
+- Harness authentication is probed lazily, once per harness, only for `claude` and `codex`
+  entries (in `Path(project_root or cwd)` for `describe`, in the request workspace for
+  `run`), unless `describe` is given `harness_auth` (a mapping of harness name to `HarnessAuth`).
+- `run` normalizes `allow` once, so a generator survives re-selection, and probes once per call.
+  A declaration whose every entry is switched off raises `NoUsableRoutingTarget` before any
+  backend call.
+- A caller that opts in MUST print `Consent.note` itself; the floor does not carry it. A
+  consumer that must also run against an older llm-kit checks that `run` accepts `allow`
+  (`inspect.signature`) and that `llm_kit.registry.consent` imports, and reports "absent" and
+  "too old" differently.
+
+`llm-kit models describe <ids> --allow free,usage` applies the same filter from the command
+line (comma-separated or repeated; an unknown class exits 2) and shows the switched-off
+entries.
+
 ## `llm_kit.cli`, launchers and bootstrap
 
 The console script is `llm-kit = llm_kit.cli:main`, with the groups `account`, `completion`,
-`models`, `jobs`, `pipeline`, `frontdoor` and `local`. `llm_kit.cli.LEGACY_VERBS` maps each
+`models`, `jobs`, `pipeline`, `frontdoor`, `local` and `consent`. `llm_kit.cli.LEGACY_VERBS` maps each
 verb the consolidated commands carried to its group; a bare old verb prints the migration
 hint. Each carried verb keeps its arguments, output and exit codes; the exit-code tables
 differ by group because the commands differed (the scripting groups use 2 usage, 3 halt, 4

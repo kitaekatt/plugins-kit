@@ -14,6 +14,9 @@ Three surfaces, kept apart:
   out-of-quota entries (with their reset time) and unreachable entries, which
   are all real on this machine. Unresolved, unroutable-here,
   requirements-mismatch, excluded and shadowed-core entries are HIDDEN.
+  Entries switched off by the cost-class ``allow`` filter are SHOWN, never
+  hidden: :attr:`Ranking.switched_off` lists them, and :meth:`Ranking.render`
+  and :meth:`Ranking.to_json` name them (and only when there are any).
 - **SKIP** -- selection passes over every non-usable entry silently: no
   notice, no warning, no log line.
 - **FLOOR** -- when no usable rendered entry remains, :func:`describe` raises
@@ -45,6 +48,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence
 
+from llm_kit.registry import cost as _cost
 from llm_kit.registry.constants import cli_command
 from llm_kit.completion.contract import OutputContractViolation, contract_requirements, merge_requirements
 from llm_kit.completion.halt import HALT_INSUFFICIENT_CREDIT, HALT_QUOTA
@@ -92,6 +96,7 @@ DISPOSITION_UNROUTABLE = "unroutable"
 DISPOSITION_REQUIREMENTS_MISMATCH = "requirements-mismatch"
 DISPOSITION_EXCLUDED = "excluded"
 DISPOSITION_SHADOWED_CORE = "shadowed-core"
+DISPOSITION_SWITCHED_OFF = "switched-off"
 #: Dispositions that stay in the render. Everything else is hidden.
 _RENDERED = (DISPOSITION_USABLE, DISPOSITION_OUT_OF_QUOTA, DISPOSITION_UNREACHABLE)
 
@@ -271,6 +276,7 @@ class Disposition:
     disposition: str
     detail: str = ""
     resets_at: Optional[int] = None
+    cost_class: Optional[str] = None
 
     def describe_line(self) -> str:
         text = self.disposition
@@ -279,13 +285,16 @@ class Disposition:
         return f"{self.id}: {text}" + (f" ({self.detail})" if self.detail else "")
 
     def to_json(self) -> Dict[str, Any]:
-        return {
+        data: Dict[str, Any] = {
             "id": self.id,
             "declared_index": self.declared_index,
             "disposition": self.disposition,
             "detail": self.detail,
             "resets_at": self.resets_at,
         }
+        if self.cost_class is not None:
+            data["cost_class"] = self.cost_class
+        return data
 
 
 @dataclass(frozen=True)
@@ -365,7 +374,9 @@ class NoUsableRoutingTarget(Exception):
 
     Carries EVERY declared entry and its disposition in declaration order,
     including the hidden ones. It is the only selection error; every caller
-    propagates it.
+    propagates it. An entry the cost-class ``allow`` filter switched off
+    appears here like any other, with its cost class and the reason; the ids
+    of those entries are :attr:`switched_off_ids`.
     """
 
     def __init__(self, names: Sequence[str], dispositions: Sequence[Disposition], caller: str) -> None:
@@ -376,6 +387,13 @@ class NoUsableRoutingTarget(Exception):
         super().__init__(
             f"no usable routing target in [{', '.join(self.names)}] "
             f"for a {caller} caller:\n{lines}"
+        )
+
+    @property
+    def switched_off_ids(self) -> tuple:
+        """Ids of the entries the cost-class ``allow`` filter switched off, in declaration order."""
+        return tuple(
+            d.id for d in self.dispositions if d.disposition == DISPOSITION_SWITCHED_OFF
         )
 
     def to_json(self) -> Dict[str, Any]:
@@ -397,6 +415,12 @@ class Ranking:
     :meth:`to_json` name rendered entries only. Only
     :class:`NoUsableRoutingTarget` may name a hidden id (RENDER, SKIP and
     FLOOR are separate surfaces).
+
+    ``switched_off`` holds the entries the cost-class ``allow`` filter
+    switched off. They are SHOWN, not hidden: when it is non-empty,
+    :meth:`render` adds one ``Switched off:`` line and :meth:`to_json` adds a
+    ``"switched_off"`` key; when it is empty (always, without ``allow``) the
+    output is byte-identical to a build without the filter.
     """
 
     names: tuple = field(repr=False)
@@ -404,6 +428,9 @@ class Ranking:
     rendered_entries: tuple = ()
     dispositions: tuple = field(default=(), repr=False)
     rule: str = ""
+    # Entries switched off by the cost-class allow filter. They are SHOWN (render
+    # and to_json name them when non-empty), never hidden; empty leaves output unchanged.
+    switched_off: tuple = field(default=(), repr=False)
 
     @property
     def default(self) -> Optional[EntryState]:
@@ -430,18 +457,26 @@ class Ranking:
             if entry.shares_quota_with:
                 line += f"  shares {entry.pool} with {', '.join(entry.shares_quota_with)}"
             lines.append(line)
+        if self.switched_off:
+            lines.append(
+                "Switched off: "
+                + ", ".join(f"{d.id} ({d.cost_class})" for d in self.switched_off)
+            )
         lines.append(self.rule)
         return "\n".join(lines)
 
     def to_json(self) -> Dict[str, Any]:
         default = self.default
         # No `names` and no `dispositions`: both carry hidden ids.
-        return {
+        data: Dict[str, Any] = {
             "caller": self.caller,
             "default": default.id if default is not None else None,
             "rendered_entries": [entry.to_json() for entry in self.rendered_entries],
             "rule": self.rule,
         }
+        if self.switched_off:
+            data["switched_off"] = [d.to_json() for d in self.switched_off]
+        return data
 
 
 def _fresh_reading(entry_id: str, spec: ConserveSpec, harness: Optional[str]) -> Budget:
@@ -517,6 +552,43 @@ def _rule(caller: str, has_author: bool) -> str:
     return "\n".join(parts)
 
 
+_AUTH_HARNESSES = ("claude", "codex")
+
+
+class _LazyHarnessAuth(Mapping):
+    """Harness authentication probed on first need, once per harness.
+
+    ``describe`` and ``run`` build one only when an ``allow`` filter is in
+    force and the caller supplied no ``harness_auth``. Nothing is probed (and
+    ``llm_kit.adapters.harness_auth`` is not imported) until a claude or codex
+    harness entry is actually classified; ``cwd`` is the working directory the
+    probe runs in. Any other harness name is absent from the mapping.
+    """
+
+    def __init__(self, cwd: Path) -> None:
+        self._cwd = cwd
+        self._auth: Dict[str, Any] = {}
+        self._probed: set = set()
+
+    def ensure(self, harness: str) -> None:
+        if harness not in _AUTH_HARNESSES or harness in self._probed:
+            return
+        self._probed.add(harness)
+        from llm_kit.adapters import harness_auth as _harness_auth  # noqa: PLC0415
+
+        self._auth.update(_harness_auth.probe_harness_auth([harness], cwd=self._cwd))
+
+    def __getitem__(self, harness: str) -> Any:
+        self.ensure(harness)
+        return self._auth[harness]
+
+    def __iter__(self):
+        return iter(self._auth)
+
+    def __len__(self) -> int:
+        return len(self._auth)
+
+
 def describe(
     names: Any,
     *,
@@ -530,6 +602,8 @@ def describe(
     reachability_cache: Optional[MutableMapping[str, Reachability]] = None,
     entries: Optional[Mapping[str, Any]] = None,
     dispatchable: Iterable[str] = (),
+    allow: Optional[Iterable[str]] = None,
+    harness_auth: Optional[Mapping[str, Any]] = None,
 ) -> Ranking:
     """Classify, filter, pace-order and default a declaration.
 
@@ -554,6 +628,25 @@ def describe(
     that reaches transports through a runner of its own. Default: none, so a
     transport is unroutable for a session caller. A process caller already
     routes every resolvable kind, so the argument changes nothing there.
+
+    ``allow`` is the cost-class filter: an iterable of ``"free"``, ``"usage"``
+    and ``"spend"`` (normalized once through
+    :func:`~llm_kit.registry.cost.normalize_allow`; ``ValueError`` on an
+    unknown class). An entry whose class (:func:`~llm_kit.registry.cost.classify`)
+    is not allowed gets the disposition ``switched-off``, with its cost class
+    and the detail ``"<class> not allowed: <reason>"``. The check follows the
+    unroutable checks and precedes the requirements match and every probe, so a
+    switched-off entry is never probed. Switched-off entries are SHOWN, not
+    hidden: they are listed in :attr:`Ranking.switched_off`, named by
+    ``render``/``to_json``, and itemised by the floor. With ``allow=None``
+    (the default) nothing is classified or authenticated and the result is
+    byte-identical to a call without the argument. Harness authentication
+    (claude and codex entries only) is probed lazily, once per harness, in the
+    working directory ``Path(project_root or Path.cwd()).resolve()`` -- unless
+    the caller supplies ``harness_auth``, a mapping of harness name to
+    :class:`~llm_kit.registry.cost.HarnessAuth`, in which case nothing is
+    probed.
+
     Raises :class:`NoUsableRoutingTarget` when nothing usable remains, and
     ``bootstrap_lib.model_declaration.DeclarationError`` for a structurally
     invalid declaration (empty, duplicate, non-string). Skipping is silent.
@@ -567,6 +660,12 @@ def describe(
             f"dispatchable kinds must be among {_DISPATCHABLE_KINDS}, got {unknown_kinds}"
         )
     session_transport = caller == CALLER_SESSION and DISPATCHABLE_TRANSPORT in extra_kinds
+    allow_set = _cost.normalize_allow(allow) if allow is not None else None
+    auth: Optional[Mapping[str, Any]] = None
+    if allow_set is not None:
+        auth = harness_auth
+        if auth is None:
+            auth = _LazyHarnessAuth(Path(project_root or Path.cwd()).resolve())
     declared = _model_declaration().parse(names)
     root = str(project_root) if project_root is not None else None
     injected = entries is not None
@@ -591,8 +690,11 @@ def describe(
     dispositions: Dict[int, Disposition] = {}
     candidates: List[Dict[str, Any]] = []
     for index, name in enumerate(declared):
-        def settle(disposition: str, detail: str = "", resets_at: Optional[int] = None) -> None:
-            dispositions[index] = Disposition(name, index, disposition, detail, resets_at)
+        def settle(
+            disposition: str, detail: str = "", resets_at: Optional[int] = None,
+            cost_class: Optional[str] = None,
+        ) -> None:
+            dispositions[index] = Disposition(name, index, disposition, detail, resets_at, cost_class)
 
         if name in excluded:
             settle(DISPOSITION_EXCLUDED, "ruled out by the caller")
@@ -638,6 +740,17 @@ def describe(
         ):
             settle(DISPOSITION_UNROUTABLE, f"harness {harness!r} has no completion backend")
             continue
+        if allow_set is not None:
+            if isinstance(auth, _LazyHarnessAuth) and kind == HARNESS_KIND:
+                auth.ensure((harness or "").lower())
+            verdict = _cost.classify(merged, entries=entries, harness_auth=auth)
+            if verdict.cost_class not in allow_set:
+                settle(
+                    DISPOSITION_SWITCHED_OFF,
+                    f"{verdict.cost_class} not allowed: {verdict.reason}",
+                    cost_class=verdict.cost_class,
+                )
+                continue
         if matcher is not None:
             adapter = backend_name if isinstance(backend_name, str) else _adapter_name(kind, harness)
             record = advertised.get(adapter) if adapter else None
@@ -752,6 +865,9 @@ def describe(
         rendered_entries=tuple(finished),
         dispositions=ordered_dispositions,
         rule=_rule(caller, any(state.is_self for state in finished)),
+        switched_off=tuple(
+            d for d in ordered_dispositions if d.disposition == DISPOSITION_SWITCHED_OFF
+        ),
     )
 
 
@@ -881,6 +997,7 @@ def run(
     reachability_cache: Optional[MutableMapping[str, Reachability]] = None,
     entries: Optional[Mapping[str, Any]] = None,
     observer: Optional[ExecutionObserver] = None,
+    allow: Optional[Iterable[str]] = None,
 ) -> RunResult:
     """Dispatch a unit to the first usable entry, moving on only on a classified halt.
 
@@ -937,9 +1054,30 @@ def run(
     ``bootstrap_lib.execution_event`` is absent or too old, the call raises
     :class:`DeclarationSupportError` before any dispatch; without an observer
     the module is never imported.
+
+    ``allow`` (keyword-only, default ``None``) is the cost-class filter of
+    :func:`describe`. It is normalized ONCE here, so a one-shot iterable such as
+    a generator survives re-selection, and the same frozenset filters every
+    attempt's :func:`describe`; an unknown class raises ``ValueError`` before
+    anything runs. Harness authentication is probed lazily, once for the whole
+    run, in ``request.workspace or project_root or Path.cwd()`` (resolved) --
+    the directory the backend runs in -- and reused by every attempt. Switched-off
+    entries are shown by :func:`describe` and itemised by the floor, never
+    dispatched to: a declaration whose every entry is switched off raises
+    :class:`NoUsableRoutingTarget` before any backend call. Without ``allow``
+    nothing is classified or probed.
     """
     if max_attempts < 1:
         raise ValueError("max_attempts must be at least 1")
+    allow_set = _cost.normalize_allow(allow) if allow is not None else None
+    allow_kwargs: Dict[str, Any] = {}
+    if allow_set is not None:
+        allow_kwargs = {
+            "allow": allow_set,
+            "harness_auth": _LazyHarnessAuth(
+                Path(request.workspace or project_root or Path.cwd()).resolve()
+            ),
+        }
     execution_event = _execution_event() if observer is not None else None
     contract = getattr(request.options, "output_contract", None)
     if contract is not None:
@@ -979,7 +1117,7 @@ def run(
             ranking = describe(
                 names, project_root=root, caller=CALLER_PROCESS, requirements=requirements,
                 capabilities=capabilities, backend_factory=backend_factory, exclude=excluded,
-                reachability_cache=cache, entries=entries,
+                reachability_cache=cache, entries=entries, **allow_kwargs,
             )
         except NoUsableRoutingTarget:
             emit("terminal", payload={"state": "unroutable"})
@@ -1112,6 +1250,7 @@ __all__ = [
     "DISPOSITION_OUT_OF_QUOTA",
     "DISPOSITION_REQUIREMENTS_MISMATCH",
     "DISPOSITION_SHADOWED_CORE",
+    "DISPOSITION_SWITCHED_OFF",
     "DISPOSITION_UNREACHABLE",
     "DISPOSITION_UNRESOLVED",
     "DISPOSITION_UNROUTABLE",

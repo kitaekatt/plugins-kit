@@ -4,8 +4,6 @@ One plugin and one shared library, `llm_kit`, for LLM access, durable agent
 jobs and batch content pipelines. It consolidates `llm-scripting-kit`, `job-kit`
 and `content-pipeline-kit` (migrated from those plugins; they stay installed,
 published and unchanged, and llm-kit never imports them).
-The plugin manifest sets `"published": false`, so no marketplace entry exists and
-a publish of any other plugin does not ship it.
 
 ## Library
 
@@ -18,7 +16,7 @@ empty: import the sub-package you need.
 ## CLI
 
 The console script is `llm-kit = llm_kit.cli:main`, with the groups `account`,
-`completion`, `models`, `jobs`, `pipeline`, `frontdoor` and `local`. Run it by
+`completion`, `models`, `jobs`, `pipeline`, `frontdoor`, `local` and `consent`. Run it by
 its version-free venv path, which works from any shell and directory:
 
 ```
@@ -46,6 +44,55 @@ source and reports the deprecated and removed names in use:
 
 It exits 1 when a removed name is used (a deprecated name too under `--strict`)
 and 2 when the contract cannot be read.
+
+## Cost classes and consent
+
+Every declared model entry has a cost class, and a caller that opts in with `allow=` is
+limited to the classes it names. Classification fails closed: what cannot be shown to be
+`free` or `usage` is `spend`.
+
+| Class | Meaning |
+|---|---|
+| `free` | A transport with `billing.mode` `unmetered`, or a front door whose every tier is unmetered (a front door with no tiers is `spend`). |
+| `usage` | A `claude` or `codex` harness on a subscription session pool. |
+| `spend` | Everything else: a metered transport, an undeclared entry, any other harness, or a harness whose authentication is metered or unknown. |
+
+Harness authentication is probed, never assumed. Claude is metered when a billing-diverting
+variable is set and non-empty (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
+`ANTHROPIC_BASE_URL`, `ANTHROPIC_CUSTOM_HEADERS`, `CLAUDE_CODE_USE_BEDROCK`,
+`CLAUDE_CODE_USE_VERTEX`, `AWS_BEARER_TOKEN_BEDROCK`, `ANTHROPIC_VERTEX_PROJECT_ID`);
+otherwise `claude auth status` must report `authMethod` `claude.ai` and `apiProvider`
+`firstParty`. Codex is metered when `CODEX_API_KEY` or `OPENAI_API_KEY` is set; otherwise
+`codex doctor --json` (run in the call's working directory and environment) must report
+provider `openai`, ChatGPT auth and no stored API key. A probe that cannot run, times out or
+returns an unrecognized report is unknown, which counts as `spend`.
+
+Consent is one file per machine, `~/.claude/plugins/data/plugins-kit/llm-kit/consent.json`.
+`free` is always allowed; `usage` and `spend` are off until the user turns them on. An absent
+or malformed file means free-only.
+
+```
+llm-kit consent show [--json]                       # usage, spend, source, path, note
+llm-kit consent set [--usage on|off] [--spend on|off]   # only the flags given change; none given exits 2
+```
+
+Opt-in is per caller. `describe(..., allow=...)` and `run(..., allow=...)` take class names,
+and a caller passes what the user consented to:
+
+```python
+from llm_kit.registry.consent import load_consent
+
+consent = load_consent()
+if consent.note:
+    print(consent.note)        # the caller prints it; the library never does
+result = run(names, request, allow=consent.allowed)
+```
+
+Without `allow`, nothing is classified or probed and behavior is unchanged. With it, an entry
+whose class is not allowed gets the disposition `switched-off`: it is shown (a `Switched off:`
+line in `render()`, a `switched_off` key in `to_json()`, and in the `NoUsableRoutingTarget`
+floor), never hidden and never dispatched to or probed. `llm-kit models describe <ids> --allow
+free,usage` applies the same filter from the command line.
 
 ## Local model servers and the front door
 

@@ -101,9 +101,9 @@ class TestVerbMap:
                                             "guard-launch"}
         assert nested(final, "acceptance") == {"swapper", "frontdoor"}
 
-    def test_the_groups_are_the_seven_in_the_design(self, final_mods):
+    def test_the_groups_are_the_eight_in_the_design(self, final_mods):
         assert list(final_mods.cli.GROUPS) == [
-            "account", "completion", "models", "jobs", "pipeline", "frontdoor", "local",
+            "account", "completion", "models", "jobs", "pipeline", "frontdoor", "local", "consent",
         ]
 
 
@@ -147,7 +147,7 @@ class TestRouting:
 
 class TestUsageTokens:
     def test_group_parsers_name_llm_kit_and_the_group(self, final_mods, capsys):
-        for group in ("account", "completion", "models", "jobs", "pipeline", "local"):
+        for group in ("account", "completion", "models", "jobs", "pipeline", "local", "consent"):
             out = run(final_mods.cli.main, [group, "--help"], capsys)
             assert out.code == 0 and f"usage: llm-kit {group}" in out.out, group
 

@@ -17,6 +17,7 @@
     --accent:#71b7ff; --on-accent:#08111c; --warn:#f2b84b; --bad:#ff7b7b; --good:#83d6a3; --queue:#b79cff; --shadow:0 6px 18px #0007; }
 }
 * { box-sizing:border-box; }
+body section,body .card { break-inside:auto !important; page-break-inside:auto !important; }
 html { -webkit-text-size-adjust:100%; }
 body { margin:0; background:var(--bg); color:var(--text); font:14px/1.42 system-ui,-apple-system,"Segoe UI",sans-serif; overflow-wrap:anywhere; }
 button { font:inherit; color:inherit; }
@@ -42,7 +43,7 @@ a { color:var(--accent); }
 .tab { border:0; background:transparent; padding:8px 14px 7px; border-bottom:3px solid transparent; cursor:pointer; font-weight:680; color:var(--muted); }
 .tab[aria-selected="true"] { color:var(--text); border-bottom-color:var(--accent); }
 .tab small { font-weight:400; }
-.layout { padding-top:12px; padding-bottom:60px; }
+.layout { padding-top:12px; padding-bottom:0; }
 .viewnote { border-left:4px solid var(--good); background:color-mix(in srgb,var(--good) 8%,var(--panel)); padding:8px 11px; margin-bottom:11px; border-radius:0 7px 7px 0; font-size:12.5px; }
 .lens[hidden] { display:none; }
 .lenshead { display:flex; align-items:flex-start; gap:10px; margin-bottom:10px; }
@@ -95,6 +96,7 @@ a { color:var(--accent); }
   .tab small { display:block; font-size:9px; }
   .answerline { grid-template-columns:1fr; gap:2px; }
 }
+@media screen { .layout { padding-bottom:60px; } }
 </style>
 </head>
 <body>

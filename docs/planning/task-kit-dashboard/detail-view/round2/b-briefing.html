@@ -17,6 +17,7 @@
     --accent:#71b7ff; --on-accent:#08111c; --warn:#f2b84b; --bad:#ff7b7b; --good:#83d6a3; --queue:#b79cff; --shadow:0 6px 18px #0007; }
 }
 * { box-sizing:border-box; }
+body section { break-inside:auto !important; page-break-inside:auto !important; }
 html { -webkit-text-size-adjust:100%; }
 body { margin:0; background:var(--bg); color:var(--text); font:14px/1.48 system-ui,-apple-system,"Segoe UI",sans-serif; overflow-wrap:anywhere; }
 button { font:inherit; color:inherit; }
@@ -36,7 +37,7 @@ a { color:var(--accent); }
 .titleline h1 { font-size:1.45rem; line-height:1.2; }
 .pri { color:var(--bad); border:1px solid currentColor; border-radius:4px; padding:1px 6px; font-size:11px; font-weight:750; }
 .meta { margin-top:5px; color:var(--muted); font-size:12px; }
-.layout { padding-top:4px; padding-bottom:60px; }
+.layout { padding-top:4px; padding-bottom:0; }
 .viewnote { border-left:4px solid var(--queue); background:color-mix(in srgb,var(--queue) 8%,var(--panel)); padding:8px 11px; margin-bottom:11px; border-radius:0 7px 7px 0; font-size:12.5px; }
 .brief-wrap { display:grid; grid-template-columns:minmax(0,1.65fr) minmax(290px,.8fr); gap:12px; align-items:start; }
 .brief { background:var(--panel); border:1px solid var(--line); border-radius:10px; box-shadow:var(--shadow); overflow:hidden; }
@@ -88,6 +89,7 @@ a { color:var(--accent); }
   .ledger-row { grid-template-columns:20px minmax(0,1fr); }
   .ledger-row .status { grid-column:2; }
 }
+@media screen { .layout { padding-bottom:60px; } }
 </style>
 </head>
 <body>

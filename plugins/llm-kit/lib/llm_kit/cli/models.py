@@ -84,6 +84,17 @@ def _add_describe_args(parser: argparse.ArgumentParser) -> None:
         default=[],
         help="An id the caller has ruled out; repeatable or comma-separated.",
     )
+    parser.add_argument(
+        "--allow",
+        action="append",
+        default=None,
+        help=(
+            "Cost classes this caller may use, comma-separated or repeated: "
+            "free, usage, spend (e.g. `--allow free,usage`). An entry of a class "
+            "not listed is shown as switched off, never dispatched. Omit the "
+            "flag for no cost filtering."
+        ),
+    )
     parser.add_argument("--json", action="store_true", help="Emit the ranking as JSON.")
     _add_project_arg(parser)
 
@@ -276,6 +287,9 @@ def _cmd_describe(ids: list[str], args: argparse.Namespace) -> int:
     because that is what will drive them; a session caller resolves them
     against the merged registry, because the agent drives the harness itself.
     Hidden entries are absent from the output; they surface only in the floor.
+    ``--allow`` switches off entries whose cost class is not listed; those are
+    SHOWN (a ``Switched off:`` line, a ``switched_off`` JSON key) and itemised
+    by the floor. An unknown class is a usage error (exit 2).
     """
     requirements = _load_requirements(args.requirements)
     ranking = describe(
@@ -287,6 +301,7 @@ def _cmd_describe(ids: list[str], args: argparse.Namespace) -> int:
         backend_factory=_backend_factory if args.caller == "process" else None,
         exclude=_split_ids(args.exclude),
         dispatchable=tuple(args.dispatchable),
+        **({"allow": _split_ids(args.allow)} if args.allow is not None else {}),
     )
     if args.json:
         _json(ranking.to_json())

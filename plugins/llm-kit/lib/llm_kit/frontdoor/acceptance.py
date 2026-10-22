@@ -38,6 +38,7 @@ from ..registry.model_endpoints import (
     EndpointRegistryError,
     load_endpoint_registry,
 )
+from ..registry.cost import is_unmetered
 from ..adapters.swapper_acceptance import (
     AcceptanceConfigError,
     AcceptanceReport,
@@ -89,7 +90,7 @@ class Level:
 
 def is_paid(entry: EndpointEntry) -> bool:
     """Paid unless the registry declares ``billing.mode: unmetered``."""
-    return entry.billing_mode != "unmetered"
+    return not is_unmetered(entry)
 
 
 def load_levels(registry_path: str, group: str) -> tuple[list[Level], list[str]]:

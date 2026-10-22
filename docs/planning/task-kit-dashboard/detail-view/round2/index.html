@@ -17,6 +17,7 @@
     --accent:#71b7ff; --on-accent:#08111c; --warn:#f2b84b; --bad:#ff7b7b; --good:#83d6a3; --queue:#b79cff; --shadow:0 6px 18px #0007; }
 }
 * { box-sizing:border-box; }
+body section { break-inside:auto !important; page-break-inside:auto !important; }
 html { -webkit-text-size-adjust:100%; }
 body { margin:0; background:var(--bg); color:var(--text); font:14px/1.46 system-ui,-apple-system,"Segoe UI",sans-serif; overflow-wrap:anywhere; }
 h1,h2,h3,p { margin:0; }
@@ -27,7 +28,7 @@ a { color:var(--accent); }
 .eyebrow { color:var(--queue); font-size:11px; font-weight:800; letter-spacing:.075em; text-transform:uppercase; }
 .top h1 { font-size:1.6rem; line-height:1.2; margin-top:2px; }
 .top .lede { margin-top:7px; color:var(--muted); max-width:850px; font-size:14px; }
-.layout { padding-bottom:64px; }
+.layout { padding-bottom:40px; }
 .model { display:grid; grid-template-columns:minmax(0,1.35fr) minmax(280px,.65fr); gap:10px; margin-bottom:14px; }
 .panel { background:var(--panel); border:1px solid var(--line); border-radius:9px; padding:12px 14px; min-width:0; }
 .panel h2 { font-size:13px; margin-bottom:5px; }
@@ -66,6 +67,7 @@ a { color:var(--accent); }
 @media (max-width:940px) { .cards { grid-template-columns:1fr; } .concept-body { display:grid; grid-template-columns:minmax(0,1fr) minmax(260px,.7fr); gap:10px; } .judge,.questions,.open { grid-column:2; } .judge { grid-row:1; margin-top:0; } .questions { grid-row:2; } .open { justify-self:start; } }
 @media (max-width:700px) { .model { grid-template-columns:1fr; } .concept-body { display:block; } .judge { margin-top:10px; } .questions { margin-top:0; } .matrix { overflow:visible; border:0; background:transparent; } .mrow { grid-template-columns:1fr; border:1px solid var(--line); border-radius:7px; background:var(--panel); margin-bottom:7px; overflow:hidden; } .mrow:first-child { display:none; } .mrow > * { border-top:1px solid var(--line); } .mrow > *:first-child { border-top:0; font-weight:750; } .mrow > *:nth-child(2)::before { content:"A: "; color:var(--muted); } .mrow > *:nth-child(3)::before { content:"B: "; color:var(--muted); } .mrow > *:nth-child(4)::before { content:"C: "; color:var(--muted); } }
 @media (max-width:430px) { .top,.layout { padding-left:12px; padding-right:12px; } .top h1 { font-size:1.4rem; } .trade { grid-template-columns:1fr; } }
+@media screen { .layout { padding-bottom:64px; } }
 </style>
 </head>
 <body>
