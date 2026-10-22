@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import dataclasses
+import datetime
 import hashlib
 import json
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 import yaml
 
+from . import answer_store, questions
+from .answers_types import Catalog
 from .discovery import (
     DEFAULT_USER_ROOT,
     OPEN_CLASSIFICATIONS,
@@ -25,6 +28,13 @@ from .discovery import (
 
 SUMMARY_METADATA_KEYS = frozenset(("summary", "summary_fingerprint", "summary_updated"))
 SUMMARY_ELIGIBLE_STATUSES = frozenset(("active", "blocked", "closed", "deferred"))
+# The list projection's version: "2" adds answers, coverage and summary_source, serves summary from the
+# orientation answer before the legacy task.summary, and adds the summary_status values invalid and
+# not-applicable.
+PROJECTION_VERSION = "2"
+ORIENTATION_QUESTION = "orientation"
+SUMMARY_SOURCE_ANSWER = "answer"
+SUMMARY_SOURCE_LEGACY = "legacy"
 
 # Folded into summary_source_fingerprint's hashed material below. Bump this
 # whenever summary_ops's generation contract changes (system prompt wording,
@@ -58,6 +68,12 @@ class TaskView:
     last_activity: str | None = None  # YYYY-MM-DD HH:MM of the newest update
     # Working-session registrations of this task (sessions.Record, this machine's running first); empty without any.
     sessions: tuple[Any, ...] = ()
+    # "answer" (the orientation answer's headline), "legacy" (task.summary) or None.
+    summary_source: str | None = None
+    # {question id: AnswerState.as_dict()} and the task's coverage; empty/None without a readable folder or catalog.
+    answers: Mapping[str, Any] | None = None
+    coverage: Mapping[str, int] | None = None
+    answer_notes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -119,7 +135,16 @@ def activity_key(view: TaskView) -> str | None:
     return view.last_activity or view.last_update
 
 
-def _view_record(record: TaskRecord, fallback_root: Path) -> TaskView:
+@dataclass(frozen=True)
+class AnswerContext:
+    """What a listing needs to read answers: the catalog, the repository logs and the read time."""
+
+    catalog: Catalog
+    logs: answer_store.RepoLogs
+    now: datetime.datetime  # naive local time, as log.md stamps are
+
+
+def _view_record(record: TaskRecord, fallback_root: Path, context: AnswerContext | None = None) -> TaskView:
     root = record.project_root or fallback_root
     folder = root / record.id
     if record.classification == "remote" or not folder.is_dir():
@@ -185,6 +210,30 @@ def _view_record(record: TaskRecord, fallback_root: Path) -> TaskView:
         "stale",
     ):
         summary_status = "unavailable"
+    summary_source = SUMMARY_SOURCE_LEGACY if summary is not None else None
+    answers: dict[str, Any] | None = None
+    coverage_data: dict[str, int] | None = None
+    answer_notes: tuple[str, ...] = ()
+    if context is not None:
+        top = context.logs.top_of(folder)
+        found = answer_store.task_answers(
+            context.catalog, folder, block, record.classification,
+            repo_top=top, log=context.logs.log_for(top), now=context.now,
+        )
+        answers = {question_id: state.as_dict() for question_id, state in found.states.items()}
+        coverage_data = found.coverage.as_dict()
+        answer_notes = found.notes
+        from_answer = answer_store.orientation_headline(found.states)
+        orientation = found.states.get(ORIENTATION_QUESTION)
+        if from_answer is not None:
+            summary, answer_state_name, summary_updated = from_answer
+            summary_status = "present" if answer_state_name == answer_store.STATE_CURRENT else "stale"
+            summary_source = SUMMARY_SOURCE_ANSWER
+        elif summary is None and record.classification in SUMMARY_ELIGIBLE_STATUSES and orientation is not None:
+            if orientation.state == answer_store.STATE_INVALID:
+                summary_status = "invalid"
+            elif orientation.state == answer_store.STATE_NOT_APPLICABLE:
+                summary_status = "not-applicable"
     return TaskView(
         id=record.id,
         status=record.classification,
@@ -201,6 +250,10 @@ def _view_record(record: TaskRecord, fallback_root: Path) -> TaskView:
         project_root=root,
         updates=updates,
         last_activity=_last_activity(updates),
+        summary_source=summary_source,
+        answers=answers,
+        coverage=coverage_data,
+        answer_notes=answer_notes,
     )
 
 
@@ -231,8 +284,24 @@ def collect_listing(
     priority: str | None = None,
     user_root: Path | None = None,
     devroot: Path | None = None,
+    catalog: Catalog | None = None,
+    now: datetime.datetime | None = None,
 ) -> TaskListing:
+    """Discover tasks and project them, with their answers.
+
+    ``catalog`` defaults to the shipped questions plus the fleet layer; a catalog that cannot load is a note
+    (``answers: ...``) and the listing carries no answers. ``now`` is the naive local time scripts read.
+    """
     notes: list[str] = []
+    context: AnswerContext | None = None
+    if catalog is None:
+        try:
+            catalog = questions.load_catalog(questions.default_shipped_dir(), questions.default_fleet_dir())
+        except questions.QuestionError as exc:
+            notes.append(f"answers: the question catalog cannot be loaded: {exc}")
+    logs = answer_store.RepoLogs()
+    if catalog is not None:
+        context = AnswerContext(catalog=catalog, logs=logs, now=now if now is not None else datetime.datetime.now())
     effective_root = (
         user_root if user_root is not None else DEFAULT_USER_ROOT
         if scope == "user"
@@ -250,12 +319,14 @@ def collect_listing(
     )
     views = tuple(
         sorted(
-            (_view_record(record, effective_root) for record in records),
+            (_view_record(record, effective_root, context) for record in records),
             key=review_sort_key,
             reverse=True,
         )
     )
     views = _attach_sessions(views, notes)
+    notes.extend(f"answers: {note}" for note in dict.fromkeys(note for view in views for note in view.answer_notes))
+    notes.extend(f"answers: {note}" for note in logs.notes)
     warnings: list[str] = []
     for view in views:
         if view.status not in SUMMARY_ELIGIBLE_STATUSES:
@@ -268,7 +339,13 @@ def collect_listing(
         if view.summary_status == "missing":
             warnings.append(f"task {label} is missing task.summary")
         elif view.summary_status == "stale":
-            warnings.append(f"task {label} task.summary is stale")
+            warnings.append(
+                f"task {label} orientation answer is stale"
+                if view.summary_source == SUMMARY_SOURCE_ANSWER
+                else f"task {label} task.summary is stale"
+            )
+        elif view.summary_status == "invalid":
+            warnings.append(f"task {label} has an invalid orientation answer file")
         elif view.summary_status == "unavailable":
             warnings.append(
                 f"task {label} has no locally readable task summary ({view.status})"
@@ -371,8 +448,11 @@ def _view_dict(listing: TaskListing, view: TaskView) -> dict[str, Any]:
         "last_activity": activity_key(view),
         "title": view.title,
         "summary": view.summary,
+        "summary_source": view.summary_source,
         "summary_status": view.summary_status,
-        "summary_missing": view.summary_status in ("missing", "stale"),
+        "summary_missing": view.summary_status in ("missing", "stale", "invalid"),
+        "answers": dict(view.answers) if view.answers is not None else {},
+        "coverage": dict(view.coverage) if view.coverage is not None else None,
         "summary_fingerprint": view.summary_fingerprint,
         "current_fingerprint": view.current_fingerprint,
         "host": view.host,
@@ -396,6 +476,8 @@ def listing_data(listing: TaskListing) -> dict[str, Any]:
             code = "missing_summary"
         elif "is not a single line" in message:
             code = "malformed_summary"
+        elif "has an invalid orientation answer file" in message:
+            code = "invalid_answer"
         else:
             code = "summary_unavailable"
         diagnostics.append({"code": code, "severity": "notice", "message": message})
@@ -418,7 +500,7 @@ def listing_data(listing: TaskListing) -> dict[str, Any]:
         )
 
     return {
-        "schema_version": "1",
+        "schema_version": PROJECTION_VERSION,
         "scope": listing.scope,
         "tasks": [_view_dict(listing, view) for view in listing.views],
         "sections": {

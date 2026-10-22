@@ -1,8 +1,16 @@
-"""Publishing this machine's working-session files through git.
+"""Publishing this machine's working-session files and answer files through git.
 
-One file per machine per physical task root: ``<task root>/.sessions/<host id>.yaml``. This module commits that
-file, then fetches, integrates and pushes it, and nothing else. It never rewrites history (no force, rebase,
-reset, stash or branch switch) and never pushes a path that is not this machine's session file.
+One session file per machine per physical task root: ``<task root>/.sessions/<host id>.yaml``. This module commits
+that file, then fetches, integrates and pushes it, and nothing else. It also pushes this machine's answer files,
+``<task folder>/answers/<question id>/<host id>.yaml`` (summary-on-commit-plan.md, D3), which the answer engine
+commits itself. It never rewrites history (no force, rebase, reset, stash or branch switch) and never pushes a
+path that is not one of those two kinds of own file.
+
+An answer path is this machine's only when it is named for this host AND the record's top-level ``machine:``
+line carries this machine's fingerprint (:func:`answer_record_machine` is the one place that reads it). Content
+is judged at the commit or tree that carries it: an added or modified file by its new content (and, for a
+modification, by its previous content too, so taking over another machine's file is refused), a deletion by its
+PREIMAGE, the content the file had before the deleting commit (the upstream tracking ref for the net diff).
 
 The order is load-bearing (plan "Git publication", R2-1): **commit before any network access**. From the moment
 the commit succeeds the record is committed whatever the network does, so an offline machine has a committed,
@@ -10,15 +18,18 @@ unpublished record that every later :func:`publish` drains, never an uncommitted
 strand. Each network attempt then:
 
 1. fetches the upstream (a failure stops);
-2. refuses when any local-only (unpushed, non-merge) commit touches a path that is not this machine's session file;
+2. refuses when any local-only (unpushed, non-merge) commit touches a path that is not one of this machine's own
+   files;
 3. fast-forwards, or merges, the upstream into HEAD (an incoming change to any file is integrated like a pull;
    a merge git refuses leaves no merge state, a merge that stops on conflicts is aborted);
 4. pushes ``HEAD`` to the upstream branch only when the net diff from the upstream names only this machine's
-   session files. A non-fast-forward rejection is the expected race: the next attempt refetches and integrates.
+   own files. A non-fast-forward rejection is the expected race: the next attempt refetches and integrates.
    Attempts are bounded (:data:`MAX_ATTEMPTS` within :data:`WINDOW_S` seconds).
 
-Library API (every function is offline except :func:`publish`): :func:`session_file`, :func:`preflight`,
-:func:`pending`, :func:`publish`. Every :func:`publish` outcome, failures included, is the returned
+Library API (every function is offline except :func:`publish` and :func:`publish_holding_lock`):
+:func:`session_file`, :func:`preflight`, :func:`pending`, :func:`publish`. The per-repository lock is shared with
+the answer engine: :func:`repo_lock` takes it with a bounded wait, and :func:`publish_holding_lock` publishes
+for a caller that already holds it. Every :func:`publish` outcome, failures included, is the returned
 :class:`PublishResult`; the caller reports it (the CLI to its output, the SessionStart hook to its failure log).
 The data directory keeps only the per-repository lock file (information-free), never a record of outcomes.
 """
@@ -42,6 +53,8 @@ from .resolve import LOCATION_DEV_TASKS, LOCATION_TMP
 
 SESSIONS_DIRNAME = ".sessions"
 SESSION_SUFFIX = ".yaml"
+ANSWERS_DIRNAME = "answers"
+ANSWER_SUFFIX = ".yaml"
 SESSIONS_DATA_SUBDIR = "sessions"
 
 MAX_ATTEMPTS = 3
@@ -139,8 +152,43 @@ def is_session_file(rel_path: str, machine) -> bool:
     return len(parts) >= 2 and parts[-2] == SESSIONS_DIRNAME and parts[-1] == host_of(machine) + SESSION_SUFFIX
 
 
+def is_answer_path(rel_path: str, machine) -> bool:
+    """True for a repository-relative path shaped ``.../answers/<question id>/<host id>.yaml`` for this host.
+
+    Shape only: whether the record inside carries this machine's fingerprint is a separate, content-level
+    question (:func:`_blob_is_mine`).
+    """
+    parts = rel_path.replace("\\", "/").split("/")
+    return len(parts) >= 3 and parts[-3] == ANSWERS_DIRNAME and parts[-1] == host_of(machine) + ANSWER_SUFFIX
+
+
+_MACHINE_LINE = re.compile(r"""^machine:[ \t]*(?:"([^"\n]*)"|'([^'\n]*)'|([^\s#]+))""", re.MULTILINE)
+
+
+def answer_record_machine(text: str) -> str | None:
+    """The machine fingerprint an answer record carries (its top-level ``machine:`` line), or None.
+
+    The single parser of answer-file content in this module. A line-level read, not a YAML load, because a
+    16-hex fingerprint such as ``1234567890123456`` or ``12345e6789012345`` would load as a number.
+    """
+    found = _MACHINE_LINE.search(text)
+    if found is None:
+        return None
+    return next(group for group in found.groups() if group is not None)
+
+
+def _fingerprint_of(machine) -> str | None:
+    """The machine fingerprint, or None for a bare host-id string (which can own session files only)."""
+    value = getattr(machine, "fingerprint", None)
+    return value or None
+
+
 def _pathspec(machine) -> str:
     return f":(glob)**/{SESSIONS_DIRNAME}/{host_of(machine)}{SESSION_SUFFIX}"
+
+
+def _answer_pathspec(machine) -> str:
+    return f":(glob)**/{ANSWERS_DIRNAME}/*/{host_of(machine)}{ANSWER_SUFFIX}"
 
 
 # --------------------------------------------------------------------------- running git
@@ -223,6 +271,50 @@ def _upstream(top: Path) -> tuple[_Upstream | None, str]:
     return _Upstream(remote, merge, tracking), ""
 
 
+# --------------------------------------------------------------------------- ownership of a changed path
+
+
+def _blob_is_mine(top: Path, rev: str, path: str, fingerprint: str) -> bool:
+    """True when ``path`` at ``rev`` exists and its record carries ``fingerprint``."""
+    shown = _git(["show", f"{rev}:{path}"], top, optional_locks=False)
+    return shown.ok and answer_record_machine(shown.stdout) == fingerprint
+
+
+def _changed(top: Path, args: Sequence[str]) -> list[tuple[str, str]]:
+    """``(status letter, path)`` pairs from a ``--name-status -z`` git command (renames are never detected)."""
+    result = _git([*args], top, optional_locks=False)
+    if not result.ok:
+        raise RuntimeError(f"git {args[0]} failed: {_last_line(result)}")
+    tokens = [t for t in result.stdout.split("\0") if t]
+    return [(tokens[i][:1], tokens[i + 1]) for i in range(0, len(tokens) - 1, 2)]
+
+
+def _is_own_change(top: Path, machine, status: str, path: str, pre_rev: str, post_rev: str) -> bool:
+    """Whether one changed path belongs to this machine.
+
+    A session file by name alone. An answer file by name and by content: an addition or modification must carry
+    this machine's fingerprint after the change, a modification before it too, and a deletion must have carried
+    it before (the preimage at ``pre_rev``). Everything else is another machine's or not a record at all.
+    """
+    if is_session_file(path, machine):
+        return True
+    fingerprint = _fingerprint_of(machine)
+    if fingerprint is None or not is_answer_path(path, machine):
+        return False
+    if status == "D":
+        return _blob_is_mine(top, pre_rev, path, fingerprint)
+    if status in ("A", "M"):
+        return _blob_is_mine(top, post_rev, path, fingerprint) and (
+            status == "A" or _blob_is_mine(top, pre_rev, path, fingerprint))
+    return False
+
+
+def _foreign_in_diff(top: Path, machine, pre_rev: str, post_rev: str) -> list[str]:
+    """Paths of the diff ``pre_rev`` -> ``post_rev`` that are not this machine's own, sorted."""
+    changes = _changed(top, ["diff", "--name-status", "--no-renames", "-z", pre_rev, post_rev])
+    return sorted(path for status, path in changes if not _is_own_change(top, machine, status, path, pre_rev, post_rev))
+
+
 # --------------------------------------------------------------------------- reading state (offline, read-only)
 
 
@@ -249,10 +341,13 @@ def _status_paths(top: Path, machine) -> list[tuple[str, str]]:
 
 
 def pending(repo_root: Path, machine) -> tuple[str, ...]:
-    """This machine's session files in the repository that are uncommitted or differ from the upstream.
+    """This machine's session files that are uncommitted or differ from the upstream, plus its own answer files
+    that are committed and differ from the upstream.
 
     Offline and read-only (``--no-optional-locks``): "differ from the upstream" is judged against the last
-    fetch. Repository-relative POSIX paths, sorted. A directory that is not a git work tree has none.
+    fetch. An answer file counts only when it is this machine's by content (see :func:`_is_own_change`); an
+    uncommitted answer file is the answer engine's to commit. Repository-relative POSIX paths, sorted. A
+    directory that is not a git work tree has none.
     """
     top = _toplevel(Path(repo_root))
     if top is None:
@@ -264,6 +359,10 @@ def pending(repo_root: Path, machine) -> tuple[str, ...]:
                     optional_locks=False)
         if diff.ok:
             names.update(p for p in diff.stdout.split("\0") if p and is_session_file(p, machine))
+        for status, path in _changed(top, ["diff", "--name-status", "--no-renames", "-z", upstream.tracking, "HEAD",
+                                           "--", _answer_pathspec(machine)]):
+            if _is_own_change(top, machine, status, path, upstream.tracking, "HEAD"):
+                names.add(path)
     return tuple(sorted(names))
 
 
@@ -334,17 +433,16 @@ def _commit_session_files(top: Path, machine) -> tuple[list[str], str | None]:
 
 
 def _foreign_local_paths(top: Path, upstream: _Upstream, machine) -> list[str]:
-    """Paths touched by local-only non-merge commits that are not this machine's session file."""
+    """Paths touched by local-only non-merge commits that are not this machine's own files."""
     listed = _git(["rev-list", "--no-merges", f"{upstream.tracking}..HEAD"], top, optional_locks=False)
     if not listed.ok:
         raise RuntimeError(f"git rev-list failed: {_last_line(listed)}")
     foreign: list[str] = []
     for sha in listed.stdout.split():
-        touched = _git(["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", "--root", sha], top,
-                       optional_locks=False)
-        if not touched.ok:
-            raise RuntimeError(f"git diff-tree failed: {_last_line(touched)}")
-        foreign.extend(p for p in touched.stdout.split("\0") if p and not is_session_file(p, machine))
+        for status, path in _changed(top, ["diff-tree", "--no-commit-id", "--name-status", "--no-renames", "-r", "-z",
+                                           "--root", sha]):
+            if not _is_own_change(top, machine, status, path, f"{sha}^", sha):
+                foreign.append(path)
     return sorted(set(foreign))
 
 
@@ -395,7 +493,7 @@ def _publish_locked(top: Path, machine, window_s: float, network_timeout_s: floa
         if foreign:
             return _result(
                 FOREIGN_LOCAL,
-                "committed; not published: unpushed commits outside this machine's session records "
+                "committed; not published: unpushed commits outside this machine's session records and answer files "
                 f"({', '.join(foreign[:3])}{', ...' if len(foreign) > 3 else ''}); {CANNOT_SEE}",
                 committed=True, published=False, attempts=attempts, files=files, top=top)
 
@@ -404,15 +502,13 @@ def _publish_locked(top: Path, machine, window_s: float, network_timeout_s: floa
             return _result(INTEGRATE_FAILED, f"committed; not published: {refused}; {CANNOT_SEE}", committed=True,
                            published=False, attempts=attempts, files=files, top=top)
 
-        diff = _git(["diff", "--name-only", "-z", upstream.tracking, "HEAD"], top, optional_locks=False)
-        if not diff.ok:
-            raise RuntimeError(f"git diff failed: {_last_line(diff)}")
-        names = [p for p in diff.stdout.split("\0") if p]
-        stray = [p for p in names if not is_session_file(p, machine)]
+        names = [path for _status, path in _changed(
+            top, ["diff", "--name-status", "--no-renames", "-z", upstream.tracking, "HEAD"])]
+        stray = _foreign_in_diff(top, machine, upstream.tracking, "HEAD")
         if stray:
             return _result(
                 FOREIGN_DIFF,
-                "committed; not published: the push would carry files outside this machine's session records "
+                "committed; not published: the push would carry files outside this machine's session records and answer files "
                 f"({', '.join(stray[:3])}{', ...' if len(stray) > 3 else ''}); {CANNOT_SEE}",
                 committed=True, published=False, attempts=attempts, files=files, top=top)
         if not names:
@@ -433,10 +529,37 @@ def _publish_locked(top: Path, machine, window_s: float, network_timeout_s: floa
                    committed=True, published=False, attempts=attempts, files=files, top=top)
 
 
+def repo_lock(top: Path, data_dir: Path | None = None, wait_s: float = LOCK_WAIT_S) -> FileLock:
+    """The per-repository lock as a context manager, shared by session publishing and the answer engine.
+
+    ``top`` is the repository's top-level directory. Entering waits up to ``wait_s`` seconds and then raises
+    :class:`oslock.LockTimeout`; the operating system drops the lock if the holder dies. The lock is not
+    re-entrant: a holder calls :func:`publish_holding_lock`, never :func:`publish`, and never holds the lock
+    across a model call. ``data_dir`` defaults to the plugin's bootstrap data directory.
+    """
+    data_dir = Path(data_dir) if data_dir is not None else resolve_data_dir()
+    return FileLock(lock_path(Path(top), data_dir), wait_s)
+
+
+def publish_holding_lock(top: Path, machine, *, window_s: float = WINDOW_S,
+                         network_timeout_s: float = NETWORK_TIMEOUT_S) -> PublishResult:
+    """Publish like :func:`publish` for a caller that already holds :func:`repo_lock` for ``top``.
+
+    Takes no lock itself, so it must run inside the caller's ``with repo_lock(...)``. Commits this machine's
+    changed session files, then fetches, integrates and pushes this machine's own session and answer files.
+    Never raises for a git or network condition: those are :class:`PublishResult` statuses.
+    """
+    resolved = _toplevel(Path(top))
+    if resolved is None:
+        return _result(REFUSED, f"not published: {top} is not inside a git work tree", committed=False,
+                       published=False, attempts=0, files=(), top=None)
+    return _publish_locked(resolved, machine, window_s, network_timeout_s)
+
+
 def publish(repo_root: Path, machine, *, data_dir: Path | None = None, record: bool = True,
             window_s: float = WINDOW_S, network_timeout_s: float = NETWORK_TIMEOUT_S,
             lock_wait_s: float = LOCK_WAIT_S) -> PublishResult:
-    """Commit this machine's session files in ``repo_root``'s repository, then publish them.
+    """Commit this machine's session files in ``repo_root``'s repository, then publish them and its answer files.
 
     Holds the per-repository lock for the whole call. Never raises for a git or network condition: those are
     :class:`PublishResult` statuses; nothing is written to the data directory but the lock file. ``data_dir``
@@ -452,7 +575,7 @@ def publish(repo_root: Path, machine, *, data_dir: Path | None = None, record: b
                          published=False, attempts=0, files=(), top=None)
     else:
         try:
-            with FileLock(lock_path(top, data_dir), lock_wait_s):
+            with repo_lock(top, data_dir, lock_wait_s):
                 result = _publish_locked(top, machine, window_s, network_timeout_s)
         except LockTimeout:
             result = _result(

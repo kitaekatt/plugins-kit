@@ -16,6 +16,8 @@ Commands:
 - ``task-kit export ...`` runs ``task_system.export_cli``, the task export
   databench reads. Every outcome, including a failure to start it, writes one
   JSON document to stdout (``task-export-protocol.md``).
+- ``task-kit answers ...`` runs ``task_system.answers_cli``, the task answers engine (refresh, status, prune),
+  under the same one-document rules.
 - ``task-kit`` with no command runs ``databench --view tasks`` when databench
   is on PATH, and otherwise exits 1 saying databench provides the task view.
 - ``task-kit stop [--force]`` stops a dashboard server an earlier version
@@ -49,8 +51,8 @@ DATABENCH_MISSING_MESSAGE = (
 )
 RETIRED_MESSAGE = (
     "task-kit: the task-kit dashboard is retired; databench provides the task view (run `task-kit` with no "
-    "arguments). Remaining commands: `task-kit export ...` and `task-kit stop [--force]` (stops a dashboard "
-    "server an earlier version started)."
+    "arguments). Remaining commands: `task-kit export ...`, `task-kit answers ...` and `task-kit stop "
+    "[--force]` (stops a dashboard server an earlier version started)."
 )
 
 
@@ -92,13 +94,14 @@ def installed_plugin_root(bundle_root: Path) -> Path:
 
 
 EXPORT_COMMAND = "export"
+ANSWERS_COMMAND = "answers"
 STOP_COMMAND = "stop"
 EXPORT_PROTOCOL = 1  # the highest export protocol; a start-up failure document names it
 EXPORT_INTERNAL_EXIT = 1
 
 
-def export_start_failure(root: Path, message: str) -> int:
-    """Answer ``task-kit export`` with one ``internal`` error document when the export cannot start.
+def export_start_failure(root: Path, message: str, command: str = EXPORT_COMMAND) -> int:
+    """Answer ``task-kit export`` (or ``answers``) with one ``internal`` error document when it cannot start.
 
     Stdlib only: this runs when the plugin venv or the task system cannot be
     loaded, which is exactly when nothing else could write the document.
@@ -109,27 +112,42 @@ def export_start_failure(root: Path, message: str) -> int:
         version = "unknown"
     document = {"protocol": EXPORT_PROTOCOL, "task_kit_version": version,
                 "error": {"code": "internal", "message": message}}
-    print(f"task-kit export: internal: {message}", file=sys.stderr)
+    print(f"task-kit {command}: internal: {message}", file=sys.stderr)
     sys.stdout.write(json.dumps(document, ensure_ascii=True, sort_keys=True, separators=(",", ":")) + "\n")
     sys.stdout.flush()
     return EXPORT_INTERNAL_EXIT
 
 
-def run_export(root: Path, argv: list[str]) -> int:
-    """``task-kit export ...``: the export CLI."""
+def _run_document_command(root: Path, command: str, module: str, argv: list[str]) -> int:
+    """Run ``task_system.<module>``'s ``main`` under the plugin venv; a failure to start is one error document."""
+    import importlib  # noqa: PLC0415
+
     from bootstrap_guard import reexec_under_plugin_venv  # noqa: PLC0415
 
     try:
         reexec_under_plugin_venv(PLUGIN)
     except SystemExit as exc:  # the guard refuses (a redirected venv is missing); its reason is on stderr
-        return export_start_failure(root, f"task-kit's plugin interpreter is not available (exit {exc.code}); see stderr")
+        return export_start_failure(
+            root, f"task-kit's plugin interpreter is not available (exit {exc.code}); see stderr", command
+        )
     try:
-        from task_system import export_cli  # noqa: PLC0415
+        target = importlib.import_module(f"task_system.{module}")
     except ImportError as exc:
         return export_start_failure(
-            root, f"the task system cannot be loaded ({type(exc).__name__}: {exc}); task-kit's venv is not provisioned"
+            root, f"the task system cannot be loaded ({type(exc).__name__}: {exc}); task-kit's venv is not provisioned",
+            command,
         )
-    return export_cli.main(argv)
+    return target.main(argv)
+
+
+def run_export(root: Path, argv: list[str]) -> int:
+    """``task-kit export ...``: the export CLI."""
+    return _run_document_command(root, EXPORT_COMMAND, "export_cli", argv)
+
+
+def run_answers(root: Path, argv: list[str]) -> int:
+    """``task-kit answers ...``: the answers engine CLI."""
+    return _run_document_command(root, ANSWERS_COMMAND, "answers_cli", argv)
 
 
 def run_databench() -> int:
@@ -168,6 +186,8 @@ def main() -> int:
     argv = sys.argv[1:]
     if argv[:1] == [EXPORT_COMMAND]:
         return run_export(root, argv[1:])
+    if argv[:1] == [ANSWERS_COMMAND]:
+        return run_answers(root, argv[1:])
     if not argv:
         return run_databench()
     if argv[0] == STOP_COMMAND:

@@ -8,7 +8,7 @@ description: Use when creating, listing, working, queueing, closing, archiving o
 
 # Task
 
-Dispatch surface for the task system: one CLI (`scripts/task.py`) exposing 15
+Dispatch surface for the task system: one CLI (`scripts/task.py`) exposing 16
 verbs over file-backed task folders. This skill routes a natural-language task
 request ("start a task for X", "what tasks are open here?", "what can I work
 on in this task?", "archive the closet task") to the right verb invocation
@@ -80,7 +80,7 @@ or a bare stub (ambiguous stub = error listing candidates).
 ```yaml
 capability_skill:
   _schema_version: "1"
-  identity: "Dispatch surface routing natural-language task requests to the task-system CLI's 15 verbs and defining the agent-side behaviors (work's Skill lines, status's background summarizer, update's rotation) the scripts deliberately leave to the agent."
+  identity: "Dispatch surface routing natural-language task requests to the task-system CLI's 16 verbs and defining the agent-side behaviors (work's Skill lines, status's background summarizer, update's rotation) the scripts deliberately leave to the agent."
   scope:
     covers:
       - "Creating, listing, showing, validating, reviewing, and summarizing file-backed task folders (tmp/<stub>, dev/tasks/<stub>)"
@@ -97,13 +97,13 @@ capability_skill:
   external_capability:
     kind: tool
     name: task.py (task-system CLI)
-    description: "Single-entry-point CLI at skills/task/scripts/task.py with 15 verb subcommands over task folders, task.yaml records, task_list references, plan.md task_items blocks, and working-session registrations. 14 verbs are script-driven; status is the one inference verb (the script prints substrate only). Review is script-driven and may use Codex Luna to repair summaries."
+    description: "Single-entry-point CLI at skills/task/scripts/task.py with 16 verb subcommands over task folders, task.yaml records, task_list references, plan.md task_items blocks, and working-session registrations. 15 verbs are script-driven; status is the one inference verb (the script prints substrate only). Review and answers are script-driven and may ask a model for task answers through llm-kit."
   layering:
     claude_md: []
     skill_md:
       - "The data model in one breath (folder = SoT, items in plan.md's task_items block, refs inert, id = path, explicit task refs, durability = location)"
       - "The canonical venv-python invocation and CLI conventions"
-      - "The 15-verb capability surface with per-verb contracts"
+      - "The 16-verb capability surface with per-verb contracts"
       - "The agent-side behaviors the scripts leave open (work's initialization block -- invoke every emitted skill, then dispatch -- status background summary, update rotation, and the hand-off packaging plus baton, which run only when the user invokes /task hand-off)"
     references:
       - "handoff-template.md -- how to fill in and rotate a scaffolded folder's CLAUDE.md / plan.md / log.md"
@@ -126,7 +126,7 @@ capability_skill:
       gotchas:
         - "Contract: prints the classification (active/blocked/closed/deferred/archived/invalid/remote) to stdout, errors AND warnings to stderr; exit 0 iff zero findings. All warnings originate here -- among them: uncommitted dev/tasks folder, dangling depends_on/blocked_by, orphaned tmp ref, no task_items block, stale item reference, document over its line ceiling."
         - "Findings gate work -- errors AND warnings both block. Fix forward (no recovery path), then re-validate."
-        - "Advisory note: lines (NOT findings; exit code unaffected) also print to stderr -- approaching-budget, dominant-section, session-diary, version-control-unverified (outside any git repo; submit with the workspace VCS yourself), version-control-ignored (git will never carry the folder; relocate anything that must outlive it via update --durable-output). Act on size notes at the next rotation; thresholds and remedies: handoff-template.md 'Document size budgets'."
+        - "Advisory note: lines (NOT findings; exit code unaffected) also print to stderr -- approaching-budget, dominant-section, session-diary, version-control-unverified (outside any git repo; submit with the workspace VCS yourself), version-control-ignored (git will never carry the folder; relocate anything that must outlive it via update --durable-output). An `invalid answer file:` note (an unreadable file under the task's answers/ folder) is also advisory and never gates work; the answers engine rewrites its own invalid file on the next pass. Act on size notes at the next rotation; thresholds and remedies: handoff-template.md 'Document size budgets'."
     - id: work
       keywords: [work on task, start task, dispatch]
       user_objective: "Work an explicitly named task and load its working context."
@@ -144,9 +144,9 @@ capability_skill:
     - id: update
       keywords: [update task, edit fields, refresh folder, set status, set priority, rotation]
       user_objective: "Upsert a task and apply task.yaml field edits; refresh the folder."
-      operation: task.py update <ref> [--status S] [--priority P] [--description D] [--depends-on PATH ...] [--blocked-by PATH ...] [--agent-hint H] [--skill-to-invoke NAME ...] [--durable-output PATH ...] [--root PATH]
+      operation: task.py update <ref> [--status S] [--priority P] [--description D] [--depends-on PATH ...] [--blocked-by PATH ...] [--agent-hint H] [--skill-to-invoke NAME ...] [--durable-output PATH ...] [--summary S] [--root PATH]
       gotchas:
-        - "Contract: requires an explicit ref; inits when absent (upsert). Applies the field edits, appends one dated entry to log.md, re-validates, prints the classification; exit 0 iff no findings -- but the write persists regardless (fix-forward). List-valued flags are repeatable and REPLACE the stored list."
+        - "Contract: requires an explicit ref; inits when absent (upsert). Applies the field edits, appends one dated entry to log.md, re-validates, prints the classification; exit 0 iff no findings -- but the write persists regardless (fix-forward). List-valued flags are repeatable and REPLACE the stored list. --summary writes the legacy one-line task.summary; when the task's orientation answer exists, update prints a stderr note that the answer's headline supersedes it in list and review."
         - "--status deferred marks a task purposefully put on hold, intended to be resumed later -- it is neither open nor closed. A deferred task is excluded from list's Open tasks: section and review's Open group, sectioned in its own Deferred tasks: / Deferred group instead. `reopen <ref>` returns it to active."
         - "AGENT BEHAVIOR: the script's only document write is the dated log.md line -- it never rewrites plan.md. On every update that represents substantive progress, run the rotation passes yourself per handoff-template.md 'Rotation discipline' (rotation, stale-state, durable-outputs, vocabulary). Rotation is the standing discipline, not a cleanup that fires once a doc crosses its budget; the budgets are ENFORCED at the re-validate (over the ceiling = blocking warning, past the healthy target = advisory note; handoff-template.md 'Document size budgets')."
         - "DURABLE-OUTPUTS PASS: a folder document that would outlive the folder belongs in the repo it describes -- move it there NOW and declare it with --durable-output <repo-relative path> (repeatable; REPLACES the stored list). Judge at authoring time, not at archive, whose check is only a backstop. Declaring nothing is valid. Full rule: handoff-template.md 'Durable outputs'."
@@ -208,7 +208,7 @@ capability_skill:
       operation: task.py list [--scope all|user|project|skill|file] [--target X] [--status S] [--priority P] [--format text|json|yaml] [--root PATH]
       gotchas:
         - "Contract: the default output has three sections, in order: Open tasks:, Deferred tasks:, and Closed tasks:. Open means active or blocked; Deferred means purposefully put on hold, intended to be resumed later (reopen returns it to active). Each task line is 'id  status  priority  last_update  title' (absent fields '-'); last_update is the latest ISO date in dated log.md entries. Explicit --status prints only matching task lines, including archived and other classifications. Dedupe by canonical path; classify each via validate. Exit 0 even when empty; notes and summary warnings go to stderr."
-        - "--format text preserves the legacy line output; --format json or yaml emits the shared versioned listing projection, including task.summary, summary_status, summary_missing, update history, and diagnostics for missing or stale summaries. List never invokes inference or writes task folders."
+        - "--format text preserves the legacy line output; --format json or yaml emits the shared versioned listing projection, (version \"2\") including task.summary, summary_source (answer, legacy or null), summary_status, summary_missing, answers and coverage (the task answers, references/task-export-protocol.md), update history, and diagnostics for missing, stale or invalid summaries and answers. A task's current orientation answer headline replaces task.summary in summary. List never invokes inference or writes task folders."
         - "The project list is always computed (documents ARE the registry) -- there is no stored master list to consult or maintain."
         - "A task line with working-session registrations ends with ` [working: <host> <state> <age>; ...]` (state: running / not running on the machine that wrote the record, unverified on any other), and --format json|yaml carry `sessions` per task. List only reads them."
         - "--scope all scans direct, non-hidden project directories under each parent in ~/.claude/task.local.yaml's project_directories list. Entries are absolute paths or paths containing ${NAME} / %NAME% environment references; for example, project_directories: ['${DEVROOT}']. When the file is absent or declares no project_directories, the DEVROOT environment variable is the single parent. With neither, --scope all exits with an error naming both options. Each project contributes tmp/ and dev/tasks/; physical task folders reached through shared dev/tasks symlinks or junctions are emitted once, owned by the shortest project name."
@@ -225,19 +225,29 @@ capability_skill:
         - "Present and resolve one task at a time, even when the audits were prepared in parallel."
         - "An empty scaffold is a direct never-started classification with an archive recommendation; it needs no audit."
     - id: review
-      keywords: [review tasks, task overview, task summaries, open tasks, closed tasks, missing summaries]
+      keywords: [review tasks, task overview, task summaries, task answers, open tasks, closed tasks, missing summaries]
       user_objective: "Generate and open an HTML review of non-archived tasks in configured projects, or in the current project when no project directories are configured."
       operation: task.py review [--scope all|user|project|skill|file] [--target X] [--output PATH|-] [--no-open] [--generate-missing-summaries | --no-generate-missing-summaries] [--root PATH]
       steps:
         - n: 1
           action: "Run the shared listing projection used by list. Default to all scope (project directories from ~/.claude/task.local.yaml, else DEVROOT) and group records by project after physical-folder deduplication; with neither available, exit with an error naming both options instead of narrowing to the current project. An explicit --scope project renders the current project's tasks as HTML. Group active/blocked tasks as Open, deferred tasks as Deferred (purposefully put on hold, intended to be resumed later), closed tasks as Closed, and omit archived tasks. Order projects by last update, newest first: a project's last update is the newest dated activity among its open tasks (closed tasks and summary dates do not count), and projects with none sort last by name. Within each group, sort tasks by each folder's latest log.md activity timestamp, newest first. Each task row dims with age: full brightness up to 4 hours old, fading linearly to 33% at 120 hours and beyond. Task rows do not expand and there is no Updates section; hovering over or keyboard-focusing a task name shows a card with its summary only."
         - n: 2
-          action: "By default, generate every missing or stale one-line task.summary before rendering. Eligible local active, blocked, deferred, or closed tasks are completed with bounded parallel model calls (up to four at once); generation and persistence finish before HTML rendering begins. The script uses Codex Luna at medium effort with a read-only, no-network sandbox and persists summaries with provenance through the update path. Use --no-generate-missing-summaries to inspect gaps without writing; --generate-missing-summaries is the explicit form of the default."
+          action: "By default, answer the orientation question of every eligible local active, blocked, deferred, or closed task whose orientation answer is missing, stale or invalid, before rendering. The answers engine runs one pass per repository, asks the models of the answers chain (shipped default: luna, then haiku, at medium effort; the config key answers.models in ~/.claude/config/task-kit.yaml replaces the list) through llm-kit, tries free entries first, and uses a paid class only when llm-kit's per-machine consent allows it. Each answer is one file under the task's answers/ folder; review commits and publishes only this machine's answer files and writes neither task.yaml nor log.md. Use --no-generate-missing-summaries to inspect gaps without asking a model; --generate-missing-summaries is the explicit form of the default."
         - n: 3
           action: "Write a self-contained HTML document, open it in the user's browser unless --no-open is set, and report generation failures on stderr. --output - writes HTML to stdout; otherwise the default is a private temporary HTML file."
       gotchas:
-        - "Missing or stale summaries have a distinct warning treatment in HTML and remain visible in the structured diagnostics. Unavailable, remote, invalid, or orphaned tasks are shown as unavailable and are never sent to the model."
-        - "Summary-maintenance log entries do not advance last_update. Later substantive task changes invalidate the stored summary fingerprint and cause the next default review to regenerate it."
+        - "Missing or stale summaries have a distinct warning treatment in HTML and remain visible in the structured diagnostics. Unavailable, remote, invalid, or orphaned tasks are shown as unavailable and are never sent to the model. Answer states (current, stale, missing, invalid, not-applicable) have distinct treatments."
+        - "Exit code: review exits 1 when a model refusal (llm-kit absent or too old; the message names the install or update command) or any failed answer was reported, and 0 otherwise; the HTML is written either way. Errors and advisory note: lines (uncommitted task folder skipped, answer superseded, answers waiting to be published) print to stderr."
+        - "Answering writes no log entry, so it does not advance last_update. A substantive task change makes the answer stale (its stored fingerprint no longer matches the question and inputs) and the next default review answers it again. Model answering REFUSES when llm-kit is absent or older than 0.4.0; nothing substitutes, and every other verb works without llm-kit."
+    - id: answers
+      keywords: [task answers, answers refresh, answers status, answers prune, orientation, coverage, question catalog]
+      user_objective: "Compute, inspect or prune the answers of the question catalog (orientation, decisions, activity, task commits) for the tasks of configured projects."
+      operation: task.py answers refresh|status|prune --format json --protocol N [--parent DIR ...] [--allow CLASSES] [--batch N] [--stop-file PATH] [--deadline-s N]
+      gotchas:
+        - "Contract: the same command as `task-kit answers`; it writes exactly one JSON document to stdout, diagnostics to stderr, and requires --format json and --protocol N. The payloads, flags and exit codes (0 ok, 1 internal/discovery_failed/config_invalid, 2 usage, 4 protocol_unsupported) are in references/task-export-protocol.md, section Answers commands."
+        - "status writes nothing and takes no lock. refresh answers the pending questions of the most recently modified tasks (--batch, default 4 tasks per repository), commits only this machine's answer files and publishes them. prune deletes this machine's answer files of questions the catalog no longer holds."
+        - "Spend: refresh asks free entries first. A usage or spend class entry runs only when --allow names the class or, without --allow, llm-kit's per-machine consent allows it. Do not pass --allow with a paid class unless the user said so."
+        - "Model answering REFUSES when llm-kit is absent or too old: the repository report carries a refusal naming the install or update command. Relay it as printed; do not install llm-kit unasked."
     - id: dashboard
       keywords: [task dashboard, dashboard, /task dashboard, open the dashboard, task-kit, browser view of tasks]
       user_objective: "Open the browser view over every configured project's task folders."

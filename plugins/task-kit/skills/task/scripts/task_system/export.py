@@ -30,13 +30,16 @@ import hashlib
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor
+import datetime as datetime_mod
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from . import answer_store
 from . import machine as machine_mod
-from . import plan_sections, repo_identity, sessions, sessions_config, vcs
+from . import plan_sections, questions, repo_identity, sessions, sessions_config, vcs
+from .answers_types import Catalog
 from .discovery import (
     NO_PROJECT_DIRECTORIES_MESSAGE,
     TASK_CONFIG_PATH,
@@ -61,6 +64,7 @@ TASK_ROOTS = tuple(root for root in KNOWN_ROOTS if root != LOCATION_TMP)
 # The files a task's content revision covers.
 REVISION_FILES = ("task.yaml", "plan.md", "log.md")
 SUMMARY_SOURCE_TASK_YAML = "task.yaml"
+SUMMARY_SOURCE_ANSWER = "answer"
 
 
 class ExportError(Exception):
@@ -219,14 +223,44 @@ def item_record(item) -> dict:
     return {"id": item.id, "title": item.title, "state": item.state, "priority": item.priority, "note": item.note}
 
 
-def task_facts(owner: _Owner) -> dict:
-    """What one task folder says, through the task system's own readers (no checkout or sessions yet)."""
+@dataclass(frozen=True)
+class AnswerEnv:
+    """What the answers of a task need: the catalog, the repository logs and the naive local read time."""
+
+    catalog: Catalog
+    logs: answer_store.RepoLogs
+    now: datetime_mod.datetime
+
+
+def task_facts(owner: _Owner, env: AnswerEnv | None = None) -> dict:
+    """What one task folder says, through the task system's own readers (no checkout or sessions yet).
+
+    ``env`` carries the question catalog; without one the task has no answers (``answers`` is empty and
+    ``coverage`` null). The answer problems of the task come back under ``_answer_notes``, which the caller
+    removes before the record is exported.
+    """
     folder = owner.folder
     result = validate_ref(owner.path, owner.project.root)
     block = read_task_block(folder) or {}
     updates = read_task_updates(folder)
     items = read_task_items(folder, HAND_OFF)
     summary = _text(block, "summary")
+    summary_source = SUMMARY_SOURCE_TASK_YAML if summary is not None else None
+    answers: dict = {}
+    coverage = None
+    answer_notes: tuple[str, ...] = ()
+    if env is not None:
+        top = env.logs.top_of(folder)
+        found = answer_store.task_answers(
+            env.catalog, folder, block, result.classification,
+            repo_top=top, log=env.logs.log_for(top), now=env.now,
+        )
+        answers = {question_id: state.as_dict() for question_id, state in found.states.items()}
+        coverage = found.coverage.as_dict()
+        answer_notes = found.notes
+        headline = answer_store.orientation_headline(found.states)
+        if headline is not None:
+            summary, summary_source = headline[0], SUMMARY_SOURCE_ANSWER
     return {
         "path": owner.path,
         "stub": owner.stub,
@@ -236,7 +270,9 @@ def task_facts(owner: _Owner) -> dict:
         "priority": _text(block, "priority"),
         "description": _text(block, "description"),
         "summary": summary,
-        "summary_source": SUMMARY_SOURCE_TASK_YAML if summary is not None else None,
+        "summary_source": summary_source,
+        "answers": answers,
+        "coverage": coverage,
         "classification": result.classification,
         "blocked_by": _strings(block.get("blocked_by")),
         "last_activity": max((update.timestamp for update in updates), default=None),
@@ -252,6 +288,7 @@ def task_facts(owner: _Owner) -> dict:
             "item_errors": list(items.errors),
             "notes": list(result.notes),
         },
+        "_answer_notes": answer_notes,
     }
 
 
@@ -320,20 +357,41 @@ def tasks_payload(
     config_path: Path | None = None,
     resolve_machine: Callable[[], machine_mod.Machine] | None = None,
     now: Callable[[], datetime] = _utc_now,
+    catalog: Catalog | None = None,
+    local_now: Callable[[], datetime_mod.datetime] = datetime_mod.datetime.now,
 ) -> dict:
-    """The payload of ``export tasks`` (protocol 1)."""
+    """The payload of ``export tasks`` (protocol 1).
+
+    ``catalog`` is the question catalog (default: the shipped questions plus the fleet layer); ``local_now``
+    is the naive local time the script answers read. Both are for tests.
+    """
     errors: list[dict] = []
     owners, bases = _owners(resolve_parents(parents, config_path), errors)
+    env: AnswerEnv | None = None
+    logs = answer_store.RepoLogs()
+    if catalog is None:
+        try:
+            catalog = questions.load_catalog(questions.default_shipped_dir(), questions.default_fleet_dir())
+        except questions.QuestionError as exc:
+            errors.append(_error("questions", f"the question catalog cannot be loaded, so tasks carry no answers: {exc}"))
+    if catalog is not None:
+        env = AnswerEnv(catalog=catalog, logs=logs, now=local_now())
+        for owner in owners.values():  # one git process per task root and per repository, before the workers start
+            logs.log_for(logs.top_of(owner.folder))
     facts: dict[str, dict] = {}
     if owners:
         with ThreadPoolExecutor(max_workers=LOAD_WORKERS) as pool:
-            futures = {key: pool.submit(task_facts, owner) for key, owner in owners.items()}
+            futures = {key: pool.submit(task_facts, owner, env) for key, owner in owners.items()}
             for key, future in futures.items():
                 try:
                     facts[key] = future.result()
                 except OSError as exc:
                     owner = owners[key]
                     errors.append(_error("unreadable", f"cannot read task folder {owner.folder}: {exc}", owner.project.root))
+    for key, record in facts.items():
+        for note in record.pop("_answer_notes"):
+            errors.append(_error("answers", note, owners[key].project.root))
+    errors.extend(_error("answers", note) for note in logs.notes)
     machine_reader = resolve_machine if resolve_machine is not None else (lambda: current_machine(config_path))
     registrations = _sessions(bases, machine_reader, errors)
 

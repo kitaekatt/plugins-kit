@@ -106,8 +106,8 @@
       "type": "object",
       "required": [
         "checkout", "path", "stub", "location", "revision", "title", "priority", "description", "summary",
-        "summary_source", "classification", "blocked_by", "last_activity", "updates", "updates_total",
-        "has_items_block", "items", "findings", "sessions"
+        "summary_source", "answers", "coverage", "classification", "blocked_by", "last_activity", "updates",
+        "updates_total", "has_items_block", "items", "findings", "sessions"
       ],
       "additionalProperties": false,
       "properties": {
@@ -120,7 +120,13 @@
         "priority": {"$ref": "#/$defs/nullable_string"},
         "description": {"$ref": "#/$defs/nullable_string"},
         "summary": {"$ref": "#/$defs/nullable_string"},
-        "summary_source": {"type": ["string", "null"], "description": "open enum: task.yaml"},
+        "summary_source": {"type": ["string", "null"], "description": "open enum: task.yaml, answer"},
+        "answers": {
+          "type": "object",
+          "description": "one entry per question of the catalog, keyed by question id",
+          "additionalProperties": {"$ref": "#/$defs/answer"}
+        },
+        "coverage": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/coverage"}]},
         "classification": {"type": "string", "description": "open enum: active, blocked, deferred, closed, archived, orphaned, remote, invalid"},
         "blocked_by": {"$ref": "#/$defs/strings"},
         "last_activity": {"type": ["string", "null"], "description": "YYYY-MM-DD HH:MM, the newest update; a date-only entry reads as 12:00"},
@@ -130,6 +136,59 @@
         "items": {"type": "array", "items": {"$ref": "#/$defs/item"}},
         "findings": {"$ref": "#/$defs/findings"},
         "sessions": {"type": "array", "items": {"$ref": "#/$defs/session"}}
+      }
+    },
+    "answer": {
+      "type": "object",
+      "required": ["state", "answer", "answerer", "as_of", "fingerprint"],
+      "additionalProperties": false,
+      "properties": {
+        "state": {"type": "string", "description": "open enum: current, stale, missing, invalid, not-applicable"},
+        "answer": {"type": ["object", "null"], "description": "the chosen answer; its fields are the question's answer schema"},
+        "answerer": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/answerer"}]},
+        "as_of": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/as_of"}]},
+        "fingerprint": {"$ref": "#/$defs/nullable_string"}
+      }
+    },
+    "answerer": {
+      "type": "object",
+      "required": ["kind", "entry", "name", "tier", "effort", "attempts"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"type": "string", "description": "open enum: model, script"},
+        "entry": {"$ref": "#/$defs/nullable_string"},
+        "name": {"$ref": "#/$defs/nullable_string"},
+        "tier": {"$ref": "#/$defs/nullable_string"},
+        "effort": {"$ref": "#/$defs/nullable_string"},
+        "attempts": {"type": "array", "items": {"$ref": "#/$defs/attempt"}}
+      }
+    },
+    "attempt": {
+      "type": "object",
+      "required": ["entry", "outcome"],
+      "additionalProperties": false,
+      "properties": {
+        "entry": {"type": "string"},
+        "outcome": {"type": "string"}
+      }
+    },
+    "as_of": {
+      "type": "object",
+      "required": ["task_commit", "code_commit"],
+      "additionalProperties": false,
+      "properties": {
+        "task_commit": {"$ref": "#/$defs/nullable_string"},
+        "code_commit": {"$ref": "#/$defs/nullable_string"}
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "required": ["catalog_version", "applicable", "current"],
+      "additionalProperties": false,
+      "properties": {
+        "catalog_version": {"type": "integer", "minimum": 1},
+        "applicable": {"type": "integer", "minimum": 0},
+        "current": {"type": "integer", "minimum": 0}
       }
     },
     "update": {
@@ -184,7 +243,7 @@
       "required": ["code", "message", "root"],
       "additionalProperties": false,
       "properties": {
-        "code": {"type": "string", "description": "open enum: unreadable, repo_identity, sessions"},
+        "code": {"type": "string", "description": "open enum: unreadable, repo_identity, sessions, answers, questions"},
         "message": {"type": "string"},
         "root": {"$ref": "#/$defs/nullable_string"}
       }

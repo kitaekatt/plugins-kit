@@ -120,6 +120,22 @@ class ValidationResult:
         return not self.errors and not self.warnings
 
 
+def _answer_file_notes(folder: Path) -> list[str]:
+    """One advisory note per answer file under ``<folder>/answers/`` that cannot be read as a record.
+
+    NOT a finding: an invalid answer file never gates ``work`` and never changes the exit code. The valid
+    records still count, and the answers engine rewrites its own invalid file on the next pass. The import is
+    lazy because the answer store reaches this module through discovery.
+    """
+    from . import answer_store  # noqa: PLC0415
+
+    notes: list[str] = []
+    for question_id in answer_store.question_dirs(folder):
+        _records, invalid = answer_store.read_records(folder, question_id)
+        notes.extend(f"invalid answer file: {item.note}" for item in invalid)
+    return notes
+
+
 def _git_status_porcelain(folder: Path) -> str | None:
     """``git status --porcelain`` scoped to folder; None when not in a repo
     (or git is unavailable/fails) -- read as uncommitted (module docstring).
@@ -524,6 +540,7 @@ def validate_ref(
     size_warnings, size_notes = _doc_size_findings(folder, resolved.canonical)
     warnings.extend(size_warnings)
     result.notes.extend(size_notes)
+    result.notes.extend(_answer_file_notes(folder))
 
     for field_name in ("depends_on", "blocked_by"):
         entries = task_block.get(field_name)

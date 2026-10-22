@@ -25,6 +25,7 @@ DEFAULT_CONFIG = PLUGINS / "llm-scripting-kit/lib/llm_scripting_kit/default_conf
 ORCHESTRATION = PLUGINS / "awesome-kit/skills/orchestrate/defaults/orchestration.yaml"
 REVIEW_PROFILES = PLUGINS / "bootstrap/bootstrap_lib/code_review/defaults/review_profiles.yaml"
 LANE_MODELS = PLUGINS / "skills-kit/skills_kit_lib/defaults/lane_models.yaml"
+TASK_ANSWERS = PLUGINS / "task-kit/skills/task/defaults/answers.yaml"
 
 # Exempt lane_models families: Workflow agent() runs Claude models only.
 AGENT_ONLY_LANE_FAMILIES = {"detect", "classify", "coverage", "generate", "remediate"}
@@ -58,6 +59,7 @@ def _declarations():
                 f"review_profiles {profile['id']}.{reviewer['name']}",
                 [_entry_id(m) for m in reviewer["model"]],
             )
+    yield "task-kit answers.models", [_entry_id(m) for m in _load(TASK_ANSWERS)["answers"]["models"]]
     lanes = _load(LANE_MODELS)["lane_models"]
     for family, entries in lanes.items():
         if family in AGENT_ONLY_LANE_FAMILIES:

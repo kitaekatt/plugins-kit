@@ -1,0 +1,28 @@
+_schema_version: "1"
+id: task_commits
+version: 1
+title: Latest task-record commits
+applies_to: [active, blocked, deferred, closed]
+inputs: [task_commits]
+max_input_chars: 1000
+script: task_commits
+prompt: null
+answer:
+  type: object
+  required: [commits]
+  additionalProperties: false
+  properties:
+    commits:
+      type: array
+      maxItems: 10
+      items:
+        type: object
+        required: [sha, date, subject]
+        additionalProperties: false
+        properties:
+          sha: {type: string}
+          date: {type: string}
+          subject: {type: string}
+grounding: []
+models: null
+effort: null

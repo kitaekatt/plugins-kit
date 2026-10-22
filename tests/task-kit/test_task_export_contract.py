@@ -97,6 +97,11 @@ def test_the_tasks_golden_covers_the_fixture(world):
         pytest.param(lambda t: t.__setitem__("updates_total", "3"), id="retyped"),
         pytest.param(lambda t: t.__setitem__("has_items_block", None), id="nulled"),
         pytest.param(lambda t: t.__setitem__("added_without_schema", 1), id="undocumented"),
+        pytest.param(lambda t: t.pop("answers"), id="answers-removed"),
+        pytest.param(lambda t: t.__setitem__("coverage", {"catalog_version": 1}), id="coverage-incomplete"),
+        pytest.param(lambda t: t["answers"]["activity"].__setitem__("state", None), id="answer-state-nulled"),
+        pytest.param(lambda t: t["answers"]["activity"].__setitem__("extra", 1), id="answer-undocumented"),
+        pytest.param(lambda t: t["answers"]["activity"]["answerer"].pop("attempts"), id="answerer-field-removed"),
     ],
 )
 def test_the_schema_refuses_a_changed_protocol_1_field(world, mutate):

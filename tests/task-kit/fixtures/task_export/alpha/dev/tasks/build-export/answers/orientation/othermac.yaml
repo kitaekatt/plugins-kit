@@ -1,0 +1,23 @@
+_schema_version: '1'
+host: othermac
+machine: '0123456789abcdef'
+os_instance: linux
+question: orientation
+question_version: 1
+answer:
+  headline: Export task facts as JSON for databench
+  state: The schema is frozen and the CLI is next
+  next: Write the export CLI
+inputs_fingerprint: '1111111111111111111111111111111111111111111111111111111111111111'
+as_of:
+  task_commit: '2222222222222222222222222222222222222222'
+  code_commit: null
+answerer:
+  kind: model
+  entry: example-endpoint
+  tier: free
+  effort: medium
+  attempts:
+  - entry: example-endpoint
+    outcome: completed
+generated_at: '2026-10-20T09:30:00-05:00'

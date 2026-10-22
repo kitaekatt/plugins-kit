@@ -1,9 +1,9 @@
 """task.py -- the task-system CLI entry point (spec section 7).
 
-One entry point with verb subcommands. The CLI exposes 15 verbs:
+One entry point with verb subcommands. The CLI exposes 16 verbs:
 ``init``, ``list``, ``show``, ``status``, ``validate``,
 ``work``, ``update``, ``items``, ``close``, ``reopen``,
-``archive``, ``delete``, ``move``, ``review``, and ``sessions``.
+``archive``, ``delete``, ``move``, ``review``, ``sessions``, and ``answers``.
 
 Conventions (spec 7.1): exit 0 on success, non-zero on failure/block;
 findings print to stderr. ``validate`` exits 0 iff there are no errors AND no
@@ -136,6 +136,7 @@ Usage:
     task.py sessions [list] [--scope project|all] [--format text|json] [--root PATH]
     task.py sessions release <ref> [--all-local] [--root PATH]
     task.py sessions publish [--root PATH]
+    task.py answers refresh|status|prune --format json --protocol N [--parent DIR ...] [...]
 """
 
 import argparse
@@ -177,7 +178,7 @@ try:
         serialize_listing,
     )  # noqa: E402
     from task_system.review_html import render_review_html  # noqa: E402
-    from task_system.summary_ops import generate_missing_summaries  # noqa: E402
+    from task_system import summary_ops  # noqa: E402
     from task_system.state_ops import StateOpError  # noqa: E402
     from task_system.task_items import read_task_items, sort_items  # noqa: E402
     from task_system.types import DEFAULT_TYPE_NAME, get_type  # noqa: E402
@@ -352,15 +353,19 @@ def _cmd_review(args: argparse.Namespace) -> int:
     generation_failed = False
     if args.generate_missing_summaries:
         try:
-            report = generate_missing_summaries(listing, root)
+            report = summary_ops.answer_missing_orientations(listing, root)
         except Exception as exc:
-            print(f"error: summary generation unavailable: {exc}", file=sys.stderr)
+            print(f"error: orientation answers unavailable: {exc}", file=sys.stderr)
             generation_failed = True
         else:
+            for message in report.refusals:
+                print(f"error: model answering unavailable: {message}", file=sys.stderr)
             for task_id, reason in report.failed:
-                print(f"error: could not generate summary for {task_id}: {reason}", file=sys.stderr)
-            generation_failed = bool(report.failed)
-            if report.generated:
+                print(f"error: could not answer the orientation of {task_id}: {reason}", file=sys.stderr)
+            for note in report.notes:
+                print(f"note: {note}", file=sys.stderr)
+            generation_failed = report.broken
+            if report.answered:
                 listing = _collect_listing(args, root)
                 if listing is None:
                     return 1
@@ -573,6 +578,14 @@ def _cmd_update(args: argparse.Namespace) -> int:
     validation = result.validation
     print(validation.classification)
     _print_findings(validation)
+    if args.summary is not None and summary_ops.orientation_supersedes_summary(
+        result.folder, validation.classification
+    ):
+        print(
+            "note: task.summary was written, but this task's orientation answer supersedes it: "
+            "list and review show the answer's headline, not task.summary",
+            file=sys.stderr,
+        )
     # The write persisted either way; the exit code reports the findings
     # (consistent with the validate verb).
     return 0 if validation.clean else 1
@@ -674,6 +687,13 @@ def _cmd_move(args: argparse.Namespace) -> int:
     print(f"moved: {result.old_canonical} -> {result.new_canonical}")
     print(f"rewrote {len(result.rewritten_docs)} document(s)")
     return 0
+
+
+def _cmd_answers(args: argparse.Namespace) -> int:
+    """``answers refresh|status|prune``: the same code as ``task-kit answers``, with its flags and its one JSON document."""
+    from task_system import answers_cli  # noqa: PLC0415 -- the other verbs need none of its imports
+
+    return answers_cli.main(list(args.answers_args))
 
 
 def _cmd_sessions(args: argparse.Namespace) -> int:
@@ -869,13 +889,15 @@ def main(argv: list[str] | None = None) -> int:
         "--generate-missing-summaries",
         dest="generate_missing_summaries",
         action="store_true",
-        help="Generate missing/stale summaries before rendering (the default).",
+        help="Answer the orientation question of tasks whose answer is missing, stale or invalid before "
+        "rendering (the default). Commits and publishes this machine's answer files; writes neither "
+        "task.yaml nor log.md.",
     )
     summary_group.add_argument(
         "--no-generate-missing-summaries",
         dest="generate_missing_summaries",
         action="store_false",
-        help="Keep missing/stale summaries visible instead of generating them.",
+        help="Keep missing/stale summaries visible instead of answering them.",
     )
     p_review.set_defaults(generate_missing_summaries=True)
     p_review.add_argument(
@@ -983,7 +1005,8 @@ def main(argv: list[str] | None = None) -> int:
         "--description", default=None, help="Set task.description."
     )
     p_update.add_argument(
-        "--summary", default=None, help="Set task.summary."
+        "--summary", default=None,
+        help="Set task.summary (the legacy one-line summary; a task's orientation answer supersedes it)."
     )
     p_update.add_argument(
         "--depends-on",
@@ -1100,6 +1123,17 @@ def main(argv: list[str] | None = None) -> int:
     p_sessions_publish.add_argument("--root", type=Path, default=argparse.SUPPRESS,
                                     help="Project root (default: cwd).")
 
+    p_answers = sub.add_parser(
+        "answers",
+        help="Task answers (refresh, status, prune): the same command as `task-kit answers`, run with "
+        "`--format json --protocol N`. Writes one JSON document to stdout.",
+    )
+    p_answers.add_argument(
+        "answers_args", nargs=argparse.REMAINDER, metavar="VERB [OPTIONS]",
+        help="Passed to `task-kit answers` unchanged: refresh|status|prune --format json --protocol N "
+        "[--parent DIR ...] [--allow CLASSES] [--batch N] [--stop-file PATH] [--deadline-s N].",
+    )
+
     args = parser.parse_args(argv)
     if args.verb == "validate":
         return _cmd_validate(args)
@@ -1131,6 +1165,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_move(args)
     if args.verb == "sessions":
         return _cmd_sessions(args)
+    if args.verb == "answers":
+        return _cmd_answers(args)
     parser.error(f"unknown verb: {args.verb}")
     return 2
 

@@ -1,0 +1,56 @@
+=== task ===
+depends_on:
+- dev/tasks/buy-tools
+description: |
+  Data path is dead.
+  Re-terminate and re-test.
+priority: P2
+status: active
+title: Re-terminate the closet cat6a run
+type: hand-off
+=== claude_md ===
+# Re-terminate the closet cat6a run
+
+The wall plate in the closet reads open on the tester.
+The trailing spaces on the line above are part of the golden text.
+
+## Immediate Priorities
+
+1. `reterminate-run` -- redo the punch-down.
+=== plan_md ===
+# Plan
+
+Redo the punch-down at the closet patch panel, then re-test the run.
+
+```yaml
+task_items:
+  items:
+    - id: buy-tools
+      title: "Buy a punch-down tool"
+      state: blocked-user
+      priority: P1
+      note: "waiting on the hardware store"
+    - id: reterminate-run
+      title: "Re-terminate the closet run"
+      state: available
+      priority: P2
+    - id: retest-run
+      title: "Re-test the run"
+      state: deferred
+```
+=== items ===
+- id: buy-tools
+  note: waiting on the hardware store
+  priority: P1
+  state: blocked-user
+  title: Buy a punch-down tool
+- id: reterminate-run
+  priority: P2
+  state: available
+  title: Re-terminate the closet run
+- id: retest-run
+  state: deferred
+  title: Re-test the run
+=== activity ===
+2026-10-06: Tester shows the pair open at the wall plate.
+2026-10-03 09:15: update: status = 'active'

@@ -1,0 +1,39 @@
+_schema_version: "1"
+id: decisions
+version: 1
+title: Decisions waiting on the user
+applies_to: [active, blocked]
+inputs: [items, plan_md, claude_md, activity]
+max_input_chars: 40000
+script: null
+prompt: |
+  From the task files below, list the decisions the task is waiting on its
+  owner to make. Return one JSON object with the key decisions: a list of at
+  most 5 objects, empty when nothing waits on the owner. Each object has item
+  (the item id or a short label), question (what must be decided), evidence
+  (a short quote copied verbatim from the files that shows the decision is
+  waiting) and, only when the files state a default or recommendation, default
+  (that text copied verbatim from the files). Omit default otherwise. Every
+  value is one line of plain ASCII text.
+answer:
+  type: object
+  required: [decisions]
+  additionalProperties: false
+  properties:
+    decisions:
+      type: array
+      maxItems: 5
+      items:
+        type: object
+        required: [item, question, evidence]
+        additionalProperties: false
+        properties:
+          item: {type: string, minLength: 1, maxLength: 80}
+          question: {type: string, minLength: 1, maxLength: 200}
+          default: {type: string, minLength: 1, maxLength: 200}
+          evidence: {type: string, minLength: 1, maxLength: 300}
+grounding:
+  - "decisions[].evidence"
+  - "decisions[].default"
+models: null
+effort: null

@@ -5,18 +5,16 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
 from html import unescape
 
 import pytest
 import yaml
 
 from bootstrap_guard import _REEXEC_SKIP_ENV
-from task_system import discovery, listing, summary_ops
+from task_system import discovery, listing
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _TASK_CLI = (
@@ -78,30 +76,6 @@ def make_task(
     return folder
 
 
-def _install_fake_completion_module(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stand in for llm_kit.completion.types, which is not a test-venv dep.
-
-    summary_ops._complete does `from llm_kit.completion.types import
-    BackendOptions` at call time; real backends are always monkeypatched over
-    _complete in the other tests in this module, but the prompt-contract test
-    below calls _complete itself, so the import needs somewhere to resolve.
-    """
-    parent = ModuleType("llm_kit")
-    completion = ModuleType("llm_kit.completion")
-    types = ModuleType("llm_kit.completion.types")
-
-    class BackendOptions:
-        def __init__(self, **kwargs: object) -> None:
-            self.kwargs = kwargs
-
-    types.BackendOptions = BackendOptions
-    parent.completion = completion
-    completion.types = types
-    monkeypatch.setitem(sys.modules, "llm_kit", parent)
-    monkeypatch.setitem(sys.modules, "llm_kit.completion", completion)
-    monkeypatch.setitem(sys.modules, "llm_kit.completion.types", types)
-
-
 def _link_directory(link: Path, target: Path) -> None:
     link.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -129,56 +103,6 @@ def _configure_project_directories(
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setattr(discovery, "TASK_CONFIG_PATH", config)
     return config
-
-
-def test_summary_backend_absent_names_install_command(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def absent(name: str) -> ModuleType:
-        raise ModuleNotFoundError(name="llm_kit")
-
-    monkeypatch.setattr(summary_ops.importlib, "import_module", absent)
-    with pytest.raises(summary_ops.SummaryBackendUnavailable, match="plugin install"):
-        summary_ops._default_backend()
-
-
-def test_summary_backend_too_old_names_update_and_minimum(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    modules = {
-        "llm_kit": ModuleType("llm_kit"),
-        "llm_kit.adapters.codex_backend": ModuleType("backend"),
-        "llm_kit.completion.types": ModuleType("types"),
-    }
-
-    monkeypatch.setattr(summary_ops.importlib, "import_module", modules.__getitem__)
-    with pytest.raises(summary_ops.SummaryBackendUnavailable, match="plugin update") as exc:
-        summary_ops._default_backend()
-    assert summary_ops.LLM_KIT_MIN_VERSION in str(exc.value)
-
-
-def test_summary_backend_refusal_reports_every_affected_task(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    make_task(tmp_path, "tmp/one", title="One")
-    make_task(tmp_path, "tmp/two", title="Two")
-    monkeypatch.setattr(
-        summary_ops,
-        "_default_backend",
-        lambda: (_ for _ in ()).throw(
-            summary_ops.SummaryBackendUnavailable(
-                "llm-kit is absent; claude plugin install llm-kit@plugins-kit"
-            )
-        ),
-    )
-
-    report = summary_ops.generate_missing_summaries(
-        listing.collect_listing("project", tmp_path), tmp_path
-    )
-
-    assert report.generated == ()
-    assert {task_id for task_id, _reason in report.failed} == {"tmp/one", "tmp/two"}
-    assert all("plugin install" in reason for _task_id, reason in report.failed)
 
 
 class TestTaskListingAndReview:
@@ -216,7 +140,7 @@ class TestTaskListingAndReview:
         yaml_result = run_cli(
             ["list", "--format", "yaml", "--root", str(tmp_path)], tmp_path
         )
-        assert yaml.safe_load(yaml_result.stdout)["schema_version"] == "1"
+        assert yaml.safe_load(yaml_result.stdout)["schema_version"] == "2"
         assert "missing task.summary" in yaml_result.stderr
 
     def test_list_text_has_deferred_section_between_open_and_closed(
@@ -741,155 +665,7 @@ class TestTaskListingAndReview:
         assert [view.id for view in views] == ["tmp/late", "tmp/early"]
 
 
-class TestSummaryGeneration:
-    def test_all_scope_generation_uses_selected_project_roots(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        devroot = tmp_path / "devroot"
-        owner = devroot / "kit"
-        other = devroot / "kit-long"
-        shared = tmp_path / "shared-tasks"
-        shared.mkdir()
-        shared_folder = make_task(shared, "shared", title="Shared task")
-        _link_directory(owner / "dev" / "tasks", shared)
-        _link_directory(other / "dev" / "tasks", shared)
-        other_folder = make_task(other, "tmp/other", title="Other task")
-        monkeypatch.setenv("DEVROOT", str(devroot))
-        _configure_project_directories(tmp_path, monkeypatch, ["${DEVROOT}"])
-
-        calls: list[tuple[str, Path]] = []
-
-        def complete(backend: object, view: listing.TaskView, root: Path) -> str:
-            calls.append((view.id, root))
-            return "Generated summary."
-
-        monkeypatch.setattr(summary_ops, "_complete", complete)
-        current = listing.collect_listing("all", owner)
-        report = summary_ops.generate_missing_summaries(
-            current, owner, backend=SimpleNamespace()
-        )
-
-        assert report.failed == ()
-        assert set(report.generated) == {"kit/dev/tasks/shared", "kit-long/tmp/other"}
-        assert set(calls) == {("dev/tasks/shared", owner), ("tmp/other", other)}
-        for folder in (shared_folder, other_folder):
-            block = yaml.safe_load((folder / "task.yaml").read_text(encoding="utf-8"))
-            assert block["task"]["summary"] == "Generated summary."
-
-    def test_deferred_task_is_eligible_for_summary_generation(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # deferred joins active/blocked/closed in the summary-eligible set
-        # (listing.SUMMARY_ELIGIBLE_STATUSES, summary_ops.ELIGIBLE_STATUSES)
-        # -- a deferred task's missing summary is generated like any other
-        # eligible task's, not treated as "unavailable".
-        make_task(tmp_path, "tmp/on-hold", title="On hold", status="deferred")
-        current = listing.collect_listing("project", tmp_path)
-        view = current.views[0]
-        assert view.status == "deferred"
-        assert view.summary_status == "missing"
-
-        monkeypatch.setattr(
-            summary_ops,
-            "_complete",
-            lambda backend, view, root: "Generated summary.",
-        )
-        report = summary_ops.generate_missing_summaries(
-            current, tmp_path, backend=SimpleNamespace()
-        )
-        assert report.generated == ("tmp/on-hold",)
-        assert report.failed == ()
-
-    def test_generation_does_not_recreate_disappeared_task_folder(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        folder = make_task(tmp_path, "tmp/disappears", title="Disappears")
-        current = listing.collect_listing("project", tmp_path)
-
-        def disappear(backend, view, root):
-            shutil.rmtree(folder)
-            return "Generated summary."
-
-        monkeypatch.setattr(summary_ops, "_complete", disappear)
-        report = summary_ops.generate_missing_summaries(
-            current, tmp_path, backend=SimpleNamespace()
-        )
-        assert report.generated == ()
-        assert report.failed and report.failed[0][0] == "tmp/disappears"
-        assert not folder.exists()
-
-    def test_generation_persists_summary_without_advancing_activity(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        make_task(tmp_path, "tmp/generate", title="Generate me", date="2026-09-19")
-        first = listing.collect_listing("project", tmp_path)
-        assert first.views[0].summary_status == "missing"
-
-        monkeypatch.setattr(
-            summary_ops,
-            "_complete",
-            lambda backend, view, root: "Generated summary.",
-        )
-        report = summary_ops.generate_missing_summaries(
-            first, tmp_path, backend=SimpleNamespace()
-        )
-        assert report.generated == ("tmp/generate",)
-        assert report.failed == ()
-
-        block = yaml.safe_load(
-            (tmp_path / "tmp" / "generate" / "task.yaml").read_text(encoding="utf-8")
-        )["task"]
-        assert block["summary"] == "Generated summary."
-        log = (tmp_path / "tmp" / "generate" / "log.md").read_text(encoding="utf-8")
-        assert "summary: refreshed" in log
-        refreshed = listing.collect_listing("project", tmp_path)
-        view = refreshed.views[0]
-        assert view.summary_status == "present"
-        assert view.last_update == "2026-09-19"
-        assert view.updates[0].detail == "update: task changed"
-
-
-class TestSummaryPromptContract:
-    def test_normalize_summary_truncates_at_new_cap_on_a_word_boundary(self) -> None:
-        text = " ".join(["alpha"] * 60)  # 359 chars, past both the 240 cap and the old 320 cap
-        normalized = summary_ops._normalize_summary(text)
-        assert len(normalized) <= 240
-        assert normalized.endswith("...")
-        assert not normalized.endswith(" ...")
-
-    def test_normalize_summary_keeps_a_short_three_section_line_intact(self) -> None:
-        text = "Closet run is dead; re-terminating cat6a; re-test pending."
-        assert summary_ops._normalize_summary(text) == text
-
-    def test_complete_system_prompt_states_problem_approach_state_contract(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        make_task(tmp_path, "tmp/contract", title="Contract check")
-        view = listing.collect_listing("project", tmp_path).views[0]
-        _install_fake_completion_module(monkeypatch)
-
-        captured: dict[str, str] = {}
-
-        class _StubBackend:
-            def complete(self, system: str, user: str, **_kwargs: object) -> SimpleNamespace:
-                captured["system"] = system
-                captured["user"] = user
-                return SimpleNamespace(text="Problem stated; approach stated; state stated")
-
-        result = summary_ops._complete(_StubBackend(), view, tmp_path)
-        assert result == "Problem stated; approach stated; state stated"
-
-        system = captured["system"]
-        lowered = system.lower()
-        assert "problem the task solves" in lowered
-        assert "how it is being solved" in lowered
-        assert "stands now" in lowered
-        assert str(summary_ops.SUMMARY_MAX_CHARS) in system
-        assert str(summary_ops.SUMMARY_SECTION_MAX_CHARS) in system
-        assert "plan.md's task_items" in system
-        assert "no heading, markdown, bullets, or quotes" in lowered
-        assert "```" not in system
-
+class TestLegacySummaryFingerprint:
     def test_fingerprint_bump_invalidates_a_summary_stored_under_the_old_scheme(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

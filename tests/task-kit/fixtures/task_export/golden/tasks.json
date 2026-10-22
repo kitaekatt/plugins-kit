@@ -28,9 +28,89 @@
     "revision": "<revision>",
     "tasks": [
       {
+        "answers": {
+          "activity": {
+            "answer": {
+              "days_since": 0,
+              "last_at": "2026-10-22 14:30",
+              "last_entry": "Fixture written."
+            },
+            "answerer": {
+              "attempts": [],
+              "effort": null,
+              "entry": null,
+              "kind": "script",
+              "name": "activity",
+              "tier": null
+            },
+            "as_of": {
+              "code_commit": null,
+              "task_commit": "<head>"
+            },
+            "fingerprint": null,
+            "state": "current"
+          },
+          "decisions": {
+            "answer": null,
+            "answerer": null,
+            "as_of": null,
+            "fingerprint": null,
+            "state": "missing"
+          },
+          "orientation": {
+            "answer": {
+              "headline": "Export task facts as JSON for databench",
+              "next": "Write the export CLI",
+              "state": "The schema is frozen and the CLI is next"
+            },
+            "answerer": {
+              "attempts": [
+                {
+                  "entry": "example-endpoint",
+                  "outcome": "completed"
+                }
+              ],
+              "effort": "medium",
+              "entry": "example-endpoint",
+              "kind": "model",
+              "name": null,
+              "tier": "free"
+            },
+            "as_of": {
+              "code_commit": null,
+              "task_commit": "2222222222222222222222222222222222222222"
+            },
+            "fingerprint": "<fingerprint>",
+            "state": "stale"
+          },
+          "task_commits": {
+            "answer": {
+              "commits": []
+            },
+            "answerer": {
+              "attempts": [],
+              "effort": null,
+              "entry": null,
+              "kind": "script",
+              "name": "task_commits",
+              "tier": null
+            },
+            "as_of": {
+              "code_commit": null,
+              "task_commit": "<head>"
+            },
+            "fingerprint": null,
+            "state": "current"
+          }
+        },
         "blocked_by": [],
         "checkout": "<checkout:alpha>",
         "classification": "active",
+        "coverage": {
+          "applicable": 4,
+          "catalog_version": 1,
+          "current": 2
+        },
         "description": "Export task facts as JSON for databench.",
         "findings": {
           "errors": [],
@@ -88,8 +168,8 @@
           }
         ],
         "stub": "build-export",
-        "summary": "The export reads task folders; the schema is frozen; the CLI is next.",
-        "summary_source": "task.yaml",
+        "summary": "Export task facts as JSON for databench",
+        "summary_source": "answer",
         "title": "Build the export",
         "updates": [
           {
@@ -111,9 +191,70 @@
         "updates_total": 3
       },
       {
+        "answers": {
+          "activity": {
+            "answer": {
+              "days_since": 4,
+              "last_at": "2026-10-18 08:00",
+              "last_entry": "Task created."
+            },
+            "answerer": {
+              "attempts": [],
+              "effort": null,
+              "entry": null,
+              "kind": "script",
+              "name": "activity",
+              "tier": null
+            },
+            "as_of": {
+              "code_commit": null,
+              "task_commit": "<head>"
+            },
+            "fingerprint": null,
+            "state": "current"
+          },
+          "decisions": {
+            "answer": null,
+            "answerer": null,
+            "as_of": null,
+            "fingerprint": null,
+            "state": "not-applicable"
+          },
+          "orientation": {
+            "answer": null,
+            "answerer": null,
+            "as_of": null,
+            "fingerprint": null,
+            "state": "missing"
+          },
+          "task_commits": {
+            "answer": {
+              "commits": []
+            },
+            "answerer": {
+              "attempts": [],
+              "effort": null,
+              "entry": null,
+              "kind": "script",
+              "name": "task_commits",
+              "tier": null
+            },
+            "as_of": {
+              "code_commit": null,
+              "task_commit": "<head>"
+            },
+            "fingerprint": null,
+            "state": "current"
+          }
+        },
         "blocked_by": [],
         "checkout": "<checkout:alpha-two>",
         "classification": "deferred",
+        "coverage": {
+          "applicable": 3,
+          "catalog_version": 1,
+          "current": 2
+        },
         "description": null,
         "findings": {
           "errors": [],
@@ -147,9 +288,70 @@
         "updates_total": 1
       },
       {
+        "answers": {
+          "activity": {
+            "answer": {
+              "days_since": 50,
+              "last_at": "2026-09-02 10:00",
+              "last_entry": "Closed."
+            },
+            "answerer": {
+              "attempts": [],
+              "effort": null,
+              "entry": null,
+              "kind": "script",
+              "name": "activity",
+              "tier": null
+            },
+            "as_of": {
+              "code_commit": null,
+              "task_commit": "<head>"
+            },
+            "fingerprint": null,
+            "state": "current"
+          },
+          "decisions": {
+            "answer": null,
+            "answerer": null,
+            "as_of": null,
+            "fingerprint": null,
+            "state": "not-applicable"
+          },
+          "orientation": {
+            "answer": null,
+            "answerer": null,
+            "as_of": null,
+            "fingerprint": null,
+            "state": "missing"
+          },
+          "task_commits": {
+            "answer": {
+              "commits": []
+            },
+            "answerer": {
+              "attempts": [],
+              "effort": null,
+              "entry": null,
+              "kind": "script",
+              "name": "task_commits",
+              "tier": null
+            },
+            "as_of": {
+              "code_commit": null,
+              "task_commit": "<head>"
+            },
+            "fingerprint": null,
+            "state": "current"
+          }
+        },
         "blocked_by": [],
         "checkout": "<checkout:alpha>",
         "classification": "closed",
+        "coverage": {
+          "applicable": 3,
+          "catalog_version": 1,
+          "current": 2
+        },
         "description": null,
         "findings": {
           "errors": [],
@@ -188,11 +390,91 @@
         "updates_total": 2
       },
       {
+        "answers": {
+          "activity": {
+            "answer": {
+              "days_since": 3,
+              "last_at": "2026-10-19 11:00",
+              "last_entry": "Task created."
+            },
+            "answerer": {
+              "attempts": [],
+              "effort": null,
+              "entry": null,
+              "kind": "script",
+              "name": "activity",
+              "tier": null
+            },
+            "as_of": {
+              "code_commit": null,
+              "task_commit": "<head>"
+            },
+            "fingerprint": null,
+            "state": "current"
+          },
+          "decisions": {
+            "answer": null,
+            "answerer": null,
+            "as_of": null,
+            "fingerprint": null,
+            "state": "missing"
+          },
+          "orientation": {
+            "answer": {
+              "headline": "Wait for the build-export review",
+              "next": "Start when build-export closes",
+              "state": "Blocked on build-export"
+            },
+            "answerer": {
+              "attempts": [
+                {
+                  "entry": "example-endpoint",
+                  "outcome": "completed"
+                }
+              ],
+              "effort": "medium",
+              "entry": "example-endpoint",
+              "kind": "model",
+              "name": null,
+              "tier": "free"
+            },
+            "as_of": {
+              "code_commit": null,
+              "task_commit": "3333333333333333333333333333333333333333"
+            },
+            "fingerprint": "<fingerprint>",
+            "state": "current"
+          },
+          "task_commits": {
+            "answer": {
+              "commits": []
+            },
+            "answerer": {
+              "attempts": [],
+              "effort": null,
+              "entry": null,
+              "kind": "script",
+              "name": "task_commits",
+              "tier": null
+            },
+            "as_of": {
+              "code_commit": null,
+              "task_commit": "<head>"
+            },
+            "fingerprint": null,
+            "state": "current"
+          }
+        },
         "blocked_by": [
           "dev/tasks/build-export"
         ],
         "checkout": "<checkout:alpha>",
         "classification": "blocked",
+        "coverage": {
+          "applicable": 4,
+          "catalog_version": 1,
+          "current": 3
+        },
         "description": null,
         "findings": {
           "errors": [],
@@ -213,8 +495,8 @@
         "revision": "310f66dab8558b38",
         "sessions": [],
         "stub": "wait-on-review",
-        "summary": null,
-        "summary_source": null,
+        "summary": "Wait for the build-export review",
+        "summary_source": "answer",
         "title": "Wait on review",
         "updates": [
           {

@@ -21,7 +21,9 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-from task_system import export
+from task_system import answer_store, export, question_inputs, questions
+from task_system.answers_types import Answerer
+from task_system.discovery import read_task_block
 from task_system.machine import Machine
 
 FIXTURE = Path(__file__).with_name("fixtures") / "task_export"
@@ -29,6 +31,7 @@ GOLDEN = FIXTURE / "golden"
 CHECKOUTS = ("alpha", "alpha-two")
 ORIGIN = "https://example.invalid/acme/alpha.git"
 NOW = datetime(2026, 10, 22, 15, 0, 0, tzinfo=timezone.utc)
+LOCAL_NOW = datetime(2026, 10, 22, 15, 0, 0)  # naive local time the script answers read
 MACHINE = Machine(host="thismac", fingerprint="fedcba9876543210", os_instance="macos")
 
 
@@ -52,12 +55,40 @@ def make_world(tmp_path: Path) -> Path:
         (root / ".gitignore").write_text("dev/tasks/\n", encoding="utf-8")
         _git(root, "add", "README.md", ".gitignore")
         _git(root, "commit", "-q", "-m", "init")
+    write_current_answer(parent / "alpha" / "dev" / "tasks" / "wait-on-review")
     return parent
+
+
+def shipped_catalog():
+    """The shipped questions only, so a fleet layer on the machine running the tests cannot reach a golden."""
+    return questions.load_catalog(questions.default_shipped_dir())
+
+
+def write_current_answer(folder: Path) -> None:
+    """This machine's orientation answer for ``folder``, current for the folder's present inputs."""
+    question = shipped_catalog().get("orientation")
+    fingerprint = answer_store.question_fingerprint(folder, read_task_block(folder), question)
+    answer_store.write_answer(
+        folder, "orientation", MACHINE,
+        answer_store.NewAnswer(
+            question_version=question.version,
+            answer={"headline": "Wait for the build-export review", "state": "Blocked on build-export",
+                    "next": "Start when build-export closes"},
+            inputs_fingerprint=fingerprint,
+            as_of=answer_store.AsOf(task_commit="3" * 40, code_commit=None),
+            answerer=Answerer(kind="model", entry="example-endpoint", name=None, tier="free", effort="medium",
+                              attempts=(("example-endpoint", "completed"),)),
+            generated_at="2026-10-22T09:00:00-05:00",
+        ),
+    )
 
 
 def inject() -> dict:
     """What a test passes to ``export_cli.document`` so the document is deterministic."""
-    return {"resolve_machine": lambda: MACHINE, "now": lambda: NOW}
+    return {
+        "resolve_machine": lambda: MACHINE, "now": lambda: NOW, "catalog": shipped_catalog(),
+        "local_now": lambda: LOCAL_NOW,
+    }
 
 
 def normalize(doc: dict, parent: Path) -> dict:
@@ -83,6 +114,12 @@ def normalize(doc: dict, parent: Path) -> dict:
 
     fixed = fix(doc)
     fixed["task_kit_version"] = "<version>"
+    for task in (fixed.get("payload") or {}).get("tasks", []) if isinstance(fixed.get("payload"), dict) else []:
+        for entry in task.get("answers", {}).values():
+            if entry["fingerprint"] is not None:
+                entry["fingerprint"] = "<fingerprint>"  # moves with the question text; question tests own it
+            if entry["as_of"] is not None and entry["as_of"]["task_commit"] is not None and entry["answerer"]["kind"] == "script":
+                entry["as_of"]["task_commit"] = "<head>"  # a fixture repository's HEAD is not reproducible
     payload = fixed.get("payload")
     if isinstance(payload, dict) and "revision" in payload and "generated_at" in payload:
         payload["revision"] = "<revision>"
@@ -149,6 +186,11 @@ def schema_errors(value, schema: dict, root: dict, where: str = "$") -> list[str
         properties = schema.get("properties", {})
         if schema.get("additionalProperties") is False:
             errors.extend(f"{where}: unexpected {key!r}" for key in value if key not in properties)
+        extra = schema.get("additionalProperties")
+        if isinstance(extra, dict):
+            for key, item in value.items():
+                if key not in properties:
+                    errors.extend(schema_errors(item, extra, root, f"{where}.{key}"))
         for key, sub in properties.items():
             if key in value:
                 errors.extend(schema_errors(value[key], sub, root, f"{where}.{key}"))

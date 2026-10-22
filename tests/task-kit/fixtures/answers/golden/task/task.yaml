@@ -1,0 +1,14 @@
+task:
+  _schema_version: '1'
+  type: hand-off
+  title: Re-terminate the closet cat6a run
+  status: active
+  priority: P2
+  description: |
+    Data path is dead.
+    Re-terminate and re-test.
+  summary: A generated summary the task reader must leave out.
+  summary_fingerprint: 0123456789abcdef
+  summary_updated: '2026-10-01'
+  depends_on:
+  - dev/tasks/buy-tools

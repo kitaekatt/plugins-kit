@@ -1,158 +1,54 @@
-"""Summary maintenance for the task review projection.
+"""The adapters between the task CLI verbs and the task answers engine.
 
-The task CLI remains the owner of persistence. This module only asks the
-configured Codex Luna completion for a one-line summary and writes it through
-state_ops.update so the normal YAML and log discipline is preserved.
+``task.py review`` shows each task's one-line summary, which is the headline of the task's orientation answer.
+``answer_missing_orientations`` makes that answer through ``answer_engine.run_pass`` (the engine ``task.py
+answers refresh`` and ``task-kit answers refresh`` run): it commits and publishes only this machine's answer
+files under the repository lock, and it writes neither task.yaml nor log.md. The cost classes a model may use
+are the engine's: llm-kit's per-machine consent (``llm_kit.registry.consent``) unless the caller names them.
+
+``orientation_supersedes_summary`` serves ``update --summary``: whether a usable orientation answer already
+takes the place of ``task.summary`` in listings.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
-import importlib
-import json
-from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from . import state_ops
+from . import answer_engine, answer_scripts, answer_store, answers_config, export, questions
+from .answers_types import Catalog
 from .discovery import read_task_block
-from .listing import TaskListing, TaskView, summary_source_fingerprint
+from .listing import ORIENTATION_QUESTION, TaskListing, TaskView
 
-SUMMARY_MODEL = "gpt-5.6-luna"
-SUMMARY_EFFORT = "medium"
-SUMMARY_TIMEOUT_S = 180.0
-SUMMARY_MAX_CHARS = 240
-SUMMARY_SECTION_MAX_CHARS = 80
 ELIGIBLE_STATUSES = frozenset(("active", "blocked", "closed", "deferred"))
-SUMMARY_WORKERS = 4
-LLM_KIT_MIN_VERSION = "0.1.9"
-
-
-class SummaryBackendUnavailable(RuntimeError):
-    """Summary repair cannot run because the optional llm-kit is unavailable."""
+# The orientation states a review makes an answer for. ``current`` needs none; ``not-applicable`` has none.
+WANTED_STATES = frozenset((answer_store.STATE_MISSING, answer_store.STATE_STALE, answer_store.STATE_INVALID))
 
 
 @dataclass(frozen=True)
-class SummaryGenerationReport:
-    generated: tuple[str, ...] = ()
+class ReviewAnswerReport:
+    """What a review's answering step did.
+
+    ``answered`` and ``failed`` name tasks (``project/id`` in all scope, else ``id``). ``refusals`` are the
+    repository-level reasons no model could answer (llm-kit absent or too old). ``notes`` are advisory lines
+    (a task folder with uncommitted changes is skipped, an answer was superseded, answers wait to be published).
+    """
+
+    answered: tuple[str, ...] = ()
     failed: tuple[tuple[str, str], ...] = ()
+    refusals: tuple[str, ...] = ()
+    notes: tuple[str, ...] = ()
 
     @property
     def attempted(self) -> int:
-        return len(self.generated) + len(self.failed)
+        return len(self.answered) + len(self.failed)
 
-
-def _read_excerpt(path: Path, limit: int = 12000) -> str:
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return "(unavailable)"
-    if len(text) <= limit:
-        return text
-    return text[:limit] + "\n[truncated]"
-
-
-def _normalize_summary(text: str) -> str:
-    value = text.strip()
-    if value.startswith(chr(96) * 3) and value.endswith(chr(96) * 3):
-        value = value[3:-3].strip()
-    if value.lower().startswith("summary:"):
-        value = value.split(":", 1)[1].strip()
-    try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError:
-        parsed = None
-    if isinstance(parsed, dict) and isinstance(parsed.get("summary"), str):
-        value = parsed["summary"].strip()
-    value = " ".join(value.split())
-    if len(value) > SUMMARY_MAX_CHARS:
-        value = value[: SUMMARY_MAX_CHARS - 3].rsplit(" ", 1)[0] + "..."
-    if not value:
-        raise ValueError("model returned an empty summary")
-    return value
-
-
-def _default_backend():
-    try:
-        importlib.import_module("llm_kit")
-    except ModuleNotFoundError as exc:
-        raise SummaryBackendUnavailable(
-            "llm-kit is absent; install it with "
-            "claude plugin install llm-kit@plugins-kit"
-        ) from exc
-    try:
-        backend_module = importlib.import_module("llm_kit.adapters.codex_backend")
-        types_module = importlib.import_module("llm_kit.completion.types")
-    except ModuleNotFoundError as exc:
-        raise SummaryBackendUnavailable(
-            "llm-kit is too old or stale; update it with "
-            "claude plugin update llm-kit@plugins-kit "
-            f"(minimum version {LLM_KIT_MIN_VERSION})"
-        ) from exc
-    try:
-        backend_type = backend_module.CodexCliBackend
-        types_module.BackendOptions
-    except AttributeError as exc:
-        raise SummaryBackendUnavailable(
-            "llm-kit is too old or stale; update it with "
-            "claude plugin update llm-kit@plugins-kit "
-            f"(minimum version {LLM_KIT_MIN_VERSION})"
-        ) from exc
-    return backend_type()
-
-
-def _task_context(view: TaskView, root: Path) -> str:
-    folder = root / view.id
-    task_yaml = _read_excerpt(folder / "task.yaml")
-    claude = _read_excerpt(folder / "CLAUDE.md")
-    plan = _read_excerpt(folder / "plan.md")
-    log = _read_excerpt(folder / "log.md", limit=8000)
-    return "\n\n".join(
-        (
-            "TASK YAML:\n" + task_yaml,
-            "CLAUDE.md:\n" + claude,
-            "PLAN:\n" + plan,
-            "ACTIVITY LOG:\n" + log,
-        )
-    )
-
-
-def _complete(backend: Any, view: TaskView, root: Path) -> str:
-    from llm_kit.completion.types import BackendOptions
-
-    system = (
-        "Write task.summary for a task review dashboard as ONE line with "
-        "three semicolon-separated sections, in this exact order: (1) the "
-        "problem the task solves, (2) how it is being solved, (3) where it "
-        f"stands now. Each section is at most {SUMMARY_SECTION_MAX_CHARS} "
-        f"characters, and the full line is at most {SUMMARY_MAX_CHARS} "
-        "characters. Prefer the current state from plan.md's task_items and "
-        "the latest log entries. Telegraphic style is fine. Return only the "
-        "summary line: no heading, markdown, bullets, or quotes."
-    )
-    user = (
-        "Task id: "
-        + view.id
-        + "\nProject: "
-        + view.project_name
-        + "\nCurrent status: "
-        + view.status
-        + "\n\n"
-        + _task_context(view, root)
-    )
-    response = backend.complete(
-        system,
-        user,
-        model=SUMMARY_MODEL,
-        options=BackendOptions(
-            effort=SUMMARY_EFFORT,
-            timeout_s=SUMMARY_TIMEOUT_S,
-            cwd=root.resolve(),
-            extras={"sandbox": "read-only", "network": False},
-        ),
-    )
-    return _normalize_summary(response.text)
+    @property
+    def broken(self) -> bool:
+        return bool(self.failed or self.refusals)
 
 
 def _view_root(view: TaskView, fallback: Path) -> Path:
@@ -163,117 +59,132 @@ def _view_label(listing: TaskListing, view: TaskView) -> str:
     return f"{view.project_name}/{view.id}" if listing.scope == "all" else view.id
 
 
-def _existing_folder(view: TaskView, root: Path) -> Path:
-    folder = root / view.id
-    if not folder.is_dir():
-        raise FileNotFoundError(f"{view.id}: task folder is no longer present")
-    return folder.resolve()
+def _wants_orientation(view: TaskView) -> bool:
+    state = (view.answers or {}).get(ORIENTATION_QUESTION)
+    return state is not None and state.get("state") in WANTED_STATES
 
 
-def _assert_current_folder(view: TaskView, root: Path, expected: Path) -> None:
-    actual = _existing_folder(view, root)
-    if actual != expected:
-        raise RuntimeError(
-            f"{view.id}: task folder changed from {expected} to {actual}"
-        )
-    block = read_task_block(actual)
-    if block is None:
-        raise RuntimeError(f"{view.id}: task.yaml is no longer readable")
-    fingerprint = summary_source_fingerprint(actual, block)
-    if fingerprint != view.current_fingerprint:
-        raise RuntimeError(f"{view.id}: task changed during summary generation")
+def _orientation_only(catalog: Catalog) -> Catalog:
+    question = catalog.get(ORIENTATION_QUESTION)
+    if question is None:
+        raise answers_config.AnswersConfigError(f"the question catalog holds no {ORIENTATION_QUESTION} question")
+    return dataclasses.replace(catalog, questions=(question,))
 
 
-def generate_missing_summaries(
+def answer_missing_orientations(
     listing: TaskListing,
     project_root: Path,
     *,
-    backend: Any | None = None,
-) -> SummaryGenerationReport:
-    """Generate missing/stale summaries for valid local task folders.
+    allow: Any = None,
+    run: Callable[..., Any] | None = None,
+    config: answers_config.AnswersConfig | None = None,
+    catalog: Catalog | None = None,
+    machine: Any = None,
+    data_dir: Path | None = None,
+    now: Callable[[], datetime.datetime] = datetime.datetime.now,
+    publish: bool = True,
+) -> ReviewAnswerReport:
+    """Answer the orientation question of every listed task whose answer is missing, stale or invalid.
 
-    Individual failures do not prevent the remaining eligible tasks from being
-    attempted. The caller decides whether failed attempts should affect the
-    command exit code.
+    One engine pass per task repository covers every such task of it (no batch cut). ``allow`` is the cost
+    classes (None: llm-kit's consent, read only when a model must answer). ``run``, ``config``, ``catalog``,
+    ``machine``, ``data_dir``, ``now`` and ``publish`` replace the defaults (tests). A listing with nothing to
+    answer touches neither git nor llm-kit.
     """
-    generated: list[str] = []
-    failed: list[tuple[str, str]] = []
-    candidate_views = [
+    candidates = [
         view
         for view in listing.views
-        if view.summary_status in ("missing", "stale")
-        and view.status in ELIGIBLE_STATUSES
-        and (_view_root(view, project_root) / view.id).is_dir()
+        if view.status in ELIGIBLE_STATUSES
         and view.current_fingerprint is not None
+        and (_view_root(view, project_root) / view.id).is_dir()
+        and _wants_orientation(view)
     ]
-    if not candidate_views:
-        return SummaryGenerationReport()
+    if not candidates:
+        return ReviewAnswerReport()
+    if catalog is None:
+        catalog = questions.load_catalog(questions.default_shipped_dir(), questions.default_fleet_dir())
+    orientation = _orientation_only(catalog)
+    if config is None:
+        config = answers_config.load()
+    if machine is None:
+        machine = export.current_machine()
 
-    backend_error: Exception | None = None
-    if backend is None:
-        try:
-            active_backend = _default_backend()
-        except SummaryBackendUnavailable as exc:
-            active_backend = None
-            backend_error = exc
-    else:
-        active_backend = backend
-    stamp = datetime.date.today().isoformat()
-    # Refill each worker slot as soon as a completion finishes. Persistence
-    # stays in the caller thread so updates cannot race, and is applied in
-    # listing order after every model completion has finished.
-    prepared: list[tuple[TaskView, Path, str, Path | None, Exception | None]] = []
-    for view in candidate_views:
-        root = _view_root(view, project_root)
+    failed: list[tuple[str, str]] = []
+    grouped: dict[Path, list[answer_engine.TaskTarget]] = {}
+    labels: dict[Path, dict[str, str]] = {}
+    for view in candidates:
+        folder = _view_root(view, project_root) / view.id
         label = _view_label(listing, view)
-        try:
-            expected_folder = _existing_folder(view, root)
-            prepared.append((view, root, label, expected_folder, backend_error))
-        except Exception as exc:
-            prepared.append((view, root, label, None, exc))
+        top = answer_scripts.repo_top_of(folder)
+        if top is None:
+            failed.append((label, "the task folder is not inside a git work tree, so it has no answers"))
+            continue
+        top = top.resolve()
+        grouped.setdefault(top, []).append(answer_engine.TaskTarget(folder, view.status))
+        labels.setdefault(top, {})[folder.resolve().relative_to(top).as_posix()] = label
 
-    results: dict[int, str | Exception] = {
-        index: error
-        for index, (_view, _root, _label, _folder, error) in enumerate(prepared)
-        if error is not None
-    }
-    pending: dict[Future[str], int] = {}
-    next_index = 0
-    with ThreadPoolExecutor(max_workers=SUMMARY_WORKERS) as pool:
-        while next_index < len(prepared) or pending:
-            while next_index < len(prepared) and len(pending) < SUMMARY_WORKERS:
-                view, root, _label, expected_folder, error = prepared[next_index]
-                if error is None and expected_folder is not None:
-                    pending[pool.submit(_complete, active_backend, view, root)] = next_index
-                next_index += 1
-            if not pending:
-                continue
-            completed, _ = wait(pending, return_when=FIRST_COMPLETED)
-            for future in completed:
-                index = pending.pop(future)
-                try:
-                    results[index] = future.result()
-                except Exception as exc:
-                    results[index] = exc
+    lazy = answer_engine.LazyAllow(allow)
+    answered: list[str] = []
+    refusals: list[str] = []
+    notes: list[str] = []
+    for top, targets in sorted(grouped.items()):
+        names = labels[top]
+        report = answer_engine.run_pass(
+            top, machine, config, budget=answer_engine.Budget(batch_size=len(targets)), targets=targets,
+            catalog=orientation, allow=lazy, run=run, data_dir=data_dir, now=now, publish=publish,
+        )
 
-    for index, (view, root, label, expected_folder, error) in enumerate(prepared):
+        def label_of(task: str) -> str:
+            return names.get(task, task)
+
+        if report.outcome == answer_engine.OUTCOME_SKIPPED:
+            reason = f"the repository {top} was skipped: {report.reason}"
+            failed.extend((names[rel], reason) for rel in sorted(names))
+            continue
+        answered.extend(label_of(item.task) for item in report.answered)
+        failed.extend((label_of(item.task), item.reason) for item in report.failed)
+        if report.refusal is not None:
+            refusals.append(f"{report.refusal['message']} ({report.refusal['state']})")
+        if report.commit_error is not None:
+            failed.append((str(top), f"answers were written but not committed: {report.commit_error}"))
+        notes.extend(f"{label_of(task)}: skipped: {reason}" for task, reason in report.skipped_tasks)
+        notes.extend(f"{label_of(item.task)}: not written: {item.reason}" for item in report.dropped)
+        notes.extend(report.notes)
+        if report.unpublished:
+            notes.append(f"{report.unpublished} answer file(s) in {top} are committed but not yet published")
+    resolved = lazy.resolved
+    if resolved is not None and resolved.note:
+        notes.append(resolved.note)
+    return ReviewAnswerReport(
+        answered=tuple(answered),
+        failed=tuple(failed),
+        refusals=tuple(dict.fromkeys(refusals)),
+        notes=tuple(dict.fromkeys(notes)),
+    )
+
+
+def orientation_supersedes_summary(
+    folder: Path,
+    status: str,
+    *,
+    catalog: Catalog | None = None,
+    now: Callable[[], datetime.datetime] = datetime.datetime.now,
+) -> bool:
+    """Whether the task in ``folder`` has a usable orientation answer, current or stale.
+
+    Such an answer takes the place of ``task.summary`` in ``list`` and ``review``. A catalog that cannot be
+    loaded, or one without the orientation question, answers False: the legacy summary is then what is shown.
+    """
+    if catalog is None:
         try:
-            result = results[index] if error is None else error
-            if isinstance(result, Exception):
-                raise result
-            if expected_folder is None:
-                raise FileNotFoundError(f"{view.id}: task folder is no longer present")
-            _assert_current_folder(view, root, expected_folder)
-            state_ops.update(
-                view.id,
-                root,
-                summary=result,
-                summary_fingerprint=view.current_fingerprint,
-                summary_updated=stamp,
-                allow_init=False,
-                expected_folder=expected_folder,
-            )
-            generated.append(label)
-        except Exception as exc:  # one task must not suppress the rest
-            failed.append((label, str(exc)))
-    return SummaryGenerationReport(tuple(generated), tuple(failed))
+            catalog = questions.load_catalog(questions.default_shipped_dir(), questions.default_fleet_dir())
+        except questions.QuestionError:
+            return False
+    question = catalog.get(ORIENTATION_QUESTION)
+    if question is None:
+        return False
+    folder = Path(folder)
+    state = answer_store.answer_state(
+        question, folder, read_task_block(folder), status, repo_top=None, log=None, now=now()
+    )
+    return answer_store.orientation_headline({ORIENTATION_QUESTION: state}) is not None

@@ -1,0 +1,19 @@
+_schema_version: "1"
+id: golden
+version: 1
+title: Golden fixture question
+applies_to: [active]
+inputs: [task, claude_md, plan_md, items, activity]
+max_input_chars: 40000
+script: null
+prompt: |
+  Answer from the task files below.
+answer:
+  type: object
+  required: [headline]
+  additionalProperties: false
+  properties:
+    headline: {type: string, maxLength: 100}
+grounding: []
+models: null
+effort: null

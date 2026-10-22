@@ -8,7 +8,7 @@ reference it, and every verb names its task explicitly.
 The `task` skill drives one CLI over task folders (`tmp/<stub>` for
 ephemeral work, `dev/tasks/<stub>` for version-controlled work): create,
 list, show, validate, work, review, summarize, close, reopen, archive,
-delete, and move (which rewrites every `task_list` reference to the moved
+delete, move, and answers (which rewrites every `task_list` reference to the moved
 folder). The skill routes a natural-language request ("start a task for X",
 "what tasks are open here?", "archive the closet task") to the right verb and
 states what the agent, rather than the script, must do with the output.
@@ -42,6 +42,29 @@ bootstrap pass that provisions this version.
 
 Queued work is the `queue` capability of the skill: it hands a clarified unit to a background worker per
 awesome-kit:orchestrate.
+
+## Task answers
+
+A task carries answers to a catalog of questions (orientation, decisions, activity, task commits). The questions are
+declared data under `skills/task/questions/`; a fleet layer in `~/.claude/config/task-kit.yaml` can add to them. An answer
+is current while the fingerprint it stored equals the fingerprint of the question and its inputs, and stale after the task
+changes. Model answers are files under the task's `answers/` folder, one per machine, committed and pushed with the task
+folder's repository; script answers (`activity`, `task_commits`) are computed from git history when read and never stored.
+`task-kit export` carries each task's `answers` and `coverage`, and the `list` and `review` verbs show the orientation
+answer's headline in place of `task.summary`.
+
+```
+task-kit answers status  --format json --protocol N   what is pending; writes nothing
+task-kit answers refresh --format json --protocol N   answer pending questions, commit and publish this machine's answer files
+task-kit answers prune   --format json --protocol N   delete this machine's files of questions the catalog no longer holds
+```
+
+`/task review` runs the same engine for the orientation question. The models are the config key `answers.models`
+(`~/.claude/config/task-kit.yaml`, section `answers:`; shipped default `[luna, haiku]`, `effort: medium`); free entries
+run first. A paid cost class (`usage`, `spend`) runs only when llm-kit's per-machine consent allows it or the caller
+passes `--allow`. Model answering needs llm-kit 0.4.0 or later and refuses without it; every other verb works without
+llm-kit. The command contract is in
+[skills/task/references/task-export-protocol.md](skills/task/references/task-export-protocol.md).
 
 ## Working sessions
 
