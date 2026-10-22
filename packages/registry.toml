@@ -19,3 +19,10 @@ import = "katsoft_contracts"
 marker = "katsoft_contracts/_release.py"
 sources = []
 surface = { all = "packages/katsoft-contracts/src/katsoft_contracts/__init__.py" }
+
+[[package]]
+name = "katsoft-llm-kit"
+import = "llm_kit"
+marker = "llm_kit/_deployment.py"
+sources = ["plugins/llm-kit/lib/llm_kit"]
+surface = { json = "plugins/llm-kit/contract/public-surface.json" }
