@@ -1,0 +1,26 @@
+{
+  "argv": [
+    "models",
+    "resolve",
+    "--models",
+    "cdx"
+  ],
+  "exit": 0,
+  "stderr": "",
+  "stdout": {
+    "json": {
+      "backend": "codex-cli",
+      "declared_effort": "high",
+      "effort": "high",
+      "effort_delivery": {
+        "deliverable": true,
+        "emits": "-c model_reasoning_effort=<value>",
+        "source": "adapter",
+        "style": null
+      },
+      "endpoint": "cdx",
+      "kind": "harness",
+      "model": "gpt-x"
+    }
+  }
+}

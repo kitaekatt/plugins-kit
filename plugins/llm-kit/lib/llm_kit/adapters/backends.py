@@ -565,6 +565,9 @@ def _claudx_plugin_args() -> list:
     """
     if not os.environ.get("CLAUDE_PLUGIN_TEST"):
         return []
+    from llm_kit import _runtime  # noqa: PLC0415
+
+    _runtime.require_legacy("claudx propagation")
     try:
         from bootstrap_lib.claudx import nested_claude_args
     except ImportError as exc:

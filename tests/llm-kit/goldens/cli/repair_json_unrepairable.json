@@ -1,0 +1,19 @@
+{
+  "argv": [
+    "completion",
+    "repair-json",
+    "--schema-file",
+    "<T>/schema.json"
+  ],
+  "exit": 0,
+  "stderr": "",
+  "stdout": {
+    "json": {
+      "edits": [],
+      "protocol": 1,
+      "reason": "not a JSON token stream",
+      "status": "unrecoverable",
+      "text": "no json here at all"
+    }
+  }
+}

@@ -26,6 +26,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from llm_kit import _runtime
+
 from . import probe
 from .probe import CallShape, Importer, ProbeFailure, Render
 
@@ -133,7 +135,13 @@ class ContractProbeSpec:
 
 
 def probe_interrupt_contract(spec: ContractProbeSpec) -> Any:
-    """Return the usable interrupt-contract module, or raise ``spec.error``."""
+    """Return the usable interrupt-contract module, or raise ``spec.error``.
+
+    Package mode returns the routed interrupt contract and probes
+    nothing: the pinned dependency guarantees the contract and call shapes.
+    """
+    if spec.module == MODULE and _runtime.mode() == "package":
+        return _runtime.load("interrupt_contract", error=spec.error)
     probe.import_package(
         spec.package, spec.error, spec.render, spec.floor, spec.importer
     )

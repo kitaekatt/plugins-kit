@@ -36,6 +36,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional
 
+from llm_kit import _runtime
+
 from . import probe
 from .probe import CallShape, Importer, ProbeFailure, Render
 
@@ -97,7 +99,13 @@ class EventProbeSpec:
 
 
 def probe_execution_event(spec: EventProbeSpec) -> Any:
-    """Return the usable execution-event module, or raise ``spec.error``."""
+    """Return the usable execution-event module, or raise ``spec.error``.
+
+    Package mode returns the routed execution-event contract and probes
+    nothing: the pinned dependency guarantees the schemas and call shapes.
+    """
+    if spec.module == MODULE and _runtime.mode() == "package":
+        return _runtime.load("execution_event", error=spec.error)
     probe.import_package(
         spec.package, spec.error, spec.render, spec.floor, spec.importer
     )
@@ -130,6 +138,8 @@ def probe_execution_event_v2(spec: EventProbeSpec) -> Any:
     if spec.v2_schema is None or spec.v2_shape is None:
         raise ValueError("this EventProbeSpec declares no schema-v2 stage")
     module = probe_execution_event(spec)
+    if spec.module == MODULE and _runtime.mode() == "package":
+        return module
     if not probe.advertises(getattr(module, "SUPPORTED_SCHEMAS", None), spec.v2_schema):
         probe.refuse(
             spec.error,

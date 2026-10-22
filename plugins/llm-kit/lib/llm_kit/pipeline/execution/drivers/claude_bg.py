@@ -322,6 +322,9 @@ def _refuse_supervised_under_claudx(what: str, env: Optional[Mapping[str, str]])
     """
     if not os.environ.get("CLAUDE_PLUGIN_TEST") and not (env or {}).get("CLAUDE_PLUGIN_TEST"):
         return
+    from llm_kit._runtime import require_legacy  # noqa: PLC0415
+
+    require_legacy("claudx propagation")
     try:
         from bootstrap_lib.claudx import refuse_supervised
     except ImportError as exc:

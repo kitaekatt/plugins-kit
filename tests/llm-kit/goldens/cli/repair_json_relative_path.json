@@ -1,0 +1,18 @@
+{
+  "argv": [
+    "completion",
+    "repair-json",
+    "--schema-file",
+    "schema.json"
+  ],
+  "exit": 2,
+  "stderr": {
+    "json": {
+      "error": {
+        "kind": "configuration",
+        "message": "--schema-file must be an absolute path"
+      }
+    }
+  },
+  "stdout": ""
+}

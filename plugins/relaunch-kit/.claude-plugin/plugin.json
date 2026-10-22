@@ -1,0 +1,19 @@
+{
+  "name": "relaunch-kit",
+  "version": "0.1.0",
+  "description": "Restart Claude Code for real: the clauder launcher resumes the session or starts a hand-off session in the same terminal, and this plugin's hooks module requests the exit after the turn ends.",
+  "author": {
+    "name": "Christina"
+  },
+  "dependencies": [
+    "bootstrap"
+  ],
+  "keywords": [
+    "restart",
+    "relaunch",
+    "hand-off",
+    "launcher",
+    "session"
+  ],
+  "types": "./types/index.d.ts"
+}

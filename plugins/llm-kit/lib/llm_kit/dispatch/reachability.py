@@ -48,6 +48,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+from llm_kit import _runtime
 from llm_kit.adapters.account import EndpointProbe, get_authenticated, probe_endpoint
 from llm_kit.adapters.harness_adapters import resolve_opencode_cli
 
@@ -314,17 +315,27 @@ def _check_codex(*, timeout: float) -> Reachability:
     than a manufactured one. ``detect_codex`` stays the PREFERRED path when
     importable: it is cached, it parses a structured version, and it is the
     same detector bootstrap's own tooling relies on elsewhere.
+
+    Package mode has no ``bootstrap_lib`` and never imports it: the PATH +
+    ``--version`` check is its verdict, the same real check.
     """
+    if _runtime.mode() == "package":
+        return _codex_path_check(timeout=timeout)
     try:
         from bootstrap_lib.codex import detect_codex  # noqa: PLC0415
     except ImportError:
-        resolved = _resolve_cli("codex")
-        if resolved is None:
-            return Reachability(status=STATUS_UNREACHABLE, checked="cli-version", detail="`codex` not found on PATH")
-        return _run_version_probe(resolved, label="codex", timeout=timeout)
+        return _codex_path_check(timeout=timeout)
     detection = detect_codex(timeout=timeout)
     status = STATUS_REACHABLE if detection.available else STATUS_UNREACHABLE
     return Reachability(status=status, checked="cli-version", detail=detection.reason)
+
+
+def _codex_path_check(*, timeout: float) -> Reachability:
+    """The PATH + ``--version`` check codex shares with claude and opencode."""
+    resolved = _resolve_cli("codex")
+    if resolved is None:
+        return Reachability(status=STATUS_UNREACHABLE, checked="cli-version", detail="`codex` not found on PATH")
+    return _run_version_probe(resolved, label="codex", timeout=timeout)
 
 
 def _run_version_probe(argv: List[str], *, label: str, timeout: float) -> Reachability:

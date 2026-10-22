@@ -1,0 +1,49 @@
+{
+  "argv": [
+    "completion",
+    "complete",
+    "--prompt",
+    "hello",
+    "--format",
+    "json"
+  ],
+  "exit": 3,
+  "stderr": "",
+  "stdout": {
+    "json": {
+      "backend": "fake",
+      "endpoint": "chosen",
+      "halt": {
+        "kind": "rate_limit"
+      },
+      "kind": "harness",
+      "protocol": 1,
+      "response": {
+        "attempts": 1,
+        "cache_hit_tokens": 0,
+        "dropped_params": [],
+        "ended_at": "<t>",
+        "error": {
+          "code": "rate_limit",
+          "message": "limited"
+        },
+        "finish_reason": null,
+        "forwarded_params": [],
+        "from_cache": false,
+        "input_tokens": 0,
+        "model": "model-id",
+        "output_contract": null,
+        "output_tokens": 0,
+        "reasoning": "",
+        "reported_cost_source": null,
+        "reported_cost_usd": null,
+        "skill_context": null,
+        "started_at": "<t>",
+        "status": "error",
+        "text": "",
+        "total_tokens": 0,
+        "wall_ms": "<ms>"
+      }
+    }
+  }
+}

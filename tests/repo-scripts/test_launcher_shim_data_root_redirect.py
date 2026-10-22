@@ -11,7 +11,8 @@ launcher shims"):
 * With the variable set, the redirected venv is the ONLY candidate. A missing
   one exits 2 with a message, never a fallback to the production venv. With the
   variable unset the existing chain is unchanged.
-* All six shims (job-kit, llm-scripting-kit, llm-kit, task-kit, hue-kit, secrets-kit) refuse to
+* All seven shims (job-kit, llm-scripting-kit, llm-kit, task-kit, hue-kit, secrets-kit,
+  relaunch-kit's clauder) refuse to
   run as the CACHED copy, a path under ``plugins/cache/<marketplace>/``, when
   ``CLAUDE_PLUGIN_TEST`` is set. The marketplace is
   ``CLAUDE_PLUGIN_TEST_MARKETPLACE``; with it unset every cache path is refused,
@@ -20,7 +21,9 @@ launcher shims"):
 * task-kit's shim is also the launcher copy bootstrap syncs into the plugin's
   production DATA directory (``plugins/data/<marketplace>/task-kit/bin``) and puts
   on PATH. That copy is a thin locator that runs the newest INSTALLED version, so
-  under claudx it is refused like a cached copy.
+  under claudx it is refused like a cached copy. relaunch-kit's clauder is the
+  same kind of PATH copy, but the whole launcher: bootstrap syncs ``bin`` and ``lib``
+  to the data directory, and the shim finds the launcher as ``../lib/relaunch.py``.
 
 The tests run each real shim, copied into a throwaway plugin tree whose
 entrypoint prints ``sys.prefix``, against real venvs, so the printed prefix
@@ -30,6 +33,7 @@ names which interpreter the shim chose. The POSIX shim needs a bash; its
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -88,11 +92,13 @@ _VENV_SHIMS = [
     ("llm-kit", "llm-kit", "bin/llm_kit_entrypoint.py"),
     ("task-kit", "task-kit", "bin/task_kit_entrypoint.py"),
 ]
-# hue-kit and secrets-kit choose no plugin venv (the CLI re-execs itself), so only
-# the cached-copy refusal applies to them.
+# hue-kit, secrets-kit and relaunch-kit's clauder choose no plugin venv (hue-kit's CLI
+# re-execs itself; the other two are stdlib-only), so only the cached-copy refusal and
+# the BOOTSTRAP_PYTHON validation apply to them.
 _SHIMS = _VENV_SHIMS + [
     ("hue-kit", "hue-kit", "scripts/hue_kit_cli.py"),
     ("secrets-kit", "secrets-kit", "scripts/secrets_kit_cli.py"),
+    ("relaunch-kit", "clauder", "lib/relaunch.py"),
 ]
 # Variables a surrounding claudx session would leak into the shim under test.
 _SCRUBBED_ENV = (
@@ -350,18 +356,30 @@ def bundle_spec(request):
     return request.param
 
 
+# Every shim whose data-directory copy (the one on PATH) must be refused under claudx.
+_DATA_COPY_SHIMS = _BUNDLE_SHIMS + [spec for spec in _SHIMS if spec[0] == "relaunch-kit"]
+
+
+@pytest.fixture(params=_DATA_COPY_SHIMS, ids=[s[0] for s in _DATA_COPY_SHIMS])
+def data_copy_spec(request):
+    return request.param
+
+
 @pytest.mark.parametrize("marketplace_env", ["plugins-kit", None], ids=["owned", "marketplace-unset"])
-def test_data_dir_launcher_copy_is_refused_under_claudx(tmp_path, venv_template, bundle_spec, kind,
+def test_data_dir_launcher_copy_is_refused_under_claudx(tmp_path, venv_template, data_copy_spec, kind,
                                                         marketplace_env):
     """The launcher copy in the PRODUCTION data directory (the one on PATH) exits 2 under claudx.
 
     It is a thin locator that runs the installed release from the plugin cache,
     which a claudx session must never do in place of the working copy.
 
+    clauder's PATH copy holds the whole launcher rather than a locator, but a claudx session
+    still tests the working copy, so the installed release must not run there either.
+
     Shown to fail: drop the ``*"/plugins/data/"*`` alternative from the POSIX shim's case
     (and the ``_DATA_NEEDLE`` line from the .cmd twin); the shim then runs.
     """
-    plugin, stem, entrypoint = bundle_spec
+    plugin, stem, entrypoint = data_copy_spec
     launch = _Launch(tmp_path, venv_template, plugin, stem, entrypoint, kind,
                      data_bundle_marketplace="plugins-kit")
     result = launch.run(redirect=False, claudx=True, marketplace=marketplace_env)
@@ -396,13 +414,15 @@ def test_data_dir_launcher_copy_never_reads_the_production_venv_in_a_redirected_
 # Root CLAUDE.md: the variable counts only when its OWN realpath resolves inside
 # the standalone directory; a stranger's BOOTSTRAP_PYTHON must never substitute.
 # The cases run against each shim that accepts BOOTSTRAP_PYTHON (task-kit, llm-kit,
-# hue-kit, secrets-kit); job-kit and llm-scripting-kit are frozen and out of scope.
+# hue-kit, secrets-kit, relaunch-kit); job-kit and llm-scripting-kit are frozen and out of
+# scope.
 # Every case runs with no plugin venv, a fakebin ``python3`` that prints PATHPY
 # first on PATH, and a tools directory holding only the utilities the shim calls.
 
 _STANDALONE_REL = Path(".local") / "share" / "python-standalone"
 _TOOLS = ("dirname", "uname", "tr", "readlink")
-_BP_SHIMS = [spec for spec in _SHIMS if spec[0] in ("task-kit", "llm-kit", "hue-kit", "secrets-kit")]
+_BP_SHIMS = [spec for spec in _SHIMS
+             if spec[0] in ("task-kit", "llm-kit", "hue-kit", "secrets-kit", "relaunch-kit")]
 
 
 def _script(path: Path, marker: str) -> Path:
@@ -529,3 +549,58 @@ def test_a_relative_symlink_inside_the_tree_escaping_by_dotdot_is_refused(bp):
     relative = os.path.relpath(bp.stranger, link.parent)
     link.symlink_to(relative)
     assert _marker(bp.run(link)) == "PATHPY"
+
+
+# --- relaunch-kit: the synced data-directory copy is the whole launcher ------------
+#
+# task-kit's PATH copy is a locator into the plugin cache. clauder's is the launcher
+# itself, so bootstrap.json must sync ``lib`` beside ``bin`` and PATH must name the
+# synced ``bin``: the shim finds the launcher as ``../lib/relaunch.py``.
+
+_RELAUNCH_ROOT = _REPO_ROOT / "plugins" / "relaunch-kit"
+
+
+def _sync_like_bootstrap(manifest: dict, data_dir: Path) -> None:
+    """The copy bootstrap's sync_to_data phase makes (copytree, dirs_exist_ok)."""
+    for entry in manifest["sync_to_data"]:
+        shutil.copytree(_RELAUNCH_ROOT / entry["src"], data_dir / entry["dst"],
+                        dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns("__pycache__"))
+
+
+def test_relaunch_kit_manifest_puts_the_synced_bin_on_path():
+    """path_entries names the data directory's bin, and bin is what sync_to_data fills.
+
+    Shown to fail: change the path_entries value, or the ``dst`` of the bin sync entry;
+    the two stop agreeing.
+    """
+    manifest = json.loads((_RELAUNCH_ROOT / "bootstrap.json").read_text(encoding="utf-8"))
+    sync = {entry["src"]: entry["dst"] for entry in manifest["sync_to_data"]}
+    assert sync.get("bin") == "bin"
+    assert sync.get("lib") == "lib"
+    assert manifest["path_entries"] == [
+        "~/.claude/plugins/data/plugins-kit/relaunch-kit/" + sync["bin"]
+    ]
+
+
+def test_relaunch_kit_synced_copy_finds_its_launcher_and_the_real_claude(tmp_path, posix_kind):
+    """clauder run from the bootstrap-synced data directory reaches claude.
+
+    ``-v`` is a pass-through, so the launcher execs the target named by
+    RELAUNCH_KIT_CLAUDE without a rendezvous file.
+
+    Shown to fail: remove the ``lib`` entry from sync_to_data; the shim exits 2 with
+    ``launcher not found``.
+    """
+    manifest = json.loads((_RELAUNCH_ROOT / "bootstrap.json").read_text(encoding="utf-8"))
+    home = tmp_path / "home"
+    data = home / ".claude" / "plugins" / "data" / "plugins-kit" / "relaunch-kit"
+    _sync_like_bootstrap(manifest, data)
+    fake_claude = _script(tmp_path / "claude-target" / "claude", "REAL-CLAUDE")
+    env = {name: value for name, value in os.environ.items() if name not in _SCRUBBED_ENV}
+    env.update(HOME=str(home), USERPROFILE=str(home), RELAUNCH_KIT_CLAUDE=str(fake_claude))
+    bash = _BASH if posix_kind == "posix" else _BASH32
+    result = subprocess.run([bash, str(data / "bin" / "clauder"), "-v"],
+                            env=env, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, (result.returncode, result.stdout, result.stderr)
+    assert result.stdout.strip().splitlines()[-1] == "REAL-CLAUDE"

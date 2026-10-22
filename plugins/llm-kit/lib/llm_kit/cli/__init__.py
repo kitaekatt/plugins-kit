@@ -36,6 +36,7 @@ import argparse
 import sys
 from typing import Optional, Sequence
 
+from llm_kit import _runtime
 from llm_kit.bootstrap_guard import reexec_under_plugin_venv
 
 EXIT_USAGE = 2
@@ -146,12 +147,13 @@ def _run_group(group: str, rest: Sequence[str]) -> int:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Run the CLI and return its exit status.
 
-    With ``argv`` omitted (the console-script and launcher path) the process
-    first moves into this plugin's provisioned venv, or exits 2 under a
-    redirected data root whose venv is missing. An explicit ``argv`` is a library
-    call and stays in the caller's interpreter.
+    With ``argv`` omitted (the console-script and launcher path) the plugin's
+    copy first moves into the plugin's provisioned venv, or exits 2 under a
+    redirected data root whose venv is missing. The installed package stays in
+    the environment it was started in: it has no plugin venv to move into.
+    An explicit ``argv`` is a library call and stays in the caller's interpreter.
     """
-    if argv is None:
+    if argv is None and _runtime.mode() == "legacy":
         # reexec_under_plugin_venv re-executes ``[target, *sys.argv]`` and
         # treats argv[0] as a script path, but argv[0] here is a console-script
         # wrapper (an .exe on Windows) or a launcher entry that Python cannot

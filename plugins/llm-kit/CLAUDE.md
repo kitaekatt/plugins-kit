@@ -80,6 +80,35 @@ edges to a consumer: each consumer declares what it needs (`plugins/CLAUDE.md`,
 "Why shared libs rather than published packages"). `shared_lib_imports` in
 `bootstrap.json` declares the edge for llm-kit's own venv.
 
+## Runtime mode: plugin copy or installed package
+
+The same `llm_kit` source runs in two deployments, told apart by
+`llm_kit/_deployment.py`: the plugin's copy (`MODE = "legacy"`, linked into the
+plugin venv together with `bootstrap_lib`), and the `katsoft-llm-kit` wheel
+(`MODE = "package"`, written at build time, depending on `katsoft-contracts`).
+`llm_kit._runtime.mode()` decides once per process and raises
+`RuntimeIdentityError` or `UnsupportedLayout` for an environment it cannot
+identify (both copies present, a duplicate or editable install, a zip or frozen
+layout). Never import `bootstrap_lib` directly for a new feature without
+choosing a side:
+
+- The three shared contracts (`execution_event`, `interrupt_contract`,
+  `model_declaration`) are routed: in package mode `_runtime.load(name)` imports
+  them from `katsoft_contracts` and the legacy probes are skipped; in legacy
+  mode the existing probes and their diagnostics run unchanged. Add no fourth
+  routed name without extending `ROUTED_CONTRACTS` and its test.
+- Any other `bootstrap_lib` use (codex, claudx, skill material, the code-review
+  lane) calls `_runtime.require_legacy("<feature>")` before the import, which
+  raises `UnsupportedInPackageMode` in package mode.
+- `cli.main()` re-execs into the plugin venv only in legacy mode.
+- Package-mode model config is the one policy point
+  `registry.models.package_mode_model_config`.
+- `_runtime` is a support module outside the 16 components: any component may
+  import it, it imports only `_deployment`, and only `_runtime` imports
+  `_deployment`. `tests/llm-kit/test_import_graph.py` enforces this. Import it
+  inside a function where a module is compared with a legacy twin, so the
+  module surface stays unchanged.
+
 ## Persisted state keeps its historical names
 
 The credential, configuration and routing contracts, and the persisted formats,

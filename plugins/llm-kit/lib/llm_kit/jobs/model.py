@@ -79,6 +79,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Mapping, Optional, Sequence
 
+from llm_kit import _runtime
 from llm_kit.execution.values import InterruptResolution, interrupt_lapsed
 
 
@@ -556,8 +557,11 @@ def _parse_declaration(value: object) -> tuple[str, ...]:
     links it, and bootstrap is a declared dependency of every plugin), so an
     absent or too-old copy is diagnosed by name rather than surfacing as a
     bare ImportError. It is imported here rather than at module load so that
-    importing ``job_kit`` never needs it.
+    importing ``job_kit`` never needs it. Package mode validates with
+    the routed model-declaration contract and probes nothing.
     """
+    if _runtime.mode() == "package":
+        return tuple(_runtime.load("model_declaration").parse(value))
     try:
         import bootstrap_lib  # noqa: F401
     except ImportError as exc:

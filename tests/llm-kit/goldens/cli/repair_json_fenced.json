@@ -1,0 +1,25 @@
+{
+  "argv": [
+    "completion",
+    "repair-json",
+    "--schema-file",
+    "<T>/schema.json"
+  ],
+  "exit": 0,
+  "stderr": "",
+  "stdout": {
+    "json": {
+      "edits": [
+        {
+          "offset": 0,
+          "op": "strip",
+          "token": "fence"
+        }
+      ],
+      "protocol": 1,
+      "reason": "",
+      "status": "repaired",
+      "text": "{\"n\": 1}"
+    }
+  }
+}

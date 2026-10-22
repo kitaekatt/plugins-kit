@@ -1,0 +1,22 @@
+{
+  "argv": [
+    "completion",
+    "complete",
+    "--prompt",
+    "x",
+    "--max-attempts",
+    "2",
+    "--format",
+    "json"
+  ],
+  "exit": 2,
+  "stderr": {
+    "json": {
+      "error": {
+        "kind": "configuration",
+        "message": "--max-attempts needs a multi-entry --models or --requirements: a single-entry call makes exactly one execution"
+      }
+    }
+  },
+  "stdout": ""
+}

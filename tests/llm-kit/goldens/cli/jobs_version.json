@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "jobs",
+    "--version"
+  ],
+  "exit": 0,
+  "stderr": "",
+  "stdout": "llm-kit jobs X.Y.Z\n"
+}

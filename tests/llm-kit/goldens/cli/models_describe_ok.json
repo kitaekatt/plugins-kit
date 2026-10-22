@@ -1,0 +1,64 @@
+{
+  "argv": [
+    "models",
+    "describe",
+    "--caller",
+    "process",
+    "--requirements",
+    "<T>/req.json",
+    "--json",
+    "cl",
+    "cdx"
+  ],
+  "exit": 0,
+  "stderr": "",
+  "stdout": {
+    "json": {
+      "caller": "process",
+      "default": "cl",
+      "rendered_entries": [
+        {
+          "declared_index": 0,
+          "default": true,
+          "drive": "claude-cli",
+          "family": "alpha",
+          "harness": "claude",
+          "id": "cl",
+          "is_self": false,
+          "kind": "harness",
+          "model": "opus",
+          "pace": null,
+          "pace_note": "n/a (unpaced)",
+          "reachability": "reachable",
+          "resets_at": "<t>",
+          "resolved": true,
+          "shares_quota_with": [],
+          "tier": 2,
+          "usability": null,
+          "usable": true
+        },
+        {
+          "declared_index": 1,
+          "default": false,
+          "drive": "codex-cli",
+          "family": "beta",
+          "harness": "codex",
+          "id": "cdx",
+          "is_self": false,
+          "kind": "harness",
+          "model": "gpt-x",
+          "pace": null,
+          "pace_note": "n/a (unpaced)",
+          "reachability": "reachable",
+          "resets_at": "<t>",
+          "resolved": true,
+          "shares_quota_with": [],
+          "tier": 3,
+          "usability": null,
+          "usable": true
+        }
+      ],
+      "rule": "Rule: take the first usable entry of the ordered list (the default); a run is explainable from the declared list plus the logged pace readings.\nRe-select: only a classified halt (quota, rate limit, auth, insufficient credit, launch/transport) moves to the next usable entry; a quota or credit halt records the entry out of quota until its reset. A task error, schema-invalid output, or an unclassified timeout stays a failed attempt."
+    }
+  }
+}

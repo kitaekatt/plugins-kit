@@ -17,6 +17,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Collection, Iterator, Mapping, Optional, Sequence
 
+from llm_kit import _runtime
 from llm_kit.completion.capabilities import Capabilities, subjects_for_disallowed_tools
 from llm_kit.completion.halt import (
     AgentTimeoutError,
@@ -347,6 +348,7 @@ def _claudx_contract_command(
         "CLAUDE_PLUGIN_TEST"
     ):
         return list(command)
+    _runtime.require_legacy("claudx propagation")
     try:
         from bootstrap_lib.claudx import contract_command
     except ImportError as exc:

@@ -2150,6 +2150,14 @@ def _strip(path: Path) -> tuple[str, list[str]]:
             imports.append(ast.dump(node))
             return None
 
+        def visit_Expr(self, node: ast.Expr) -> Any:
+            # `require_legacy(...)` is the one deliberate package-mode refusal
+            # (llm_kit._runtime); it changes nothing in legacy mode.
+            call = node.value
+            if isinstance(call, ast.Call) and getattr(call.func, "id", None) == "require_legacy":
+                return None
+            return self.generic_visit(node)
+
         def visit_Import(self, node: ast.Import) -> None:
             return self._import(node)
 
@@ -2202,12 +2210,13 @@ class TestVerbatimModules:
         """Only the shared-kernel modules (storage, execution) add imports; none is lost."""
         legacy = _legacy_imports_by_name(_LEGACY_DIR / relative)
         final = _legacy_imports_by_name(_FINAL_DIR / relative)
-        added = {item for item in final - legacy if not item[0].startswith(("llm_kit.storage", "llm_kit.execution"))}
+        added = {item for item in final - legacy
+                 if not item[0].startswith(("llm_kit.storage", "llm_kit.execution", "llm_kit._runtime"))}
         assert not added, added
         lost = {item for item in legacy - final if item[0].startswith(("content_pipeline", "llm_scripting_kit"))}
         assert not lost, lost
         if relative not in ("store.py", "model.py", "events.py", "interrupts.py"):
-            assert final == legacy
+            assert {item for item in final if not item[0].startswith("llm_kit._runtime")} == legacy
 
     @pytest.mark.parametrize("module", _MODULES)
     def test_the_public_surface_is_the_legacy_surface(self, sides, module):
@@ -2269,7 +2278,8 @@ class TestVerbatimModules:
 
 class TestImportBoundary:
     _ALLOWED = ("llm_kit.execution", "llm_kit.storage", "llm_kit.pipeline.core", "llm_kit.pipeline.artifacts",
-                "llm_kit.pipeline.runtime", "llm_kit.pipeline.execution")
+                "llm_kit.pipeline.runtime", "llm_kit.pipeline.execution",
+                "llm_kit._runtime")
 
     def _imports(self) -> list[tuple[str, int, str]]:
         found = []

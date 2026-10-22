@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from llm_kit import _runtime
+
 #: The bootstrap release that shipped ``bootstrap_lib.model_declaration``.
 _MODEL_DECLARATION_BOOTSTRAP = "0.129.0"
 
@@ -27,7 +29,13 @@ class DeclarationSupportError(ImportError):
 
 
 def _model_declaration() -> Any:
-    """Return ``bootstrap_lib.model_declaration``, probed for the symbols used."""
+    """Return ``bootstrap_lib.model_declaration``, probed for the symbols used.
+
+    Package mode returns the routed model-declaration contract instead: the
+    pinned dependency guarantees the symbols, so nothing is probed.
+    """
+    if _runtime.mode() == "package":
+        return _runtime.load("model_declaration", error=DeclarationSupportError)
     try:
         import bootstrap_lib  # noqa: F401, PLC0415
     except ImportError as exc:

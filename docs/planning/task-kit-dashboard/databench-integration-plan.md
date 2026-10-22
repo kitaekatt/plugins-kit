@@ -205,7 +205,7 @@ contributor, and no web view (its page viewer is used inside explorer's file vie
 | 1 | M1 Core split | databench | none | `databench modules list|enable|disable`; disabling explorer or html removes its views, routes and CLI operations, and core runs with no module enabled | a core that runs alone, two switchable modules, and a lint that blocks any further coupling |
 | 2 | M2 Tasks module, read-only | plugins-kit (task-kit), databench | M1 | Tasks in databench's header: every project's tasks, project dropdown, sections, needs, items, working sessions (unverified tinted); detail with Orient, Decide and Trace lenses in databench's styling; works with explorer and html disabled; `databench modules disable tasks` | tasks visible in databench; task-kit and its dashboard unchanged |
 | 3 | M3 task-kit dashboard cutover | plugins-kit (task-kit) | M2 shipped | `task-kit` and `/task dashboard` open databench's Tasks view; task-kit's browser dashboard and its Queue and Run are gone; every `task.py` verb and the skill work as before | two task views: databench's (read-only) and task-kit's (with runs) |
-| 4 | M4 Web module directories | databench | M2 | none (web files move into `web/src/modules/`) | web module files still share `web/src/`, held apart by the web allowlist |
+| 4 | M4 Web module split | databench | M2 | none in behavior; a disabled module's web code is no longer downloaded | module files sit in `web/src/modules/`, but the shell still imports them, held by the web allowlist |
 | 5 | M5 Task answers | plugins-kit (task-kit), databench, claude-settings | M2 | the detail lenses show orientation and decisions answers with answerer, as-of commit and a stale marker; `task.py answers refresh` | answers refreshed by hand or by `task review` |
 | 6 | M6 Shared file summaries | databench | M1 | file summaries tracked in `.databench/`, shared through git | summaries shared; nothing regenerates in the background |
 | 7 | M7 Generation service | databench, plugins-kit (task-kit hook), claude-settings | M1, M5, M6 | an always-on service; settings panel with regeneration (on by default, type drop-down, all types by default), usage (on by default) and spend (off by default); summaries, index pages and task answers stay fresh | (end of planned work) |
@@ -215,7 +215,7 @@ M1 carries the whole backend extraction of explorer and html, because the tasks 
 running with both disabled and no expected isolation failure; a core that still imports them
 (`server.py:24-29`, `cli.py:38-44`, `filesystem.py:21`) cannot do that. M2 then puts tasks inside
 databench, and M3 removes the second task view (ruling of 2026-10-22 on task-kit's dashboard).
-M4 is a file move with no user-visible change and can wait. M5 precedes M6 and M7 because
+M4 makes the web client follow the module rule and has no user-visible change, so it can wait. M5 precedes M6 and M7 because
 answers are the detail view's main content and run by hand without a service.
 
 ## 5. Stages
@@ -374,7 +374,7 @@ Payload of `tasks` (protocol 1; every field present; `?` marks a nullable value)
 | `tasks[].checkout`, `.path`, `.stub`, `.location` | string; `path` is project-relative (`dev/tasks/<stub>`) |
 | `tasks[].revision` | string |
 | `tasks[].title?`, `.priority?`, `.description?`, `.summary?` | string |
-| `tasks[].summary_source?` | `"task.yaml"` (M4 adds `"answer"`) |
+| `tasks[].summary_source?` | `"task.yaml"` (M5 adds `"answer"`) |
 | `tasks[].classification` | open enum: active, blocked, deferred, closed, archived, orphaned, remote, invalid (`validate.py`) |
 | `tasks[].blocked_by` | [string] |
 | `tasks[].last_activity?` | string |
@@ -471,7 +471,7 @@ disabled.
 
 **M2-U3 tasks views** (databench web; after U2's routes). Owns `databench:web/src/modules/tasks/`
 (list, detail and tests). List: prototype A's layout with the project dropdown (approved
-2026-10-17). Detail: concept C (ruled): Orient (legacy `summary` labelled legacy until M4, items,
+2026-10-17). Detail: concept C (ruled): Orient (legacy `summary` labelled legacy until M5, items,
 working sessions), Decide (needs, blocked-user items), Trace (task-record updates). Styling is
 databench's shell (ruling); the round-5 mockup refines it when it lands. No spend, usage or
 regeneration control (ruling); no Queue, Dismiss or authoring control (q3). Checks (vitest):
@@ -541,11 +541,124 @@ dead pid reports it stale and signals nothing. Verify: serial `tests/task-kit` r
 (`/task work` registers and pushes, `/task hand-off` releases, `/task dashboard` opens databench);
 git-code-review; `publish.py --only task-kit` (pre-authorized).
 
-### M4 Web module directories
+### M4 Web module split
 
-**M4-U1.** Owns `databench:web/src/modules/explorer/`, `databench:web/src/modules/html/` (moved
-from `web/src/`) and the web allowlist (emptied). Verify: `npm test`, typecheck, M1-U9's browser
-runs.
+**Landed (databench `5171fcb`):** M4-U1 moved explorer and html web files into
+`web/src/modules/{explorer,html}/`. The web allowlist could not be emptied: six edges remain, all
+from `web/src/main.tsx` (1904 lines), whose `AppBody`, `ViewerPane`, `DirectoryTree` and listing
+sort are the explorer view, whose `MODULE_VIEWS` names `TasksView`, and which imports html's
+`IndexPagesViewer`, `indexPageFileKind` and `rawFileUrl` (`main.tsx:92,561,639-650,1106,1571`).
+Five test files import helpers from `main.tsx`, and `api-path-builders.test.ts` enumerates its
+builders.
+
+**Decisions.**
+- **Registration by web entry, reached through one lazy glob.** Each module has
+  `web/src/modules/<id>/web.tsx` whose default export is a `ModuleWeb`. The shell names no module
+  file: `module-web.ts` holds the one call
+  `import.meta.glob<ModuleWeb>("./modules/*/web.tsx", { import: "default" })` (lazy; Vite requires
+  literal arguments), and loads
+  the entries of the modules `GET /api/v1/modules` reports enabled, and only those, so a disabled
+  module's code is never downloaded (the browser counterpart of "never imported").
+- **The boundary test sees the glob.** It accepts exactly one `import.meta.glob` in core, in
+  `module-web.ts`, with exactly those literal arguments; any other glob, or any `import()` of a
+  module path, in a core file fails. The allowlist must be empty.
+- **Module-to-module needs go through shell contributions.** html's page viewer reaches explorer's
+  file view as a `fileViewers` contribution that explorer reads with `useFileViewers()`, so
+  explorer never imports html. `rawFileUrl` is core (the raw route is core).
+- **What stays in the shell (core):** `App` and boot (session, modules), `ModuleNav`, the core
+  pages, `projects.tsx`, the comments components (`comments-view.tsx`,
+  `comments-dashboard.tsx`, `comments.ts`; ruling 2), `markup.ts`, `code-viewer.tsx`,
+  `markdown-viewer.tsx`, `ui.ts`, `system-viewer.ts`, `session.ts`, plus three added files:
+  `routes.ts` (the client URL scheme `/<slug>/...`, `/-/<view>`, and the core API URLs: raw, root
+  metadata, the write header), `context-types.ts` (the server's context payload types, which
+  explorer and html both read) and `module-web.ts`. The toolbar (`action-bar.tsx`) stays
+  explorer's: only explorer imports it; it moves to core when a second module needs it.
+- **Explorer's boundary:** the project routes (`/` and `/<slug>/...`, `AppBody` at `5171fcb`), the viewer
+  pane and its actions, the directory tree, listing sort and listing helpers, and the explorer
+  API URLs (browse, tree, refresh). Explorer composes the core comments panel and comments
+  dashboard into its views; with explorer disabled, comments stay reachable through the CLI and
+  API only (no comments page without explorer is built in M4).
+- **Tests are outside the boundary rule** (they exercise shell and views together), so the five
+  test files repoint their imports; `listing-sort.test.tsx` moves beside the listing code.
+
+**Interface (fixed before U2-U4 start):**
+
+```ts
+// web/src/module-web.ts (core)
+// the only glob, written literally (Vite does not accept variables as glob arguments):
+// const entries = import.meta.glob<ModuleWeb>("./modules/*/web.tsx", { import: "default" });
+export type ModuleViewProps = { nav: ComponentChildren };
+export type ProjectRoutesProps = { modules: Modules };
+export type FileViewerProps = { context: FileContext; rawPrefix: string;
+  onNavigate: (path: string) => void };            // IndexPagesViewer relays page links
+export type FileViewerEntry = {
+  id: string;
+  applies: (context: FileContext) => boolean;   // e.g. html: a marked index page not opted out
+  Component: (props: FileViewerProps) => JSX.Element;
+};
+export type ModuleWeb = {
+  module: string;                                // equals the directory and the server module id
+  views?: Record<string, (props: ModuleViewProps) => JSX.Element>;  // keys = announced view ids
+  projectRoutes?: (props: ProjectRoutesProps) => JSX.Element;       // at most one enabled module
+  fileViewers?: FileViewerEntry[];
+};
+export function loadModuleWeb(enabled: readonly string[],
+  entries?: Record<string, () => Promise<ModuleWeb>>): Promise<ReadonlyMap<string, ModuleWeb>>;
+  // calls only the enabled ids' loaders; a `module` mismatch or two projectRoutes owners throw
+export const FileViewersContext: Context<FileViewerEntry[]>;
+export function useFileViewers(): FileViewerEntry[];
+// web/src/modules.ts: shellPlan(pathname, modules, loaded) -- "view-unavailable" when an
+// announced view has no component in the loaded entries; project routes go to the loaded
+// projectRoutes owner, else "module-disabled"
+```
+
+**M4-U2 shell contract and loader** (core). Owns `databench:web/src/module-web.ts`,
+`databench:web/src/routes.ts`, `databench:web/src/context-types.ts` (all added),
+`databench:web/src/main.tsx` (reduced to the shell), `databench:web/src/modules.ts`,
+`databench:web/src/module-boundaries.test.ts` (glob rule; empty allowlist),
+`databench:web/src/module-web.test.ts` (added), and the import repoints in
+`databench:web/src/main.test.tsx`, `comments-routing.test.tsx`, `session.test.tsx` and
+`api-path-builders.test.ts` (its builder table names `routes.ts` and the explorer files).
+Checks: re-adding `import { TasksView } from "./modules/tasks/tasks-view"` to `main.tsx` fails the
+boundary test; changing the glob literal, or adding a second glob, fails it; `loadModuleWeb(["tasks"])`
+calls only the tasks loader (revert: load all, then filter -> red); a mismatched `module` throws;
+two loaded entries that both declare `projectRoutes` are rejected (revert: last one wins -> red).
+The test proves which loaders are called; that a disabled chunk is never fetched is M4-U5's
+browser gate.
+
+**M4-U3 explorer view extraction** (developed beside U2 against the frozen interface; lands in the
+same commit). Owns `databench:web/src/modules/explorer/web.tsx` (`{module: "explorer",
+projectRoutes: ExplorerView}`), `explorer-view.tsx` (from `AppBody`), `viewer-pane.tsx`
+(`ViewerPane`, `DownloadAction`, `SystemViewerAction`, the system-open and future buttons; it
+asks `useFileViewers()` before its own viewers, and the Raw toggle and mode rules at
+`main.tsx:1106,1571` read "a contributed viewer applies" instead of `indexPageFileKind`),
+`directory-tree.tsx`, `listing.ts` (sort state, `sortEntries`, `ListingSortHeader`,
+`listingDisplayName`, `withMissingChildren`, size and date formats), `explorer-api.ts` (browse,
+tree, refresh URLs), and `databench:web/src/modules/explorer/listing-sort.test.tsx` (moved).
+Checks: `main.test.tsx`, `comments-routing.test.tsx`, `session.test.tsx` and the listing-sort test
+pass with only import changes; no explorer file imports `modules/html/` (boundary test).
+
+**M4-U4 html and tasks entries** (same commit). Owns `databench:web/src/modules/html/web.tsx`
+(`{module: "html", fileViewers: [indexPagesViewer]}`; `applies` = `indexPageFileKind(name) !==
+null && viewer.index_pages !== false`), `databench:web/src/modules/html/index-pages.tsx` (takes
+`rawFileUrl` from `routes.ts`), `databench:web/src/modules/html/index-pages.test.tsx` (renders
+explorer's `ViewerPane` inside a `FileViewersContext` holding html's entry), and
+`databench:web/src/modules/tasks/web.tsx` (`{module: "tasks", views: {tasks: TasksView}}`).
+Checks: the index-pages tests pass with only that wrapper; with no html entry loaded, a marked page
+opens in explorer's ordinary HTML viewer (the sandboxed iframe at `main.tsx:648`) with Raw
+available, because the identifying context keys are absent (revert: keep a direct html import in
+`viewer-pane.tsx` -> boundary red).
+
+**M4-U5 gates and docs** (after U2-U4). Owns `databench:web/vite.config.ts` (enables
+`build.manifest`), `databench:web/tests/browser-check.mjs` additions,
+`databench:web/tests/browser-modules.mjs` (added), `databench:README.md` and
+`databench:CLAUDE.md` (web map). Browser gates, desktop and Pixel 7: all modules enabled
+(`browser-check.mjs` unchanged otherwise); explorer disabled (`/` redirects to `/-/tasks`, a project
+URL shows "Module disabled", no explorer chunk is requested); html disabled (a marked page shows
+in the ordinary HTML viewer, a sandboxed iframe, with Raw available; no html chunk is requested); tasks disabled
+(`browser-tasks.mjs` case 2 and no tasks chunk). Build check: `npm run build` emits one chunk per
+`modules/*/web.tsx` (read from the Vite manifest). Verify also: `npm test`, typecheck, the Python
+suite, the fingerprint verifier (unchanged: no Python file moves), databench push.
 
 ### M5 Task answers
 

@@ -20,7 +20,13 @@ from dataclasses import replace as _replace_dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
-from bootstrap_lib.code_review.lane_prompts import (
+from llm_kit import _runtime
+
+# Legacy only: the lane prompts and bundle readers live in bootstrap_lib. Refuse
+# in package mode before the first bootstrap_lib import below.
+_runtime.require_legacy("the code-review lane")
+
+from bootstrap_lib.code_review.lane_prompts import (  # noqa: E402
     ENDPOINT_ELIGIBLE_LANES,
     KNOWN_LANES,
     LANE_PROMPTS,
@@ -31,7 +37,7 @@ from bootstrap_lib.code_review.lane_prompts import (
     is_agent_alias,
     parse_issue_array,
 )
-from bootstrap_lib.code_review.lane_output import claude_mds_by_file, load_bundle
+from bootstrap_lib.code_review.lane_output import claude_mds_by_file, load_bundle  # noqa: E402
 from llm_kit.completion.halt import HaltError
 from llm_kit.completion.types import BackendOptions
 from llm_kit.dispatch.factory import create_backend

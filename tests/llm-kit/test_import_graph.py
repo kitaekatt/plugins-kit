@@ -21,6 +21,9 @@ Rules beyond the edge set:
   module that sits in it or an import of ``llm_kit._copy`` is a violation;
 * ``llm_kit.bootstrap_guard`` is CLI-owned startup support: it imports no llm_kit
   module, and only ``cli`` and ``jobs`` import it;
+* ``llm_kit._runtime`` is the deployment-mode support module: every component
+  may import it, it imports no llm_kit module except ``llm_kit._deployment``,
+  and only ``_runtime`` imports ``_deployment`` (the marker the wheel replaces);
 * jobs and pipeline.execution never import each other (neither edge is in the
   signed set).
 
@@ -49,6 +52,8 @@ ROOT = "<root>"
 PIPELINE_ROOT = "<pipeline>"
 COPY = "_copy"
 GUARD = "bootstrap_guard"
+RUNTIME = "_runtime"
+DEPLOYMENT = "_deployment"
 
 # The signed graph: A -> {B} is the complete inter-component import set.
 ALLOWED: dict[str, frozenset[str]] = {
@@ -125,6 +130,8 @@ def classify_module(dotted: str) -> Optional[str]:
     head = parts[1]
     if head == GUARD:
         return GUARD
+    if head in (RUNTIME, DEPLOYMENT):
+        return head
     if head == "pipeline":
         if len(parts) == 2:
             return PIPELINE_ROOT
@@ -150,6 +157,8 @@ def classify_file(root: Path, path: Path) -> tuple[Optional[str], str]:
         return PIPELINE_ROOT, dotted
     if parts[0] == GUARD and len(parts) == 1 and not is_init:
         return GUARD, dotted
+    if parts[0] in (RUNTIME, DEPLOYMENT) and len(parts) == 1 and not is_init:
+        return parts[0], dotted
     if len(parts) == 1 and not is_init:
         return None, dotted                       # flat top-level module
     if parts[0] == "pipeline":
@@ -298,6 +307,16 @@ def check_file(root: Path, path: Path, tree: ast.AST) -> list[Violation]:
             continue
         for module in _targets(ref):
             target = classify_module(module)
+            if source in (RUNTIME, DEPLOYMENT):
+                if not (source == RUNTIME and target == DEPLOYMENT):
+                    add("runtime-imports-llm-kit", module, ref,
+                        "_runtime imports only _deployment; _deployment imports nothing")
+                continue
+            if target == DEPLOYMENT:
+                add("deployment-consumer", module, ref, "only llm_kit._runtime imports llm_kit._deployment")
+                continue
+            if target == RUNTIME and source not in (None, ROOT, PIPELINE_ROOT):
+                continue                              # any component may use the mode seam
             if target is None:
                 add("unclassified-target", module, ref, "no such component")
                 continue
@@ -413,6 +432,15 @@ def test_jobs_and_pipeline_execution_do_not_cross_import():
 def test_no_component_may_reach_the_cli_or_root():
     assert not any("cli" in targets for targets in ALLOWED.values())
     assert not any(ROOT in targets or PIPELINE_ROOT in targets for targets in ALLOWED.values())
+
+
+def test_runtime_support_modules_are_classified_and_confined():
+    """The real tree: _runtime/_deployment exist, import nothing they should not,
+    and the mode seam is imported by components without breaking the graph."""
+    assert (PACKAGE_ROOT / "_runtime.py").is_file() and (PACKAGE_ROOT / "_deployment.py").is_file()
+    violations = [v for v in scan(PACKAGE_ROOT)
+                  if v.rule in ("runtime-imports-llm-kit", "deployment-consumer", "unclassified-source")]
+    assert not violations, report(violations)
 
 
 def test_the_map_names_the_same_guard_owner_and_consumers():
@@ -621,3 +649,35 @@ def test_bootstrap_guard_importing_llm_kit_is_caught(tmp_path):
 
 
 
+
+
+# --------------------------------------------------------------------------
+# the deployment-mode support modules
+# --------------------------------------------------------------------------
+
+def test_any_component_may_import_the_runtime_seam(tmp_path):
+    root = _tree(tmp_path, {
+        "_runtime.py": "from llm_kit import _deployment\nimport os\n",
+        "_deployment.py": 'MODE = "legacy"\n',
+        "registry/__init__.py": "from llm_kit import _runtime\n",
+        "jobs/__init__.py": "def f():\n    from llm_kit._runtime import mode\n",
+        "execution/__init__.py": "import llm_kit._runtime\n",
+    })
+    assert scan(root) == []
+
+
+@pytest.mark.parametrize("files, rule", [
+    ({"_runtime.py": "from llm_kit.registry import x\n", "registry/__init__.py": ""},
+     "runtime-imports-llm-kit"),
+    ({"_runtime.py": "from llm_kit import bootstrap_guard\n", "bootstrap_guard.py": ""},
+     "runtime-imports-llm-kit"),
+    ({"_deployment.py": "from llm_kit import _runtime\n", "_runtime.py": ""},
+     "runtime-imports-llm-kit"),
+    ({"registry/__init__.py": "from llm_kit import _deployment\n", "_deployment.py": ""},
+     "deployment-consumer"),
+    ({"cli/__init__.py": "import llm_kit._deployment\n", "_deployment.py": ""},
+     "deployment-consumer"),
+])
+def test_runtime_support_module_rules_can_fail(tmp_path, files, rule):
+    found = scan(_tree(tmp_path, files))
+    assert rule in {v.rule for v in found}, report(found)

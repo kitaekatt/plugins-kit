@@ -1,0 +1,83 @@
+#!/bin/sh
+# clauder -- run Claude Code, and run it again in this terminal when the
+# session asks to be restarted. The launcher itself is lib/relaunch.py.
+#
+# POSIX sh only (macOS /bin/sh is bash 3.2; Git Bash and zsh users reach this
+# file through PATH). Interpreter order, from root CLAUDE.md "Scoped exception:
+# Python CLI launcher shims" (the CLI names no plugin venv; it is stdlib only):
+#   1. the standalone Python bootstrap installs;
+#   2. BOOTSTRAP_PYTHON, only when that file is absent and the variable's own
+#      realpath lies inside the standalone directory;
+#   3. python3, then python, on PATH.
+
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Under claudx (CLAUDE_PLUGIN_TEST) the working copy is the plugin under test, so
+# the cached copy, and the copy bootstrap syncs into the plugin's data directory
+# (the one on PATH), would run the INSTALLED release. Refuse both.
+# Same scope as bootstrap_lib.env_var_check.cache_root_refusal: only the cache of
+# CLAUDE_PLUGIN_TEST_MARKETPLACE is refused (every cache path when it is unset).
+if [ -n "${CLAUDE_PLUGIN_TEST:-}" ]; then
+    _real_root="$(cd "$PLUGIN_ROOT" && pwd -P | tr '[:upper:]' '[:lower:]')"
+    _owned="$(printf '%s' "${CLAUDE_PLUGIN_TEST_MARKETPLACE:-}" | tr '[:upper:]' '[:lower:]')"
+    if [ -n "$_owned" ]; then
+        _needle="/plugins/cache/${_owned}/"
+    else
+        _needle="/plugins/cache/"
+    fi
+    case "${_real_root}/" in
+        *"$_needle"*|*"/plugins/data/"*)
+            echo "clauder: refusing to run the cached copy at ${PLUGIN_ROOT}: CLAUDE_PLUGIN_TEST is set, so this session tests the working copy and the cached copy is the INSTALLED release. Run the working copy's bin/clauder." >&2
+            exit 2
+            ;;
+    esac
+fi
+
+LAUNCHER="$PLUGIN_ROOT/lib/relaunch.py"
+if [ ! -f "$LAUNCHER" ]; then
+    echo "clauder: launcher not found at ${LAUNCHER}" >&2
+    exit 2
+fi
+
+case "$(uname -s 2>/dev/null || echo Unknown)" in
+    MINGW*|MSYS*|CYGWIN*) PY="${HOME}/.local/share/python-standalone/python/python.exe" ;;
+    *) PY="${HOME}/.local/share/python-standalone/python/bin/python3" ;;
+esac
+
+# BOOTSTRAP_PYTHON counts only when the standalone directory exists and the
+# variable's OWN realpath lies inside it: every symlink is followed first (a
+# relative target against its own directory), then the final directory is
+# resolved physically. An absent standalone directory accepts nothing.
+if [ ! -x "$PY" ]; then
+    _standalone="$(cd -P "${HOME}/.local/share/python-standalone" 2>/dev/null && pwd -P)"
+    if [ -n "$_standalone" ] && [ -n "${BOOTSTRAP_PYTHON:-}" ] && [ -x "$BOOTSTRAP_PYTHON" ]; then
+        # A symlink loop makes the -x test above false (ELOOP), so this loop ends.
+        _bp="$BOOTSTRAP_PYTHON"
+        while [ -L "$_bp" ]; do
+            _target="$(readlink "$_bp")"
+            case "$_target" in
+                /*) _bp="$_target" ;;
+                *) _bp="$(dirname "$_bp")/$_target" ;;
+            esac
+        done
+        case "$(cd -P "$(dirname "$_bp")" 2>/dev/null && pwd -P)/" in
+            "$_standalone"/*) PY="$BOOTSTRAP_PYTHON" ;;
+        esac
+    fi
+fi
+
+if [ ! -x "$PY" ]; then
+    if command -v python3 >/dev/null 2>&1; then
+        PY="python3"
+    elif command -v python >/dev/null 2>&1; then
+        PY="python"
+    else
+        echo "clauder: no Python interpreter found" >&2
+        exit 1
+    fi
+fi
+
+exec "$PY" "$LAUNCHER" "$@"

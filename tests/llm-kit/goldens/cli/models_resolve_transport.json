@@ -1,0 +1,29 @@
+{
+  "argv": [
+    "models",
+    "resolve",
+    "--models",
+    "local"
+  ],
+  "exit": 0,
+  "stderr": "",
+  "stdout": {
+    "json": {
+      "backend": "openrouter",
+      "declared_effort": null,
+      "effort": null,
+      "effort_delivery": {
+        "deliverable": true,
+        "emits": "reasoning_effort",
+        "remap": {
+          "high": "xhigh"
+        },
+        "source": "endpoint",
+        "style": "ninfer"
+      },
+      "endpoint": "local",
+      "kind": "transport",
+      "model": "m-local"
+    }
+  }
+}

@@ -54,6 +54,8 @@ import sys
 from pathlib import Path
 from typing import Mapping, Optional
 
+from llm_kit import _runtime
+
 from .model_endpoints import (
     HARNESS_KIND,
     TRANSPORT_KIND,
@@ -239,6 +241,18 @@ def fleet_config_path() -> Path:
     return Path.home() / ".claude" / "config" / f"{CONFIG_PLUGIN}.yaml"
 
 
+def package_mode_model_config(base: dict) -> dict:
+    """The model config in package mode: the shipped defaults, unchanged.
+
+    The installed package has no layered config.yaml files to read. The
+    endpoint registry file is still resolved by
+    :mod:`llm_kit.registry.model_endpoints`, and ``MODEL_ENDPOINTS_REGISTRY``
+    overrides its path. This is the one place package mode decides what the
+    model list is when no registry is configured.
+    """
+    return base
+
+
 def load_model_config(*, project_root: Optional[str] = None) -> dict:
     """Resolve the effective model config: shipped baseline deep-merged with the
     fleet, machine, and (optional) project layers.
@@ -256,6 +270,8 @@ def load_model_config(*, project_root: Optional[str] = None) -> dict:
     into a traceback with no way to recover.
     """
     base = copy.deepcopy(DEFAULT_MODEL_CONFIG)
+    if _runtime.mode() == "package":
+        return package_mode_model_config(base)
     try:
         from bootstrap_lib.config_resolve import (
             ConfigError,

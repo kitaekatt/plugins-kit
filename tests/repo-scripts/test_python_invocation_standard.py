@@ -660,6 +660,17 @@ _SHELL_ALLOWLIST: dict[str, AllowlistEntry] = {
         "the plugin venv bootstrap provisions -- it has PyYAML, which the CLI",
         "class C launcher shim (Windows); same venv-first order, same exit 2 on "
         "a missing redirected venv, same cached-copy refusal under claudx"),
+    "plugins/relaunch-kit/bin/clauder": AllowlistEntry(
+        'Interpreter order, from root CLAUDE.md "Scoped exception:',
+        "class C launcher shim; the standalone path first (no plugin venv: the "
+        "launcher is stdlib-only), then BOOTSTRAP_PYTHON only when its realpath is "
+        "inside the standalone directory, then the PATH-name fallback; exits 2 "
+        "under claudx when run as the cached copy or as the data-directory copy "
+        "on PATH"),
+    "plugins/relaunch-kit/bin/clauder.cmd": AllowlistEntry(
+        'Interpreter order (root CLAUDE.md "Scoped exception: Python CLI launcher',
+        "class C launcher shim (Windows); same standalone-first order, same "
+        "cached-copy and data-directory-copy refusals under claudx"),
     "plugins/secrets-kit/bin/secrets-kit": AllowlistEntry(
         "Fall back to anything on PATH; bootstrap normally guarantees the",
         "class C launcher shim; the standalone path first (no plugin venv: the "

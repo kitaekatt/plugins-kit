@@ -94,6 +94,9 @@ def _skill_material() -> Any:
     the named module is caught, so a syntax error in a half-synced copy
     surfaces as itself.
     """
+    from llm_kit import _runtime  # noqa: PLC0415
+
+    _runtime.require_legacy("skill context")
     try:
         import bootstrap_lib  # noqa: F401, PLC0415
     except ModuleNotFoundError as exc:

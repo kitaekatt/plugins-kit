@@ -249,6 +249,9 @@ class CodexAdapter(HarnessAdapter):
         # This import must stay inside dispatch. Consumers that only link this
         # package are allowed to import its adapter types without provisioning
         # bootstrap_lib; the missing shared library should fail only here.
+        from llm_kit import _runtime  # noqa: PLC0415
+
+        _runtime.require_legacy("the codex adapter")
         from bootstrap_lib.codex import build_codex_exec_argv  # noqa: PLC0415
 
         kwargs = {"root": cwd, "model": entry.model}
@@ -266,6 +269,9 @@ class CodexAdapter(HarnessAdapter):
 
     def is_available(self) -> bool:
         """Use bootstrap's existing Codex presence detector, without a model run."""
+        from llm_kit import _runtime  # noqa: PLC0415
+
+        _runtime.require_legacy("the codex adapter")
         from bootstrap_lib.codex import detect_codex  # noqa: PLC0415
 
         return bool(detect_codex().available)

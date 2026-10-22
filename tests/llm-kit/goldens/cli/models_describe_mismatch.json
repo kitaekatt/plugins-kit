@@ -1,0 +1,40 @@
+{
+  "argv": [
+    "models",
+    "describe",
+    "--caller",
+    "process",
+    "--requirements",
+    "<T>/req.json",
+    "--json",
+    "cl",
+    "cdx"
+  ],
+  "exit": 1,
+  "stderr": {
+    "json": {
+      "error": {
+        "caller": "process",
+        "dispositions": [
+          {
+            "declared_index": 0,
+            "detail": "adapter 'claude-cli'",
+            "disposition": "requirements-mismatch",
+            "id": "cl",
+            "resets_at": "<t>"
+          },
+          {
+            "declared_index": 1,
+            "detail": "adapter 'codex-cli'",
+            "disposition": "requirements-mismatch",
+            "id": "cdx",
+            "resets_at": "<t>"
+          }
+        ],
+        "kind": "no-usable-routing-target",
+        "message": "no usable routing target in [cl, cdx] for a process caller:\n  cl: requirements-mismatch (adapter 'claude-cli')\n  cdx: requirements-mismatch (adapter 'codex-cli')"
+      }
+    }
+  },
+  "stdout": ""
+}

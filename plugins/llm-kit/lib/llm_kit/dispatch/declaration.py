@@ -48,6 +48,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence
 
+from llm_kit import _runtime
 from llm_kit.registry import cost as _cost
 from llm_kit.registry.constants import cli_command
 from llm_kit.completion.contract import OutputContractViolation, contract_requirements, merge_requirements
@@ -184,6 +185,9 @@ def _execution_event() -> Any:
     too-old are diagnosed apart because their remedies differ; the version in
     a message is this plugin's own constant, never read from the module.
     """
+    if _runtime.mode() == "package":
+        # Package mode: the routed contract, unprobed.
+        return _runtime.load("execution_event", error=DeclarationSupportError)
     try:
         import bootstrap_lib  # noqa: F401, PLC0415
     except ModuleNotFoundError as exc:

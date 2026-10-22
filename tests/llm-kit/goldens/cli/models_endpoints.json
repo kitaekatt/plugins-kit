@@ -1,0 +1,784 @@
+{
+  "argv": [
+    "models",
+    "endpoints"
+  ],
+  "exit": 0,
+  "stderr": "",
+  "stdout": {
+    "json": {
+      "capabilities": {
+        "claude-cli": {
+          "adapter": "claude-cli",
+          "dropped_params": [
+            "max_tokens",
+            "temperature",
+            "max_retries",
+            "cache_salt",
+            "user_cache_prefix",
+            "client_id",
+            "extras"
+          ],
+          "execution_controls": [
+            {
+              "effect": "allow",
+              "emits": "--allowedTools",
+              "id": "allowed-tools",
+              "note": "an ALLOW-list of caller-supplied tool names, not a deny-list: it cannot express denial of an arbitrary tool without a complete tool universe. The record makes no claim about how it composes with the permission bypass below",
+              "parameter": "allowed_tools",
+              "source": "request"
+            },
+            {
+              "effect": "deny",
+              "emits": "--disallowedTools",
+              "id": "disallowed-tools",
+              "note": "the only real tool DENY channel across the four adapters. Emitted only when the caller sets the param, so an unset deny-list reports no control -- suppressing a flag is not a control. The record claims the EMISSION only: nothing here establishes that the CLI honors the deny, and the subjects are caller-supplied rather than a native identifier list, so none are enumerated. FILESYSTEM_WRITE is carried as a CANONICAL subject rather than a native one: it names the outcome a caller can require, and the caller arms it by passing the deny list",
+              "parameter": "disallowed_tools",
+              "source": "request",
+              "subjects": [
+                "filesystem-write",
+                "shell-exec",
+                "subagent-spawn"
+              ]
+            },
+            {
+              "effect": "bypass",
+              "emits": "--permission-mode bypassPermissions",
+              "id": "permission-bypass",
+              "note": "emitted on every call except in text-only mode",
+              "parameter": "backend.text_only",
+              "source": "request",
+              "when_value": "false"
+            },
+            {
+              "effect": "disable",
+              "emits": "--no-session-persistence",
+              "id": "no-session-persistence",
+              "source": "fixed",
+              "subjects": [
+                "session-persistence"
+              ]
+            },
+            {
+              "effect": "deny",
+              "emits": "--tools \"\" --strict-mcp-config --mcp-config {\"mcpServers\":{}} --disable-slash-commands --setting-sources \"\" --permission-mode dontAsk",
+              "id": "text-only-mode",
+              "note": "no tools, no MCP servers, no skills, no settings or CLAUDE.md memory, and no permission bypass. A guarantees requirement admits claude-cli through this control and declaration.run arms it, so the caller passes no flag. Measured 2026-10-07 on Claude Code 2.1.293: the model reported no callable tool and ran nothing. Neither allowed-tools nor permission-bypass is emitted in this mode",
+              "parameter": "backend.text_only",
+              "source": "request",
+              "subjects": [
+                "filesystem-write",
+                "shell-exec",
+                "subagent-spawn"
+              ],
+              "when_value": "true"
+            }
+          ],
+          "guarantees": [],
+          "params": {
+            "allowed_tools": {
+              "default": "",
+              "emits": "--allowedTools",
+              "handling": "mapped",
+              "note": "None becomes the empty string, i.e. a pure completion with no tools",
+              "type": "string"
+            },
+            "backend.text_only": {
+              "default": false,
+              "emits": "--tools \"\" --strict-mcp-config --mcp-config {\"mcpServers\":{}} --disable-slash-commands --setting-sources \"\" --permission-mode dontAsk",
+              "handling": "mapped",
+              "note": "a ClaudeCliBackend field, not a BackendOptions field: declaration.run sets it when a guarantees requirement admitted this entry (requirements.arm_requirements). When true it replaces --permission-mode bypassPermissions and --allowedTools, and a non-empty allowed_tools is refused before dispatch",
+              "type": "boolean"
+            },
+            "cwd": {
+              "emits": "subprocess cwd",
+              "handling": "mapped",
+              "note": "defaults to the process cwd",
+              "type": "path"
+            },
+            "disallowed_tools": {
+              "emits": "--disallowedTools",
+              "handling": "mapped",
+              "note": "emitted ONLY when not None; unlike --allowedTools no empty value is sent, because an empty deny-list restricts nothing",
+              "type": "string"
+            },
+            "effort": {
+              "emits": "--effort",
+              "handling": "mapped",
+              "note": "emitted only when not None; the adapter validates no value menu",
+              "type": "string"
+            },
+            "log_prefix": {
+              "default": "[llm]",
+              "emits": "runner log_prefix",
+              "handling": "mapped",
+              "type": "string"
+            },
+            "output_contract": {
+              "emits": "--json-schema <canonical schema json>",
+              "handling": "mapped",
+              "note": "a listed schema policy is delivered as emitted and the answer is validated at the seam; text-only emits nothing; a policy structured_output.policies does not list is refused before dispatch",
+              "type": "output-contract"
+            },
+            "skill_context": {
+              "handling": "mapped",
+              "note": "read and refused before dispatch: the harness loads skills itself",
+              "type": "skill-context"
+            },
+            "system_prompt_mode": {
+              "default": "replace",
+              "emits": "--system-prompt | --append-system-prompt",
+              "handling": "mapped",
+              "note": "the menu is advertised because ClaudeCliBackend REJECTS an unknown mode before dispatch; the two flags differ in meaning, not just spelling (see system_prompt.emits_by_mode)",
+              "type": "string",
+              "values": [
+                "append",
+                "replace"
+              ]
+            },
+            "timeout_s": {
+              "default": 900.0,
+              "emits": "runner timeout_s",
+              "handling": "mapped",
+              "type": "number"
+            }
+          },
+          "structured_output": {
+            "contract_delivery": "native",
+            "contract_emits": "--json-schema <canonical schema json>",
+            "contract_schema_class": "json-schema-subset",
+            "mode": "none",
+            "note": "--output-format json is claude's transport envelope, which the adapter parses to reach data['result']; it is not a caller schema",
+            "policies": [
+              "native-required",
+              "validated-result",
+              "text-only"
+            ],
+            "result": "text"
+          },
+          "system_prompt": {
+            "emits": "--system-prompt",
+            "emits_by_mode": {
+              "append": "--append-system-prompt",
+              "replace": "--system-prompt"
+            },
+            "mode": "replace",
+            "modes": [
+              "replace",
+              "append"
+            ],
+            "note": "REPLACE is the default and makes the caller's text the WHOLE system prompt; APPEND emits --append-system-prompt, which adds it to the CLI's own default prompt. That difference is why append is a separate mode rather than a spelling of the same thing. Both claims are about the argv this adapter builds; neither asserts what the CLI then does with the text",
+            "parameter": "system_prompt_mode"
+          }
+        },
+        "codex-cli": {
+          "adapter": "codex-cli",
+          "dropped_params": [
+            "max_tokens",
+            "temperature",
+            "max_retries",
+            "cache_salt",
+            "user_cache_prefix",
+            "allowed_tools",
+            "disallowed_tools",
+            "system_prompt_mode",
+            "client_id"
+          ],
+          "execution_controls": [
+            {
+              "effect": "confine",
+              "emits": "-s <value>",
+              "id": "sandbox-mode",
+              "note": "always emitted, defaulting to workspace-write. The value is forwarded as given -- the adapter validates no mode menu, so modes beyond workspace-write and read-only reach the CLI. It carries FILESYSTEM_WRITE because read-only confines it -- but the DEFAULT does not, so a caller requiring that subject must pass extras.sandbox=read-only to arm it",
+              "parameter": "extras.sandbox",
+              "source": "request",
+              "subjects": [
+                "filesystem-write"
+              ]
+            },
+            {
+              "effect": "allow",
+              "emits": "-c sandbox_workspace_write.network_access=true",
+              "id": "network-enable",
+              "note": "there is deliberately no network-disable control: false emits NOTHING, and the absence of a flag is not a control",
+              "parameter": "extras.network",
+              "source": "request",
+              "subjects": [
+                "network-egress"
+              ],
+              "when_value": "true"
+            },
+            {
+              "effect": "confine",
+              "emits": "-c windows.sandbox=\"unelevated\"",
+              "id": "windows-sandbox-mode",
+              "note": "a compatibility selector without which workspace-write silently degrades to read-only on Windows; not itself a filesystem confinement control",
+              "platform": "windows",
+              "source": "fixed"
+            },
+            {
+              "effect": "disable",
+              "emits": "--skip-git-repo-check",
+              "id": "skip-git-repo-check",
+              "source": "fixed",
+              "subjects": [
+                "git-repo-check"
+              ]
+            },
+            {
+              "effect": "deny",
+              "emits": "--ignore-user-config -s read-only -c features.shell_tool=false -c features.unified_exec=false -c features.multi_agent=false -c features.multi_agent_v2=false -c features.apps=false -c features.plugins=false -c features.view_image=false -c features.image_generation=false -c features.browser_use=false -c features.browser_use_external=false -c features.computer_use=false -c features.in_app_browser=false -c features.code_mode_host=false -c features.sleep_tool=false -c features.tool_suggest=false -c features.skill_search=false -c features.goals=false -c web_search=\"disabled\" -c mcp_servers={} -c model_catalog_json='<temp one-model catalog>'",
+              "id": "text-only-mode",
+              "note": "user config ignored, feature-gated tools off, and the model's catalog entry patched to drop code mode, multi-agent, apply_patch, tool_search and the node REPL. Measured 2026-10-07 on codex-cli 0.160.0 (gpt-6.1-sol): the model listed only functions.request_user_input, which belongs to no guarantee subject and which codex refuses in exec mode",
+              "parameter": "backend.text_only",
+              "source": "request",
+              "subjects": [
+                "filesystem-write",
+                "shell-exec",
+                "subagent-spawn"
+              ],
+              "when_value": "true"
+            }
+          ],
+          "guarantees": [],
+          "params": {
+            "backend.text_only": {
+              "default": false,
+              "emits": "--ignore-user-config -s read-only -c features.shell_tool=false -c features.unified_exec=false -c features.multi_agent=false -c features.multi_agent_v2=false -c features.apps=false -c features.plugins=false -c features.view_image=false -c features.image_generation=false -c features.browser_use=false -c features.browser_use_external=false -c features.computer_use=false -c features.in_app_browser=false -c features.code_mode_host=false -c features.sleep_tool=false -c features.tool_suggest=false -c features.skill_search=false -c features.goals=false -c web_search=\"disabled\" -c mcp_servers={} -c model_catalog_json='<temp one-model catalog>'",
+              "handling": "mapped",
+              "note": "a CodexCliBackend field, not a BackendOptions field: declaration.run sets it when a guarantees requirement admitted this entry. Forces -s read-only and network off, ignores the user config, and runs one extra `codex debug models` call to build the patched catalog. extras.sandbox other than read-only, extras.network true, or no model id is refused before dispatch",
+              "type": "boolean"
+            },
+            "cwd": {
+              "emits": "-C",
+              "handling": "mapped",
+              "note": "resolved absolute when None; a relative path is rejected before dispatch",
+              "type": "absolute-path"
+            },
+            "effort": {
+              "emits": "-c model_reasoning_effort=<value>",
+              "handling": "mapped",
+              "note": "any truthy string is emitted. The [low, medium, high, xhigh, max] menu is validated on CodexAdapter, which this backend BYPASSES by calling the shared argv builder directly, so no menu is advertised",
+              "type": "string"
+            },
+            "extras.add_dirs": {
+              "default": [],
+              "emits": "--add-dir (repeated)",
+              "handling": "mapped",
+              "type": "absolute-path-list"
+            },
+            "extras.network": {
+              "default": true,
+              "emits": "-c sandbox_workspace_write.network_access=true",
+              "handling": "mapped",
+              "note": "emitted ONLY when true; false emits nothing",
+              "type": "boolean"
+            },
+            "extras.output_schema": {
+              "emits": "--output-schema",
+              "handling": "mapped",
+              "type": "absolute-path"
+            },
+            "extras.sandbox": {
+              "default": "workspace-write",
+              "emits": "-s",
+              "handling": "mapped",
+              "type": "string"
+            },
+            "extras.scratch_dir": {
+              "emits": "--add-dir",
+              "handling": "mapped",
+              "type": "absolute-path"
+            },
+            "log_prefix": {
+              "default": "[llm]",
+              "emits": "runner log_prefix",
+              "handling": "mapped",
+              "type": "string"
+            },
+            "output_contract": {
+              "emits": "--output-schema <temp schema file>",
+              "handling": "mapped",
+              "note": "a listed schema policy is delivered as emitted and the answer is validated at the seam; text-only emits nothing; a policy structured_output.policies does not list is refused before dispatch",
+              "type": "output-contract"
+            },
+            "skill_context": {
+              "handling": "mapped",
+              "note": "read and refused before dispatch: the harness loads skills itself",
+              "type": "skill-context"
+            },
+            "timeout_s": {
+              "default": 900.0,
+              "emits": "runner timeout_s",
+              "handling": "mapped",
+              "type": "number"
+            }
+          },
+          "structured_output": {
+            "contract_delivery": "native",
+            "contract_emits": "--output-schema <temp schema file>",
+            "contract_schema_class": "openai-strict",
+            "mode": "native",
+            "note": "--output-schema is a first-class CLI schema control, and the adapter parses the -o result file into the normalized structured field when -- and only when -- a caller schema was sent. Unparseable output leaves structured None; text still carries the result verbatim",
+            "policies": [
+              "native-required",
+              "validated-result",
+              "text-only"
+            ],
+            "request_param": "extras.output_schema",
+            "result": "parsed"
+          },
+          "system_prompt": {
+            "emits": "stdin",
+            "mode": "prompt-fold",
+            "note": "system text is concatenated ahead of the user text into one prompt",
+            "separator": "\n\n---\n\n"
+          }
+        },
+        "opencode-cli": {
+          "adapter": "opencode-cli",
+          "dropped_params": [
+            "max_tokens",
+            "temperature",
+            "max_retries",
+            "cache_salt",
+            "user_cache_prefix",
+            "allowed_tools",
+            "system_prompt_mode",
+            "client_id",
+            "extras"
+          ],
+          "execution_controls": [
+            {
+              "effect": "deny",
+              "emits": "OPENCODE_CONFIG_CONTENT permission.bash=deny",
+              "id": "permission-bash-deny",
+              "note": "armed by a deny list naming a shell tool",
+              "parameter": "disallowed_tools",
+              "source": "request",
+              "subjects": [
+                "shell-exec"
+              ]
+            },
+            {
+              "effect": "deny",
+              "emits": "OPENCODE_CONFIG_CONTENT permission.task=deny",
+              "id": "permission-task-request-deny",
+              "note": "the fixed permission-task-deny below already denies task on every call; this records the same scalar as ALSO reachable through a caller's deny list",
+              "parameter": "disallowed_tools",
+              "source": "request",
+              "subjects": [
+                "subagent-spawn"
+              ]
+            },
+            {
+              "effect": "deny",
+              "emits": "OPENCODE_CONFIG_CONTENT permission.edit=deny",
+              "id": "permission-edit-deny",
+              "note": "armed by a caller-supplied deny list naming any write tool. Verified 2026-09-05 on opencode 1.18.25 with a two-arm check: denied, the agent reports read-only tools and writes nothing; undenied, the same prompt and model create the file. So the deny survives --auto, which approves only what is not already denied",
+              "parameter": "disallowed_tools",
+              "source": "request",
+              "subjects": [
+                "filesystem-write"
+              ]
+            },
+            {
+              "effect": "deny",
+              "emits": "OPENCODE_CONFIG_CONTENT permission.external_directory=deny",
+              "id": "permission-external-directory-deny",
+              "source": "fixed",
+              "subjects": [
+                "permission.external_directory"
+              ]
+            },
+            {
+              "effect": "deny",
+              "emits": "OPENCODE_CONFIG_CONTENT permission.task=deny",
+              "id": "permission-task-deny",
+              "note": "task lives in opencode's PERMISSION namespace; this is not a tool allow/deny list",
+              "source": "fixed",
+              "subjects": [
+                "permission.task"
+              ]
+            },
+            {
+              "effect": "deny",
+              "emits": "OPENCODE_CONFIG_CONTENT agent.build.permission.external_directory=deny",
+              "id": "agent-permission-external-directory-deny",
+              "source": "fixed",
+              "subjects": [
+                "agent.build.permission.external_directory"
+              ]
+            },
+            {
+              "effect": "deny",
+              "emits": "OPENCODE_CONFIG_CONTENT agent.build.permission.task=deny",
+              "id": "agent-permission-task-deny",
+              "source": "fixed",
+              "subjects": [
+                "agent.build.permission.task"
+              ]
+            },
+            {
+              "effect": "disable",
+              "emits": "--pure",
+              "id": "pure-mode",
+              "source": "fixed",
+              "subjects": [
+                "external-plugins"
+              ]
+            },
+            {
+              "effect": "bypass",
+              "emits": "--auto",
+              "id": "auto-approve",
+              "note": "auto-approves permissions not explicitly denied above; shell remains available",
+              "source": "fixed"
+            },
+            {
+              "effect": "confine",
+              "emits": "--agent build",
+              "id": "agent-selection",
+              "note": "the agent is fixed, not caller-selectable",
+              "source": "fixed",
+              "subjects": [
+                "agent.build"
+              ]
+            }
+          ],
+          "guarantees": [],
+          "params": {
+            "cwd": {
+              "emits": "--dir",
+              "handling": "mapped",
+              "note": "also the process cwd; --dir is NOT a filesystem-confinement boundary",
+              "type": "absolute-path"
+            },
+            "disallowed_tools": {
+              "emits": "OPENCODE_CONFIG_CONTENT permission.{edit,bash,task}=deny",
+              "handling": "mapped",
+              "note": "read as a NEUTRAL tool-deny vocabulary and translated into opencode's permission scalars, which have no deny-list form. The edit scalar gates write, edit and patch together; unrecognized names are ignored rather than guessed at",
+              "type": "string"
+            },
+            "effort": {
+              "emits": "--variant",
+              "handling": "mapped",
+              "note": "any nonempty provider variant; the adapter validates no menu",
+              "type": "string"
+            },
+            "log_prefix": {
+              "default": "[llm]",
+              "emits": "runner log_prefix",
+              "handling": "mapped",
+              "type": "string"
+            },
+            "output_contract": {
+              "emits": "stdin schema instruction",
+              "handling": "mapped",
+              "note": "a listed schema policy is delivered as emitted and the answer is validated at the seam; text-only emits nothing; a policy structured_output.policies does not list is refused before dispatch",
+              "type": "output-contract"
+            },
+            "skill_context": {
+              "handling": "mapped",
+              "note": "read and refused before dispatch: the harness loads skills itself",
+              "type": "skill-context"
+            },
+            "timeout_s": {
+              "default": 120.0,
+              "emits": "runner timeout_s",
+              "handling": "mapped",
+              "type": "number"
+            }
+          },
+          "structured_output": {
+            "contract_delivery": "prompt",
+            "contract_emits": "stdin schema instruction",
+            "contract_schema_class": "json-schema-subset",
+            "mode": "none",
+            "note": "--format json is deliberately unused; stdout is read as the answer",
+            "policies": [
+              "validated-result",
+              "text-only"
+            ],
+            "result": "text"
+          },
+          "system_prompt": {
+            "emits": "stdin",
+            "mode": "prompt-fold",
+            "separator": "\n\n---\n\n"
+          }
+        },
+        "openrouter": {
+          "adapter": "openrouter",
+          "conditional_params": {
+            "effort": {
+              "emits": "reasoning_effort | chat_template_kwargs.reasoning_effort",
+              "handling": "mapped",
+              "note": "emitted only for a transport entry that resolves a delivering effort_style (entry effort_style, frontdoor: true, or a declared routing.effort_style); an effort already in extras (top-level or chat_template_kwargs) wins verbatim and an explicit null there sends none; the ninfer style maps high to xhigh",
+              "type": "string"
+            }
+          },
+          "dropped_params": [
+            "cache_salt",
+            "effort",
+            "allowed_tools",
+            "disallowed_tools",
+            "system_prompt_mode",
+            "cwd",
+            "log_prefix"
+          ],
+          "execution_controls": [],
+          "guarantees": [
+            "filesystem-write",
+            "shell-exec",
+            "subagent-spawn"
+          ],
+          "params": {
+            "client_id": {
+              "emits": "user",
+              "handling": "mapped",
+              "note": "uses the caller id, a process identity when None, nothing when empty",
+              "type": "string"
+            },
+            "extras": {
+              "emits": "extra_body",
+              "handling": "passthrough",
+              "note": "every key rides as a TOP-LEVEL request parameter, unvalidated and unfiltered; the adapter makes no claim the provider accepts any of them",
+              "type": "json-object"
+            },
+            "max_retries": {
+              "emits": "client.with_options(max_retries=...)",
+              "handling": "mapped",
+              "note": "SDK retries per call; unset keeps the client default of 2",
+              "type": "integer"
+            },
+            "max_tokens": {
+              "default": 4096,
+              "emits": "max_tokens",
+              "handling": "mapped",
+              "type": "integer"
+            },
+            "output_contract": {
+              "emits": "messages[system] schema instruction",
+              "handling": "mapped",
+              "note": "a listed schema policy is delivered as emitted and the answer is validated at the seam; text-only emits nothing; a policy structured_output.policies does not list is refused before dispatch",
+              "type": "output-contract"
+            },
+            "skill_context": {
+              "emits": "messages[system] leading skill context block",
+              "handling": "mapped",
+              "note": "the materialized block leads the system message, followed by the caller's system text and then any output-contract instruction",
+              "type": "skill-context"
+            },
+            "temperature": {
+              "emits": "temperature",
+              "handling": "mapped",
+              "note": "server/model default when unset; omitted from the request",
+              "type": "number"
+            },
+            "timeout_s": {
+              "emits": "timeout",
+              "handling": "mapped",
+              "note": "omitted from the request entirely when None",
+              "type": "number"
+            },
+            "user_cache_prefix": {
+              "default": "",
+              "emits": "messages[user].content[0].cache_control",
+              "handling": "mapped",
+              "note": "when set, the user message becomes a two-part content list with an ephemeral cache breakpoint on the static prefix",
+              "type": "string"
+            }
+          },
+          "skill_context": {
+            "delivery": "system-message",
+            "emits": "messages[system] leading skill context block"
+          },
+          "structured_output": {
+            "contract_delivery": "prompt",
+            "contract_emits": "messages[system] schema instruction",
+            "contract_schema_class": "json-schema-subset",
+            "mode": "passthrough",
+            "note": "the adapter neither defines nor validates a schema; it forwards a caller-supplied response_format through extras and always reads the result as message.content",
+            "policies": [
+              "validated-result",
+              "text-only"
+            ],
+            "request_param": "extras.response_format",
+            "result": "text"
+          },
+          "system_prompt": {
+            "emits": "messages[system]",
+            "mode": "native-role",
+            "note": "a distinct system-role message, not an append: the adapter supplies the system prompt rather than adding to an existing one"
+          }
+        }
+      },
+      "default": "openrouter",
+      "endpoints": {
+        "cdx": {
+          "adapter": "codex-cli",
+          "effort": "high",
+          "harness": "codex",
+          "kind": "harness",
+          "model": "gpt-x",
+          "name": null
+        },
+        "cl": {
+          "adapter": "claude-cli",
+          "effort": null,
+          "harness": "claude",
+          "kind": "harness",
+          "model": "opus",
+          "name": null
+        },
+        "fable": {
+          "adapter": "claude-cli",
+          "effort": null,
+          "harness": "claude",
+          "kind": "harness",
+          "model": "fable",
+          "name": null
+        },
+        "haiku": {
+          "adapter": "claude-cli",
+          "effort": null,
+          "harness": "claude",
+          "kind": "harness",
+          "model": "haiku",
+          "name": null
+        },
+        "local": {
+          "adapter": "openrouter",
+          "base_url": "http://h.invalid/v1",
+          "effort_delivery": {
+            "deliverable": true,
+            "emits": "reasoning_effort",
+            "remap": {
+              "high": "xhigh"
+            },
+            "source": "endpoint",
+            "style": "ninfer"
+          },
+          "frontdoor": false,
+          "key_env": "LOCAL_KEY",
+          "kind": "transport",
+          "model": "m-local",
+          "name": null,
+          "reasoning_effort": null
+        },
+        "luna": {
+          "adapter": "codex-cli",
+          "effort": "high",
+          "harness": "codex",
+          "kind": "harness",
+          "model": "gpt-5.6-luna",
+          "name": null
+        },
+        "openrouter": {
+          "adapter": "openrouter",
+          "base_url": "https://openrouter.ai/api/v1",
+          "default_model": "gpt-mini",
+          "effort_delivery": {
+            "deliverable": false,
+            "emits": null,
+            "source": "none",
+            "style": null
+          },
+          "key_env": "OPENROUTER_API_KEY",
+          "kind": "transport",
+          "reasoning_effort": null
+        },
+        "opus": {
+          "adapter": "claude-cli",
+          "effort": null,
+          "harness": "claude",
+          "kind": "harness",
+          "model": "opus",
+          "name": null
+        },
+        "or-gemini-lite": {
+          "adapter": "openrouter",
+          "base_url": "https://openrouter.ai/api/v1",
+          "effort_delivery": {
+            "deliverable": false,
+            "emits": null,
+            "source": "none",
+            "style": null
+          },
+          "frontdoor": false,
+          "key_env": "OPENROUTER_API_KEY",
+          "kind": "transport",
+          "model": "google/gemini-2.5-flash-lite",
+          "name": null,
+          "reasoning_effort": null
+        },
+        "or-gpt-mini": {
+          "adapter": "openrouter",
+          "base_url": "https://openrouter.ai/api/v1",
+          "effort_delivery": {
+            "deliverable": false,
+            "emits": null,
+            "source": "none",
+            "style": null
+          },
+          "frontdoor": false,
+          "key_env": "OPENROUTER_API_KEY",
+          "kind": "transport",
+          "model": "openai/gpt-4o-mini",
+          "name": null,
+          "reasoning_effort": null
+        },
+        "or-qwen": {
+          "adapter": "openrouter",
+          "base_url": "https://openrouter.ai/api/v1",
+          "effort_delivery": {
+            "deliverable": false,
+            "emits": null,
+            "source": "none",
+            "style": null
+          },
+          "frontdoor": false,
+          "key_env": "OPENROUTER_API_KEY",
+          "kind": "transport",
+          "model": "qwen/qwen3-32b",
+          "name": null,
+          "reasoning_effort": null
+        },
+        "other": {
+          "adapter": "openrouter",
+          "base_url": "http://h.invalid/v1",
+          "effort_delivery": {
+            "deliverable": false,
+            "emits": null,
+            "source": "none",
+            "style": null
+          },
+          "frontdoor": false,
+          "key_env": null,
+          "kind": "transport",
+          "model": "m-other",
+          "name": null,
+          "reasoning_effort": null
+        },
+        "sol": {
+          "adapter": "codex-cli",
+          "effort": "high",
+          "harness": "codex",
+          "kind": "harness",
+          "model": "gpt-5.6-sol",
+          "name": null
+        },
+        "sonnet": {
+          "adapter": "claude-cli",
+          "effort": null,
+          "harness": "claude",
+          "kind": "harness",
+          "model": "sonnet",
+          "name": null
+        }
+      },
+      "notes": []
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "argv": [
+    "completion",
+    "complete",
+    "--request-file",
+    "<T>/req.json",
+    "--prompt",
+    "x",
+    "--format",
+    "json"
+  ],
+  "exit": 4,
+  "stderr": {
+    "json": {
+      "error": {
+        "kind": "protocol",
+        "message": "--request-file cannot be combined with --prompt; the request carries those values itself"
+      },
+      "protocol": 1
+    }
+  },
+  "stdout": ""
+}

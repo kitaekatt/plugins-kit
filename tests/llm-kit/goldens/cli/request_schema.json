@@ -1,0 +1,42 @@
+{
+  "argv": [
+    "completion",
+    "request-schema"
+  ],
+  "exit": 0,
+  "stderr": "",
+  "stdout": {
+    "json": {
+      "keys": {
+        "cheap": "boolean, optional",
+        "endpoint": "string, optional",
+        "model": "string, optional",
+        "options": "object, optional",
+        "prompt": "string, optional",
+        "protocol": "integer, required, must equal 1",
+        "system": "string, optional"
+      },
+      "options": {
+        "allowed_tools": "Optional[str]",
+        "cache_salt": "int",
+        "client_id": "Optional[str]",
+        "cwd": "Optional[Path]",
+        "disallowed_tools": "Optional[str]",
+        "effort": "Optional[str]",
+        "extras": "Mapping[str, Any]",
+        "max_retries": "Optional[int]",
+        "max_tokens": "int",
+        "output_contract": "Optional[OutputContract]",
+        "skill_context": "skill selection object, optional: {skills: [{path: string, level?: 'catalog'|'full', declared_resources?: boolean, resources?: [string]}], token_budget: integer > 0, format_version?: string}; materialized by bootstrap_lib.skill_material against the CLI working directory before any endpoint is resolved",
+        "system_prompt_mode": "str",
+        "temperature": "Optional[float]",
+        "timeout_s": "Optional[float]",
+        "user_cache_prefix": "str"
+      },
+      "protocol": 1,
+      "rejected_options": {
+        "log_prefix": "derived by the CLI from the resolved endpoint"
+      }
+    }
+  }
+}

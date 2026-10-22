@@ -1,0 +1,44 @@
+{
+  "argv": [
+    "completion",
+    "complete",
+    "--system",
+    "s",
+    "--format",
+    "json"
+  ],
+  "exit": 0,
+  "stderr": "",
+  "stdout": {
+    "json": {
+      "backend": "fake",
+      "endpoint": "chosen",
+      "kind": "harness",
+      "protocol": 1,
+      "response": {
+        "attempts": 1,
+        "cache_hit_tokens": 0,
+        "dropped_params": [],
+        "ended_at": "<t>",
+        "execution_controls_applied": [],
+        "finish_reason": null,
+        "forwarded_params": [],
+        "from_cache": false,
+        "input_tokens": 4,
+        "model": "model-id",
+        "output_contract": null,
+        "output_tokens": 0,
+        "reasoning": "",
+        "reported_cost_source": null,
+        "reported_cost_usd": null,
+        "skill_context": null,
+        "started_at": "<t>",
+        "status": "completed",
+        "structured": null,
+        "text": "answer",
+        "total_tokens": 0,
+        "wall_ms": "<ms>"
+      }
+    }
+  }
+}

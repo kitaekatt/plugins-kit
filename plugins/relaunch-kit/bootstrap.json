@@ -1,0 +1,9 @@
+{
+  "$comment": "relaunch-kit ships one command, clauder, and nothing else that needs provisioning: the launcher (lib/relaunch.py, lib/claude_args.py) is stdlib-only, so there is no venv, no shared_lib_imports and no pyproject. Both bin/ and lib/ are synced to the data directory because the shims locate the launcher as ../lib/relaunch.py relative to their own bin directory: a synced bin/ without lib/ would find no launcher. The data directory is put on PATH (path_entries), which is how clauder reaches every terminal with no shell function, profile edit or execution-policy change (the HKCU user Path on Windows, an export line in .zshrc and .bashrc on macOS); the entry uses the marketplace name plugins-kit exactly as task-kit's does. Unlike task-kit's synced shim, which is a thin locator into the plugin cache, the synced clauder is the whole launcher, so the PATH copy and the cache copy run the same code and a bootstrap pass refreshes it after every release. The shims choose their interpreter themselves (the standalone Python bootstrap installs, then a validated BOOTSTRAP_PYTHON, then PATH) because the CLI needs no plugin venv. requires_bootstrap is task-kit's floor (0.138.0): the plugin calls no bootstrap_lib function, and sync_to_data plus path_entries are the only engine features it uses.",
+  "requires_bootstrap": "0.138.0",
+  "sync_to_data": [
+    {"src": "bin", "dst": "bin"},
+    {"src": "lib", "dst": "lib"}
+  ],
+  "path_entries": ["~/.claude/plugins/data/plugins-kit/relaunch-kit/bin"]
+}
