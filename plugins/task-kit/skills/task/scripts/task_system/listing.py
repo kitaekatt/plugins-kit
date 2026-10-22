@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 from dataclasses import dataclass
@@ -55,6 +56,8 @@ class TaskView:
     project_root: Path
     updates: tuple[TaskUpdate, ...] = ()
     last_activity: str | None = None  # YYYY-MM-DD HH:MM of the newest update
+    # Working-session registrations of this task (sessions.Record, this machine's running first); empty without any.
+    sessions: tuple[Any, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -201,6 +204,24 @@ def _view_record(record: TaskRecord, fallback_root: Path) -> TaskView:
     )
 
 
+def _attach_sessions(views: tuple[TaskView, ...], notes: list[str]) -> tuple[TaskView, ...]:
+    """Fill each locally readable task's ``sessions`` from its task root's ``.sessions`` files (read-only).
+
+    One read per physical task root; nothing is read, and no machine identified, for a project whose task roots
+    hold no ``.sessions`` directory.
+    """
+    from .sessions_cli import SessionReader, location_of  # noqa: PLC0415 -- the session store is read lazily
+
+    reader = SessionReader()
+    attached = []
+    for view in views:
+        found = location_of(view.id) if view.status != "remote" else None
+        records = reader.records_for(view.project_root, found[0], found[1]) if found else ()
+        attached.append(dataclasses.replace(view, sessions=records) if records else view)
+    notes.extend(f"sessions: {note}" for note in dict.fromkeys(reader.notes))
+    return tuple(attached)
+
+
 def collect_listing(
     scope: str,
     project_root: Path,
@@ -234,6 +255,7 @@ def collect_listing(
             reverse=True,
         )
     )
+    views = _attach_sessions(views, notes)
     warnings: list[str] = []
     for view in views:
         if view.status not in SUMMARY_ELIGIBLE_STATUSES:
@@ -338,6 +360,8 @@ def review_sort_key(view: TaskView) -> tuple[bool, str]:
 
 
 def _view_dict(listing: TaskListing, view: TaskView) -> dict[str, Any]:
+    from .sessions_cli import record_dict  # noqa: PLC0415
+
     return {
         "key": task_key(listing, view),
         "id": view.id,
@@ -354,6 +378,7 @@ def _view_dict(listing: TaskListing, view: TaskView) -> dict[str, Any]:
         "host": view.host,
         "project": view.project_name,
         "project_root": str(view.project_root),
+        "sessions": [record_dict(record) for record in view.sessions],
         "updates": [
             {"date": update.date, "detail": update.detail}
             for update in view.updates

@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from .. import sessions
 from . import cli_check, endpoint_helper, proctree, redact, snapshot
 from .codehash import DASHBOARD_PACKAGE, code_hash
 from .config import load_config
@@ -47,6 +48,7 @@ from .jobs_edge import EdgeError, JobsEdge
 from .mutation import TaskMutator
 from .runtime import ACTIVE_STATES, DB_FILE, HISTORY_STATES, LIVE_STATES, RuntimeDB, folder_key
 from .scheduler import QueueRefused, Scheduler
+from .sessions_view import SessionsMaintainer, SessionsReader, dismiss_and_publish
 from .state import (
     LOCK_FILE,
     LOG_FILE,
@@ -82,6 +84,7 @@ MUTATION_ROUTES = frozenset({
     ("POST", "runs/{}/cancel"),
     ("POST", "runs/{}/retry"),
     ("POST", "holds"),
+    ("POST", "sessions/dismiss"),
     ("POST", "shutdown"),
     ("POST", f"{endpoint_helper.ROUTE}/{{}}"),
 })
@@ -137,9 +140,15 @@ class DashboardServer:
         config_path: Path | None = None,
         scheduler: Scheduler | None = None,
         cli_observer: "cli_check.CliObserver | bool" = True,
+        sessions: SessionsReader | None = None,
+        maintainer: SessionsMaintainer | None = None,
     ) -> None:
         """``cli_observer``: True builds the real per-binary observer (production); False runs without one (no
-        Claude binary is observed or waited for); an instance is used as given."""
+        Claude binary is observed or waited for); an instance is used as given.
+
+        ``sessions`` reads working-session registrations (the scheduler lets this machine's verified-running ones hold
+        a task; the inventory, built with the same reader, displays all of them). ``maintainer`` (default: one over the
+        inventory's session roots when ``sessions`` is given) publishes this machine's pending session files."""
         self.data_dir = Path(data_dir)
         self.scripts_dir = Path(scripts_dir)
         self.root = runtime_root(self.data_dir)
@@ -149,6 +158,11 @@ class DashboardServer:
         self._config_path = config_path
         self._cli_observer = cli_observer
         self.scheduler = scheduler
+        self.sessions = sessions
+        self.maintainer = maintainer
+        if self.maintainer is None and sessions is not None:
+            self.maintainer = SessionsMaintainer(
+                sessions, lambda: self.inventory.snapshot().session_roots, data_dir=self.data_dir, log=self.log)
         self.helper_broker: endpoint_helper.HelperBroker | None = None
         self.log_stream = log if log is not None else sys.stderr
         self.code_hash = code_hash(self.scripts_dir)
@@ -199,6 +213,7 @@ class DashboardServer:
                     log=self.log,
                     observer=observer,
                     fatal=lambda message: self.request_shutdown(),
+                    sessions=self.sessions,
                 )
             # A helper call still reserved lost its server: it is interrupted (and still counts against the budget).
             interrupted = self.scheduler.db.interrupt_open_calls()
@@ -232,6 +247,8 @@ class DashboardServer:
         try:
             if self.scheduler is not None:
                 self.scheduler.start()
+            if self.maintainer is not None:
+                self.maintainer.start()
             self._httpd.serve_forever(poll_interval=0.2)
         finally:
             self.close()
@@ -243,6 +260,8 @@ class DashboardServer:
             threading.Thread(target=self._httpd.shutdown, daemon=True).start()
 
     def close(self) -> None:
+        if self.maintainer is not None:
+            self.maintainer.stop()
         if self.scheduler is not None:
             self.scheduler.stop()
             self.scheduler.db.close()
@@ -804,6 +823,44 @@ class _Handler(BaseHTTPRequestHandler):
         self.app.log(f"hold on {Path(folder).name} by session {session[:8]}")
         self._json(200, {"ok": True, "active_run": snapshot.run_json(active, "") if active else None})
 
+    def _sessions_dismiss(self, method: str) -> None:
+        """Dismiss another machine's unverified registration: recorded in THIS machine's own session file, published.
+
+        The human dismissing is a contribution of information. No other machine's file is edited."""
+        if method != "POST":
+            self._error(405, "method_not_allowed", "Use POST.")
+            return
+        body = self._checked_body({"checkout", "task", "host", "session_id", "registered_at"}, revision=False)
+        if body is None:
+            return
+        fields = [body.get(k) for k in ("checkout", "task", "host", "session_id", "registered_at")]
+        if not all(isinstance(v, str) and v for v in fields):
+            self._error(422, "bad_dismiss", "A dismissal names checkout, task, host, session_id and registered_at.")
+            return
+        checkout, task_id, host, session_id, registered_at = fields
+        task = self._find_task(checkout, task_id)
+        if task is None:
+            return
+        match = next((v for v in task.sessions if v.dismiss_key == (host, session_id, registered_at)), None)
+        if match is None:
+            self._error(404, "unknown_session", "No such working-session registration on that task.")
+            return
+        if not match.dismissable:
+            self._error(422, "not_dismissable", "Only another machine's unverified registration can be dismissed; "
+                        "this machine's own registrations end at hand-off or with `task sessions release`.")
+            return
+        try:
+            _result, published = dismiss_and_publish(self.app.sessions, Path(task.project_root), host, session_id,
+                                                     registered_at, data_dir=self.app.data_dir)
+        except sessions.SessionsError as exc:
+            self._error(409, "dismiss_failed", str(exc))
+            return
+        self.app.inventory.invalidate()
+        self.app.log(f"dismissed the registration of session {session_id[:8]} on {host} for {task.id}: "
+                     f"{published.status}")
+        self._json(200, {"ok": True, "publish": {"status": published.status, "message": published.message,
+                                                 "published": published.published}})
+
     def _api(self, method: str, route: list[str], query: dict) -> None:
         if route == ["dashboard"]:
             if method not in ("GET", "HEAD"):
@@ -849,6 +906,9 @@ class _Handler(BaseHTTPRequestHandler):
         if route[:1] == ["runs"] and len(route) in (2, 3):
             self._runs(method, route, query)
             return
+        if route == ["sessions", "dismiss"]:
+            self._sessions_dismiss(method)
+            return
         if route == ["holds"]:
             self._holds(method)
             return
@@ -892,11 +952,13 @@ class _Handler(BaseHTTPRequestHandler):
 
 def run(data_dir: Path, scripts_dir: Path, *, log=None) -> int:
     """Run a dashboard server in the foreground until it is asked to stop."""
+    reader = SessionsReader()
     server = DashboardServer(
         data_dir=data_dir,
         scripts_dir=scripts_dir,
-        inventory=Inventory(),
+        inventory=Inventory(sessions=reader),
         log=log,
+        sessions=reader,
     )
     try:
         server.start()

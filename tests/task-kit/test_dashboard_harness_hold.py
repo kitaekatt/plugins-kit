@@ -16,6 +16,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import shlex
 import socket
 import subprocess
 import sys
@@ -35,6 +36,8 @@ from dashboard_support import (
     make_task,
     runner_environment,
 )
+
+from fake_claude import FakeClaude, bash_available
 
 from task_system.dashboard import handshake, proctree, runtime, scheduler
 from task_system.dashboard.inventory import project_id_for
@@ -148,6 +151,52 @@ def test_the_handshake_registers_a_hold_keyed_by_session_and_a_live_run_gets_one
     # The run was not touched: the harness proceeds and the dashboard yields next time.
     assert rig.srv.scheduler.db.get(live.id).state == runtime.RUNNING
     psutil.Process(live.runner_pid).kill()
+
+
+@pytest.mark.skipif(not bash_available(), reason="the Bash tool process shape needs bash")
+def test_the_handshake_run_from_a_tool_shell_holds_the_claude_process_that_outlives_the_shell(rig):
+    """RED CHECK: with the old ancestor-name walk the hold names the transient ``bash -c`` shell and dies with it."""
+    command = " ".join(shlex.quote(part) for part in (
+        sys.executable, str(TASK_HOLD), "dev/tasks/alpha", "--root", str(rig.project), "--data-dir", str(rig.srv.data_dir)))
+    with FakeClaude("sess-fake", command, env=cli_env()) as fake:
+        assert fake.result["returncode"] == 0 and fake.result["stderr"] == "", fake.result
+        holds = rig.srv.scheduler.db.live_holds(str(rig.alpha))  # the shell has exited by now; the "harness" has not
+        assert [(h["session"], h["pid"]) for h in holds] == [("sess-fake", fake.pid)]
+    assert rig.srv.scheduler.db.live_holds(str(rig.alpha)) == []  # and the hold ends with the harness process
+
+
+def test_the_handshake_refuses_a_claude_pid_that_is_not_an_ancestor_and_registers_nothing(rig, session, monkeypatch):
+    monkeypatch.setenv("CLAUDE_PID", str(session.pid))
+    err = io.StringIO()
+    assert handshake.run("dev/tasks/alpha", rig.project, session="s", data_dir=rig.srv.data_dir, err=err) == 0
+    lines = err.getvalue().splitlines()
+    assert len(lines) == 1 and "no hold registered" in lines[0] and "not an ancestor" in lines[0]
+    assert rig.srv.scheduler.db.live_holds(str(rig.alpha)) == []
+
+
+def test_the_handshake_without_claude_pid_says_so_in_one_line_and_registers_nothing(rig, monkeypatch):
+    monkeypatch.delenv("CLAUDE_PID", raising=False)
+    err = io.StringIO()
+    assert handshake.run("dev/tasks/alpha", rig.project, session="s", data_dir=rig.srv.data_dir, err=err) == 0
+    lines = err.getvalue().splitlines()
+    assert len(lines) == 1 and "no hold registered" in lines[0] and "CLAUDE_PID is not set" in lines[0]
+    assert rig.srv.scheduler.db.live_holds(str(rig.alpha)) == []
+
+
+def test_the_handshake_takes_its_session_id_from_the_documented_variable(rig, session, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "env-session")
+    assert handshake.run("dev/tasks/alpha", rig.project, data_dir=rig.srv.data_dir, session_pid=session.pid,
+                         err=io.StringIO()) == 0
+    assert [h["session"] for h in rig.srv.scheduler.db.live_holds(str(rig.alpha))] == ["env-session"]
+
+
+def test_find_session_process_is_a_deprecated_shim_answering_with_the_validated_claude_pid(monkeypatch):
+    monkeypatch.setenv("CLAUDE_PID", str(os.getppid()))
+    with pytest.warns(DeprecationWarning, match="claude_process"):
+        assert handshake.find_session_process().pid == os.getppid()
+    monkeypatch.delenv("CLAUDE_PID")
+    with pytest.warns(DeprecationWarning):
+        assert handshake.find_session_process() is None
 
 
 def test_the_handshake_is_silent_when_nothing_runs_on_the_task(rig, session):

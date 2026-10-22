@@ -41,7 +41,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from . import proctree, procspawn, subagents
+from .. import procspawn
+from ..datadir import DataDirError, resolve_data_dir
+from . import proctree, subagents
 from .codehash import code_hash
 from .config import DashboardConfigError, load_config
 from .jobs_edge import EdgeError, JobsEdge
@@ -53,7 +55,6 @@ from .state import (
     ServerState,
     ensure_private_root,
     read_state,
-    resolve_data_dir,
     runtime_root,
 )
 
@@ -600,7 +601,7 @@ def main(argv: list[str] | None, *, scripts_dir: Path, entrypoint: Path) -> int:
         return EXIT_NESTED
     try:
         data_dir = args.data_dir if args.data_dir is not None else resolve_data_dir()
-    except DashboardStateError as exc:
+    except DataDirError as exc:
         print(f"task-kit: {exc}", file=sys.stderr)
         return EXIT_ERROR
     if proctree.dashboard_runner_ancestor(runtime_root(data_dir)) is not None:  # tripwire 2: the ancestry

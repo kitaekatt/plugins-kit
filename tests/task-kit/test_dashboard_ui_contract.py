@@ -65,7 +65,7 @@ def test_app_js_makes_only_same_origin_calls_and_writes_only_the_backed_actions(
     assert re.findall(r"method\s*:\s*(\w+)", JS) == ["method"]
     assert re.findall(r"send\((?!')(\w+)", JS) == ["method", "method"]  # its definition and the comment naming it: no call site hides its verb
     assert sorted(set(re.findall(r"send\('(\w+)'", JS))) == ["DELETE", "PATCH", "POST", "PUT"]
-    assert len(re.findall(r"send\('\w+', '/api/v1/", JS)) == 10  # queue, recheck, retry, cancel, remove, queue all, defer, new task, add item, run options
+    assert len(re.findall(r"send\('\w+', '/api/v1/", JS)) == 11  # queue, recheck, retry, cancel, remove, queue all, defer, new task, add item, run options, dismiss a session
 
 
 def test_app_js_never_emits_markup_the_csp_would_block():

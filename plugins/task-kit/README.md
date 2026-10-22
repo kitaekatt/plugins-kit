@@ -88,6 +88,39 @@ bootstrap puts the launcher on your PATH (`~/.claude/plugins/data/plugins-kit/ta
 on Windows the User PATH), so a new terminal finds `task-kit` after the first
 bootstrap pass that provisions this version.
 
+## Working sessions
+
+Inside a Claude Code session, `/task work <ref>` also registers that session as working the task. The registration is a
+record in `<task root>/.sessions/<host>.yaml`, one file per machine, committed and pushed with the task folder's own
+repository (a `tmp/` task stays local). Publishing commits the file on the checked-out branch, then fetches the upstream and
+fast-forwards or merges it into the checked-out HEAD and working tree, as a pull would (a merge that stops on conflicts is
+aborted), and pushes only when the net change from the upstream is session files. It never force-pushes, rebases, stashes or
+switches branches. `sessions: {record: false}` turns it off. `/task hand-off` releases it (`task sessions release <ref>`) after committing and pushing the task folder, because publishing pushes only session-file changes. A registration lasts
+from work until hand-off: exiting Claude Code, a crash or a resume does not end it, and nothing removes a record because its
+process died. An interrupted session is cleaned up by a person with `task sessions release <ref> --all-local`, or by
+dismissing it in the dashboard. Registration adds `session:` lines on stderr and changes neither the output nor the exit
+code of `work`; a refusal (a dashboard run, `sessions.record: false`, a folder git ignores or cannot publish) is a
+`session: not registered: <reason>` line with nothing written.
+
+A record is `running` or `not running` on the machine that wrote it (decided by the exact process id plus start stamp) and
+`unverified` on any other machine. `list`, `show` and `status` show the registrations of a task, read-only and offline.
+
+```
+task sessions [list] [--scope project|all] [--format text|json]   registrations and this machine's unpublished files
+task sessions release <ref> [--all-local]                         remove the calling session's registration (all of this machine's with --all-local), then publish
+task sessions publish                                             publish this machine's session files that are committed but not pushed
+```
+
+The dashboard marks a registered task on its row. This machine's verified-running record holds the task: no run starts on
+it and authoring is refused while the session lives. Another machine's record is tinted, blocks nothing, and can be
+dismissed in the task details; the dismissal is recorded in git (in the dismissing machine's own session file), so every
+reader hides that record. Re-check never releases a registration.
+
+`~/.claude/task.local.yaml` takes `sessions: {record: false}` to turn registration off and `sessions: {host: <id>}` to
+replace the derived host id. Registration is refused on Windows: the process verification (`CLAUDE_PID` ancestry and the
+process start stamp) has not been measured there, and `work` says so on a `session:` line. The contract is in
+`skills/task/SKILL.md` and `skills/task/references/dashboard.md`.
+
 ## Install
 
 ```

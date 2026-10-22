@@ -358,7 +358,7 @@ def test_server_publishes_an_ownership_record_and_owns_the_lock(srv, tmp_path, w
 def test_run_exits_75_when_another_server_holds_the_lock(srv, tmp_path, monkeypatch):
     from task_system.dashboard import server as server_module
 
-    monkeypatch.setattr(server_module, "Inventory", lambda: Inventory(parents=()))
+    monkeypatch.setattr(server_module, "Inventory", lambda **kw: Inventory(parents=(), **kw))
     assert server_module.run(tmp_path / "data", SCRIPTS_DIR, log=srv.log) == EXIT_LOCK_HELD
 
 

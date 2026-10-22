@@ -54,6 +54,7 @@ from ..task_items import read_task_items, sort_items
 from ..types import HAND_OFF
 from ..validate import validate_ref
 from . import mutation, repo_identity, vcs
+from .sessions_view import SessionRoot, SessionsReader, SessionsUnavailable, SessionView, view_of
 
 # Item state (plan.md vocabulary) -> the state the UI draws.
 ITEM_UI_STATE = {
@@ -118,6 +119,8 @@ class TaskEntry:
     id: str  # project-relative canonical path, e.g. dev/tasks/<stub>
     folder: str
     core: TaskCore
+    # Working-session registrations on this task (display; ``holds`` marks the verified-running local ones).
+    sessions: tuple[SessionView, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -135,6 +138,8 @@ class InventorySnapshot:
     generated_at: str
     projects: tuple[ProjectEntry, ...]
     errors: tuple[dict, ...] = ()
+    #: Every physical task root whose ``.sessions`` was read (for the background publish and prune).
+    session_roots: tuple[SessionRoot, ...] = ()
 
     def find_task(self, checkout_id: str, task_id: str) -> TaskEntry | None:
         """The task with this id read from this checkout (``TaskEntry.checkout_id``)."""
@@ -272,8 +277,10 @@ class Inventory:
         parents: tuple[Path, ...] | None = None,
         min_interval: float = 1.0,
         clock: Callable[[], float] = time.monotonic,
+        sessions: SessionsReader | None = None,
     ) -> None:
         self._config_path = config_path
+        self._sessions = sessions
         self._parents = parents
         self._min_interval = min_interval
         self._clock = clock
@@ -339,6 +346,7 @@ class Inventory:
 
         # Walk each PHYSICAL task root once, however many projects link to it.
         stubs_by_base: dict[str, list[str]] = {}
+        bases: dict[str, tuple[ProjectRoot, Path]] = {}  # physical task root -> (the most preferred project reaching it, its path to it)
         owners: dict[str, tuple[ProjectRoot, str, str]] = {}
         for project in sorted(roots, key=_preference):
             for location in DASHBOARD_ROOTS:
@@ -347,6 +355,7 @@ class Inventory:
                     continue
                 physical_base = _physical(base)
                 if physical_base not in stubs_by_base:
+                    bases[physical_base] = (project, base)
                     try:
                         stubs_by_base[physical_base] = _list_task_stubs(base)
                     except OSError as exc:
@@ -411,6 +420,9 @@ class Inventory:
 
         if force:
             self._repos.clear()
+            if self._sessions is not None:
+                self._sessions.invalidate()
+        session_views, session_roots = self._read_sessions(bases, errors)
         repo_names: dict[str, str] = {}
         for key in cores:
             repo_names[str(owners[key][0].root)] = ""
@@ -437,6 +449,7 @@ class Inventory:
                     id=f"{location}/{stub}",
                     folder=str(project.root / location / stub),
                     core=core,
+                    sessions=session_views.get((_physical(project.root / location), stub), ()),
                 )
             )
         for stale in set(self._cache) - live_keys:
@@ -461,8 +474,33 @@ class Inventory:
             generated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
             projects=tuple(projects),
             errors=tuple(errors),
+            session_roots=session_roots,
         )
 
+    def _read_sessions(self, bases: dict[str, tuple[ProjectRoot, Path]], errors: list[dict]) -> tuple[dict, tuple[SessionRoot, ...]]:
+        """The registrations under every physical task root, as ``{(physical root, stub): views}``, plus the roots read.
+
+        Process state is re-read on every refresh (a fingerprint of the task folder cannot see a process die).
+        A machine that cannot be identified or an unreadable file is an entry in ``errors``, never a hold.
+        """
+        if self._sessions is None or not bases:
+            return {}, ()
+        views: dict[tuple[str, str], list[SessionView]] = {}
+        roots: list[SessionRoot] = []
+        for physical_base in sorted(bases):
+            project, base = bases[physical_base]
+            real = Path(os.path.realpath(base))
+            try:
+                found = self._sessions.read(real)
+            except SessionsUnavailable as exc:
+                errors.append({"code": "sessions", "message": str(exc)})
+                return {}, ()
+            for note in found.notes:
+                errors.append({"code": "sessions", "message": f"{real}: {note}"})
+            roots.append(SessionRoot(str(real), str(project.root)))
+            for record in found.records:
+                views.setdefault((physical_base, record.task), []).append(view_of(record))
+        return {key: tuple(value) for key, value in views.items()}, tuple(roots)
 
     def _repo_name(self, root: str, errors: list[dict]) -> str:
         """The repository name for a checkout, read once; a failure falls back to
@@ -509,6 +547,7 @@ def _revision(projects: list[ProjectEntry], errors: list[dict]) -> str:
                 "errors": core.errors,
                 "warnings": core.warnings,
                 "rev": core.revision,
+                "sessions": [v.revision_key() for v in task.sessions],
             }
             digest.update(json.dumps(payload, sort_keys=True).encode("utf-8"))
     digest.update(json.dumps(errors, sort_keys=True).encode("utf-8"))

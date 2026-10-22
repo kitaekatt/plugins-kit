@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Task detail mockups - Round 2</title>
+<meta name="description" content="Three task-detail concepts built around durable answers to declared questions.">
+<style>
+:root {
+  color-scheme:light dark;
+  --bg:#f5f7fa; --panel:#fff; --panel2:#eef2f6; --text:#17202c; --muted:#5d6b7d; --line:#d9e0e8;
+  --accent:#1769aa; --on-accent:#fff; --warn:#8f5c00; --bad:#b42318; --good:#147a43; --queue:#6b4fd1;
+  --shadow:0 6px 18px #0002;
+}
+@media (prefers-color-scheme:dark) {
+  :root { --bg:#10151d; --panel:#18212d; --panel2:#1f2a39; --text:#e9eef5; --muted:#9eabba; --line:#334255;
+    --accent:#71b7ff; --on-accent:#08111c; --warn:#f2b84b; --bad:#ff7b7b; --good:#83d6a3; --queue:#b79cff; --shadow:0 6px 18px #0007; }
+}
+* { box-sizing:border-box; }
+html { -webkit-text-size-adjust:100%; }
+body { margin:0; background:var(--bg); color:var(--text); font:14px/1.46 system-ui,-apple-system,"Segoe UI",sans-serif; overflow-wrap:anywhere; }
+h1,h2,h3,p { margin:0; }
+a { color:var(--accent); }
+.mono { font-family:ui-monospace,"Cascadia Mono",Consolas,monospace; }
+.top,.layout { max-width:1220px; margin:0 auto; padding-left:16px; padding-right:16px; }
+.top { padding-top:18px; padding-bottom:13px; }
+.eyebrow { color:var(--queue); font-size:11px; font-weight:800; letter-spacing:.075em; text-transform:uppercase; }
+.top h1 { font-size:1.6rem; line-height:1.2; margin-top:2px; }
+.top .lede { margin-top:7px; color:var(--muted); max-width:850px; font-size:14px; }
+.layout { padding-bottom:64px; }
+.model { display:grid; grid-template-columns:minmax(0,1.35fr) minmax(280px,.65fr); gap:10px; margin-bottom:14px; }
+.panel { background:var(--panel); border:1px solid var(--line); border-radius:9px; padding:12px 14px; min-width:0; }
+.panel h2 { font-size:13px; margin-bottom:5px; }
+.flow { display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-top:8px; }
+.step { border:1px solid var(--line); background:var(--panel2); border-radius:6px; padding:5px 8px; font-size:11.5px; }
+.arrow { color:var(--muted); }
+.rules { margin:0; padding-left:18px; font-size:12.5px; }
+.rules li + li { margin-top:3px; }
+.sec-title { margin:15px 0 7px; color:var(--muted); font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.065em; }
+.cards { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; align-items:start; }
+.concept { background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden; min-width:0; }
+.concept.a { border-top:4px solid var(--accent); }
+.concept.b { border-top:4px solid var(--queue); }
+.concept.c { border-top:4px solid var(--good); }
+.concept-head { padding:12px 13px 9px; border-bottom:1px solid var(--line); }
+.tag { display:inline-flex; border:1px solid var(--line); border-radius:99px; padding:1px 7px; color:var(--muted); font-size:10.5px; margin-bottom:5px; }
+.concept h2 { font-size:1.08rem; }
+.pitch { color:var(--muted); font-size:12.8px; margin-top:5px; }
+.concept-body { padding:10px 13px 13px; }
+.trade { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.trade h3,.questions h3 { font-size:10.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin-bottom:3px; }
+.trade ul,.questions ul { margin:0; padding-left:17px; font-size:11.8px; }
+.trade li + li,.questions li + li { margin-top:3px; }
+.strength h3 { color:var(--good); }
+.cost h3 { color:var(--bad); }
+.judge { margin:10px 0 9px; padding:8px 9px; border-left:3px solid var(--warn); background:color-mix(in srgb,var(--warn) 8%,var(--panel)); font-size:12.5px; }
+.questions { border-top:1px solid var(--line); padding-top:8px; }
+.open { display:inline-flex; align-items:center; border:1px solid var(--accent); border-radius:6px; background:var(--accent); color:var(--on-accent); padding:5px 10px; margin-top:10px; text-decoration:none; font-size:12px; font-weight:700; }
+.matrix { border:1px solid var(--line); border-radius:8px; overflow:hidden; background:var(--panel); }
+.mrow { display:grid; grid-template-columns:minmax(150px,1.2fr) repeat(3,minmax(80px,.45fr)); }
+.mrow > * { padding:7px 9px; border-top:1px solid var(--line); font-size:11.5px; }
+.mrow:first-child > * { border-top:0; background:var(--panel2); color:var(--muted); font-size:10.5px; font-weight:750; text-transform:uppercase; }
+.yes { color:var(--good); font-weight:750; }
+.partial { color:var(--warn); font-weight:750; }
+.foot { margin-top:10px; color:var(--muted); font-size:12px; }
+@media (max-width:940px) { .cards { grid-template-columns:1fr; } .concept-body { display:grid; grid-template-columns:minmax(0,1fr) minmax(260px,.7fr); gap:10px; } .judge,.questions,.open { grid-column:2; } .judge { grid-row:1; margin-top:0; } .questions { grid-row:2; } .open { justify-self:start; } }
+@media (max-width:700px) { .model { grid-template-columns:1fr; } .concept-body { display:block; } .judge { margin-top:10px; } .questions { margin-top:0; } .matrix { overflow:visible; border:0; background:transparent; } .mrow { grid-template-columns:1fr; border:1px solid var(--line); border-radius:7px; background:var(--panel); margin-bottom:7px; overflow:hidden; } .mrow:first-child { display:none; } .mrow > * { border-top:1px solid var(--line); } .mrow > *:first-child { border-top:0; font-weight:750; } .mrow > *:nth-child(2)::before { content:"A: "; color:var(--muted); } .mrow > *:nth-child(3)::before { content:"B: "; color:var(--muted); } .mrow > *:nth-child(4)::before { content:"C: "; color:var(--muted); } }
+@media (max-width:430px) { .top,.layout { padding-left:12px; padding-right:12px; } .top h1 { font-size:1.4rem; } .trade { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<header class="top"><div class="eyebrow">Task detail mockups - Round 2</div><h1>Questions are the schema. Answers are the view.</h1><p class="lede">These concepts make orientation a durable set of declared questions answered by cheap models: local Qwen first, Luna or Haiku as fallback. Every answer carries its source revision, model, time, and freshness; stale, unanswered, and failed questions remain visible instead of silently disappearing.</p></header>
+<main class="layout">
+  <section class="model">
+    <div class="panel"><h2>Shared metadata model</h2><p>A task schema declares questions, not fixed prose fields. A refresh asks only questions invalidated by changed evidence. The durable record keeps the last usable answer and its provenance.</p><div class="flow" aria-label="Question answer flow"><span class="step">Declared question</span><span class="arrow">-&gt;</span><span class="step">Evidence bundle</span><span class="arrow">-&gt;</span><span class="step">Qwen, then Luna/Haiku</span><span class="arrow">-&gt;</span><span class="step">Durable answer + provenance</span><span class="arrow">-&gt;</span><span class="step">View</span></div></div>
+    <div class="panel"><h2>Shared display rules</h2><ul class="rules"><li>Fresh answers read as content, not AI output.</li><li>Provenance is quiet but always available.</li><li>Stale answers stay visible and marked.</li><li>Failures never erase the prior good answer.</li><li>Run controls do not lead the default view.</li></ul></div>
+  </section>
+  <div class="sec-title">Three concepts</div>
+  <section class="cards">
+    <article class="concept a">
+      <div class="concept-head"><span class="tag">Concept A</span><h2>Answer board</h2><p class="pitch">A prioritized board where each card is one declared question and its current answer. Purpose, standing, next action, and waiting-on-you dominate the first screen.</p></div>
+      <div class="concept-body">
+        <div class="trade"><div class="strength"><h3>Strengths</h3><ul><li>Most literal, inspectable expression of the metadata model.</li><li>Missing and stale answers degrade independently.</li><li>Easy to reorder questions by task type.</li></ul></div><div class="cost"><h3>Costs</h3><ul><li>Can become card-heavy as the registry grows.</li><li>Reads less like a human hand-off.</li><li>Question wording becomes visible product copy.</li></ul></div></div>
+        <p class="judge"><b>Judge:</b> Should the default task view expose the question model this directly, or should it read more like a single brief?</p>
+        <div class="questions"><h3>Questions assumed</h3><ul><li>Purpose; current standing; next action.</li><li>Waiting on me, with defaults; blockers.</li><li>Associated commits; remaining size.</li><li>Related tasks; stale or abandoned.</li></ul></div>
+        <a class="open" href="a-answer-board.html" data-print-hide>Open concept A</a>
+      </div>
+    </article>
+    <article class="concept b">
+      <div class="concept-head"><span class="tag">Concept B</span><h2>Cited briefing</h2><p class="pitch">A compact hand-off note assembled from current answers. Numbered question citations connect the narrative to a complete answer ledger and its provenance.</p></div>
+      <div class="concept-body">
+        <div class="trade"><div class="strength"><h3>Strengths</h3><ul><li>Fastest to read after time away.</li><li>Feels like one coherent orientation, not a database.</li><li>Ledger preserves inspectability and failure states.</li></ul></div><div class="cost"><h3>Costs</h3><ul><li>Composition rules can hide answer boundaries.</li><li>Stale paragraphs are harder to isolate visually.</li><li>More risk that the brief feels over-generated.</li></ul></div></div>
+        <p class="judge"><b>Judge:</b> Is the primary object a readable brief, with the question system one layer beneath it?</p>
+        <div class="questions"><h3>Questions assumed</h3><ul><li>Purpose; current standing; next action.</li><li>Waiting on me, with defaults; remaining size.</li><li>Associated commits; blockers.</li><li>Changes since last session; related tasks; staleness.</li></ul></div>
+        <a class="open" href="b-briefing.html" data-print-hide>Open concept B</a>
+      </div>
+    </article>
+    <article class="concept c">
+      <div class="concept-head"><span class="tag">Concept C</span><h2>Question lenses</h2><p class="pitch">Orient, Decide, and Trace are separate task views. Each is a versioned set of questions, with only the controls that make sense for that intent.</p></div>
+      <div class="concept-body">
+        <div class="trade"><div class="strength"><h3>Strengths</h3><ul><li>Strongest realization of view-specific information and controls.</li><li>Keeps decisions and evidence out of the reading path.</li><li>Question sets can evolve without redesigning every card.</li></ul></div><div class="cost"><h3>Costs</h3><ul><li>Answers repeat across lenses.</li><li>Important evidence may sit behind another view.</li><li>Requires a clear contract for lens membership.</li></ul></div></div>
+        <p class="judge"><b>Judge:</b> Are Orient / Decide / Trace the right stable views, and should views be defined as named question sets?</p>
+        <div class="questions"><h3>Questions assumed</h3><ul><li>Orient: purpose, standing, next, waiting, size, staleness.</li><li>Decide: pending choices, defaults, consequences.</li><li>Trace: commits, changes since last session, related tasks, answer health.</li></ul></div>
+        <a class="open" href="c-lenses.html" data-print-hide>Open concept C</a>
+      </div>
+    </article>
+  </section>
+  <div class="sec-title">What differs</div>
+  <section class="matrix" aria-label="Concept comparison">
+    <div class="mrow"><span>Design test</span><span>Answer board</span><span>Briefing</span><span>Lenses</span></div>
+    <div class="mrow"><span>Question boundaries stay visible</span><span class="yes">Strong</span><span class="partial">Moderate</span><span class="yes">Strong</span></div>
+    <div class="mrow"><span>Fast after a long absence</span><span class="partial">Good</span><span class="yes">Best</span><span class="partial">Good</span></div>
+    <div class="mrow"><span>View-specific controls</span><span class="partial">Limited</span><span class="partial">Limited</span><span class="yes">Best</span></div>
+    <div class="mrow"><span>Graceful partial metadata</span><span class="yes">Best</span><span class="partial">Good</span><span class="partial">Good</span></div>
+  </section>
+  <p class="foot">Suggested starting point: A for the first schema-backed implementation; borrow B's short opening sentence and C's Decide / Trace split only when those views have enough real questions to earn navigation.</p>
+</main>
+</body>
+</html>

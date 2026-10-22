@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Round 2C - Question lenses</title>
+<meta name="description" content="A task detail concept where each view is a named set of durable questions with view-specific controls.">
+<style>
+:root {
+  color-scheme:light dark;
+  --bg:#f5f7fa; --panel:#fff; --panel2:#eef2f6; --text:#17202c; --muted:#5d6b7d; --line:#d9e0e8;
+  --accent:#1769aa; --on-accent:#fff; --warn:#8f5c00; --bad:#b42318; --good:#147a43; --queue:#6b4fd1;
+  --shadow:0 6px 18px #0002;
+}
+@media (prefers-color-scheme:dark) {
+  :root { --bg:#10151d; --panel:#18212d; --panel2:#1f2a39; --text:#e9eef5; --muted:#9eabba; --line:#334255;
+    --accent:#71b7ff; --on-accent:#08111c; --warn:#f2b84b; --bad:#ff7b7b; --good:#83d6a3; --queue:#b79cff; --shadow:0 6px 18px #0007; }
+}
+* { box-sizing:border-box; }
+html { -webkit-text-size-adjust:100%; }
+body { margin:0; background:var(--bg); color:var(--text); font:14px/1.42 system-ui,-apple-system,"Segoe UI",sans-serif; overflow-wrap:anywhere; }
+button { font:inherit; color:inherit; }
+h1,h2,h3,p { margin:0; }
+a { color:var(--accent); }
+.mono { font-family:ui-monospace,"Cascadia Mono",Consolas,monospace; }
+.grow { flex:1; }
+.mockbar { border-bottom:1px solid var(--line); background:var(--panel); }
+.mockbar-in,.top,.layout { max-width:1220px; margin:0 auto; padding-left:16px; padding-right:16px; }
+.mockbar-in { min-height:42px; display:flex; gap:9px 14px; align-items:center; flex-wrap:wrap; padding-top:7px; padding-bottom:7px; }
+.mockbar nav { display:flex; gap:10px; flex-wrap:wrap; font-size:12px; }
+.mtag,.chip,.status { display:inline-flex; align-items:center; border:1px solid var(--line); border-radius:99px; padding:2px 8px; font-size:11px; white-space:nowrap; }
+.mtag { color:var(--queue); border-color:var(--queue); font-weight:750; }
+.top { padding-top:13px; }
+.eyebrow { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.07em; font-weight:740; }
+.titleline,.tabbar,.prov,.health,.actions { display:flex; align-items:center; gap:7px 10px; flex-wrap:wrap; }
+.titleline h1 { font-size:1.45rem; }
+.pri { color:var(--bad); border:1px solid currentColor; border-radius:4px; padding:1px 6px; font-size:11px; font-weight:750; }
+.status { color:var(--good); border-color:var(--good); font-weight:700; }
+.sub { color:var(--muted); font-size:12px; margin-top:4px; }
+.tabs-shell { margin-top:12px; border-bottom:1px solid var(--line); }
+.tabbar { gap:0; }
+.tab { border:0; background:transparent; padding:8px 14px 7px; border-bottom:3px solid transparent; cursor:pointer; font-weight:680; color:var(--muted); }
+.tab[aria-selected="true"] { color:var(--text); border-bottom-color:var(--accent); }
+.tab small { font-weight:400; }
+.layout { padding-top:12px; padding-bottom:60px; }
+.viewnote { border-left:4px solid var(--good); background:color-mix(in srgb,var(--good) 8%,var(--panel)); padding:8px 11px; margin-bottom:11px; border-radius:0 7px 7px 0; font-size:12.5px; }
+.lens[hidden] { display:none; }
+.lenshead { display:flex; align-items:flex-start; gap:10px; margin-bottom:10px; }
+.lenshead h2 { font-size:1.12rem; }
+.lenshead p { color:var(--muted); font-size:12.5px; }
+.grid { display:grid; grid-template-columns:minmax(0,1.4fr) minmax(290px,.8fr); gap:10px; align-items:start; }
+.stack { display:flex; flex-direction:column; gap:10px; min-width:0; }
+.card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:11px 13px; min-width:0; }
+.card.primary { border-top:4px solid var(--accent); }
+.card.next { border-left:4px solid var(--good); }
+.card.need { border-left:4px solid var(--warn); }
+.q { color:var(--muted); font-size:10.5px; font-weight:780; letter-spacing:.055em; text-transform:uppercase; margin-bottom:4px; }
+.card h3 { font-size:1.05rem; margin-bottom:4px; }
+.card p,.card li { font-size:13px; }
+.card ul { margin:6px 0 0; padding-left:18px; }
+.prov { border-top:1px solid var(--line); margin-top:8px; padding-top:6px; color:var(--muted); font-size:10.5px; }
+.fresh { color:var(--good); font-weight:760; }
+.warn { color:var(--warn); font-weight:780; }
+.bad { color:var(--bad); font-weight:780; }
+.answerline { display:grid; grid-template-columns:minmax(120px,.7fr) minmax(0,1.3fr); gap:6px 12px; padding:7px 0; border-top:1px solid var(--line); }
+.answerline:first-of-type { border-top:0; }
+.answerline b { font-size:12px; }
+.answerline span { font-size:12.5px; }
+.btn { display:inline-flex; align-items:center; border:1px solid var(--line); background:var(--panel2); border-radius:6px; padding:4px 9px; cursor:pointer; font-size:11px; }
+.btn.primary { background:var(--accent); border-color:var(--accent); color:var(--on-accent); }
+.btn:hover { border-color:var(--accent); }
+.health { margin-top:10px; align-items:stretch; }
+.health-item { flex:1 1 190px; display:flex; gap:7px; align-items:flex-start; padding:8px 9px; border:1px solid var(--line); border-radius:7px; background:var(--panel); font-size:11.5px; }
+.dot { width:8px; height:8px; margin-top:4px; border-radius:50%; background:var(--good); flex:none; }
+.dot.warn { background:var(--warn); }
+.dot.bad { background:var(--bad); }
+.dot.none { background:transparent; border:1px dashed var(--muted); }
+.contract { margin-top:14px; border:1px solid var(--line); background:var(--panel); border-radius:8px; overflow:hidden; }
+.contract h2 { font-size:13px; padding:9px 11px; background:var(--panel2); }
+.contract-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); }
+.contract article { padding:9px 11px; border-top:1px solid var(--line); }
+.contract article + article { border-left:1px solid var(--line); }
+.contract h3 { font-size:12px; margin-bottom:3px; }
+.contract p { color:var(--muted); font-size:11.5px; }
+.timeline { list-style:none; margin:0; padding:0; }
+.timeline li { display:grid; grid-template-columns:62px minmax(0,1fr); gap:8px; padding:6px 0; border-top:1px solid var(--line); font-size:12.5px; }
+.timeline li:first-child { border-top:0; }
+.timeline time { color:var(--muted); font-size:11px; }
+@media (max-width:780px) { .grid { grid-template-columns:1fr; } .contract-grid { grid-template-columns:1fr; } .contract article + article { border-left:0; } }
+@media (max-width:430px) {
+  .mockbar-in,.top,.layout { padding-left:12px; padding-right:12px; }
+  .titleline h1 { width:100%; font-size:1.28rem; }
+  .tabbar { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .tab { padding:8px 4px 7px; font-size:12px; }
+  .tab small { display:block; font-size:9px; }
+  .answerline { grid-template-columns:1fr; gap:2px; }
+}
+</style>
+</head>
+<body>
+<div class="mockbar"><div class="mockbar-in"><span class="mtag">Round 2C</span><b>Question lenses</b><nav data-print-hide aria-label="Round 2 mockups"><a href="index.html">All concepts</a><a href="a-answer-board.html">A. Answer board</a><a href="b-briefing.html">B. Briefing</a></nav></div></div>
+<header class="top">
+  <div class="eyebrow">plugins-kit:task-kit-extraction</div>
+  <div class="titleline"><h1>Task kit extraction</h1><span class="pri">P1</span><span class="status">active session</span><span class="chip">2 decisions</span></div>
+  <p class="sub">Each view declares its own questions and exposes only controls that fit that purpose.</p>
+  <div class="tabs-shell" data-print-hide><div class="tabbar" role="tablist" aria-label="Task views"><button class="tab" type="button" role="tab" id="tab-orient" aria-controls="lens-orient" aria-selected="true" data-lens="orient">Orient <small>6 answers</small></button><button class="tab" type="button" role="tab" id="tab-decide" aria-controls="lens-decide" aria-selected="false" data-lens="decide">Decide <small>2 answers</small></button><button class="tab" type="button" role="tab" id="tab-trace" aria-controls="lens-trace" aria-selected="false" data-lens="trace">Trace <small>4 answers</small></button></div></div>
+</header>
+<main class="layout">
+  <div class="viewnote"><b>Concept:</b> A view is a versioned question set. Orient reads; Decide asks for human input; Trace explains evidence and provenance.</div>
+  <section class="lens" id="lens-orient" role="tabpanel" aria-labelledby="tab-orient">
+    <div class="lenshead"><div><h2>Orient</h2><p>The default view answers enough to resume the task without showing run configuration.</p></div></div>
+    <div class="grid">
+      <div class="stack">
+        <article class="card primary"><div class="q">What is this task for?</div><h3>Make the task system independent, operational, and easy to re-enter.</h3><p>Extraction is complete. The active design problem is a dashboard that explains the work before it offers agents and queue controls.</p><div class="prov"><span>local qwen</span><span>code <span class="mono">8ab21c4</span></span><span class="fresh">fresh</span></div></article>
+        <article class="card"><div class="q">Where does it stand?</div><h3>Most dashboard increments are shipped; two related changes are waiting to move together.</h3><p>Session tracking is implemented but unreleased. Detail-view work is at round 2. No engineering failure blocks either stream.</p><div class="prov"><span>local qwen</span><span>task record <span class="mono">4de319a</span></span><span class="fresh">fresh</span></div></article>
+        <article class="card next"><div class="q">What is the next action?</div><h3>Choose a detail-view direction.</h3><p>Then plan and implement the live view, finish cross-platform release checks, publish, and restart.</p><div class="prov"><span>luna medium</span><span>asked 9 min ago</span><span class="fresh">fresh</span></div></article>
+      </div>
+      <div class="stack">
+        <article class="card need"><div class="q">What is waiting on me, with defaults?</div><div class="answerline"><b>Detail direction</b><span>Choose among these concepts. Default: Answer board.</span></div><div class="answerline"><b>Older form review</b><span>Try the shipped controls or accept their current behavior. Default: keep it.</span></div><div class="prov"><span>local qwen</span><span class="fresh">fresh</span></div></article>
+        <article class="card"><div class="q">How big is what remains?</div><h3>Medium</h3><p>One focused UI increment and one release pass; likely 1-2 sessions, with moderate confidence.</p><div class="prov"><span>haiku medium</span><span>24 min ago</span><span class="fresh">fresh</span></div></article>
+        <article class="card"><div class="q">Is it stale or abandoned?</div><h3>Could not answer reliably</h3><p>The active session and repository activity disagree about the latest task touch. The prior answer remains stored but is not displayed as current.</p><div class="prov"><span>local qwen</span><span class="bad">failed - signal conflict</span><button class="btn" type="button" data-print-hide>Re-ask</button></div></article>
+      </div>
+    </div>
+    <div class="health" aria-label="Answer health"><div class="health-item"><span class="dot"></span><span><b>6 fresh</b><br>Current at code and task-record revisions.</span></div><div class="health-item"><span class="dot warn"></span><span><b>1 stale</b><br>Commit classification predates 3 changes.</span></div><div class="health-item"><span class="dot none"></span><span><b>1 unanswered</b><br>Related tasks await index refresh.</span></div><div class="health-item"><span class="dot bad"></span><span><b>1 failed</b><br>Staleness signals conflict.</span></div></div>
+  </section>
+  <section class="lens" id="lens-decide" role="tabpanel" aria-labelledby="tab-decide" hidden>
+    <div class="lenshead"><div><h2>Decide</h2><p>Only questions that require a person, with their computed defaults and consequences.</p></div></div>
+    <div class="grid"><div class="stack"><article class="card need"><div class="q">What is waiting on me, with defaults?</div><h3>Choose the task-detail direction.</h3><p>Default: Answer board. It most directly exposes the metadata contract and degrades well when individual answers are missing.</p><div class="actions" data-print-hide><button class="btn primary" type="button">Choose A</button><button class="btn" type="button">Choose B</button><button class="btn" type="button">Choose C</button></div><div class="prov"><span>local qwen</span><span class="fresh">fresh</span></div></article><article class="card need"><div class="q">Which older decision is still open?</div><h3>Whether to keep the shipped authoring-control behavior.</h3><p>Default: accept it. It has been in use without a reported defect; changing it does not block this release.</p><div class="actions" data-print-hide><button class="btn primary" type="button">Accept default</button><button class="btn" type="button">Open in Claude Code</button></div><div class="prov"><span>luna medium</span><span class="fresh">fresh</span></div></article></div><aside class="card"><div class="q">What happens after I decide?</div><h3>The task can move immediately.</h3><p>The detail-view item becomes available for implementation. The release item remains separately gated by its test and publication checklist.</p><div class="prov"><span>local qwen</span><span class="fresh">fresh</span></div></aside></div>
+  </section>
+  <section class="lens" id="lens-trace" role="tabpanel" aria-labelledby="tab-trace" hidden>
+    <div class="lenshead"><div><h2>Trace</h2><p>Evidence, change history, and answer health. Controls here refresh evidence, not task state.</p></div></div>
+    <div class="grid"><article class="card"><div class="q">Which code commits belong to it?</div><ul class="timeline"><li><time>today</time><span><b class="mono">8ab21c4</b> prepared durable session records for release.</span></li><li><time>today</time><span><b class="mono">f3027ae</b> distinguished local evidence from remote reports.</span></li><li><time>earlier</time><span><b class="mono">1c92be0</b> connected the dashboard to session metadata.</span></li></ul><div class="prov"><span>local qwen</span><span>code <span class="mono">8ab21c4</span></span><span class="warn">stale - 3 newer commits</span><button class="btn" type="button" data-print-hide>Re-ask</button></div></article><div class="stack"><article class="card"><div class="q">What changed since I last worked on it?</div><h3>Session tracking landed and the detail-view design advanced to round 2.</h3><div class="prov"><span>local qwen</span><span>session boundary 16:05</span><span class="fresh">fresh</span></div></article><article class="card"><div class="q">What tasks are related?</div><h3>Not answered</h3><p>The question exists, but the task index has not produced an answer.</p><div class="prov"><span>never asked</span><button class="btn" type="button" data-print-hide>Ask now</button></div></article></div></div>
+  </section>
+  <section class="contract">
+    <h2>Questions this concept assumes, grouped by view</h2>
+    <div class="contract-grid"><article><h3>Orient</h3><p>Purpose; current standing; next action; waiting on me with defaults; remaining size; stale or abandoned.</p></article><article><h3>Decide</h3><p>Waiting on me with defaults; which older decision is open; what happens after I decide.</p></article><article><h3>Trace</h3><p>Associated commits; changes since my last session; related tasks; answer freshness and failures.</p></article></div>
+  </section>
+</main>
+<script>
+(function () {
+  var tabs = document.querySelectorAll('[data-lens]');
+  tabs.forEach(function (tab) {
+    tab.addEventListener('click', function () {
+      var name = tab.getAttribute('data-lens');
+      tabs.forEach(function (item) { item.setAttribute('aria-selected', String(item === tab)); });
+      document.querySelectorAll('.lens').forEach(function (panel) { panel.hidden = panel.id !== 'lens-' + name; });
+    });
+  });
+})();
+</script>
+</body>
+</html>

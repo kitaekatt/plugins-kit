@@ -1,9 +1,9 @@
 """task.py -- the task-system CLI entry point (spec section 7).
 
-One entry point with verb subcommands. The CLI exposes 14 verbs:
+One entry point with verb subcommands. The CLI exposes 15 verbs:
 ``init``, ``list``, ``show``, ``status``, ``validate``,
 ``work``, ``update``, ``items``, ``close``, ``reopen``,
-``archive``, ``delete``, ``move``, and ``review``.
+``archive``, ``delete``, ``move``, ``review``, and ``sessions``.
 
 Conventions (spec 7.1): exit 0 on success, non-zero on failure/block;
 findings print to stderr. ``validate`` exits 0 iff there are no errors AND no
@@ -22,9 +22,10 @@ Read-op conventions (Step 3):
   absent fields ``-``; ``last_update`` is the latest ISO date in dated
   ``log.md`` entries). Explicit ``--status`` prints only matching task lines.
   Discovery notes go to stderr. Exit 0 even when empty.
-- ``show <ref>`` prints the selected task.yaml fields; non-zero with a
-  reason on stderr when the ref is unresolvable or the folder is not
-  readable locally (archived / orphaned / remote).
+- ``show <ref>`` prints the selected task.yaml fields, then one ``working:``
+  line per working-session registration of the task (``working: -`` without
+  any); non-zero with a reason on stderr when the ref is unresolvable or the
+  folder is not readable locally (archived / orphaned / remote).
 - ``status <ref>`` is the spec's one INFERENCE verb (spec 7.1): a background
   agent summarizes the task. The script side implemented here is the
   SUBSTRATE ONLY -- classification + findings + the raw material
@@ -52,7 +53,10 @@ State-op conventions (Step 4):
   (``state_ops.BASELINE_SKILLS`` then the task's own ``skills_to_invoke``,
   deduped), an ``agent_hint: <name>`` dispatch hint line when present, and
   a closing ``== then: start ... ==`` directive (the skill layer acts on
-  these; the script only emits them).
+  these; the script only emits them). After the gate passes, inside a Claude
+  Code subprocess, ``work`` also registers the calling session as working the
+  task and publishes the record (see ``sessions`` below); that changes neither
+  stdout nor the exit code -- it adds ``session:`` lines on stderr.
 - ``update <ref>`` applies the explicit ref. Prints the
   re-validation classification to stdout and findings to stderr; exits 0 iff
   there are no findings -- but the field edits persist regardless (update is
@@ -64,6 +68,23 @@ State-op conventions (Step 4):
   outside the folder it is about to park or delete.
 - ``close <ref>`` prints ``closed: <id>``; ``reopen <ref>`` prints the
   re-validation classification (exit 0 iff no findings, like ``update``).
+
+Working-session conventions:
+- A registration lasts from ``work`` until the hand-off step runs
+  ``sessions release <ref>``; harness exit, crash and resume do not end it.
+  The record lives in ``<task root>/.sessions/<host id>.yaml`` and is committed
+  and pushed with the tasks' own repository. ``list``, ``show``, ``status``
+  and ``sessions`` only READ it (offline, no writes).
+- ``sessions [list] [--scope project|all] [--format text|json]`` lists the
+  registrations with their state (``running`` / ``not running`` on the machine
+  that wrote them, ``unverified`` on any other) and this machine's pending
+  files. ``sessions release <ref> [--all-local]`` removes this machine's
+  registration of the caller's session (every local one with ``--all-local``)
+  and publishes. ``sessions publish`` publishes pending session files.
+- ``list`` appends `` [working: <host> <state> <age>; ...]`` to a task line that
+  has registrations and gains ``sessions`` per task in ``--format json|yaml``.
+- ``~/.claude/task.local.yaml`` ``sessions:`` takes ``record`` (false turns
+  recording off) and ``host`` (replaces the derived host id).
 
 Location-op conventions (Step 5):
 - ``archive <ref>`` prints ``archived: <id>`` plus the closure-policy
@@ -112,6 +133,9 @@ Usage:
     task.py archive <ref> [--root PATH]
     task.py delete <ref> [--root PATH]
     task.py move <ref> <dest> [--root PATH]
+    task.py sessions [list] [--scope project|all] [--format text|json] [--root PATH]
+    task.py sessions release <ref> [--all-local] [--root PATH]
+    task.py sessions publish [--root PATH]
 """
 
 import argparse
@@ -137,6 +161,7 @@ try:
     from task_system import location_ops  # noqa: E402
     from task_system import reference_rewrite  # noqa: E402
     from task_system import resolve  # noqa: E402
+    from task_system import sessions_cli  # noqa: E402
     from task_system import state_ops  # noqa: E402
     from task_system.discovery import (  # noqa: E402
         DiscoveryError,
@@ -229,7 +254,7 @@ def _format_list_line(view) -> str:
     ident = view.id
     if view.status == "remote" and view.host:
         ident = f"{view.id} @{view.host}"
-    return "  ".join(
+    line = "  ".join(
         [
             ident,
             view.status,
@@ -238,6 +263,7 @@ def _format_list_line(view) -> str:
             view.title or "-",
         ]
     )
+    return line + sessions_cli.working_suffix(view.sessions)
 
 
 def _print_listing_diagnostics(listing: TaskListing) -> None:
@@ -406,6 +432,15 @@ def _cmd_show(args: argparse.Namespace) -> int:
     print(f"id: {resolved.canonical}")
     for field in _SHOW_FIELDS:
         print(f"{field}: {_render_value(block.get(field))}")
+    reader = sessions_cli.SessionReader()
+    records = reader.records_for(root, resolved.location, resolved.stub)
+    for note in reader.notes:
+        print(f"note: sessions: {note}", file=sys.stderr)
+    if records:
+        for record in records:
+            print(f"working: {sessions_cli.describe_long(record)}")
+    else:
+        print("working: -")
     return 0
 
 
@@ -508,6 +543,11 @@ def _cmd_work(args: argparse.Namespace) -> int:
         _print_state_op_error(exc)
         return 1
     _emit_work(result)
+    sys.stdout.flush()
+    # Registration comes AFTER the gate and the initialization block: stdout and the exit code are exactly what
+    # they were without it, and every outcome (including a refusal) is a `session:` line on stderr.
+    for line in sessions_cli.register_for_work(root, result.canonical):
+        print(line, file=sys.stderr)
     return 0
 
 
@@ -636,6 +676,20 @@ def _cmd_move(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_sessions(args: argparse.Namespace) -> int:
+    root = (getattr(args, "root", None) or Path.cwd()).resolve()
+    action = getattr(args, "sessions_action", None) or "list"
+    if action == "release":
+        return sessions_cli.release_command(root, args.ref, all_local=args.all_local)
+    if action == "publish":
+        return sessions_cli.publish_command(root)
+    return sessions_cli.list_command(
+        root,
+        scope=getattr(args, "scope", None) or "project",
+        output_format=getattr(args, "format", None) or "text",
+    )
+
+
 def _cmd_status(args: argparse.Namespace) -> int:
     # INFERENCE verb, script-side substrate only (see module docstring): the
     # summarization over this material is dispatched by the skill layer
@@ -669,6 +723,18 @@ def _cmd_status(args: argparse.Namespace) -> int:
                 fpath = folder / fname
                 suffix = "" if fpath.is_file() else "  (missing)"
                 print(f"  {fname}: {fpath}{suffix}")
+            # Working-session registrations of the task (read-only).
+            found = sessions_cli.location_of(result.canonical)
+            reader = sessions_cli.SessionReader()
+            records = reader.records_for(root, found[0], found[1]) if found else ()
+            if records:
+                print("sessions:")
+                for record in records:
+                    print(f"  {sessions_cli.describe_long(record)}")
+            else:
+                print("sessions: none")
+            for note in reader.notes:
+                print(f"note: sessions: {note}", file=sys.stderr)
             # The parsed task_items menu (design section 8): part of the
             # substrate so the summarizer leads with it without re-parsing.
             # Its findings already surface above via validate.
@@ -996,6 +1062,44 @@ def main(argv: list[str] | None = None) -> int:
         help="Destination location root (the stub is preserved).",
     )
 
+    p_sessions = sub.add_parser(
+        "sessions",
+        help="Working-session registrations: list them (default), release this "
+        "machine's registration of a task, or publish pending session files. A "
+        "registration is made by `work` and ends at hand-off.",
+    )
+    # A flag declared on the parser AND a subparser is overwritten by the subparser's default, so every subparser
+    # copy defaults to SUPPRESS and the value is read with getattr (see plugins/CLAUDE.md).
+    p_sessions.add_argument("--root", type=Path, default=None, help="Project root (default: cwd).")
+    p_sessions.add_argument("--scope", choices=["project", "all"], default="project",
+                            help="List the current project's task roots (default) or every configured project's.")
+    p_sessions.add_argument("--format", choices=["text", "json"], default="text",
+                            help="Output format for the listing (default: text).")
+    sessions_sub = p_sessions.add_subparsers(dest="sessions_action", required=False)
+    p_sessions_list = sessions_sub.add_parser(
+        "list", help="List registrations with their states and this machine's pending files (the default).")
+    p_sessions_list.add_argument("--root", type=Path, default=argparse.SUPPRESS, help="Project root (default: cwd).")
+    p_sessions_list.add_argument("--scope", choices=["project", "all"], default=argparse.SUPPRESS,
+                                 help="List the current project's task roots (default) or every configured project's.")
+    p_sessions_list.add_argument("--format", choices=["text", "json"], default=argparse.SUPPRESS,
+                                 help="Output format (default: text).")
+    p_sessions_release = sessions_sub.add_parser(
+        "release",
+        help="Remove this machine's registration of the calling session on <ref> (the hand-off step), then publish. "
+        "--all-local removes every registration this machine holds for the task.",
+    )
+    p_sessions_release.add_argument(
+        "ref", help="Task path (tmp/<stub> or dev/tasks/<stub>) or bare stub.")
+    p_sessions_release.add_argument(
+        "--all-local", dest="all_local", action="store_true",
+        help="Release every registration this machine holds for the task (the human's explicit cleanup).")
+    p_sessions_release.add_argument("--root", type=Path, default=argparse.SUPPRESS,
+                                    help="Project root the ref is relative to (default: cwd).")
+    p_sessions_publish = sessions_sub.add_parser(
+        "publish", help="Commit and publish this machine's pending session files (drains an offline registration).")
+    p_sessions_publish.add_argument("--root", type=Path, default=argparse.SUPPRESS,
+                                    help="Project root (default: cwd).")
+
     args = parser.parse_args(argv)
     if args.verb == "validate":
         return _cmd_validate(args)
@@ -1025,6 +1129,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_delete(args)
     if args.verb == "move":
         return _cmd_move(args)
+    if args.verb == "sessions":
+        return _cmd_sessions(args)
     parser.error(f"unknown verb: {args.verb}")
     return 2
 

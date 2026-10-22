@@ -43,7 +43,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import proctree, procspawn, runfiles
+from .. import procspawn
+from . import proctree, runfiles
 from .runfiles import (  # noqa: F401 -- the file names are part of this module's public surface
     CANCEL_FILE,
     CHILD_FILE,

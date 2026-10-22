@@ -8,7 +8,7 @@ description: Use when creating, listing, working, closing, archiving, or moving 
 
 # Task
 
-Dispatch surface for the task system: one CLI (`scripts/task.py`) exposing 14
+Dispatch surface for the task system: one CLI (`scripts/task.py`) exposing 15
 verbs over file-backed task folders. This skill routes a natural-language task
 request ("start a task for X", "what tasks are open here?", "what can I work
 on in this task?", "archive the closet task") to the right verb invocation
@@ -63,12 +63,13 @@ or a bare stub (ambiguous stub = error listing candidates).
 ```yaml
 capability_skill:
   _schema_version: "1"
-  identity: "Dispatch surface routing natural-language task requests to the task-system CLI's 14 verbs and defining the agent-side behaviors (work's Skill lines, status's background summarizer, update's rotation) the scripts deliberately leave to the agent."
+  identity: "Dispatch surface routing natural-language task requests to the task-system CLI's 15 verbs and defining the agent-side behaviors (work's Skill lines, status's background summarizer, update's rotation) the scripts deliberately leave to the agent."
   scope:
     covers:
       - "Creating, listing, showing, validating, reviewing, and summarizing file-backed task folders (tmp/<stub>, dev/tasks/<stub>)"
       - "Enumerating a task's open items (plan.md's task_items unit) with their states -- the item-level menu below the task level"
       - "Lifecycle transitions: close, reopen, archive, delete, and move (with task_list reference rewriting)"
+      - "Working-session registrations: which Claude Code session, on which machine, is working a task -- registered by work, released by the hand-off step, shown by list, show, status and the sessions verb"
       - "Launching the task dashboard: /task dashboard runs the task-kit launcher (a live browser view over every configured project that can also run queued items)"
       - "Filling in scaffolded task folders per the hand-off template (references/handoff-template.md)"
     excludes:
@@ -78,13 +79,13 @@ capability_skill:
   external_capability:
     kind: tool
     name: task.py (task-system CLI)
-    description: "Single-entry-point CLI at skills/task/scripts/task.py with 14 verb subcommands over task folders, task.yaml records, task_list references, and plan.md task_items blocks. 13 verbs are script-driven; status is the one inference verb (the script prints substrate only). Review is script-driven and may use Codex Luna to repair summaries."
+    description: "Single-entry-point CLI at skills/task/scripts/task.py with 15 verb subcommands over task folders, task.yaml records, task_list references, plan.md task_items blocks, and working-session registrations. 14 verbs are script-driven; status is the one inference verb (the script prints substrate only). Review is script-driven and may use Codex Luna to repair summaries."
   layering:
     claude_md: []
     skill_md:
       - "The data model in one breath (folder = SoT, items in plan.md's task_items block, refs inert, id = path, explicit task refs, durability = location)"
       - "The canonical venv-python invocation and CLI conventions"
-      - "The 14-verb capability surface with per-verb contracts"
+      - "The 15-verb capability surface with per-verb contracts"
       - "The agent-side behaviors the scripts leave open (work's initialization block -- invoke every emitted skill, then dispatch -- status background summary, update rotation, and the hand-off packaging plus baton, which run only when the user invokes /task hand-off)"
     references:
       - "handoff-template.md -- how to fill in and rotate a scaffolded folder's CLAUDE.md / plan.md / log.md"
@@ -116,10 +117,11 @@ capability_skill:
         - n: 1
           action: "Run the dashboard handshake first, once: `task_hold.py <ref> --session \"${CLAUDE_SESSION_ID}\"`, invoked exactly like task.py (same venv Python, `scripts/task_hold.py`, same project root). It never fails and never blocks the work verb. If it printed a line on stderr, relay it to the user in one sentence; then continue to step 2 either way. What it does and prints: references/dashboard.md, \"The /task work handshake\"."
         - n: 2
-          action: "Run the work verb. It validates first: ANY error OR warning blocks (exit non-zero, findings on stderr, initialization block not emitted). A remote ref (tmp + other host) cannot be worked locally. If no folder exists at the ref, work ERRORS -- treat that as a mistyped path (run list) rather than a task to create; --init opts into scaffolding the folder and working it, and is for a ref you meant to promote."
+          action: "Run the work verb. It validates first: ANY error OR warning blocks (exit non-zero, findings on stderr, initialization block not emitted). A remote ref (tmp + other host) cannot be worked locally. If no folder exists at the ref, work ERRORS -- treat that as a mistyped path (run list) rather than a task to create; --init opts into scaffolding the folder and working it, and is for a ref you meant to promote. Once the gate passes, inside a Claude Code session, the verb also REGISTERS this session as working the task and publishes the record: it commits this machine's file under the task root's .sessions/ directory on the checked-out branch, then fetches the upstream and fast-forwards or merges it into the checked-out HEAD and working tree (as a pull would; a merge that stops on conflicts is aborted), then pushes only when the net change from the upstream is session files. It never force-pushes, rebases, stashes or switches branches; `sessions: {record: false}` in ~/.claude/task.local.yaml turns it off. Registering adds `session:` lines on stderr and changes neither stdout nor the exit code. Relay any `session:` line to the user in one sentence; a `session: kept:` line names the release command for another session's registration, which you run only if the user asks."
         - n: 3
           action: "On success the script prints ONE initialization block to stdout: a '== task init ... ==' header, a Skill(skill: \"<name>\") line for every skill the task needs (the always-required baseline the script emits, followed by the task's own skills_to_invoke, deduped), an agent_hint: <type> line when set, and a closing '== then: start ... ==' directive. AGENT BEHAVIOR: invoke EVERY emitted Skill(...) line via the Skill tool now, in the order printed, before any other tool use -- the emitted list is the whole required set, so there is nothing to remember from elsewhere. Then act on the closing directive: START the work in this turn. Route planning and implementation through orchestrate's rendered policy, honoring the agent_hint type when eligible. The script only emits these lines; acting on them is your job."
       gotchas:
+        - "A registration lasts from work until the hand_off capability's release step runs; exiting or crashing the harness does not end it, and it shows as `not running` on this machine and `unverified` elsewhere until released (`sessions release <ref> --all-local` is the explicit cleanup). `sessions: {record: false}` in ~/.claude/task.local.yaml turns registration off."
         - "Do not skip the emitted Skill(...) invocations -- they are the task's self-documented working context (the self-documenting-task pattern), not decoration."
         - "The emitted list is the SINGLE source of the required-skill set (baseline plus task-declared, merged script-side) -- do not treat the baseline as advisory. orchestrate is emitted unconditionally, even for trivial work. Once invoked through task, it has the same force as direct invocation: delegate every work-product implementation unit, including small code, tests, scripts, configuration, and documentation. Running task CLI verbs, read-only listings, or other existing scripts for coordination or verification is not by itself work-product implementation."
         - "work is a START, not a checkpoint. Say the orientation line the folder's opening response protocol asks for and then begin the first concrete action in the SAME turn. Do not end the turn on an unblocked task waiting for the user to say go. Two things still stop the turn and neither is waived: a real blocker, and a decision the folder's Autonomy status has claimed for the user."
@@ -137,7 +139,7 @@ capability_skill:
     - id: hand_off
       keywords: [hand-off, hand off, package for a fresh session, resume in a new session, baton, continue in a new session]
       user_objective: "Package the folder so a fresh session resumes with one paste -- ONLY when the user invokes /task hand-off."
-      operation: "/task hand-off <ref> -- user-invoked; no CLI verb. Dispatches onto task.py update <ref> plus the agent-side packaging in the steps."
+      operation: "/task hand-off <ref> -- user-invoked; no CLI verb. Dispatches onto task.py update <ref> and task.py sessions release <ref> plus the agent-side packaging in the steps."
       steps:
         - n: 1
           action: "GATE: proceed only if the user's own message invoked /task hand-off <ref>, or said in plain words to hand off / package the task for a new session. Nothing else qualifies: not an update that looks like the session's last, not a stopping point you judge natural, not the end of a long turn, and not the template's 'end the turn with the baton' (that instruction is scoped to THIS capability). Without the invocation there is no hand-off -- finish the turn normally and do not raise the idea yourself."
@@ -146,9 +148,11 @@ capability_skill:
         - n: 3
           action: "Self-verify per handoff-template.md 'Self-verify': read CLAUDE.md + plan.md cold, as the next agent, and fix what a cold reader could not resolve."
         - n: 4
+          action: "Release this session's registration: run `task.py sessions release <ref>` (the work verb registered it). Run it after the update findings are clean and the self-verify is done, because release is the last state change, and before the baton. FIRST, in a git task root, commit AND push the task folder (the update's log.md line and any self-verify fixes; task_records authorization), because the release publishes only when the net change from upstream is session files, so an unpushed folder commit makes it print `committed; not published: unpushed commits outside this machine's session records`. If the release still reports `not published`, push the task root (it carries both the folder commit and the release commit), then run `task.py sessions publish`. Relay its `session:` line to the user in one sentence; if it exits non-zero, relay the error and still end with the baton."
+        - n: 5
           action: "End the turn with the hand-off baton -- exactly two lines, `CWD: <project root>` then `Continue: /task work <CWD-relative task-folder path>` (the awesome-kit:verbose-updates communication framework, 'hand-off baton'). The script emits neither line; both are your job, and they belong to this turn only."
       gotchas:
-        - "Do not pass hand-off to task.py as a verb -- the CLI has no such verb, and hand-off is also the task TYPE name (--type flag). The dispatch is skill-level: the step-2 update call is the only script invocation."
+        - "Do not pass hand-off to task.py as a verb -- the CLI has no such verb, and hand-off is also the task TYPE name (--type flag). The dispatch is skill-level: the step-2 update call and the step-4 `sessions release` are the only script invocations."
     - id: close
       keywords: [close task, finish task, mark done, keep folder]
       user_objective: "Mark an active task's work done while keeping the folder reopenable."
@@ -190,6 +194,7 @@ capability_skill:
         - "Contract: the default output has three sections, in order: Open tasks:, Deferred tasks:, and Closed tasks:. Open means active or blocked; Deferred means purposefully put on hold, intended to be resumed later (reopen returns it to active). Each task line is 'id  status  priority  last_update  title' (absent fields '-'); last_update is the latest ISO date in dated log.md entries. Explicit --status prints only matching task lines, including archived and other classifications. Dedupe by canonical path; classify each via validate. Exit 0 even when empty; notes and summary warnings go to stderr."
         - "--format text preserves the legacy line output; --format json or yaml emits the shared versioned listing projection, including task.summary, summary_status, summary_missing, update history, and diagnostics for missing or stale summaries. List never invokes inference or writes task folders."
         - "The project list is always computed (documents ARE the registry) -- there is no stored master list to consult or maintain."
+        - "A task line with working-session registrations ends with ` [working: <host> <state> <age>; ...]` (state: running / not running on the machine that wrote the record, unverified on any other), and --format json|yaml carry `sessions` per task. List only reads them."
         - "--scope all scans direct, non-hidden project directories under each parent in ~/.claude/task.local.yaml's project_directories list. Entries are absolute paths or paths containing ${NAME} / %NAME% environment references; for example, project_directories: ['${DEVROOT}']. When the file is absent or declares no project_directories, the DEVROOT environment variable is the single parent. With neither, --scope all exits with an error naming both options. Each project contributes tmp/ and dev/tasks/; physical task folders reached through shared dev/tasks symlinks or junctions are emitted once, owned by the shortest project name."
         - "project/user scope enumerate the TASK ROOTS: folder crawl over tmp/ + dev/tasks/, plus a task_list reference scan of the *.md under those roots (the parked <root>/archived-tasks/ subtree excluded under either root). They do NOT crawl the whole tree -- an embedded task_list block is indistinguishable from an EXAMPLE of one, so a whole-tree scan reports the format's own documentation as live tasks. A task_list embedded elsewhere (a SKILL.md, a domain issues.md) is reached by NAMING its document: --scope skill <name> or --scope file <path>."
     - id: triage
@@ -232,7 +237,7 @@ capability_skill:
       user_objective: "Render one task's selected task.yaml fields, cheaply."
       operation: task.py show <ref> [--root PATH]
       gotchas:
-        - "Contract: pure field read, no inference. Non-zero with a reason when the ref is unresolvable or the folder is not locally readable (archived / orphaned / remote)."
+        - "Contract: pure field read, no inference. Non-zero with a reason when the ref is unresolvable or the folder is not locally readable (archived / orphaned / remote). Ends with one `working: <host> <state> (<checkout>, session <id>, since <time>)` line per working-session registration, or `working: -`."
     - id: items
       keywords: [items, task items, work items, open items, goals, priorities, what next, what can I work on, what is available, sub-tasks, enumerate items, item menu]
       user_objective: "Enumerate a named task's open items -- the menu of next work within the task, with states."
@@ -252,7 +257,17 @@ capability_skill:
         - n: 2
           action: "AGENT BEHAVIOR: status is the system's ONE inference verb. Dispatch a BACKGROUND sub-agent (Task tool) to read the substrate's documents and produce the summary -- do NOT read plan.md/log.md and summarize inline in the main context. Lead the summary with the parsed open-item menu from the substrate, without re-parsing it. The point is main-context preservation; the sub-agent returns the short summary, you relay it. Route the dispatch through orchestrate and use whatever model its rendered routing policy resolves for this work -- do not pick or assume one here."
       gotchas:
+        - "The substrate includes a `sessions:` block (or `sessions: none`) listing the task's working-session registrations; fold it into the summary when someone is working the task."
         - "Summarizing inline defeats the verb's reason for existing (context preservation). The script even prints a reminder note to this effect."
+    - id: sessions
+      keywords: [who is working on, is anyone working on, working sessions, registered session, which session, release registration, unregister, stale registration, publish session records]
+      user_objective: "See which Claude Code sessions are registered as working which tasks, release a registration, or publish this machine's pending records."
+      operation: task.py sessions [list] [--scope project|all] [--format text|json] [--root PATH] | task.py sessions release <ref> [--all-local] [--root PATH] | task.py sessions publish [--root PATH]
+      gotchas:
+        - "Contract: a registration is made by the work verb and ends only when it is released (the hand_off capability's step 4, or `release <ref> --all-local` by a person); harness exit and resume do not end it. The record lives in <task root>/.sessions/<host id>.yaml and is committed and pushed with the tasks' own repository, one file per machine."
+        - "States: running and not running are judged only by the machine that wrote the record, from its exact process stamp; a record from any other machine is unverified. Every display shows the record's age."
+        - "The default list and `list` are read-only and offline. `release <ref>` removes the calling session's registration of the task (it needs the Claude Code session; outside one, pass --all-local); `--all-local` removes every registration this machine holds for the task. Both publish; `publish` drains files committed but not yet pushed. A `not published` line means other machines cannot see the change until the next publish; when it names unpushed commits outside this machine's session records, commit and push the task root first."
+        - "Release another session's registration only when the user asks; work keeps a not-running registration by another session and names the command."
   gotchas:
     - "hand-off names two things and neither is a CLI verb: the task TYPE (task.yaml type: field, --type flag; the skill was renamed hand-off -> task and the v1 type keeps the old name -- do not 'fix' type: hand-off to type: task) and the user-invoked packaging capability (/task hand-off <ref>, the hand_off record above)."
     - "Refs resolve against `--root`, which defaults to cwd -- so a `cd` into the task folder, or into the repository behind a `dev/tasks` link, breaks every ref-taking verb: a bare stub fails with 'matches no task folder under tmp/ or dev/tasks/', a path ref with 'not a known task location'. Run from the project root, or pass `--root <project>` when the shell must sit elsewhere."

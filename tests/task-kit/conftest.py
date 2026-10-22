@@ -19,6 +19,14 @@ import pytest
 # real script behaves once the guard has already fired. See plugins/CLAUDE.md.
 os.environ.setdefault("_BOOTSTRAP_GUARD_SKIP_REEXEC", "1")
 
+# A test run inside a Claude Code session inherits that session's identity. A test that registered a working
+# session (or took a hold) under it would write the real session's records and publish them, so both variables
+# are removed at import. CLAUDE_BOOTSTRAP_DATA_ROOT is NOT redirected here: bootstrap_guard refuses to run
+# task.py under a redirected data root without a provisioned venv there, which fails every CLI test.
+# Guard: test_task_env_sanitized.py runs a child pytest with both set.
+for _name in ("CLAUDE_PID", "CLAUDE_CODE_SESSION_ID"):
+    os.environ.pop(_name, None)
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SYS_PATHS = (
     _REPO_ROOT / "plugins" / "skills-kit",  # skills_kit_lib

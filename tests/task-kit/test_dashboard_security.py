@@ -158,6 +158,7 @@ def concrete_paths(rig: Rig, run_id: str) -> dict:
         ("POST", "runs/{}/cancel"): f"/api/v1/runs/{run_id}/cancel",
         ("POST", "runs/{}/retry"): f"/api/v1/runs/{run_id}/retry",
         ("POST", "holds"): "/api/v1/holds",
+        ("POST", "sessions/dismiss"): "/api/v1/sessions/dismiss",
         ("POST", "shutdown"): "/api/v1/shutdown",
         ("POST", f"{endpoint_helper.ROUTE}/{{}}"): f"/api/v1/{endpoint_helper.ROUTE}/some-helper",
     }

@@ -58,3 +58,21 @@ resolves that root too.
 The count was corrected during the fix: the four call sites originally
 identified were real but not exhaustive. Eight functions had the pattern, and
 the live archive bug was in one of the four that had NOT been named.
+
+## Working-session registrations and dismissals live in git
+
+Provenance for behavior the task-kit dashboard reference states without it. A working-session
+registration and a dashboard dismissal are recorded in the registering machine's own file,
+`<task root>/.sessions/<host>.yaml`, and published (committed, upstream fetched and fast-forwarded or
+merged, pushed), so every machine's reader sees the same record and no machine edits another's file.
+A dismissal is an authoritative fact, not a local view setting: it is written to the dismissing
+machine's session file and published like a registration, and the owning machine drops the dismissed
+record at its next write. User rulings, 2026-10-21:
+
+> The human dismissing is contribution of information.
+
+> No it definitely changes it in git. Why wouldn't it. We need a way of reconciling truth that is git.
+
+> if the data isn't in the task file, wherever it goes still needs to be commited, because we run this dashboard on multiple machines
+
+The shipped opinion and its seam (`sessions: {record: false}`) are registered in `plugins/CLAUDE.md`.

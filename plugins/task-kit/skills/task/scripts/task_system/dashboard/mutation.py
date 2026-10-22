@@ -41,7 +41,6 @@ import contextlib
 import hashlib
 import os
 import re
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, ContextManager
@@ -49,6 +48,7 @@ from typing import Callable, ContextManager
 import yaml
 from skills_kit_lib.document_walker import YAML_BLOCK_RE
 
+from .. import oslock
 from ..discovery import log_timestamp
 
 TASK_YAML = "task.yaml"
@@ -122,56 +122,26 @@ def folder_revision(folder: Path) -> str:
 
 
 class ProcessLock:
-    """A blocking-with-timeout OS file lock; separate handles exclude each other."""
+    """A blocking-with-timeout OS file lock; separate handles exclude each other (see :mod:`task_system.oslock`)."""
 
     def __init__(self, path: Path, timeout_s: float = LOCK_TIMEOUT_S) -> None:
         self.path = Path(path)
         self.timeout_s = timeout_s
-        self._handle = None
+        self._lock = oslock.FileLock(self.path, timeout_s, LOCK_POLL_S)
 
     def __enter__(self) -> "ProcessLock":
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        deadline = time.monotonic() + self.timeout_s
-        while True:
-            handle = open(self.path, "a+b")
-            try:
-                if os.name == "nt":
-                    import msvcrt
-
-                    handle.seek(0)
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-                else:
-                    import fcntl
-
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                self._handle = handle
-                return self
-            except OSError:
-                handle.close()
-                if time.monotonic() >= deadline:
-                    raise MutationError(
-                        "lock-timeout",
-                        f"another dashboard writer held {self.path} for {self.timeout_s:g} seconds",
-                        self.path,
-                    ) from None
-                time.sleep(LOCK_POLL_S)
+        try:
+            self._lock.__enter__()
+        except oslock.LockTimeout:
+            raise MutationError(
+                "lock-timeout",
+                f"another dashboard writer held {self.path} for {self.timeout_s:g} seconds",
+                self.path,
+            ) from None
+        return self
 
     def __exit__(self, *_exc) -> None:
-        handle, self._handle = self._handle, None
-        if handle is None:
-            return
-        try:
-            if os.name == "nt":
-                import msvcrt
-
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        finally:
-            handle.close()
+        self._lock.__exit__(*_exc)
 
 
 # -- the mutator ------------------------------------------------------------

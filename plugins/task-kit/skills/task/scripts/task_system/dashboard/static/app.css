@@ -87,6 +87,15 @@ h1,h2,h3,h4,p { margin:0; }
 .mk.need { background:var(--warn); color:var(--on-warn); border-color:var(--warn); }
 .mk.run { background:color-mix(in srgb,var(--run) 14%,var(--panel)); color:var(--run); border-color:var(--run); }
 .mk.q { background:transparent; color:var(--queue); border:1px dashed var(--queue); font-weight:600; padding:1px 8px; }
+/* Working-session registrations: a small inline marker per record. Only "on" (verified running here) holds the task. */
+.mk.sess { white-space:normal; max-width:100%; font-weight:600; padding:1px 8px; }
+.mk.sess.on { background:color-mix(in srgb,var(--good) 14%,var(--panel)); color:var(--good); border:1px solid var(--good); }
+.mk.sess.off { background:transparent; color:var(--muted); border:1px dashed var(--muted); }
+/* Another machine's record, unverified here: a tint instead of a label, so it reads as present but not confirmed. */
+.mk.sess.far { background:color-mix(in srgb,var(--queue) 10%,var(--panel)); color:var(--queue); border:1px dotted var(--queue); opacity:.8; }
+.sess-line.on { color:var(--good); }
+.sess-line.off { color:var(--muted); }
+.sess-line.far { color:var(--queue); }
 .spin { animation:spin 1.6s linear infinite; transform-origin:50% 50%; }
 @keyframes spin { to { transform:rotate(360deg); } }
 

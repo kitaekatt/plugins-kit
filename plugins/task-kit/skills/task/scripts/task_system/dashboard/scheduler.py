@@ -129,12 +129,13 @@ from typing import Callable
 import yaml
 
 from .. import init as task_init
+from .. import procspawn
 from ..task_items import read_task_items, sort_items
 from ..types import HAND_OFF
 from ..validate import validate_ref
 from . import authoring
 from . import findings as findings_mod
-from . import cli_check, endpoint_helper, floor, proctree, procspawn, redact, repo_identity, runfiles, subagents, vcs
+from . import cli_check, endpoint_helper, floor, proctree, redact, repo_identity, runfiles, subagents, vcs
 from .blocker import BlockOutcome, concise, record_block, record_blocks
 from .config import DashboardConfig, DashboardConfigError, load_config
 from .inventory import project_id_for
@@ -155,6 +156,7 @@ from .mutation import (
     set_task_status,
     stored_status,
 )
+from .sessions_view import SessionsReader, hold_message
 from .runtime import (
     ACCEPTED,
     ACTIVE_STATES,
@@ -333,8 +335,11 @@ class Scheduler:
         log: Callable[[str], None] = lambda message: None,
         observer: "cli_check.CliObserver | None" = None,
         fatal: Callable[[str], None] | None = None,
+        sessions: SessionsReader | None = None,
     ) -> None:
         self.root = Path(root)
+        # Working-session registrations: only this machine's verified-running ones hold a task (sessions_view).
+        self._sessions = sessions
         self.db = db
         self.mutator = mutator
         self.edge = edge
@@ -490,11 +495,25 @@ class Scheduler:
 
     # -- holds ---------------------------------------------------------------
 
+    def session_holders(self, folder: str | Path) -> list:
+        """This machine's registrations of the task that are VERIFIED running; every other registration holds nothing."""
+        return self._sessions.holders(folder) if self._sessions is not None else []
+
+    def is_held(self, folder: str | Path) -> bool:
+        """True when an interactive hold or a verified-running registration covers the task folder."""
+        return bool(self.db.live_holds(str(folder))) or bool(self.session_holders(folder))
+
     def hold_for(self, folder: str) -> str | None:
         holds = self.db.live_holds(folder)
-        if not holds:
+        holders = self.session_holders(folder)
+        if not holds and not holders:
             return None
-        return f"{len(holds)} Claude Code session(s) are working this task in the harness; the dashboard yields"
+        parts = []
+        if holders:
+            parts.append(hold_message(holders))
+        if holds:
+            parts.append(f"{len(holds)} Claude Code session(s) are working this task in the harness; the dashboard yields")
+        return "; ".join(parts)
 
     def register_hold(self, folder: str, session: str, ident: proctree.ProcIdent) -> Run | None:
         """Register an interactive hold; the dashboard run active on the folder (to tell the session), or None.
@@ -512,6 +531,9 @@ class Scheduler:
     def _refuse_if_held(self, folder: Path) -> None:
         if self.db.live_holds(str(folder)):
             raise QueueRefused(409, "held", HELD_MESSAGE)
+        holders = self.session_holders(folder)
+        if holders:
+            raise QueueRefused(409, "held", hold_message(holders) + "; make the change there, or wait for its hand-off")
 
     def _refuse_if_live(self, folder: Path, *, except_run: str | None = None) -> None:
         """Refuse (inside the gate) while a Claude Code session holds the folder or a dashboard run works it.
@@ -837,7 +859,11 @@ class Scheduler:
                     LOG: append_log(texts.log, "dashboard: re-check cleared the block; the task is active again")}
 
         revision = self._write(folder, edit, expected_revision=current, precommit=release)
-        return {"changed": changed["value"], "holds_released": released["n"], "revision": revision}
+        # Re-check REPORTS working-session registrations and never releases one: a registration ends at hand-off, or
+        # by the explicit `task sessions release <ref> --all-local` (user ruling 2026-10-21).
+        registrations = self._sessions.registrations(folder) if self._sessions is not None else []
+        return {"changed": changed["value"], "holds_released": released["n"], "revision": revision,
+                "sessions": [view.to_json() for view in registrations]}
 
     # -- authoring ------------------------------------------------------------------
 
@@ -926,8 +952,7 @@ class Scheduler:
         canonical = f"dev/tasks/{stub}"
         folder = (root / canonical).absolute()
         with self._queue_lock, self._tick_lock:
-            if self.db.live_holds(str(folder)):
-                raise QueueRefused(409, "held", HELD_MESSAGE)
+            self._refuse_if_held(folder)
             if folder.exists():
                 raise QueueRefused(409, "task-exists", f"{canonical} already exists", current_revision=self._safe_revision(folder))
             try:
@@ -1122,7 +1147,7 @@ class Scheduler:
         return sorted(queued, key=lambda r: (last.get(r.project_id, ""), first_seq[r.project_id], r.seq))
 
     def wait_reason(self, run: Run, *, busy: set[str], ahead: bool, held: bool, config: DashboardConfig | None,
-                    config_error: str | None, edge_status, cli_state: str | None) -> dict | None:
+                    config_error: str | None, edge_status, cli_state: str | None, held_detail: str | None = None) -> dict | None:
         """Why the queued ``run`` cannot start now, as ``{"code", "detail"}``, or None when nothing holds it back.
 
         Shared by the start loop's pre-check and the UI. Codes: ``config``, ``llm-kit-unavailable``, ``held``,
@@ -1134,7 +1159,7 @@ class Scheduler:
         if not edge_status.available:
             return {"code": "llm-kit-unavailable", "detail": edge_status.detail}
         if held:
-            return {"code": "held", "detail": "a Claude Code session is working this task; the dashboard yields"}
+            return {"code": "held", "detail": held_detail or "a Claude Code session is working this task; the dashboard yields"}
         if run.project_id in busy:
             return {"code": "checkout-busy", "detail": "another run is working in this checkout"}
         if ahead:
@@ -1162,13 +1187,15 @@ class Scheduler:
         seen_unheld: set[str] = set()
         key = cli_check.claude_key() if self.observer is not None else None
         for position, run in enumerate(self.start_order(queued), start=1):
-            is_held = folder_key(run.folder) in held
+            holders = self.session_holders(run.folder)
+            is_held = folder_key(run.folder) in held or bool(holders)
+            held_detail = hold_message(holders) if holders else None
             cli_state = None
             if config is not None and self._resolved_worker(run, config) == "claude":
                 cli_state = self._cli_gate(run, config, request=False, key=key)[0]
             view[run.id] = (position, self.wait_reason(
                 run, busy=busy, ahead=run.project_id in seen_unheld, held=is_held, config=config, config_error=config_error,
-                edge_status=status, cli_state=cli_state))
+                edge_status=status, cli_state=cli_state, held_detail=held_detail))
             if not is_held:
                 seen_unheld.add(run.project_id)
         return view
@@ -1230,7 +1257,7 @@ class Scheduler:
             busy = {r.project_id for r in self.db.runs(ACTIVE_STATES)}
             if run.project_id in busy or len(busy) >= config.max_parallel_projects:
                 continue
-            if self.db.live_holds(run.folder):
+            if self.is_held(run.folder):
                 continue
             if self._cli_gate(run, config, key=key)[0] == "wait":
                 continue
@@ -1252,7 +1279,7 @@ class Scheduler:
         if len(busy) >= config.max_parallel_projects:
             return False
         return any(
-            run.project_id not in busy and not self.db.live_holds(run.folder) and self._cli_gate(run, config)[0] != "wait"
+            run.project_id not in busy and not self.is_held(run.folder) and self._cli_gate(run, config)[0] != "wait"
             for run in self.db.runs((QUEUED,)))
 
     def _report_once(self, key: str, message: str) -> None:
@@ -1300,7 +1327,7 @@ class Scheduler:
             self._report_once(run.id, "; ".join(r.line() for r in result.reasons))
             return  # only non-blocking reasons: it stays queued
         with self._hold_gate:  # the hold re-check and the lease are one step, so a hold cannot slip between them
-            if self.db.live_holds(run.folder):
+            if self.is_held(run.folder):
                 return
             leased = self.db.try_lease(run.id, run.project_id, max_projects=config.max_parallel_projects)
         if not leased:

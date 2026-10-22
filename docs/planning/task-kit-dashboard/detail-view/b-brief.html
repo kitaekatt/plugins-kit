@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Task detail: brief</title>
+<meta name="description" content="Mockup B: the expanded task reads as a one-page brief with a fact rail; run controls are folded away.">
+<style>
+:root {
+  color-scheme: light dark;
+  --bg:#f5f7fa; --panel:#ffffff; --panel2:#eef2f6; --text:#17202c; --muted:#5d6b7d; --line:#d9e0e8;
+  --accent:#1769aa; --on-accent:#ffffff; --warn:#8f5c00; --on-warn:#ffffff; --bad:#b42318; --good:#147a43; --queue:#6b4fd1; --run:#1769aa;
+  --shadow:0 6px 18px #0002;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:#10151d; --panel:#18212d; --panel2:#1f2a39; --text:#e9eef5; --muted:#9eabba; --line:#334255;
+    --accent:#71b7ff; --on-accent:#08111c; --warn:#f2b84b; --on-warn:#1a1203; --bad:#ff7b7b; --good:#83d6a3; --queue:#b79cff; --run:#71b7ff;
+    --shadow:0 6px 18px #0007;
+  }
+}
+:root[data-theme="dark"] {
+    --bg:#10151d; --panel:#18212d; --panel2:#1f2a39; --text:#e9eef5; --muted:#9eabba; --line:#334255;
+    --accent:#71b7ff; --on-accent:#08111c; --warn:#f2b84b; --on-warn:#1a1203; --bad:#ff7b7b; --good:#83d6a3; --queue:#b79cff; --run:#71b7ff;
+    --shadow:0 6px 18px #0007;
+  color-scheme:dark;
+}
+:root[data-theme="light"] { color-scheme:light; }
+* { box-sizing:border-box; }
+html { -webkit-text-size-adjust:100%; }
+body { margin:0; background:var(--bg); color:var(--text); font:14px/1.35 system-ui,-apple-system,"Segoe UI",sans-serif; }
+button, input, select, textarea { font:inherit; color:inherit; }
+h1,h2,h3,h4,p { margin:0; }
+.mono { font-family:ui-monospace,"Cascadia Mono",Consolas,monospace; }
+.muted { color:var(--muted); }
+.grow { flex:1; }
+.ic { width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; flex:none; }
+.ic.fill { fill:currentColor; stroke:none; }
+
+/* ---------- header ---------- */
+.top { max-width:1520px; margin:0 auto; padding:10px 16px 0; }
+.top-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:8px; }
+.top h1 { font-size:1.25em; }
+.status { color:var(--muted); font-size:13px; }
+.status b { color:var(--text); font-weight:650; }
+.search { border:1px solid var(--line); background:var(--panel); border-radius:6px; padding:4px 9px; width:190px; }
+.search:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+
+.sortlbl { font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; font-weight:650; }
+
+.btn { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--line); background:var(--panel2); border-radius:6px; padding:5px 11px; cursor:pointer; font-size:13px; line-height:1.2; white-space:nowrap; }
+.btn:hover { border-color:var(--accent); }
+.btn:focus-visible, .bubble:focus-visible, .pill:focus-visible, .task-id-copy:focus-visible, .row-main:focus-visible, .seg button:focus-visible, summary:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.btn.primary { background:var(--accent); border-color:var(--accent); color:var(--on-accent); font-weight:600; }
+.btn.danger { color:var(--bad); border-color:color-mix(in srgb,var(--bad) 55%,var(--line)); }
+.btn.warn { background:color-mix(in srgb,var(--warn) 18%,var(--panel)); border-color:var(--warn); color:var(--text); font-weight:600; }
+.btn.sm { padding:2px 8px; font-size:12px; }
+.btn[disabled] { opacity:.5; cursor:not-allowed; }
+
+/* ---------- layout ---------- */
+.layout { max-width:1520px; margin:0 auto; padding:4px 16px 64px; }
+.sec-title { display:flex; align-items:center; gap:8px; font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:12px 0 5px; font-weight:650; }
+.sec-title .count { text-transform:none; letter-spacing:0; font-weight:400; }
+.sec-title:first-child { margin-top:2px; }
+.count { font-size:.85em; color:var(--muted); font-weight:400; }
+
+/* ---------- now running ---------- */
+.run-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(270px,1fr)); gap:10px; align-items:start; }
+.run-card { background:var(--panel); border:1px solid var(--line); border-left:4px solid var(--run); border-radius:8px; padding:10px 12px; display:flex; flex-direction:column; gap:6px; min-width:0; }
+.run-card.idle { border-left-color:var(--line); border-style:dashed; color:var(--muted); justify-content:center; }
+.run-card .proj { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); display:flex; justify-content:space-between; gap:6px; }
+.run-card .ttl { font-weight:650; font-size:15px; overflow-wrap:anywhere; }
+.run-card .sub { font-size:12px; color:var(--muted); overflow-wrap:anywhere; }
+.run-card .row { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.bar { height:5px; background:color-mix(in srgb,var(--run) 18%,var(--line)); border-radius:99px; overflow:hidden; }
+.bar > i { display:block; height:100%; background:var(--run); border-radius:99px; transition:width .4s; }
+.tail { margin:0; font:12px/1.4 ui-monospace,"Cascadia Mono",Consolas,monospace; color:var(--muted); background:var(--panel2); border-radius:5px; padding:6px 8px; white-space:pre-wrap; overflow-wrap:anywhere; max-height:7.6em; overflow:auto; }
+.tail .err { color:var(--bad); }
+.elapsed { font-variant-numeric:tabular-nums; font-weight:650; }
+.live { display:inline-flex; align-items:center; gap:5px; color:var(--run); font-size:12px; font-weight:650; }
+.live::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--run); animation:blink 1.4s infinite; }
+@keyframes blink { 50% { opacity:.25; } }
+
+/* ---------- needs you ---------- */
+.need-list { border:1px solid color-mix(in srgb,var(--warn) 45%,var(--line)); border-radius:8px; background:var(--panel); overflow:hidden; }
+.need-row { display:grid; grid-template-columns:minmax(130px,auto) minmax(150px,1fr) minmax(0,2fr) auto; gap:4px 12px; align-items:center; padding:6px 10px; border-top:1px solid var(--line); border-left:4px solid var(--warn); }
+.need-row:first-child { border-top:0; }
+.need-row.failed { border-left-color:var(--bad); }
+.need-row .kind { font-size:11px; text-transform:uppercase; letter-spacing:.05em; font-weight:700; color:var(--warn); display:flex; gap:5px; align-items:center; white-space:nowrap; }
+.need-row.failed .kind { color:var(--bad); }
+.need-row .ttl { font-weight:650; min-width:0; overflow-wrap:anywhere; }
+.need-row .why { font-size:12.5px; color:var(--muted); display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; min-width:0; }
+.need-row .acts { display:flex; gap:6px; margin:0; flex-wrap:wrap; justify-content:flex-end; }
+@media (max-width:760px) { .need-row { grid-template-columns:1fr; } .need-row .acts { justify-content:flex-start; } }
+
+.pri { font-size:11px; font-weight:700; padding:0 6px; border-radius:4px; border:1px solid var(--line); color:var(--muted); text-align:center; justify-self:start; }
+.pri.P1 { color:var(--bad); border-color:color-mix(in srgb,var(--bad) 50%,var(--line)); }
+.pri.P2 { color:var(--warn); border-color:color-mix(in srgb,var(--warn) 50%,var(--line)); }
+/* ---------- markers: needs you vs in flight ---------- */
+.mk { display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:700; line-height:1.2; padding:2px 10px 2px 7px; border-radius:99px; white-space:nowrap; border:2px solid transparent; }
+.mk .ic { width:14px; height:14px; }
+.mk.need { background:var(--warn); color:var(--on-warn); border-color:var(--warn); }
+.mk.run { background:color-mix(in srgb,var(--run) 14%,var(--panel)); color:var(--run); border-color:var(--run); }
+.mk.q { background:transparent; color:var(--queue); border:1px dashed var(--queue); font-weight:600; padding:1px 8px; }
+/* Working-session registrations: a small inline marker per record. Only "on" (verified running here) holds the task. */
+.mk.sess { white-space:normal; max-width:100%; font-weight:600; padding:1px 8px; }
+.mk.sess.on { background:color-mix(in srgb,var(--good) 14%,var(--panel)); color:var(--good); border:1px solid var(--good); }
+.mk.sess.off { background:transparent; color:var(--muted); border:1px dashed var(--muted); }
+/* Another machine's record, unverified here: a tint instead of a label, so it reads as present but not confirmed. */
+.mk.sess.far { background:color-mix(in srgb,var(--queue) 10%,var(--panel)); color:var(--queue); border:1px dotted var(--queue); opacity:.8; }
+.sess-line.on { color:var(--good); }
+.sess-line.off { color:var(--muted); }
+.sess-line.far { color:var(--queue); }
+.spin { animation:spin 1.6s linear infinite; transform-origin:50% 50%; }
+@keyframes spin { to { transform:rotate(360deg); } }
+
+/* ---------- the single task list ---------- */
+.listbar { display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin:2px 0 6px; }
+.listbar .sec-title { margin:0; }
+.legend { display:flex; gap:8px; align-items:center; flex-wrap:wrap; font-size:12px; color:var(--muted); }
+.tlist { display:flex; flex-direction:column; gap:6px; }
+.trow { background:var(--panel); border:1px solid var(--line); border-left:4px solid var(--line); border-radius:7px; overflow:hidden; }
+.trow.deferred { border-style:dashed; border-left-style:solid; }
+.trow.has-run { border-left-color:var(--run); }
+.trow.has-need { border-left-color:var(--warn); }
+.trow.open { border-color:color-mix(in srgb,var(--accent) 60%,var(--line)); box-shadow:var(--shadow); }
+.trow.has-need.open { border-left-color:var(--warn); }
+.trow.has-run.open:not(.has-need) { border-left-color:var(--run); }
+.row-main { display:grid; grid-template-columns:14px 34px minmax(0,1fr) 270px 150px; gap:10px; align-items:center; width:100%; text-align:left; background:transparent; border:0; padding:7px 12px 7px 9px; cursor:pointer; }
+.row-main:hover { background:var(--panel2); }
+.chev { width:7px; height:7px; border-right:2px solid var(--muted); border-bottom:2px solid var(--muted); transform:rotate(-45deg); transition:transform .15s; justify-self:center; }
+.trow.open .chev { transform:rotate(45deg); }
+.c-title { display:flex; gap:2px 12px; align-items:baseline; flex-wrap:wrap; min-width:0; opacity:var(--age,1); }
+.ttl { font-weight:650; overflow-wrap:anywhere; }
+.ident { font-size:12px; color:var(--muted); overflow-wrap:anywhere; }
+.ident .repo { color:var(--text); opacity:.8; }
+.c-marks { display:flex; gap:6px; align-items:center; flex-wrap:wrap; min-width:0; }
+.c-meta { font-size:12px; color:var(--muted); display:flex; gap:10px; justify-content:flex-end; opacity:var(--age,1); white-space:nowrap; }
+
+.tbody { border-top:1px solid var(--line); padding:8px 14px 12px; background:color-mix(in srgb,var(--panel) 86%,var(--bg)); }
+.tmeta { display:flex; gap:14px; flex-wrap:wrap; align-items:flex-start; }
+.tsum { flex:1 1 320px; font-size:13px; color:var(--muted); }
+.idl { margin:0; display:grid; grid-template-columns:auto 1fr; gap:2px 10px; font-size:12px; align-items:center; }
+.idl dt { color:var(--muted); } .idl dd { margin:0; display:flex; gap:6px; align-items:center; flex-wrap:wrap; overflow-wrap:anywhere; }
+.tacts { display:flex; gap:6px; margin-left:auto; align-self:center; }
+.tbody .need-list { margin:8px 0 2px; }
+
+/* ---------- collapsible sections below the list ---------- */
+.sec { margin-top:14px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
+.sec > summary { cursor:pointer; list-style:none; display:flex; gap:8px; align-items:center; padding:7px 12px; font-weight:650; }
+.sec > summary::-webkit-details-marker { display:none; }
+.sec > summary::before { content:''; width:7px; height:7px; border-right:2px solid var(--muted); border-bottom:2px solid var(--muted); transform:rotate(-45deg); transition:transform .15s; margin-right:3px; }
+.sec[open] > summary::before { transform:rotate(45deg); }
+.sec-body { border-top:1px solid var(--line); padding:6px 12px 10px; }
+
+.pipeline { display:flex; overflow-x:auto; padding:8px 2px 4px; scrollbar-width:thin; }
+.node { position:relative; width:104px; flex:none; display:flex; flex-direction:column; align-items:center; gap:4px; --c:var(--muted); }
+.node + .node::before { content:''; position:absolute; left:-33px; width:66px; top:18px; border-top:2px dashed var(--line); }
+.node.edge-done::before { border-top:2px solid color-mix(in srgb,var(--good) 70%,var(--line)); }
+.bubble { position:relative; width:38px; height:38px; border-radius:50%; border:2px solid var(--c); background:color-mix(in srgb,var(--c) 14%,var(--panel)); color:var(--c); display:grid; place-items:center; cursor:pointer; padding:0; transition:transform .12s; z-index:1; }
+.bubble:hover { transform:scale(1.08); }
+.bubble .ic { width:18px; height:18px; position:relative; }
+.bubble .qn { font-weight:700; font-size:13px; position:relative; }
+.node.sel .bubble { outline:2px solid var(--accent); outline-offset:3px; }
+.nlabel { font-size:12px; text-align:center; line-height:1.25; width:100%; padding:0 3px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; min-height:30px; overflow-wrap:anywhere; }
+.nsub { font-size:11px; color:var(--muted); min-height:20px; display:flex; align-items:center; gap:4px; }
+.pill { border:1px solid var(--line); background:var(--panel); border-radius:99px; padding:0 9px; font-size:11px; line-height:18px; cursor:pointer; color:var(--text); }
+.pill:hover { border-color:var(--accent); color:var(--accent); }
+.pill.bad { color:var(--bad); border-color:color-mix(in srgb,var(--bad) 55%,var(--line)); }
+
+.st-available .bubble { --c:var(--accent); border-color:color-mix(in srgb,var(--accent) 50%,var(--line)); background:var(--panel); color:var(--muted); }
+.st-available .bubble:hover { color:var(--accent); border-color:var(--accent); }
+.st-queued { --c:var(--queue); } .st-queued .bubble { border-style:dashed; }
+.st-running, .st-in-flight { --c:var(--run); }
+.st-running .bubble { border-color:transparent; background:conic-gradient(var(--run) calc(var(--p,0) * 1%), color-mix(in srgb,var(--run) 22%,var(--line)) 0); animation:pulse 2s infinite; }
+.st-running .bubble::before { content:''; position:absolute; inset:3px; border-radius:50%; background:var(--panel); }
+.st-blocked { --c:var(--warn); }
+.st-failed, .st-unknown { --c:var(--bad); }
+.st-in-flight .bubble { background:color-mix(in srgb,var(--run) 14%,var(--panel)); }
+.st-deferred { --c:var(--muted); } .st-deferred .bubble { border-style:dashed; opacity:.65; }
+.st-done { --c:var(--good); } .st-done .bubble { background:var(--good); color:var(--panel); border-color:var(--good); }
+.st-done .nlabel, .st-done .nsub { opacity:.7; }
+.addnode .bubble { border-style:dashed; color:var(--muted); background:transparent; --c:var(--muted); }
+.addnode .bubble:hover { color:var(--accent); border-color:var(--accent); }
+@keyframes pulse { 0% { box-shadow:0 0 0 0 color-mix(in srgb,var(--run) 45%,transparent); } 100% { box-shadow:0 0 0 9px transparent; } }
+@media (prefers-reduced-motion: reduce) { .st-running .bubble, .live::before, .spin { animation:none; } .bubble, .bar > i, .chev { transition:none; } }
+
+.empty { color:var(--muted); padding:8px 2px; }
+
+/* ---------- history ---------- */
+.runs-table { width:100%; border-collapse:collapse; font-size:13px; background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+.runs-table th { text-align:left; font-weight:600; color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.05em; padding:5px 10px; background:var(--panel2); }
+.runs-table td { padding:5px 10px; border-top:1px solid var(--line); vertical-align:top; }
+.runs-table tr.click { cursor:pointer; } .runs-table tr.click:hover td { background:var(--panel2); }
+.out { font-size:11px; font-weight:700; padding:1px 8px; border-radius:99px; border:1px solid currentColor; white-space:nowrap; }
+.out.done { color:var(--good); } .out.failed { color:var(--bad); } .out.blocked { color:var(--warn); } .out.cancelled { color:var(--muted); }
+
+/* ---------- inline detail (item, task, run) ---------- */
+.badges { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-bottom:8px; }
+.badge { font-size:12px; font-weight:650; padding:2px 10px; border-radius:99px; border:1px solid var(--c,var(--line)); color:var(--c,var(--text)); background:color-mix(in srgb,var(--c,var(--panel)) 12%,var(--panel)); }
+.chip { font-size:11px; padding:1px 8px; border-radius:99px; border:1px solid var(--line); color:var(--muted); white-space:nowrap; display:inline-flex; gap:5px; align-items:center; }
+.chip .dot { width:7px; height:7px; border-radius:50%; background:var(--muted); }
+.chip.claude .dot { background:#d9835b; } .chip.codex .dot { background:#4fa88f; }
+.callout { border:1px solid var(--c); background:color-mix(in srgb,var(--c) 10%,var(--panel)); border-radius:7px; padding:9px 11px; margin:8px 0; --c:var(--warn); }
+.callout.bad { --c:var(--bad); } .callout.info { --c:var(--accent); } .callout.good { --c:var(--good); }
+.callout strong { display:block; margin-bottom:2px; }
+.callout p { font-size:13px; overflow-wrap:anywhere; }
+.acts { display:flex; gap:6px; flex-wrap:wrap; margin:10px 0; }
+.card { background:var(--panel2); border:1px solid var(--line); border-radius:7px; padding:8px 10px; }
+.kv { display:grid; grid-template-columns:90px 1fr; gap:4px 8px; align-items:center; font-size:13px; }
+.kv dt { color:var(--muted); } .kv dd { margin:0; display:flex; gap:6px; align-items:center; flex-wrap:wrap; min-width:0; overflow-wrap:anywhere; }
+.seg { display:inline-flex; border:1px solid var(--line); border-radius:6px; overflow:hidden; }
+.seg button { border:0; background:var(--panel); padding:3px 11px; cursor:pointer; font-size:13px; }
+.seg button + button { border-left:1px solid var(--line); }
+.seg button:hover { background:var(--panel2); }
+.seg button[aria-pressed=true] { background:var(--accent); color:var(--on-accent); font-weight:600; }
+.seg button[disabled] { cursor:not-allowed; opacity:.6; }
+select, textarea, input.f { border:1px solid var(--line); background:var(--panel); border-radius:6px; padding:4px 8px; width:100%; }
+select { width:auto; }
+textarea { resize:vertical; min-height:84px; }
+select:focus-visible, textarea:focus-visible, input.f:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+.field { display:flex; flex-direction:column; gap:3px; margin:9px 0; font-size:13px; }
+.field label { font-weight:600; }
+.hint { font-size:12px; color:var(--muted); }
+.err-msg { color:var(--bad); font-size:12px; min-height:16px; }
+.cmdbox { border:1px solid var(--line); border-radius:7px; background:var(--panel2); margin:8px 0; overflow:hidden; }
+.cmdrow { display:flex; align-items:center; gap:8px; padding:6px 8px; }
+.cmdrow + .cmdrow { border-top:1px solid var(--line); }
+.cmdmain { flex:1; min-width:0; }
+.cmdlabel { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; margin-bottom:2px; }
+.cmdrow code { display:block; font:12.5px ui-monospace,Consolas,monospace; overflow-wrap:anywhere; }
+.secbody { font-size:13px; white-space:pre-wrap; overflow-wrap:anywhere; }
+.qrow { display:flex; align-items:center; gap:8px; padding:4px 0; border-top:1px solid var(--line); font-size:13px; }
+.qrow:first-of-type { border-top:0; }
+.qrow .t { flex:1; min-width:0; overflow-wrap:anywhere; }
+.mini-run { display:flex; gap:8px; align-items:baseline; font-size:12.5px; padding:3px 0; border-top:1px solid var(--line); }
+.mini-run:first-of-type { border-top:0; }
+.mini-run .m { color:var(--muted); font-size:12px; }
+
+
+@media (max-width:900px) {
+  .row-main { grid-template-columns:14px 34px minmax(0,1fr); }
+  .c-marks, .c-meta { grid-column:3; justify-content:flex-start; }
+}
+@media (max-width:640px) { .search { width:100%; } .tacts { margin-left:0; } }
+
+/* ---------- additions for the served dashboard ---------- */
+.sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+.fs12 { font-size:12px; }
+.fs13 { font-size:13px; }
+.mt4 { margin-top:4px; }
+.mt14 { margin-top:14px; }
+.mb0 { margin-bottom:0; }
+.proj-select { min-width:170px; }
+.banners { display:flex; flex-direction:column; gap:6px; margin-bottom:6px; }
+.banners .callout { margin:0; }
+.btn.pill-later { padding:0 9px; font-size:11px; line-height:18px; border-radius:99px; background:var(--panel); }
+.chip.warnchip { color:var(--warn); border-color:color-mix(in srgb,var(--warn) 55%,var(--line)); }
+.chip.badchip { color:var(--bad); border-color:color-mix(in srgb,var(--bad) 55%,var(--line)); }
+.findings { margin:4px 0 2px; font-size:12px; }
+.findings summary { cursor:pointer; color:var(--warn); }
+.findings ul { margin:4px 0 0; padding-left:18px; color:var(--muted); overflow-wrap:anywhere; }
+.activity-table td.when { white-space:nowrap; }
+.hidden-note { color:var(--muted); font-size:12px; padding:2px 2px 6px; }
+.item-list { list-style:none; margin:0; padding:0; }
+.item-list li { display:flex; align-items:center; gap:8px; padding:4px 0; border-top:1px solid var(--line); font-size:13px; }
+.item-list li:first-child { border-top:0; }
+.item-list .t { flex:1; min-width:0; overflow-wrap:anywhere; }
+.linkbtn { appearance:none; border:0; background:transparent; color:var(--accent); cursor:pointer; padding:0; font:inherit; text-align:left; }
+.linkbtn:hover { text-decoration:underline; }
+.linkbtn:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.nomatch { color:var(--muted); padding:10px 2px; }
+.t-run { color:var(--run); font-weight:650; }
+.t-warn { color:var(--warn); font-weight:650; }
+.fs11 { font-size:11px; }
+.run-card .sub { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+
+.logtail { background:var(--panel2); border:1px solid var(--line); border-radius:7px; padding:8px 10px; font-size:12px; max-height:340px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; }
+
+.idetail { border:1px solid color-mix(in srgb,var(--accent) 45%,var(--line)); border-radius:7px; background:var(--panel); padding:8px 14px 12px; margin:10px 0 4px; }
+.idhead { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
+.idhead h3 { font-size:1.05em; overflow-wrap:anywhere; }
+.tdetails { border-top:1px dashed var(--line); margin-top:10px; padding-top:2px; }
+.cols2 { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:0 22px; align-items:start; }
+@media (max-width:900px) { .cols2 { grid-template-columns:minmax(0,1fr); } }
+.run-detail td { background:var(--panel2); }
+.run-inline .logtail { max-height:260px; }
+
+/* ---------- inline forms (New task, Add item) ---------- */
+.formcard { border:1px solid color-mix(in srgb,var(--accent) 45%,var(--line)); border-radius:7px; background:var(--panel); padding:8px 14px 12px; margin:10px 0 4px; }
+.formcard .field { margin:7px 0; }
+input.f.narrow { width:7em; }
+
+/* ---------- mockup-only additions ---------- */
+[hidden] { display:none !important; }
+.seg { flex-wrap:wrap; max-width:100%; }
+.tl-grid > *, .rail-grid > *, .nowgrid > *, .sitcols > * { min-width:0; }
+.mockbar { max-width:1520px; margin:0 auto; padding:8px 16px 0; }
+.mockbar-in { display:flex; flex-wrap:wrap; gap:6px 14px; align-items:center; border:1px dashed var(--accent); border-radius:8px; padding:6px 12px; font-size:12.5px; background:color-mix(in srgb,var(--accent) 6%,var(--panel)); }
+.mockbar a { color:var(--accent); }
+.mockbar nav { display:flex; gap:10px; flex-wrap:wrap; }
+.mockbar nav a[aria-current=page] { font-weight:700; color:var(--text); text-decoration:none; }
+.mtag { font-weight:700; color:var(--accent); text-transform:uppercase; letter-spacing:.06em; font-size:11px; }
+.mockbar label { display:inline-flex; gap:5px; align-items:center; cursor:pointer; }
+.newswatch { display:inline-block; width:14px; height:10px; border:2px dashed var(--queue); border-radius:3px; vertical-align:middle; }
+.shownew [data-new] { outline:2px dashed var(--queue); outline-offset:2px; border-radius:4px; }
+a { color:var(--accent); }
+
+.gen { background:var(--panel); border:1px solid var(--line); border-left:4px solid var(--accent); border-radius:8px; padding:10px 13px; }
+.gen .lede { font-size:15px; line-height:1.5; }
+.asof { font-size:12px; color:var(--muted); display:flex; gap:4px 10px; flex-wrap:wrap; align-items:center; margin-top:7px; }
+.asof .ic { width:13px; height:13px; }
+.asof .sha { color:var(--accent); }
+.fresh { color:var(--good); font-weight:650; }
+.stale { color:var(--warn); font-weight:650; }
+.blk { margin-top:12px; }
+.blk > .sec-title { margin-top:0; }
+.prose { font-size:13.5px; line-height:1.5; }
+.prose + .prose { margin-top:4px; }
+.donewhen { font-size:12.5px; color:var(--muted); margin-top:4px; }
+.next { list-style:none; margin:0; padding:0; }
+.next li { display:flex; gap:8px; align-items:baseline; padding:4px 0; border-top:1px solid var(--line); font-size:13.5px; flex-wrap:wrap; }
+.next li:first-child { border-top:0; }
+.next .lbl { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); min-width:7.5em; }
+.iref { font:12px ui-monospace,"Cascadia Mono",Consolas,monospace; border:1px solid var(--line); border-radius:4px; padding:0 5px; background:var(--panel2); color:var(--text); cursor:pointer; }
+.iref:hover { border-color:var(--accent); color:var(--accent); }
+
+.rail-grid { display:grid; grid-template-columns:minmax(0,1fr) 310px; gap:16px; align-items:start; }
+@media (max-width:900px) { .rail-grid { grid-template-columns:minmax(0,1fr); } }
+.rail { display:flex; flex-direction:column; gap:10px; }
+.rcard { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:8px 11px; }
+.rcard > .sec-title { margin:0 0 4px; }
+.rcard.need { border-color:color-mix(in srgb,var(--warn) 55%,var(--line)); border-left:4px solid var(--warn); }
+
+.commit { display:grid; grid-template-columns:auto minmax(0,1fr); gap:0 8px; font-size:12.5px; padding:3px 0; border-top:1px solid var(--line); }
+.commit:first-of-type { border-top:0; }
+.commit .sha { font:12px ui-monospace,"Cascadia Mono",Consolas,monospace; color:var(--accent); }
+.commit .when { grid-column:2; font-size:11.5px; color:var(--muted); }
+.subhead { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; margin:6px 0 2px; font-weight:650; }
+.linklist { list-style:none; margin:0; padding:0; font-size:12.5px; }
+.linklist li { padding:2px 0; display:flex; gap:6px; align-items:center; overflow-wrap:anywhere; min-width:0; }
+.linklist .ic { width:13px; height:13px; color:var(--muted); }
+
+.stchip { font-size:11px; font-weight:700; padding:1px 8px; border-radius:99px; border:1px solid var(--c); color:var(--c); white-space:nowrap; --c:var(--muted); }
+.stchip.available { --c:var(--accent); }
+.stchip.blocked { --c:var(--warn); background:color-mix(in srgb,var(--warn) 12%,var(--panel)); }
+.stchip.deferred { border-style:dashed; }
+.stchip.inflight { --c:var(--run); }
+.stchip.done { --c:var(--good); }
+.irow { display:grid; grid-template-columns:86px minmax(0,1fr) auto; gap:2px 10px; align-items:center; padding:6px 0; border-top:1px solid var(--line); }
+.irow:first-child { border-top:0; }
+.irow .t { font-weight:600; font-size:13.5px; overflow-wrap:anywhere; }
+.irow .n { grid-column:2; font-size:12.5px; color:var(--muted); overflow-wrap:anywhere; }
+.irow .a { grid-row:1 / span 2; grid-column:3; display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
+@media (max-width:640px) { .irow { grid-template-columns:minmax(0,1fr); } .irow .n, .irow .a { grid-column:1; grid-row:auto; justify-content:flex-start; } }
+
+.acc { list-style:none; margin:0; padding:0; }
+.acc li { display:grid; grid-template-columns:52px minmax(0,1fr); gap:8px; font-size:13px; padding:3px 0; border-top:1px solid var(--line); }
+.acc li:first-child { border-top:0; }
+.acc .d { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
+
+.pagehead { display:flex; gap:10px 16px; align-items:flex-start; flex-wrap:wrap; margin:6px 0 10px; }
+.ph-main { flex:1 1 380px; min-width:0; display:flex; flex-direction:column; gap:6px; }
+.ph-title { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.ph-title h2 { font-size:1.35em; }
+.ph-acts { display:flex; gap:6px; flex-wrap:wrap; }
+.crumbs { display:flex; gap:8px; align-items:center; font-size:13px; margin-top:4px; flex-wrap:wrap; }
+.crumbs .ic { width:14px; height:14px; }
+
+.tabs { display:flex; gap:2px; border-bottom:1px solid var(--line); overflow-x:auto; scrollbar-width:thin; }
+.tabs button { border:0; background:transparent; padding:8px 14px 7px; border-bottom:3px solid transparent; cursor:pointer; font-weight:650; color:var(--muted); white-space:nowrap; display:inline-flex; gap:6px; align-items:center; }
+.tabs button:hover { color:var(--text); }
+.tabs button[aria-selected=true] { color:var(--text); border-bottom-color:var(--accent); }
+.tabs button:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+.tabs .count { font-weight:400; }
+.tabpanel { padding-top:12px; }
+.tabpanel[hidden] { display:none; }
+.viewnote { font-size:12px; color:var(--muted); margin:0 0 10px; display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+.viewnote b { color:var(--text); }
+
+.factstrip { display:flex; gap:6px 14px; flex-wrap:wrap; font-size:12.5px; color:var(--muted); align-items:center; }
+.factstrip b { color:var(--text); font-weight:650; }
+
+.toolbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:6px; }
+.optgrid { display:grid; grid-template-columns:minmax(0,1.4fr) auto auto auto auto; gap:6px 10px; align-items:center; font-size:13px; }
+.optgrid .h { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; font-weight:650; }
+@media (max-width:760px) { .optgrid { grid-template-columns:minmax(0,1fr) auto; } .optgrid .h { display:none; } }
+.tbl-wrap { overflow-x:auto; }
+
+.day { margin-top:10px; }
+.day > .dh { font-size:12px; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; padding:3px 0; border-bottom:1px solid var(--line); position:sticky; top:0; background:color-mix(in srgb,var(--panel) 86%,var(--bg)); z-index:1; }
+.ev { display:grid; grid-template-columns:48px 22px minmax(0,1fr) auto; gap:2px 8px; align-items:start; padding:5px 0; border-bottom:1px dashed var(--line); font-size:13px; }
+.ev .tm { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; padding-top:1px; }
+.ev .k { width:20px; height:20px; border-radius:50%; display:grid; place-items:center; border:1.5px solid var(--c); color:var(--c); background:color-mix(in srgb,var(--c) 12%,var(--panel)); --c:var(--muted); }
+.ev .k .ic { width:12px; height:12px; }
+.ev .tx { min-width:0; overflow-wrap:anywhere; }
+.ev .tx .src { font-size:11.5px; color:var(--muted); }
+.ev .ea { display:flex; gap:4px; flex-wrap:wrap; justify-content:flex-end; }
+.ev.progress .k { --c:var(--good); } .ev.code .k { --c:var(--accent); } .ev.record .k { --c:var(--queue); }
+.ev.run .k { --c:var(--run); } .ev.session .k { --c:var(--good); } .ev.log .k { --c:var(--muted); } .ev.summary .k { --c:var(--accent); }
+.ev.noise { opacity:.7; }
+@media (max-width:640px) { .ev { grid-template-columns:42px 22px minmax(0,1fr); } .ev .ea { grid-column:3; justify-content:flex-start; } }
+.fchips { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+.fchip { border:1px solid var(--line); background:var(--panel); border-radius:99px; padding:2px 10px; cursor:pointer; font-size:12.5px; display:inline-flex; gap:5px; align-items:center; }
+.fchip:hover { border-color:var(--accent); }
+.fchip[aria-pressed=true] { background:color-mix(in srgb,var(--accent) 14%,var(--panel)); border-color:var(--accent); }
+.fchip:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.fchip .sw { width:8px; height:8px; border-radius:50%; background:var(--c,var(--muted)); }
+
+.sitcard { border:1px solid var(--c); border-left:6px solid var(--c); border-radius:8px; background:color-mix(in srgb,var(--c) 7%,var(--panel)); padding:11px 14px; --c:var(--accent); }
+.sitcard.working { --c:var(--good); } .sitcard.waiting { --c:var(--warn); } .sitcard.returning { --c:var(--accent); }
+.sitcard .kicker { font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.07em; color:var(--c); display:flex; gap:6px; align-items:center; }
+.sitcard h3 { font-size:1.12em; margin:3px 0 6px; overflow-wrap:anywhere; }
+.sitcols { display:grid; grid-template-columns:minmax(0,1.25fr) minmax(0,1fr); gap:6px 22px; align-items:start; }
+@media (max-width:900px) { .sitcols { grid-template-columns:minmax(0,1fr); } }
+.decision { border-top:1px solid color-mix(in srgb,var(--warn) 35%,var(--line)); padding:8px 0 4px; }
+.decision:first-of-type { border-top:0; padding-top:2px; }
+.decision ol { margin:4px 0 0; padding-left:20px; font-size:13px; }
+.decision ol li { margin:2px 0; }
+.scen { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px; font-size:12px; color:var(--muted); }
+
+.nowgrid { display:grid; grid-template-columns:minmax(0,1.6fr) minmax(0,1fr) minmax(0,1fr); gap:10px; align-items:stretch; }
+@media (max-width:1000px) { .nowgrid { grid-template-columns:minmax(0,1fr); } }
+.tl-grid { display:grid; grid-template-columns:240px minmax(0,1fr); gap:16px; align-items:start; margin-top:12px; }
+@media (max-width:860px) { .tl-grid { grid-template-columns:minmax(0,1fr); } }
+.itemfilter { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:3px; }
+.itemfilter button { width:100%; text-align:left; display:grid; grid-template-columns:10px minmax(0,1fr); gap:3px 8px; align-items:center; border:1px solid transparent; background:transparent; border-radius:6px; padding:5px 7px; cursor:pointer; font-size:12.5px; }
+.itemfilter button:hover { background:var(--panel2); }
+.itemfilter button[aria-pressed=true] { border-color:var(--accent); background:color-mix(in srgb,var(--accent) 10%,var(--panel)); }
+.itemfilter button:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+.itemfilter .dot { width:9px; height:9px; border-radius:50%; background:var(--c,var(--muted)); }
+.itemfilter .s { grid-column:2; font-size:11px; color:var(--muted); }
+.timeline-box { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:6px 12px 10px; max-height:640px; overflow:auto; }
+.ev[hidden], .day[hidden] { display:none; }
+.hiddenline { font-size:12px; color:var(--muted); padding:6px 0 0; }
+</style>
+</head>
+<body>
+<div class="mockbar"><div class="mockbar-in"><span class="mtag">Mockup B of 4</span><b>Brief: one scroll, reading first, fact rail, run work folded</b><nav aria-label="Mockups"><a href="index.html">All concepts</a><a href="a-views.html">A. Views</a><a href="b-brief.html" aria-current="page">B. Brief</a><a href="c-situation.html">C. Situation card</a><a href="d-timeline.html">D. Timeline</a></nav><span class="grow"></span><label><input type="checkbox" id="markNew"> Mark data not served today <span class="newswatch" aria-hidden="true"></span></label><span class="seg" role="group" aria-label="Theme"><button type="button" data-theme-set="auto" aria-pressed="true">Auto</button><button type="button" data-theme-set="light" aria-pressed="false">Light</button><button type="button" data-theme-set="dark" aria-pressed="false">Dark</button></span></div></div><header class="top"><div class="top-row"><h1>Tasks</h1><span class="chip" role="status">connected</span><span class="grow"></span><button class="btn" type="button">Refresh</button><button class="btn" type="button" disabled>Pause worker</button></div><div class="top-row"><select class="proj-select" aria-label="Project filter"><option>All projects</option><option>plugins-kit</option></select><input class="search" type="search" placeholder="Filter tasks and items" aria-label="Filter tasks and items"><span class="sortlbl">Sort by</span><div class="seg" role="group" aria-label="Sort"><button type="button" aria-pressed="true">Priority</button><button type="button" aria-pressed="false">Needs you first</button><button type="button" aria-pressed="false">In progress first</button><button type="button" aria-pressed="false">Latest activity</button></div><span class="grow"></span><div class="status"><b>9</b> open, <b>3</b> need you, <b>0</b> running</div><button class="btn primary" type="button">New task</button></div></header><div class="layout"><details class="sec" open><summary>Open tasks <span class="count">9 - sorted by Priority</span></summary><div class="sec-body"><div class="tlist"><div class="trow" style="--age:1.0"><button type="button" class="row-main" aria-expanded="false"><span class="chev" aria-hidden="true"></span><span class="pri P1">P1</span><span class="c-title"><span class="ttl">Release notes generator</span><span class="ident mono"><span class="repo">plugins-kit</span>:release-notes</span></span><span class="c-marks"><span class="mk need"><svg class="ic " viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4l9.5 16.5h-19z"/><path d="M12 10v4.5M12 17.5h.01"/></svg>1 needs you</span></span><span class="c-meta"><span>3 items</span><span>3h ago</span></span></button></div><div class="trow open has-need "><button type="button" class="row-main" aria-expanded="true"><span class="chev" aria-hidden="true"></span><span class="pri P1">P1</span><span class="c-title"><span class="ttl">Task kit extraction</span><span class="ident mono"><span class="repo">plugins-kit</span>:task-kit-extraction</span></span><span class="c-marks"><span class="mk need"><svg class="ic " viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4l9.5 16.5h-19z"/><path d="M12 10v4.5M12 17.5h.01"/></svg>2 need you</span><span class="mk sess on" title="Verified running on this machine">Claude Code session working (studio, since 16:05)</span><span class="mk sess far" title="Unverified: another machine's record">on laptop, 2d ago</span></span><span class="c-meta"><span>5 items</span><span>12 min ago</span></span></button><div class="tbody"><div class="toolbar"><span class="fs13 muted" data-new="task.yaml description">Extract the task skill from awesome-kit into a new task-kit plugin, publish both, and install task-kit via the user bootstrap.json.</span><span class="grow"></span><button type="button" class="btn warn" id="openCc" aria-expanded="false"><svg class="ic " viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6l6 6-6 6M12 19h8"/></svg>Open in Claude Code</button><button type="button" class="btn" data-copy="plugins-kit:task-kit-extraction"><svg class="ic " viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg>Copy id</button></div><div id="ccBox" hidden><div class="cmdbox"><div class="cmdrow"><div class="cmdmain"><div class="cmdlabel">Start Claude Code in the task's checkout and work it</div><code>cd ~/Dev/plugins-kit &amp;&amp; claude &quot;/task-kit:task work dev/tasks/task-kit-extraction&quot;</code></div><button type="button" class="btn sm" data-copy="cd ~/Dev/plugins-kit &amp;&amp; claude &quot;/task-kit:task work dev/tasks/task-kit-extraction&quot;"><svg class="ic " viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg>Copy</button></div><div class="cmdrow"><div class="cmdmain"><div class="cmdlabel">Or, inside a running Claude Code session</div><code>/task-kit:task work dev/tasks/task-kit-extraction</code></div><button type="button" class="btn sm" data-copy="/task-kit:task work dev/tasks/task-kit-extraction"><svg class="ic " viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg>Copy</button></div></div></div><div class="rail-grid"><div><div class="gen" data-new="generated summary"><p class="lede">Getting task-kit 0.13.0 out. Working sessions (a Claude Code session records in git that it is working a task, and the dashboard marks the task) are built on dev but not yet published; release prep, unit U7, is under way. Next is this redesign of the task detail view, now at the mockup stage. Two items wait on you: a review of the 0.8.0 authoring forms, and a pick between these mockups.</p><div class="asof"><svg class="ic " viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l2.2 6.8L21 12l-6.8 2.2L12 21l-2.2-6.8L3 12l6.8-2.2z"/></svg><span>Generated summary</span><span>as of <span class="mono sha">d6bb301a</span> + task record <span class="mono sha">7cd92a28</span></span><span>21 Oct 18:52</span><span>local qwen relay</span><span class="fresh">up to date</span></div></div><div class="blk"><div class="sec-title"><svg class="ic " viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/></svg>Goal</div><p class="prose" data-new="CLAUDE.md Where we want to get to">A dashboard, opened by typing <span class="mono">task-kit</span> or <span class="mono">/task dashboard</span>, where you define work, queue task items to run unattended under a Claude or Codex worker, watch progress, and resolve blocked tasks in Claude Code.</p><p class="donewhen">Done when: architecture increments 2-6 are shipped and exercised on this machine, with task use in the harness unaffected throughout.</p></div><div class="blk"><div class="sec-title">Open items <span class="count">ordered as CLAUDE.md Immediate Priorities lists them</span></div><div class="card" style="background:var(--panel)"><div class="irow"><span class="stchip available">available</span><span class="t">Release working sessions as task-kit 0.13.0 (U7) <span class="pri P1">P1</span> <span class="iref" title="item id">working-sessions</span></span><span class="a"><button type="button" class="pill" disabled title="A Claude Code session on this machine is working this task; the dashboard starts no run on it until the session hands off.">Queue</button></span><span class="n">U0-U6 are on dev. Left: version bump, register entry, README, code review, Windows gate, smoke test, publish.</span></div><div class="irow"><span class="stchip blocked">needs you</span><span class="t">Redesign the task detail view to orient you first <span class="pri P1">P1</span> <span class="iref" title="item id">task-detail-view</span></span><span class="a"><button type="button" class="pill">Answer in Claude Code</button><button type="button" class="pill">Re-check</button></span><span class="n">Round 1 answered. Waiting on your pick between the detail-view mockups.</span></div><div class="irow"><span class="stchip blocked">needs you</span><span class="t">Review the 0.8.0 forms, or accept the defaults <span class="pri P2">P2</span> <span class="iref" title="item id">dashboard-increment-4</span></span><span class="a"><button type="button" class="pill">Answer in Claude Code</button><button type="button" class="pill">Re-check</button></span><span class="n">Published as 0.8.0. Three parked questions run with their defaults until you answer.</span></div><div class="irow"><span class="stchip available">available</span><span class="t">Remaining follow-ups: Codex deny test, PATH gap, doc split, SKILL.md size <span class="pri P3">P3</span> <span class="iref" title="item id">dashboard-followups</span></span><span class="a"><button type="button" class="pill" disabled title="A Claude Code session on this machine is working this task; the dashboard starts no run on it until the session hands off.">Queue</button></span><span class="n">Four small items; none blocks the release.</span></div><div class="irow"><span class="stchip deferred">deferred</span><span class="t">Show "in flight" only with evidence of work <span class="pri P3">P3</span> <span class="iref" title="item id">inflight-evidence</span></span><span class="a"><button type="button" class="pill">Undefer</button></span><span class="n">Deferred 21 Oct. Working sessions now supply the evidence this wanted.</span></div></div><p class="hint mt4">Each item carries only the action that fits its state. Run options, Queue all and run history are in Run work below.</p></div><div class="blk"><div class="sec-title">Recent progress <span class="count">plan.md Accomplished, newest first</span></div><ul class="acc" data-new="plan.md Accomplished"><li><span class="d">21 Oct</span><span>Working sessions U0-U6 and the no-index change landed on dev, unpublished; 1399 task-kit tests pass.</span></li><li><span class="d">21 Oct</span><span>Stale in-flight item states reset in two other tasks; the dashboard fix was deferred as inflight-evidence.</span></li><li><span class="d">20 Oct</span><span>task-kit characterize passed all 5 checks; native sub-agents are on until 27 Oct.</span></li><li><span class="d">20 Oct</span><span>0.12.0 release hardening published and installed.</span></li></ul><details class="mt4"><summary class="fs12 muted">6 earlier entries</summary><ul class="acc"><li><span class="d">20 Oct</span><span>0.9.0 - 0.11.0: fair scheduling, endpoint helper broker, characterize.</span></li><li><span class="d">20 Oct</span><span>0.8.0: New task, Add item, Defer, Queue all, run options.</span></li><li><span class="d">20 Oct</span><span>0.7.0 with llm-kit 0.3.0: Cancel run, crash recovery, runner re-adoption.</span></li><li><span class="d">19 Oct</span><span>0.6.4: one flat task list, repo-based task identity.</span></li><li><span class="d">19 Oct</span><span>0.4.0: the first queued item ran unattended and was accepted.</span></li><li><span class="d">17 Oct</span><span>Extraction published as task-kit 0.1.0; read-only dashboard as 0.3.0.</span></li></ul></details></div></div><aside class="rail"><div class="rcard"><div class="sec-title">Task</div><dl class="idl"><dt>Status</dt><dd><span class="chip">active</span><span class="pri P1">P1</span><span class="chip">hand-off</span></dd><dt>Identifier</dt><dd class="mono">plugins-kit:task-kit-extraction</dd><dt>Task path</dt><dd class="mono">dev/tasks/task-kit-extraction</dd><dt>Working in</dt><dd class="mono">~/Dev/plugins-kit</dd></dl></div><div class="rcard"><div class="sec-title"><svg class="ic " viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></svg>Working on it</div><div class="fs13"><div class="sess-line on">Claude Code session working (studio, since 16:05) <span class="muted">(session 7f3a91c2, plugins-kit)</span></div><div class="sess-line far mt4">on laptop, 2d ago <span class="muted">(session c40be117, unverified)</span> <button type="button" class="pill">Dismiss</button></div></div></div><div class="rcard"><div class="sec-title"><svg class="ic " viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.5"/><path d="M3 12h5.5M15.5 12H21"/></svg>Latest commits</div><div data-new="last commits"><div class="subhead">Code (plugins-kit, dev)</div><div class="commit"><button type="button" class="linkbtn sha" data-copy="d6bb301a" title="Copy sha">d6bb301a</button><span>task-kit 0.13.0: working sessions release prep (U7)</span><span class="when">21 Oct 18:30</span></div><div class="commit"><button type="button" class="linkbtn sha" data-copy="38a1e497" title="Copy sha">38a1e497</button><span>task-kit: working sessions keep no machine-local index</span><span class="when">21 Oct 17:52</span></div><div class="commit"><button type="button" class="linkbtn sha" data-copy="810db616" title="Copy sha">810db616</button><span>working-sessions plan: record rulings and landed units</span><span class="when">21 Oct 17:20</span></div><div class="subhead">Task record (tasks repo)</div><div class="commit"><button type="button" class="linkbtn sha" data-copy="7cd92a28" title="Copy sha">7cd92a28</button><span>Update 4 files under task-kit-extraction</span><span class="when">21 Oct 18:43</span></div></div></div><div class="rcard"><div class="sec-title">Depends on / blocked by</div><p class="fs13 muted" data-new="task.yaml depends_on, blocked_by">None recorded.</p></div><div class="rcard"><div class="sec-title"><svg class="ic " viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/></svg>Outputs <span class="count">5</span></div><ul class="linklist" data-new="durable outputs (task.yaml)"><li><svg class="ic " viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/></svg><span class="mono fs12">docs/planning/task-kit-dashboard/architecture.md</span></li><li><svg class="ic " viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/></svg><span class="mono fs12">docs/planning/task-kit-dashboard/architecture-review.md</span></li><li><svg class="ic " viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/></svg><span class="mono fs12">docs/planning/task-kit-dashboard/prototype-a-stage-map.html</span></li><li><svg class="ic " viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/></svg><span class="mono fs12">docs/planning/task-kit-dashboard/working-sessions-plan.md</span></li><li><svg class="ic " viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/></svg><span class="mono fs12">docs/reference/distributed-truth.md</span></li></ul><details class="mt4"><summary class="fs12 muted">Relevant files (4)</summary><ul class="linklist" data-new="relevant files (CLAUDE.md)"><li><svg class="ic " viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/></svg><span class="mono fs12">plugins/task-kit/skills/task/scripts/task_system/dashboard/</span></li><li><svg class="ic " viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/></svg><span class="mono fs12">plugins/task-kit/bin/</span></li><li><svg class="ic " viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/></svg><span class="mono fs12">tests/task-kit/</span></li><li><svg class="ic " viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/></svg><span class="mono fs12">scripts/publish.py</span></li></ul></details></div></aside></div><details class="sec"><summary>Run work <span class="count">2 items can run - held by a working session - 1 past run</span></summary><div class="sec-body"><div class="callout info"><strong>Held by a working session</strong><p>A Claude Code session on this machine (studio, since 16:05) is working this task. The dashboard starts no run on it until that session hands off. Queue stays drawn but disabled.</p></div><div class="pipeline" role="list"><div class="node st-available" data-node="working-sessions"><button type="button" class="bubble" data-select="working-sessions" aria-pressed="false" aria-label="Release working sessions as task-kit 0.13.0 (U7)"><svg class="ic " viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z"/></svg></button><div class="nlabel" title="Release working sessions as task-kit 0.13.0 (U7)">Release working sessions as task-kit 0.13.0 (U7)</div><div class="nsub"><button type="button" class="pill" disabled title="Held by a working session">Queue</button></div></div><div class="node st-blocked" data-node="task-detail-view"><button type="button" class="bubble" data-select="task-detail-view" aria-pressed="false" aria-label="Redesign the task detail view to orient you first"><svg class="ic " viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6.5v7M12 17.5h.01"/></svg></button><div class="nlabel" title="Redesign the task detail view to orient you first">Redesign the task detail view to orient you first</div><div class="nsub"><span class="t-warn">needs you</span></div></div><div class="node st-blocked" data-node="dashboard-increment-4"><button type="button" class="bubble" data-select="dashboard-increment-4" aria-pressed="false" aria-label="Review the 0.8.0 forms, or accept the defaults"><svg class="ic " viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6.5v7M12 17.5h.01"/></svg></button><div class="nlabel" title="Review the 0.8.0 forms, or accept the defaults">Review the 0.8.0 forms, or accept the defaults</div><div class="nsub"><span class="t-warn">needs you</span></div></div><div class="node st-available" data-node="dashboard-followups"><button type="button" class="bubble" data-select="dashboard-followups" aria-pressed="false" aria-label="Remaining follow-ups: Codex deny test, PATH gap, doc split, SKILL.md size"><svg class="ic " viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z"/></svg></button><div class="nlabel" title="Remaining follow-ups: Codex deny test, PATH gap, doc split, SKILL.md size">Remaining follow-ups: Codex deny test, PATH gap, doc split, SKILL.md size</div><div class="nsub"><button type="button" class="pill" disabled title="Held by a working session">Queue</button></div></div><div class="node st-deferred" data-node="inflight-evidence"><button type="button" class="bubble" data-select="inflight-evidence" aria-pressed="false" aria-label="Show "in flight" only with evidence of work"><svg class="ic " viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6v12M15 6v12"/></svg></button><div class="nlabel" title="Show "in flight" only with evidence of work">Show "in flight" only with evidence of work</div><div class="nsub">deferred</div></div><div class="node addnode"><button type="button" class="bubble" aria-label="Add item"><svg class="ic " viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button><div class="nlabel muted">Add item</div><div class="nsub"></div></div></div><div class="toolbar mt4"><div class="sec-title" style="margin:0">Run options</div><span class="grow"></span><button type="button" class="btn sm" disabled title="Held by a working session">Queue all available (2)</button></div><div class="card"><div class="optgrid"><span class="h">Item</span><span class="h">Worker</span><span class="h">Effort</span><span class="h">Time limit</span><span class="h"></span><span><b class="fs13">Release working sessions as task-kit 0.13.0 (U7)</b><br><span class="iref">working-sessions</span></span><span class="seg" role="group" aria-label="Worker"><button type="button" aria-pressed="true">Claude</button><button type="button" aria-pressed="false" disabled title="Codex workers are refused until the live deny test runs">Codex</button></span><select aria-label="Effort"><option>Default (high)</option><option>medium</option><option>xhigh</option></select><span><input class="f narrow" type="number" placeholder="60" aria-label="Time limit in minutes"> min</span><button type="button" class="btn primary sm" disabled title="Held by a working session"><svg class="ic " viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z"/></svg>Queue</button><span><b class="fs13">Remaining follow-ups: Codex deny test, PATH gap, doc split, SKILL.md size</b><br><span class="iref">dashboard-followups</span></span><span class="seg" role="group" aria-label="Worker"><button type="button" aria-pressed="true">Claude</button><button type="button" aria-pressed="false" disabled title="Codex workers are refused until the live deny test runs">Codex</button></span><select aria-label="Effort"><option>Default (high)</option><option>medium</option><option>xhigh</option></select><span><input class="f narrow" type="number" placeholder="60" aria-label="Time limit in minutes"> min</span><button type="button" class="btn primary sm" disabled title="Held by a working session"><svg class="ic " viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z"/></svg>Queue</button></div></div><p class="hint">Machine worker idle. Native sub-agents on until 27 Oct (3 at once, no nesting). Endpoint helpers: consent given for plugins-kit.</p><div class="sec-title">Past runs</div><div class="tbl-wrap"><table class="runs-table"><thead><tr><th>Ended</th><th>Item</th><th>Worker</th><th>Result</th><th></th></tr></thead><tbody><tr><td class="muted">19 Oct 14:22</td><td>increment-2-live-check</td><td><span class="chip claude"><span class="dot"></span>claude opus</span></td><td><span class="out done">accepted</span></td><td><button type="button" class="btn sm"><svg class="ic " viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="2.5"/></svg>Run log</button></td></tr></tbody></table></div></div></details><details class="sec"><summary>Task log <span class="count">1 entry - 22 refresh lines hidden</span></summary><div class="sec-body"><div class="mini-run"><span class="m">2026-10-21 18:43</span><span class="t">update: durable_outputs = 5 documents</span></div><p class="hiddenline">22 "update: refresh (no field edits)" lines hidden. <button type="button" class="linkbtn">Show</button></p></div></details></div></div><div class="trow" style="--age:0.8"><button type="button" class="row-main" aria-expanded="false"><span class="chev" aria-hidden="true"></span><span class="pri P2">P2</span><span class="c-title"><span class="ttl">Shell launcher audit</span><span class="ident mono"><span class="repo">plugins-kit</span>:launcher-audit</span></span><span class="c-marks"><span class="mk q">1 queued</span></span><span class="c-meta"><span>4 items</span><span>1d ago</span></span></button></div><div class="trow" style="--age:0.5"><button type="button" class="row-main" aria-expanded="false"><span class="chev" aria-hidden="true"></span><span class="pri P3">P3</span><span class="c-title"><span class="ttl">Scene sync cleanup</span><span class="ident mono"><span class="repo">hue-scenes</span>:scene-sync</span></span><span class="c-marks"></span><span class="c-meta"><span>2 items</span><span>4d ago</span></span></button></div></div></div></details></div>
+<script>
+
+(function () {
+  var root = document.documentElement;
+  document.querySelectorAll('[data-theme-set]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var v = b.getAttribute('data-theme-set');
+      if (v === 'auto') root.removeAttribute('data-theme'); else root.setAttribute('data-theme', v);
+      document.querySelectorAll('[data-theme-set]').forEach(function (o) { o.setAttribute('aria-pressed', String(o === b)); });
+    });
+  });
+  var nb = document.getElementById('markNew');
+  if (nb) nb.addEventListener('change', function () { document.body.classList.toggle('shownew', nb.checked); });
+  document.querySelectorAll('[data-copy]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var t = b.getAttribute('data-copy');
+      try { navigator.clipboard.writeText(t); } catch (e) { /* static mockup: copying is best effort */ }
+      var old = b.getAttribute('data-label') || b.innerHTML;
+      b.setAttribute('data-label', old);
+      b.textContent = 'Copied';
+      setTimeout(function () { b.innerHTML = old; }, 900);
+    });
+  });
+})();
+
+(function () {
+  var cc = document.getElementById('openCc');
+  cc.addEventListener('click', function () { var box = document.getElementById('ccBox'); box.hidden = !box.hidden; cc.setAttribute('aria-expanded', String(!box.hidden)); });
+})();
+
+</script>
+</body>
+</html>

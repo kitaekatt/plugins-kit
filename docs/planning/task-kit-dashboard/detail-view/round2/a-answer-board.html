@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Round 2A - Answer board</title>
+<meta name="description" content="A task detail concept where declared questions and durable answers form an orientation board.">
+<style>
+:root {
+  color-scheme:light dark;
+  --bg:#f5f7fa; --panel:#fff; --panel2:#eef2f6; --text:#17202c; --muted:#5d6b7d; --line:#d9e0e8;
+  --accent:#1769aa; --on-accent:#fff; --warn:#8f5c00; --bad:#b42318; --good:#147a43; --queue:#6b4fd1;
+  --shadow:0 6px 18px #0002;
+}
+@media (prefers-color-scheme:dark) {
+  :root { --bg:#10151d; --panel:#18212d; --panel2:#1f2a39; --text:#e9eef5; --muted:#9eabba; --line:#334255;
+    --accent:#71b7ff; --on-accent:#08111c; --warn:#f2b84b; --bad:#ff7b7b; --good:#83d6a3; --queue:#b79cff; --shadow:0 6px 18px #0007; }
+}
+* { box-sizing:border-box; }
+html { -webkit-text-size-adjust:100%; }
+body { margin:0; background:var(--bg); color:var(--text); font:14px/1.42 system-ui,-apple-system,"Segoe UI",sans-serif; overflow-wrap:anywhere; }
+button { font:inherit; color:inherit; }
+h1,h2,h3,p { margin:0; }
+a { color:var(--accent); }
+.mono { font-family:ui-monospace,"Cascadia Mono",Consolas,monospace; }
+.muted { color:var(--muted); }
+.grow { flex:1; }
+.mockbar { border-bottom:1px solid var(--line); background:var(--panel); }
+.mockbar-in,.top,.layout { max-width:1220px; margin:0 auto; padding-left:16px; padding-right:16px; }
+.mockbar-in { min-height:42px; display:flex; gap:9px 14px; align-items:center; flex-wrap:wrap; padding-top:7px; padding-bottom:7px; }
+.mockbar nav { display:flex; gap:10px; flex-wrap:wrap; font-size:12px; }
+.mtag,.chip,.state { display:inline-flex; align-items:center; border:1px solid var(--line); border-radius:99px; padding:2px 8px; font-size:11px; white-space:nowrap; }
+.mtag { color:var(--queue); border-color:var(--queue); font-weight:750; }
+.top { padding-top:13px; padding-bottom:10px; }
+.crumbs { color:var(--muted); font-size:12px; margin-bottom:7px; }
+.titleline,.toolbar,.prov { display:flex; align-items:center; gap:7px 10px; flex-wrap:wrap; }
+.titleline h1 { font-size:1.45rem; line-height:1.15; }
+.pri { color:var(--bad); border:1px solid currentColor; border-radius:4px; padding:1px 6px; font-size:11px; font-weight:750; }
+.state { color:var(--warn); border-color:var(--warn); background:color-mix(in srgb,var(--warn) 10%,var(--panel)); font-weight:700; }
+.sub { margin-top:5px; color:var(--muted); font-size:12.5px; }
+.layout { padding-top:4px; padding-bottom:60px; }
+.viewnote { border-left:4px solid var(--accent); background:color-mix(in srgb,var(--accent) 8%,var(--panel)); padding:8px 11px; margin-bottom:11px; border-radius:0 7px 7px 0; font-size:12.5px; }
+.board { display:grid; grid-template-columns:repeat(12,minmax(0,1fr)); gap:10px; }
+.answer { grid-column:span 6; min-width:0; background:var(--panel); border:1px solid var(--line); border-radius:9px; padding:12px 14px; box-shadow:0 1px 0 #00000008; }
+.answer.hero { grid-column:1 / -1; border-top:4px solid var(--accent); padding-top:11px; }
+.answer.action { border-left:4px solid var(--good); }
+.answer.waiting { border-left:4px solid var(--warn); }
+.answer.stale { border-color:color-mix(in srgb,var(--warn) 62%,var(--line)); background:repeating-linear-gradient(-45deg,color-mix(in srgb,var(--warn) 4%,var(--panel)) 0 8px,var(--panel) 8px 16px); }
+.answer.empty { border-style:dashed; }
+.answer.failed { border-color:color-mix(in srgb,var(--bad) 60%,var(--line)); }
+.q { color:var(--muted); font-size:11px; font-weight:760; letter-spacing:.055em; text-transform:uppercase; margin-bottom:5px; }
+.answer h2 { font-size:1.1rem; line-height:1.25; margin-bottom:5px; }
+.answer.hero h2 { font-size:1.3rem; }
+.answer p { font-size:13.5px; }
+.keyline { font-size:16px !important; line-height:1.35; max-width:900px; }
+.prov { border-top:1px solid var(--line); margin-top:9px; padding-top:7px; font-size:10.8px; color:var(--muted); }
+.prov .fresh { color:var(--good); font-weight:750; }
+.prov .stale-tag { color:var(--warn); font-weight:800; }
+.prov .bad-tag { color:var(--bad); font-weight:800; }
+.btn { display:inline-flex; align-items:center; border:1px solid var(--line); background:var(--panel2); border-radius:6px; padding:3px 8px; cursor:pointer; font-size:11px; line-height:1.2; }
+.btn:hover { border-color:var(--accent); }
+.facts { margin:0; padding-left:18px; }
+.facts li + li { margin-top:4px; }
+.commit { display:grid; grid-template-columns:auto minmax(0,1fr); gap:1px 8px; padding:4px 0; border-top:1px solid var(--line); font-size:12.5px; }
+.commit:first-of-type { border-top:0; }
+.commit .sha { color:var(--accent); }
+.commit .when { grid-column:2; color:var(--muted); font-size:11px; }
+.statusbox { padding:8px 9px; border-radius:6px; background:var(--panel2); color:var(--muted); font-size:12px; }
+.statusbox b { color:var(--text); }
+.question-list { margin-top:15px; padding:12px 14px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
+.question-list h2 { font-size:13px; margin-bottom:5px; }
+.question-list ol { columns:2; column-gap:28px; margin:0; padding-left:20px; font-size:12.5px; }
+.question-list li { break-inside:avoid; margin:3px 0; }
+@media (max-width:720px) {
+  .answer { grid-column:1 / -1; }
+  .question-list ol { columns:1; }
+}
+@media (max-width:430px) {
+  .mockbar-in,.top,.layout { padding-left:12px; padding-right:12px; }
+  .mockbar-in { align-items:flex-start; }
+  .titleline h1 { width:100%; font-size:1.28rem; }
+  .answer { padding:11px; }
+  .keyline { font-size:14.5px !important; }
+  .prov { gap:4px 8px; }
+}
+</style>
+</head>
+<body>
+<div class="mockbar"><div class="mockbar-in"><span class="mtag">Round 2A</span><b>Answer board</b><nav data-print-hide aria-label="Round 2 mockups"><a href="index.html">All concepts</a><a href="b-briefing.html">B. Briefing</a><a href="c-lenses.html">C. Lenses</a></nav></div></div>
+<header class="top">
+  <div class="crumbs">Tasks / plugins-kit:task-kit-extraction</div>
+  <div class="titleline"><h1>Task kit extraction</h1><span class="pri">P1</span><span class="state">2 need you</span><span class="chip">working locally</span></div>
+  <p class="sub">9 declared questions - 6 fresh - 1 stale - 1 unanswered - 1 failed</p>
+</header>
+<main class="layout">
+  <div class="viewnote"><b>Concept:</b> The default task view is the answer set, ordered by orientation value. The question remains visible so each paragraph has a stable meaning.</div>
+  <section class="board" aria-label="Task orientation answers">
+    <article class="answer hero">
+      <div class="q">What is this task for?</div>
+      <h2>Give the task system its own plugin and make its dashboard useful for defining, running, and resuming work.</h2>
+      <p class="muted">The current phase is less about extraction and more about completing the dashboard as a trustworthy place to understand active work.</p>
+      <div class="prov"><span>local qwen</span><span>code <span class="mono">8ab21c4</span></span><span>task record <span class="mono">4de319a</span></span><span>asked 12 min ago</span><span class="fresh">fresh</span></div>
+    </article>
+    <article class="answer">
+      <div class="q">Where does it stand?</div>
+      <h2>Core dashboard work is shipped; the next release is staged but not published.</h2>
+      <p>Session tracking is implemented and tested on the development branch. The detail-view design is at round 2. Two older product choices still wait for review.</p>
+      <div class="prov"><span>local qwen</span><span>as of <span class="mono">8ab21c4</span></span><span>12 min ago</span><span class="fresh">fresh</span></div>
+    </article>
+    <article class="answer action">
+      <div class="q">What is the next action?</div>
+      <h2>Choose a task-detail direction, then package it with the pending session-tracking release.</h2>
+      <p>After the choice: plan the live UI change, finish release checks on both operating systems, publish, and restart the dashboard.</p>
+      <div class="prov"><span>luna medium</span><span>as of task record <span class="mono">4de319a</span></span><span>9 min ago</span><span class="fresh">fresh</span></div>
+    </article>
+    <article class="answer waiting">
+      <div class="q">What is waiting on me, with defaults?</div>
+      <h2>Two decisions.</h2>
+      <ul class="facts">
+        <li><b>Pick a detail view.</b> Default: Answer board.</li>
+        <li><b>Review older authoring controls.</b> Default: keep the shipped behavior.</li>
+      </ul>
+      <div class="prov"><span>local qwen</span><span>as of task record <span class="mono">4de319a</span></span><span>9 min ago</span><span class="fresh">fresh</span></div>
+    </article>
+    <article class="answer">
+      <div class="q">What is it blocked on?</div>
+      <h2>No engineering blocker.</h2>
+      <p>The work is paused for product alignment. Automated runs should not replace the pending choice.</p>
+      <div class="prov"><span>local qwen</span><span>as of <span class="mono">8ab21c4</span></span><span>12 min ago</span><span class="fresh">fresh</span></div>
+    </article>
+    <article class="answer stale">
+      <div class="q">Which code commits belong to it?</div>
+      <div class="commit"><span class="sha mono">8ab21c4</span><span>prepare durable session records for release</span><span class="when">today, development branch</span></div>
+      <div class="commit"><span class="sha mono">f3027ae</span><span>show local and remote work sessions differently</span><span class="when">today, development branch</span></div>
+      <p class="statusbox"><b>Possibly incomplete:</b> 3 newer repository commits were not classified.</p>
+      <div class="prov"><span>local qwen</span><span>as of <span class="mono">8ab21c4</span></span><span>1h ago</span><span class="stale-tag">stale</span><button class="btn" type="button" data-print-hide>Re-ask</button></div>
+    </article>
+    <article class="answer">
+      <div class="q">How big is what remains?</div>
+      <h2>Medium: one product choice, one UI increment, one release pass.</h2>
+      <p>Estimate: 1-2 focused sessions. Confidence is moderate because the live UI change is not planned yet.</p>
+      <div class="prov"><span>haiku medium</span><span>as of <span class="mono">8ab21c4</span></span><span>24 min ago</span><span class="fresh">fresh</span></div>
+    </article>
+    <article class="answer empty">
+      <div class="q">What tasks are related?</div>
+      <h2>Not answered yet</h2>
+      <p class="muted">This question is declared, but no durable answer exists. It will be asked after the task index is refreshed.</p>
+      <div class="prov"><span>preferred: local qwen</span><span>never asked</span><button class="btn" type="button" data-print-hide>Ask now</button></div>
+    </article>
+    <article class="answer failed">
+      <div class="q">Is it stale or abandoned?</div>
+      <h2>Answer failed</h2>
+      <p class="muted">The model could not reconcile the latest activity time with the active local session. The previous answer was not overwritten.</p>
+      <div class="prov"><span>local qwen</span><span>failed 6 min ago</span><span class="bad-tag">source conflict</span><button class="btn" type="button" data-print-hide>Re-ask</button></div>
+    </article>
+  </section>
+  <section class="question-list">
+    <h2>Questions this concept assumes</h2>
+    <ol><li>What is this task for?</li><li>Where does it stand?</li><li>What is the next action?</li><li>What is waiting on me, with defaults?</li><li>What is it blocked on?</li><li>Which code commits belong to it?</li><li>How big is what remains?</li><li>What tasks are related?</li><li>Is it stale or abandoned?</li></ol>
+  </section>
+</main>
+</body>
+</html>

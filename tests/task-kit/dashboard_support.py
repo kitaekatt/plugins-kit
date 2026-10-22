@@ -108,16 +108,22 @@ class Running:
     """An in-process dashboard server on a thread, plus a raw HTTP client."""
 
     def __init__(self, data_dir: Path, parents: tuple[Path, ...], busy=None, edge=None,
-                 config_path: Path | None = None, min_interval: float = 0.0, cli_observer=False) -> None:
+                 config_path: Path | None = None, min_interval: float = 0.0, cli_observer=False, sessions=None) -> None:
         from task_system.dashboard.inventory import Inventory
         from task_system.dashboard.server import DashboardServer
+        from task_system.dashboard.sessions_view import SessionsMaintainer
 
         self.data_dir = Path(data_dir)
         self.log = io.StringIO()
-        self.inventory = Inventory(parents=parents, min_interval=min_interval)
+        self.inventory = Inventory(parents=parents, min_interval=min_interval, sessions=sessions)
+        # A test drives the maintainer itself (``server.maintainer.once()``): its own thread never fires.
+        maintainer = None if sessions is None else SessionsMaintainer(
+            sessions, lambda: self.inventory.snapshot().session_roots, interval_s=3600.0, first_delay_s=3600.0,
+            data_dir=self.data_dir, log=lambda message: self.log.write(message + "\n"))
         self.server = DashboardServer(
             data_dir=data_dir, scripts_dir=SCRIPTS_DIR, inventory=self.inventory,
             busy=busy, log=self.log, edge=edge, config_path=config_path, cli_observer=cli_observer,
+            sessions=sessions, maintainer=maintainer,
         )
         self.state = self.server.start()
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)

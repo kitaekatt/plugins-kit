@@ -30,11 +30,11 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="task_hold.py", description=__doc__.split("\n\n")[0])
     parser.add_argument("ref", help="the task ref being worked (as passed to `task.py work`)")
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="project root (default: the current directory)")
-    parser.add_argument("--session", default=None, help="the Claude Code session id (default: $CLAUDE_SESSION_ID)")
+    parser.add_argument("--session", default=None, help="the Claude Code session id (default: $CLAUDE_CODE_SESSION_ID)")
     parser.add_argument("--data-dir", type=Path, default=None,
                         help="task-kit's data directory (default: derived from the running venv)")
     parser.add_argument("--session-pid", type=int, default=None,
-                        help="the Claude Code process id (default: found among this command's ancestors)")
+                        help="the Claude Code process id (default: $CLAUDE_PID, accepted only as a live ancestor of this command)")
     args = parser.parse_args(argv)
     return handshake.run(args.ref, args.root.resolve(), session=args.session, data_dir=args.data_dir,
                          session_pid=args.session_pid)

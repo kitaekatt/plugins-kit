@@ -61,6 +61,7 @@ plugins-kit/                          # Marketplace root
 | `plugins/bootstrap/skills/bootstrap/references/engine-internals.md` | Bootstrap engine internals |
 | `docs/reference/shared-lib-architecture.md` | Six findings about the `shared_libs` mechanism (standalone-broadcast collisions, verify-after-write, no revocation, no version marker, `sys.modules` staleness, a duplicated standalone-interpreter path), reviewed 2026-09-20; four open, verify-after-write fixed in bootstrap 0.123.0, `sys.modules` staleness fixed in bootstrap 0.140.0 |
 | `docs/planning/bootstrap/MILESTONES.md` | Development milestones and progress |
+| `docs/reference/distributed-truth.md` | Principles for shared state across the user's machines: git is the truth, one writer per file, verify only what you observe, never block on unverifiable state |
 | `docs/reference/adapters.md` | Current adapter guidance: model-task selection, corpus independence, admission, artifact contract, and task-skill ownership at the emitter |
 | `docs/reference/adapters-negative-results.md` | Closed adapter experiments, disqualified candidates, cost rejections, and explicitly unmeasured deferrals |
 | `docs/planning/adapters/adapter-design.md` | Historical md-audit adapter design record and measurement tables; the task skill owns the adapter and enforces it at the emitter |

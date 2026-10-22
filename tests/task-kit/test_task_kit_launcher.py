@@ -23,6 +23,7 @@ import psutil
 import pytest
 from dashboard_support import ENTRYPOINT, PLUGIN_ROOT, REPO_ROOT, SCRIPTS_DIR, clean_env, make_task
 
+from task_system import datadir
 from task_system.dashboard import launcher as L
 from task_system.dashboard import state as dstate
 from task_system.dashboard.codehash import code_hash
@@ -525,7 +526,7 @@ def _venv(root: Path, marketplace="plugins-kit") -> Path:
 
 def test_data_dir_is_the_venvs_parent_with_the_marketplace_from_the_path(tmp_path):
     venv = _venv(tmp_path / "data", marketplace="some-marketplace")
-    assert dstate.resolve_data_dir({}, str(venv)) == venv.parent.resolve()
+    assert datadir.resolve_data_dir({}, str(venv)) == venv.parent.resolve()
 
 
 def test_a_venv_outside_the_redirected_data_root_is_refused(tmp_path):
@@ -533,15 +534,15 @@ def test_a_venv_outside_the_redirected_data_root_is_refused(tmp_path):
     production = _venv(tmp_path / "production")
     redirected = tmp_path / "redirected"
     redirected.mkdir()
-    with pytest.raises(dstate.DashboardStateError, match="refusing"):
-        dstate.resolve_data_dir({dstate.DATA_ROOT_ENV: str(redirected)}, str(production))
+    with pytest.raises(datadir.DataDirError, match="refusing"):
+        datadir.resolve_data_dir({datadir.DATA_ROOT_ENV: str(redirected)}, str(production))
     inside = _venv(redirected)
-    assert dstate.resolve_data_dir({dstate.DATA_ROOT_ENV: str(redirected)}, str(inside)) == inside.parent.resolve()
+    assert datadir.resolve_data_dir({datadir.DATA_ROOT_ENV: str(redirected)}, str(inside)) == inside.parent.resolve()
 
 
 def test_a_non_plugin_interpreter_cannot_resolve_a_data_dir(tmp_path):
-    with pytest.raises(dstate.DashboardStateError, match="provisioned venv"):
-        dstate.resolve_data_dir({}, str(tmp_path))
+    with pytest.raises(datadir.DataDirError, match="provisioned venv"):
+        datadir.resolve_data_dir({}, str(tmp_path))
 
 
 # ---------------------------------------------------------------------------

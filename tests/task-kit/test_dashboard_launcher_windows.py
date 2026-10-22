@@ -1,6 +1,6 @@
 """Windows process creation, run on every OS.
 
-``procspawn`` is the one place the dashboard reads the platform for process
+``task_system.procspawn`` is the one place task-kit reads the platform for process
 creation, and its callers pass ``windows=`` explicitly. So the Windows
 composition and its wiring are tested here with the Windows constants
 monkeypatched in (absent on POSIX), and the ``child_exec`` Windows branch is
@@ -21,7 +21,8 @@ from pathlib import Path
 import pytest
 from dashboard_support import ENTRYPOINT
 
-from task_system.dashboard import child_exec, procspawn, runfiles
+from task_system import procspawn
+from task_system.dashboard import child_exec, runfiles
 from task_system.dashboard import launcher as L
 from task_system.dashboard import runner
 from task_system.dashboard.scheduler import Scheduler

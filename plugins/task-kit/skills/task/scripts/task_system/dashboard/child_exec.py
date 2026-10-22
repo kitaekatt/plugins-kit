@@ -34,7 +34,8 @@ _SCRIPTS = Path(__file__).resolve().parents[2]
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
-from task_system.dashboard import proctree, procspawn, runfiles  # noqa: E402
+from task_system import procspawn  # noqa: E402
+from task_system.dashboard import proctree, runfiles  # noqa: E402
 
 GO_TIMEOUT_S = 30.0
 POLL_S = 0.02

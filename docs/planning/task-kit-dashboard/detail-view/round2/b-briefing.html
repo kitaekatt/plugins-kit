@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Round 2B - Cited briefing</title>
+<meta name="description" content="A task detail concept that reads as a compact briefing assembled from durable question answers.">
+<style>
+:root {
+  color-scheme:light dark;
+  --bg:#f5f7fa; --panel:#fff; --panel2:#eef2f6; --text:#17202c; --muted:#5d6b7d; --line:#d9e0e8;
+  --accent:#1769aa; --on-accent:#fff; --warn:#8f5c00; --bad:#b42318; --good:#147a43; --queue:#6b4fd1;
+  --shadow:0 6px 18px #0002;
+}
+@media (prefers-color-scheme:dark) {
+  :root { --bg:#10151d; --panel:#18212d; --panel2:#1f2a39; --text:#e9eef5; --muted:#9eabba; --line:#334255;
+    --accent:#71b7ff; --on-accent:#08111c; --warn:#f2b84b; --bad:#ff7b7b; --good:#83d6a3; --queue:#b79cff; --shadow:0 6px 18px #0007; }
+}
+* { box-sizing:border-box; }
+html { -webkit-text-size-adjust:100%; }
+body { margin:0; background:var(--bg); color:var(--text); font:14px/1.48 system-ui,-apple-system,"Segoe UI",sans-serif; overflow-wrap:anywhere; }
+button { font:inherit; color:inherit; }
+h1,h2,h3,p { margin:0; }
+a { color:var(--accent); }
+.mono { font-family:ui-monospace,"Cascadia Mono",Consolas,monospace; }
+.grow { flex:1; }
+.mockbar { border-bottom:1px solid var(--line); background:var(--panel); }
+.mockbar-in,.top,.layout { max-width:1160px; margin:0 auto; padding-left:16px; padding-right:16px; }
+.mockbar-in { min-height:42px; display:flex; gap:9px 14px; align-items:center; flex-wrap:wrap; padding-top:7px; padding-bottom:7px; }
+.mockbar nav { display:flex; gap:10px; flex-wrap:wrap; font-size:12px; }
+.mtag,.chip { display:inline-flex; align-items:center; border:1px solid var(--line); border-radius:99px; padding:2px 8px; font-size:11px; white-space:nowrap; }
+.mtag { color:var(--queue); border-color:var(--queue); font-weight:750; }
+.top { padding-top:14px; padding-bottom:11px; }
+.eyebrow { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.07em; font-weight:740; }
+.titleline,.meta,.prov,.ledger-head { display:flex; align-items:center; gap:6px 10px; flex-wrap:wrap; }
+.titleline h1 { font-size:1.45rem; line-height:1.2; }
+.pri { color:var(--bad); border:1px solid currentColor; border-radius:4px; padding:1px 6px; font-size:11px; font-weight:750; }
+.meta { margin-top:5px; color:var(--muted); font-size:12px; }
+.layout { padding-top:4px; padding-bottom:60px; }
+.viewnote { border-left:4px solid var(--queue); background:color-mix(in srgb,var(--queue) 8%,var(--panel)); padding:8px 11px; margin-bottom:11px; border-radius:0 7px 7px 0; font-size:12.5px; }
+.brief-wrap { display:grid; grid-template-columns:minmax(0,1.65fr) minmax(290px,.8fr); gap:12px; align-items:start; }
+.brief { background:var(--panel); border:1px solid var(--line); border-radius:10px; box-shadow:var(--shadow); overflow:hidden; }
+.brief-top { padding:15px 17px 12px; border-bottom:1px solid var(--line); background:linear-gradient(135deg,color-mix(in srgb,var(--accent) 10%,var(--panel)),var(--panel) 55%); }
+.brief-top h2 { font-size:1.18rem; margin-top:3px; }
+.brief-top .deck { color:var(--muted); margin-top:4px; }
+.brief-body { padding:4px 17px 14px; }
+.passage { position:relative; padding:12px 0 11px 34px; border-top:1px solid var(--line); }
+.passage:first-child { border-top:0; }
+.n { position:absolute; left:0; top:12px; display:grid; place-items:center; width:23px; height:23px; border:1px solid var(--accent); border-radius:50%; color:var(--accent); font:700 11px ui-monospace,monospace; }
+.passage h3 { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; margin-bottom:3px; }
+.passage p { font-size:14px; }
+.passage .decision { padding:8px 10px; margin-top:7px; border-left:3px solid var(--warn); background:color-mix(in srgb,var(--warn) 9%,var(--panel)); border-radius:0 6px 6px 0; }
+.prov { margin-top:6px; color:var(--muted); font-size:10.5px; }
+.fresh { color:var(--good); font-weight:760; }
+.stale { color:var(--warn); font-weight:800; }
+.sidebar { display:flex; flex-direction:column; gap:10px; }
+.panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px 11px; min-width:0; }
+.panel h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin-bottom:5px; }
+.fact { display:grid; grid-template-columns:auto minmax(0,1fr); gap:1px 8px; padding:5px 0; border-top:1px solid var(--line); font-size:12.5px; }
+.fact:first-of-type { border-top:0; }
+.fact .sha { color:var(--accent); }
+.fact .when { grid-column:2; color:var(--muted); font-size:11px; }
+.ledger { background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+.ledger-head { padding:9px 11px; background:var(--panel2); }
+.ledger-head h2 { font-size:12px; }
+.ledger-row { display:grid; grid-template-columns:22px minmax(0,1fr) auto; gap:5px 8px; align-items:start; padding:8px 10px; border-top:1px solid var(--line); font-size:12px; }
+.ledger-row .id { color:var(--accent); font-weight:800; }
+.ledger-row .source { grid-column:2; color:var(--muted); font-size:10.5px; }
+.ledger-row.stale-row { background:color-mix(in srgb,var(--warn) 7%,var(--panel)); }
+.ledger-row.empty { border-left:3px dashed var(--muted); }
+.ledger-row.failed { border-left:3px solid var(--bad); }
+.status { font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.04em; color:var(--good); }
+.status.warn { color:var(--warn); }
+.status.bad { color:var(--bad); }
+.status.none { color:var(--muted); }
+.btn { border:1px solid var(--line); background:var(--panel2); border-radius:6px; padding:3px 8px; cursor:pointer; font-size:11px; }
+.btn:hover { border-color:var(--accent); }
+.question-list { margin-top:12px; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:11px 13px; }
+.question-list h2 { font-size:13px; margin-bottom:4px; }
+.question-list p { color:var(--muted); font-size:12.5px; }
+@media (max-width:820px) { .brief-wrap { grid-template-columns:1fr; } .sidebar { display:grid; grid-template-columns:1fr 1fr; } .ledger { grid-column:1 / -1; } }
+@media (max-width:560px) { .sidebar { display:flex; } }
+@media (max-width:430px) {
+  .mockbar-in,.top,.layout { padding-left:12px; padding-right:12px; }
+  .titleline h1 { width:100%; font-size:1.28rem; }
+  .brief-top,.brief-body { padding-left:12px; padding-right:12px; }
+  .passage { padding-left:30px; }
+  .ledger-row { grid-template-columns:20px minmax(0,1fr); }
+  .ledger-row .status { grid-column:2; }
+}
+</style>
+</head>
+<body>
+<div class="mockbar"><div class="mockbar-in"><span class="mtag">Round 2B</span><b>Cited briefing</b><nav data-print-hide aria-label="Round 2 mockups"><a href="index.html">All concepts</a><a href="a-answer-board.html">A. Answer board</a><a href="c-lenses.html">C. Lenses</a></nav></div></div>
+<header class="top">
+  <div class="eyebrow">plugins-kit:task-kit-extraction</div>
+  <div class="titleline"><h1>Task kit extraction</h1><span class="pri">P1</span><span class="chip">active</span><span class="chip">working locally</span></div>
+  <div class="meta"><span>Brief updated 12 min ago</span><span>-</span><span>8 of 10 questions usable</span></div>
+</header>
+<main class="layout">
+  <div class="viewnote"><b>Concept:</b> Read one coherent briefing. Each paragraph is still a durable answer, and its numbered citation opens the question ledger.</div>
+  <div class="brief-wrap">
+    <article class="brief">
+      <div class="brief-top"><div class="eyebrow">Orientation brief</div><h2>You are choosing the shape of the task view before the next dashboard release.</h2><p class="deck">The brief is composed, but not stored as a second summary: it is rendered from the answers below.</p></div>
+      <div class="brief-body">
+        <section class="passage"><span class="n">Q1</span><h3>What is this task for?</h3><p>The task moved the task system into its own plugin and grew a dashboard for defining, running, and resuming work. The present goal is to make that dashboard orient a person before it offers automation.</p><div class="prov"><span>local qwen</span><span>code <span class="mono">8ab21c4</span></span><span class="fresh">fresh</span></div></section>
+        <section class="passage"><span class="n">Q2</span><h3>Where does it stand?</h3><p>The core dashboard is already in use. Durable session tracking is implemented on the development branch and waiting to ship. The detail view is at a second round of design, with no live UI change started.</p><div class="prov"><span>local qwen</span><span>task record <span class="mono">4de319a</span></span><span class="fresh">fresh</span></div></section>
+        <section class="passage"><span class="n">Q3</span><h3>What should I do next?</h3><p>Pick a direction for the detail view. The next implementation can then be planned and released with session tracking after its remaining checks.</p><div class="decision"><b>Decision requested:</b> Choose Answer board, Cited briefing, or Lenses. Suggested default: Answer board.</div><div class="prov"><span>luna medium</span><span>task record <span class="mono">4de319a</span></span><span class="fresh">fresh</span></div></section>
+        <section class="passage"><span class="n">Q4</span><h3>What is waiting on me?</h3><p>There are two product choices: this detail-view direction, and whether to keep the already shipped authoring-control defaults. Neither is an engineering failure; unattended work should remain paused at these choices.</p><div class="prov"><span>local qwen</span><span>9 min ago</span><span class="fresh">fresh</span></div></section>
+        <section class="passage"><span class="n">Q5</span><h3>How much remains?</h3><p>Roughly one focused UI increment plus a release pass. Confidence is moderate: the release checklist is known, but the UI plan depends on the choice above.</p><div class="prov"><span>haiku medium</span><span>24 min ago</span><span class="fresh">fresh</span></div></section>
+        <section class="passage"><span class="n">Q6</span><h3>Which code belongs to this task?</h3><p>Two recent changes clearly belong to session tracking. This answer may omit newer commits because the classifier ran before the latest repository activity.</p><div class="prov"><span>local qwen</span><span>code <span class="mono">8ab21c4</span></span><span class="stale">stale - 3 newer commits</span><button class="btn" type="button" data-print-hide>Re-ask</button></div></section>
+      </div>
+    </article>
+    <aside class="sidebar">
+      <section class="panel"><h2>Evidence from code</h2><div class="fact"><span class="sha mono">8ab21c4</span><span>prepare durable session records for release</span><span class="when">classified by Q6</span></div><div class="fact"><span class="sha mono">f3027ae</span><span>separate local and remote session signals</span><span class="when">classified by Q6</span></div></section>
+      <section class="panel"><h2>Defaults in force</h2><div class="fact"><b>Detail view</b><span>Answer board</span></div><div class="fact"><b>Authoring controls</b><span>Keep shipped behavior</span></div><div class="fact"><b>Run policy</b><span>Pause at product choices</span></div></section>
+      <section class="ledger" aria-label="Question answer ledger">
+        <div class="ledger-head"><h2>Answer ledger</h2><span class="grow"></span><span class="chip">10 declared</span></div>
+        <div class="ledger-row"><span class="id">Q1</span><span>What is this task for?</span><span class="status">fresh</span><span class="source">local qwen - code + task record</span></div>
+        <div class="ledger-row"><span class="id">Q2</span><span>Where does it stand?</span><span class="status">fresh</span><span class="source">local qwen - code + task record</span></div>
+        <div class="ledger-row"><span class="id">Q3</span><span>What is the next action?</span><span class="status">fresh</span><span class="source">luna medium - task record</span></div>
+        <div class="ledger-row"><span class="id">Q4</span><span>What is waiting on me, with defaults?</span><span class="status">fresh</span><span class="source">local qwen - task record</span></div>
+        <div class="ledger-row"><span class="id">Q5</span><span>How big is what remains?</span><span class="status">fresh</span><span class="source">haiku medium - plan + history</span></div>
+        <div class="ledger-row stale-row"><span class="id">Q6</span><span>Which code commits belong to it?</span><span class="status warn">stale</span><span class="source">local qwen - code <span class="mono">8ab21c4</span></span></div>
+        <div class="ledger-row"><span class="id">Q7</span><span>What is it blocked on?</span><span class="status">fresh</span><span class="source">local qwen - task record</span></div>
+        <div class="ledger-row"><span class="id">Q8</span><span>What changed since I last worked on it?</span><span class="status">fresh</span><span class="source">local qwen - session boundary</span></div>
+        <div class="ledger-row empty"><span class="id">Q9</span><span>What tasks are related?</span><span class="status none">unanswered</span><span class="source">Waiting for task-index refresh <button class="btn" type="button" data-print-hide>Ask</button></span></div>
+        <div class="ledger-row failed"><span class="id">Q10</span><span>Is it stale or abandoned?</span><span class="status bad">failed</span><span class="source">Conflicting activity signals <button class="btn" type="button" data-print-hide>Re-ask</button></span></div>
+      </section>
+    </aside>
+  </div>
+  <section class="question-list"><h2>Questions this concept assumes</h2><p>Q1 purpose; Q2 current standing; Q3 next action; Q4 waiting on me and defaults; Q5 remaining size; Q6 associated commits; Q7 blockers; Q8 change since my last session; Q9 related tasks; Q10 staleness or abandonment.</p></section>
+</main>
+</body>
+</html>

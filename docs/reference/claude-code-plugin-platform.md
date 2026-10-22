@@ -77,6 +77,61 @@ place it can read one.
 
 bootstrap's profile prompt is the consumer of both (`bootstrap_lib/profiles.py::should_prompt`).
 
+## Session identity across resume, measured
+
+Measured 2026-10-21 on Claude Code 2.1.306, macOS (Darwin 25.6, arm64), with a throwaway plugin
+loaded through `--plugin-dir` whose `hooks.json` carried four SessionStart entries: no matcher,
+matcher `resume`, matcher `clear`, and an `async: true` entry that sleeps 3 s before logging. Each
+entry appended the hook input, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_BRIDGE_SESSION_ID`,
+`CLAUDE_PID` and the hook's `$PPID` to a log; a Bash tool command in the session printed the same
+variables. Interactive sessions were driven through a pseudo-terminal (`/clear` and `/exit` typed
+at the prompt); `claude -p` runs with `--resume`, `--continue` and `--fork-session` were a
+cross-check and gave the same ids and sources. Ids below are the first 8 characters; S1, S2 and S3
+are distinct session ids and P1..P5 distinct processes.
+
+| Case | hook `source` | hook `session_id` = Bash `CLAUDE_CODE_SESSION_ID` | `CLAUDE_PID` | `transcript_path` | matcher entries that fired |
+|---|---|---|---|---|---|
+| new session | `startup` | S1 | P1 | `<project dir>/S1.jsonl` | none (no-matcher and async only) |
+| `/clear` in that session | `clear` | S2 (new) | P1 (unchanged) | `<project dir>/S2.jsonl` | `clear` |
+| `/exit` | process exits; ids unchanged | - | - | - | SessionEnd not probed |
+| `claude --resume S1` (the pre-clear id) | `resume` | S1 (kept) | P2 (new) | `S1.jsonl` | `resume` |
+| `claude --resume S2` | `resume` | S2 (kept) | P3 (new) | `S2.jsonl` | `resume` |
+| `claude --continue` | `resume` | S2 (the most recent session in that directory) | P4 (new) | `S2.jsonl` | `resume` |
+| `claude --resume S2 --fork-session` | `fork` | S3 (new) | P5 (new) | `S3.jsonl` | none: neither `resume` nor `clear` |
+
+- `CLAUDE_PID` in the Bash tool, in a hook command, and the hook's `$PPID` were the same number
+  in every case: the Claude process itself. It changed on every new process and only then.
+- The hook input's `session_id` equalled `CLAUDE_CODE_SESSION_ID` in the hook's own environment
+  and in the Bash tool, in every case, including the first hook after `/clear`.
+- Hook input fields: `session_id`, `transcript_path`, `cwd`, `hook_event_name`, `source` on every
+  source; `resume` and `fork` also carried `scratchpad_dir`, `seconds_since_last_response`,
+  `context_tokens`, `prompt_cache_likely_expired` and `estimated_cache_write_usd`.
+- The async entry (3 s sleep) ran to completion and logged in every interactive case (startup,
+  `clear`, `resume`, `fork`) and in the `-p` runs, which lasted longer than 3 s. A `-p` run that
+  ends sooner was not tested.
+- `CLAUDE_CODE_BRIDGE_SESSION_ID` is not a session key. A nested child inherits the parent's value
+  when the parent exports one. In a clean interactive session it was absent from the SessionStart
+  hook environment on `startup`, `resume` and `fork`, present in the Bash tool environment and (after
+  `/clear`) in the hook environment, and unchanged across `/clear`. Across resume it was reused in
+  two runs (`--resume S2`, `--continue`) and new in two (`--resume S1`, fork).
+- Measurement trap: a nested interactive `claude` that inherits `CLAUDE_CODE_CHILD_SESSION` (and
+  the other `CLAUDE_CODE_*` variables of its parent) wrote no transcript file, although the hook
+  input named a `transcript_path`. The runs above removed every `CLAUDE_CODE_*` variable, `CLAUDE_PID`
+  and `CLAUDE_PLUGIN_DATA` from the child environment and kept `HOME`.
+- Not measured: Windows (Git Bash and PowerShell `CLAUDE_PID` ancestry, SessionStart behaviour);
+  the in-session `/resume` picker; SessionEnd hooks; the content of the `clear` input beyond
+  `source`, `session_id` and `transcript_path`.
+
+What this settles for `docs/planning/task-kit-dashboard/working-sessions-plan.md`:
+
+| Hypothesis | Result |
+|---|---|
+| The session id survives a plain `--resume` and `--continue`, and SessionStart `resume` carries it | Confirmed on macOS: same id, new `CLAUDE_PID`, new process, same transcript file. |
+| An `async: true` plugin SessionStart command hook completes in an interactive session | Confirmed on macOS (3 s hook, every source). |
+| `/clear` changes the session id, keeps `CLAUDE_PID`, and fires SessionStart with `source: clear` | Confirmed on macOS; the plugin `clear` matcher fired and its input carried the new id and a new `transcript_path`. |
+| A plugin SessionStart hook with matcher `resume` fires for `--resume` and `--continue` | Confirmed; both report `source: resume`. |
+| `--resume --fork-session` behaves like a resume | Refuted: `source` is `fork`, the id is new, and neither the `resume` nor the `clear` matcher fires. A hook that must see forks needs an entry that matches `fork` (or no matcher). Records of the original session keep the original id. |
+
 ## Plugin Cache and Registry Layout
 
 Claude Code stores plugin data under `~/.claude/plugins/`:

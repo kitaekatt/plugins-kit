@@ -26,36 +26,32 @@ import json
 import os
 import sys
 import time
+import warnings
 from pathlib import Path
 from typing import TextIO
 
 import psutil
 
-from .. import resolve
-from .state import DashboardStateError, read_state, resolve_data_dir, runtime_root, state_path
+from .. import harness, resolve
+from ..datadir import DataDirError, resolve_data_dir
+from .state import DashboardStateError, read_state, runtime_root, state_path
 
 TOTAL_TIMEOUT_S = 2.0
 
 
 def find_session_process(start_pid: int | None = None) -> psutil.Process | None:
-    """The nearest ancestor that looks like the Claude Code process, or None."""
+    """Deprecated: the Claude Code process for ``start_pid`` (default: this process), or None.
+
+    The former ancestor-name heuristic returned the short-lived shell a Bash tool command runs under.
+    This shim answers with ``CLAUDE_PID`` validated as a live ancestor (:func:`harness.claude_process`) and
+    is removed after two minor versions (docs/reference/deprecation-policy.md); call that function instead.
+    """
+    warnings.warn("handshake.find_session_process is deprecated: use task_system.harness.claude_process",
+                  DeprecationWarning, stacklevel=2)
     try:
-        proc = psutil.Process(start_pid if start_pid is not None else os.getpid()).parent()
-    except psutil.NoSuchProcess:
+        return harness.claude_process(start_pid=start_pid)
+    except harness.IdentityError:
         return None
-    while proc is not None:
-        try:
-            name = proc.name().lower()
-            command = " ".join(proc.cmdline()[:3]).lower()
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            name, command = "", ""
-        if "claude" in name or "claude" in command:
-            return proc
-        try:
-            proc = proc.parent()
-        except psutil.NoSuchProcess:
-            return None
-    return None
 
 
 def _post(port: int, token: str, payload: dict, timeout_s: float) -> dict:
@@ -101,7 +97,7 @@ def run(
 
     try:
         data = Path(data_dir) if data_dir is not None else resolve_data_dir()
-    except DashboardStateError as exc:
+    except DataDirError as exc:
         return say(f"dashboard handshake skipped, no hold registered: {exc}")
     root = runtime_root(data)
     try:
@@ -111,11 +107,18 @@ def run(
     if state is None:
         return 0
 
-    process = psutil.Process(session_pid) if session_pid is not None else find_session_process()
-    if process is None:
-        return say("dashboard handshake skipped, no hold registered: no Claude Code process was found among this "
-                   "command's ancestors, so a hold would not end with the session")
-    session_id = session or os.environ.get("CLAUDE_SESSION_ID") or f"pid-{process.pid}"
+    if session_pid is not None:  # an explicit pid is the caller's own choice (the tests', a tool's): no ancestry rule
+        try:
+            process = psutil.Process(session_pid)
+        except psutil.NoSuchProcess:
+            return say(f"dashboard handshake skipped, no hold registered: process {session_pid} is not running")
+    else:
+        try:
+            process = harness.claude_process()
+        except harness.IdentityError as exc:
+            return say(f"dashboard handshake skipped, no hold registered: {exc}; a hold on any other process would "
+                       "not end with the session")
+    session_id = session or harness.session_id() or f"pid-{process.pid}"
     payload = {"folder": str(folder), "session": session_id, "pid": process.pid, "create_time": process.create_time()}
     try:
         answer = _post(state.port, state.token, payload, max(0.1, deadline - clock()))

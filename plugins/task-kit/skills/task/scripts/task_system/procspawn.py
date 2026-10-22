@@ -1,4 +1,4 @@
-"""How the dashboard creates processes: the one place that reads the platform.
+"""How task-kit creates detached and hidden processes: the one place that reads the platform.
 
 Three launches share one decision, "is this Windows", and each needs different
 ``Popen`` keyword arguments:

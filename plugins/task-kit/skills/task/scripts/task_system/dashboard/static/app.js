@@ -115,6 +115,69 @@ function brightness(ts) {
   if (hrs >= 120) return 0.33;
   return 1 - ((hrs - 4) / 116) * 0.67;
 }
+/* Working-session registrations. Their timestamps are UTC ("...Z"), unlike the task log's local times. A registration
+ * that is verified running on this machine holds the task; every other one is only shown and blocks nothing. */
+function agoUtc(ts) {
+  var t = Date.parse(ts);
+  if (isNaN(t)) return 'age unknown';
+  var m = Math.floor((Date.now() - t) / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return m + ' min ago';
+  var h = Math.floor(m / 60);
+  if (h < 48) return h + 'h ago';
+  return Math.floor(h / 24) + 'd ago';
+}
+function sinceUtc(ts) {
+  var t = Date.parse(ts);
+  if (isNaN(t)) return 'an unknown time';
+  var d = new Date(t), n = new Date();
+  var clock = pad(d.getHours()) + ':' + pad(d.getMinutes());
+  if (d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate()) return clock;
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + clock;
+}
+function sessionText(s) {
+  if (s.state === 'running') return 'Claude Code session working (' + s.host + ', since ' + sinceUtc(s.registered_at) + ')';
+  if (s.state === 'not running') return 'not running (' + s.host + ', ' + agoUtc(s.registered_at) + ')';
+  return 'on ' + s.host + ', ' + agoUtc(s.registered_at);
+}
+/* The state is not left to the word "unverified" in the marker: the tint says it, and the title and the aria-label spell it out. */
+function sessionLabel(s) { return sessionText(s) + (s.state === 'unverified' ? ', unverified' : ''); }
+function sessionClass(s) { return s.state === 'running' ? 'on' : s.state === 'not running' ? 'off' : 'far'; }
+function sessionTitle(s) {
+  var what = s.state === 'running' ? 'Verified running on this machine: the dashboard starts no run on this task until it hands off.' :
+    s.state === 'not running' ? 'This machine\'s record, but its process is not running. Shown only: it blocks nothing, and stays until /task hand-off or task sessions release.' :
+    'Unverified: another machine\'s record, which this machine cannot verify. Shown only: it blocks nothing, and Dismiss hides it here.';
+  return what + ' Session ' + s.session + (s.checkout ? ', checkout ' + s.checkout : '') + ', last recorded ' + agoUtc(s.recorded_at) + '.' +
+    (s.task_state && s.task_state !== 'open' && s.task_state !== 'unknown' ? ' The task is ' + s.task_state + '.' : '');
+}
+function sessionsOf(task) { return task.sessions || []; }
+function holdingSession(task) {
+  var all = sessionsOf(task);
+  for (var i = 0; i < all.length; i++) if (all[i].holds) return all[i];
+  return null;
+}
+var MAX_SESSION_MARKS = 3;
+function sessionMarksHtml(task) {
+  var all = sessionsOf(task), h = '', i;
+  for (i = 0; i < all.length && i < MAX_SESSION_MARKS; i++) {
+    h += '<span class="mk sess ' + sessionClass(all[i]) + '" title="' + esc(sessionTitle(all[i])) + '" aria-label="' + esc(sessionLabel(all[i])) + '">' + esc(sessionText(all[i])) + '</span>';
+  }
+  if (all.length > MAX_SESSION_MARKS) {
+    h += '<span class="mk sess far" title="' + esc(all.slice(MAX_SESSION_MARKS).map(sessionLabel).join('; ')) + '">+' + (all.length - MAX_SESSION_MARKS) + ' more</span>';
+  }
+  return h;
+}
+function sessionRowsHtml(task) {
+  var all = sessionsOf(task);
+  if (!all.length) return '';
+  return '<dt>Working sessions</dt><dd>' + all.map(function (s) {
+    return '<span class="sess-line ' + sessionClass(s) + '" title="' + esc(sessionTitle(s)) + '" aria-label="' + esc(sessionLabel(s)) + '">' + esc(sessionText(s)) + ' <span class="muted">(session ' +
+      esc(s.session) + (s.checkout ? ', ' + esc(s.checkout) : '') + (s.task_state && s.task_state !== 'open' && s.task_state !== 'unknown' ? ', task ' + esc(s.task_state) : '') + ')</span>' +
+      (s.dismissable ? ' <button type="button" class="pill" data-action="dismisssession" data-key="' + esc(tkey(task)) + '" data-host="' + esc(s.host) + '" data-sid="' + esc(s.session_id) +
+        '" data-reg="' + esc(s.registered_at) + '" title="Dismiss this registration. This machine records the dismissal in its own session file and publishes it to git, so every dashboard hides the record and the owning machine drops it at its next write. No other machine file is edited; a new registration shows again.">Dismiss</button>' : '') + '</span>';
+  }).join('<br>') + '</dd>';
+}
+
 /* A task is addressed by the checkout it is read from (two checkouts of one
  * repository may each hold a task with the same path). The repository is the
  * project; the task is SHOWN as <repo>:<stub>, the full path stays the id. */
@@ -177,6 +240,8 @@ function runPill(label, action, key) {
 
 /* Why authoring (Add item, Defer, Undefer) is off for a task right now, or '' when it is not. */
 function authoringBlock(task) {
+  var holder = holdingSession(task);
+  if (holder) return 'Claude Code session ' + holder.session + ' is working this task on ' + holder.host + '; make the change there, or wait for its hand-off.';
   if (task.held) return 'A Claude Code session is working this task; make the change there, or Re-check when it is done.';
   if (task.run_active) return 'A dashboard run is working this task; wait for it to finish, or cancel it.';
   return '';
@@ -613,7 +678,7 @@ function markersHtml(task) {
   if (need) h += '<span class="mk need" title="Waiting on you: blocked items and blocked or invalid tasks">' + ic('tri') + need + (need === 1 ? ' needs you' : ' need you') + '</span>';
   if (run) h += '<span class="mk run" title="A job is running on this task">' + ic('spin', 'spin') + run + ' in flight</span>';
   if (q) h += '<span class="mk q" title="Waiting in the queue">' + q + ' queued</span>';
-  return h;
+  return h + sessionMarksHtml(task);
 }
 function taskBody(task) {
   var avail = task.items.filter(function (i) { return i.ui_state === 'available' && !isLiveRun(i.run); }).length;
@@ -627,7 +692,7 @@ function taskBody(task) {
   return '<div class="tbody"><div class="tmeta">' +
     '<dl class="idl"><dt>Identifier</dt><dd><button type="button" class="task-id-copy" data-action="copy" data-text="' + esc(ident) + '" title="Copy identifier">' + esc(ident) + '</button></dd>' +
     '<dt>Task path</dt><dd><button type="button" class="task-id-copy" data-action="copy" data-text="' + esc(task.id) + '" title="Copy task path">' + esc(task.id) + '</button></dd>' +
-    '<dt>Working in</dt><dd class="mono">' + esc(task.working_root) + '</dd></dl>' +
+    '<dt>Working in</dt><dd class="mono">' + esc(task.working_root) + '</dd>' + sessionRowsHtml(task) + '</dl>' +
     '<div class="tacts">' + (open && avail > 1 ? runButton('Queue all available (' + avail + ')', 'sm', null, 'queueall', tkey(task)) : '') + '</div></div>' +
     needsHtml(task) +
     (nodes ? '<div class="pipeline" role="list">' + nodes + '</div>' : '') + empty +
@@ -957,6 +1022,21 @@ function actionResult(label, r) {
   var e = (r.body && r.body.error) || {};
   S.notice = { kind: r.status === 409 ? 'info' : 'bad', title: label + ' was not done' + (e.blocked ? ' - the task is now blocked' : ''), text: errorText(r) };
 }
+/* Re-check reports working-session registrations and never releases one. */
+function recheckSessionsNotice(r, task) {
+  var found = r.status >= 200 && r.status < 300 && r.body && r.body.sessions;
+  if (!found || !found.length) return;
+  S.notice = { kind: 'info', title: 'Re-check done; working-session registrations remain',
+    text: 'Re-check does not release a registration. Still registered: ' + found.map(sessionText).join('; ') +
+      '. A registration ends at /task hand-off, or with: task sessions release ' + task.id + ' --all-local' };
+}
+/* Dismiss records, in this machine's own session file, a dismissal of another machine's unverified registration, then commits and pushes it (dismiss_and_publish); every reader hides the record. No other machine's file is edited. */
+function doDismissSession(el) {
+  var p = splitIKey(el.getAttribute('data-key') + '|-');
+  send('POST', '/api/v1/sessions/dismiss', { checkout: p.project, task: p.task, host: el.getAttribute('data-host'),
+    session_id: el.getAttribute('data-sid'), registered_at: el.getAttribute('data-reg') })
+    .then(function (r) { actionResult('Dismiss', r); render(); pollNow(); });
+}
 function enc(x) { return encodeURIComponent(x); }
 /* The run options of an item as the server wants them: only what the person set. Null (with a message) when one is unusable. */
 function optionsOf(key) {
@@ -988,7 +1068,12 @@ function doRecheck(el) {
   var k = el.getAttribute('data-key'), p = splitIKey(k), task = findTask(p.project + '|' + p.task);
   if (!task) return;
   send('POST', '/api/v1/items/' + enc(p.project) + '/' + enc(p.task) + '/' + enc(p.item || '-') + '/recheck',
-    { expected_revision: task.revision }).then(function (r) { actionResult('Re-check', r); pollNow(); });
+    { expected_revision: task.revision }).then(function (r) {
+      actionResult('Re-check', r);
+      recheckSessionsNotice(r, task);
+      render(); // the poll renders only when the snapshot changed, and a notice is not part of it
+      pollNow();
+    });
 }
 function doRetry(el) {
   var parts = el.getAttribute('data-key').split('|'), task = findTask(parts[1] + '|' + parts[2]);
@@ -1128,6 +1213,7 @@ function toggleRun(id) {
 var ACTIONS = {
   queue: doQueue,
   recheck: doRecheck,
+  dismisssession: doDismissSession,
   retry: doRetry,
   cancel: doCancel,
   remove: doRemove,

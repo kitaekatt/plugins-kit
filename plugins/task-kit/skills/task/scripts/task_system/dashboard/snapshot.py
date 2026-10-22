@@ -118,9 +118,11 @@ def _item_json(item: ItemView) -> dict:
 
 def task_json(task: TaskEntry, *, held: bool = False, run_active: bool = False, helpers: list[str] | None = None) -> dict:
     """One task row. ``held`` (a Claude Code session works the task) and ``run_active`` (a dashboard run does)
-    say why authoring is off for it, so the page disables the control with the reason instead of inviting a 409.
+    say why authoring is off for it; ``sessions`` lists the working-session registrations (only the ones with
+    ``holds`` true hold the task, the rest are shown and block nothing), so the page disables the control with the reason instead of inviting a 409.
     ``helpers`` names the endpoint helpers configured for the task's repository (what a run there is offered)."""
     core = task.core
+    held = held or any(view.holds for view in task.sessions)  # a registration verified running on this machine holds the task
     return {
         "key": f"{task.checkout_id}|{task.id}",
         "project": task.project_id,
@@ -131,6 +133,7 @@ def task_json(task: TaskEntry, *, held: bool = False, run_active: bool = False, 
         "stub": task.stub,
         "revision": core.revision,
         "held": held,
+        "sessions": [view.to_json() for view in task.sessions],
         "run_active": run_active,
         "helpers": list(helpers or []),
         "location": task.location,
