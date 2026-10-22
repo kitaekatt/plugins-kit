@@ -3,7 +3,7 @@ _schema_version: 1
 name: task
 author: christina
 skill-type: capability-skill
-description: Use when creating, listing, working, closing, archiving, or moving task folders and task_list refs. Do NOT use for native TaskCreate/TodoWrite or code review.
+description: Use when creating, listing, working, queueing, closing, archiving or moving task folders and task_list refs. Do NOT use for TaskCreate/TodoWrite or code review.
 ---
 
 # Task
@@ -41,6 +41,23 @@ root. A dev/tasks folder git holds only PARTLY (some files force-added, the
 rest ignored) is kept in place instead: moving it would take tracked files
 off their tracked paths with no commit.
 
+## Queued work
+
+Queue means: a unit of work to do when capacity allows. Four rules define it:
+
+- **Unattended.** The unit completes end to end with no user involvement. A unit
+  that needs a user decision, access or approval is not queueable yet.
+- **Clarified first.** When the user queues work, ask whatever the unit needs to
+  run unattended, before it is queued. Nothing with an open question enters the
+  queue.
+- **In parallel.** Queued work runs beside other work, or alone when there is
+  none.
+- **Never in the main thread.** The session that took the request does not do
+  the work itself.
+
+The `queue` capability below is the agent behavior; the dashboard's Queue
+(references/dashboard.md) is the existing mechanism that runs it.
+
 ## Invoking the CLI
 
 Run from the project root (refs are project-relative; `--root` defaults to
@@ -71,6 +88,7 @@ capability_skill:
       - "Lifecycle transitions: close, reopen, archive, delete, and move (with task_list reference rewriting)"
       - "Working-session registrations: which Claude Code session, on which machine, is working a task -- registered by work, released by the hand-off step, shown by list, show, status and the sessions verb"
       - "Launching the task dashboard: /task dashboard runs the task-kit launcher (a live browser view over every configured project that can also run queued items)"
+      - "Queued work: the definition (section Queued work) and the agent behavior when the user queues work (the queue capability)"
       - "Filling in scaffolded task folders per the hand-off template (references/handoff-template.md)"
     excludes:
       - "Native Claude Code task tracking (TaskCreate / TaskUpdate / TodoWrite) -- different system entirely"
@@ -232,6 +250,20 @@ capability_skill:
       gotchas:
         - "The dashboard contract (what Queue, Retry, Re-check, Cancel and the authoring actions do and refuse, eligibility, holds, the start order and what a queued entry waits for, the denied tools and the nested-run refusal, `dashboard:` settings in `~/.claude/task.local.yaml`) is in references/dashboard.md: load it before answering a question about the dashboard beyond launching it."
         - "The launcher's exit codes and `--no-open` (or TASK_KIT_NO_OPEN=1) are in references/dashboard.md, \"Launcher exit codes\". Relay any launcher message as printed; do not delete the server record or kill a process to get past a refusal."
+    - id: queue
+      keywords: [queue, queued work, queue this, queue it, queue up, add to the queue, put in the queue, run unattended, do this when you can]
+      user_objective: "Take a unit of work the user queues, make it runnable unattended, and hand it to a runner other than the main thread."
+      operation: "queue <work> -- agent-side; no CLI verb. Uses the dashboard Queue (references/dashboard.md) or a background worker per awesome-kit:orchestrate."
+      steps:
+        - n: 1
+          action: "Clarify. Apply the definition in section Queued work: ask the user every question the unit needs to complete with no user involvement (scope, inputs, access, the check that shows it is done), batched in one message. Ask only what the unit cannot run without. Do not queue until the answers are in."
+        - n: 2
+          action: "Make the unit a task item when it belongs to a dev/tasks task: add the plan.md task_items entry and its `### <id> -- <title>` section with the clarified brief (and `accept:` when a check exists), so the item is eligible (references/dashboard.md, Actions). The dashboard's Queue or Add item and queue then starts it. The CLI has no queue verb; report which item is ready and that Queue is the remaining step."
+        - n: 3
+          action: "When the dashboard does not fit (no dev/tasks task, llm-kit unavailable, or the unit is not a task item), launch a background worker with the clarified brief per awesome-kit:orchestrate (run_in_background), and keep the main thread free."
+      gotchas:
+        - "Never do the queued work in the main thread, and never `/task work` a task to do its queued item inline: a session that works a task holds it, and the dashboard yields (`held`) until the hand-off."
+        - "Do not restate the definition elsewhere; it lives in section Queued work only. Do not add queue verbs, routes or states."
     - id: show
       keywords: [show task, task details, read fields, inspect]
       user_objective: "Render one task's selected task.yaml fields, cheaply."
@@ -315,7 +347,7 @@ references:
     summary: "How to fill in and maintain a hand-off-type task folder: the seven-section CLAUDE.md contract (Immediate Priorities = references to item ids), plan.md's task_items block + rotation discipline (completion = removal; promotion rule), the enforced document size budgets (note at the healthy target, blocking warning at the ceiling; log.md exempt), the one-time pre-contract-folder conversion procedure, log.md filter, the durable-outputs rule (does this document belong in the folder at all -- declare at authoring time, archive verifies), anti-patterns, self-verify. Load when populating or updating a scaffolded folder, when validate emits a size finding, or when archive refuses on durable outputs."
   - id: dashboard_reference
     path: references/dashboard.md
-    keywords: [task dashboard, dashboard contract, queue, retry, re-check, cancel run, run options, waiting reason, start order, parallel checkouts, denied tools, sub-agents, nested run, exit code 6, max_parallel_projects, task.local.yaml dashboard]
+    keywords: [task dashboard, dashboard contract, queue, queued work, retry, re-check, cancel run, run options, waiting reason, start order, parallel checkouts, denied tools, sub-agents, nested run, exit code 6, max_parallel_projects, task.local.yaml dashboard]
     summary: "The task-kit dashboard's operating contract: what it shows and writes, what Queue and the other actions accept and refuse, how queued runs are ordered and why one waits, what a run may not do (denied tools, nested launches), how a run ends, and the machine settings. Load when the dashboard capability is routed and the question goes beyond launching it."
   - id: example_claude_md
     path: references/example-claude-md.md

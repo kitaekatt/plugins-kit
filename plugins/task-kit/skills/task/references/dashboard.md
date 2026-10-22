@@ -14,6 +14,8 @@ A refresh never edits a task folder. The dashboard writes one only for its own a
 
 ## Actions
 
+Queued work is defined in the task skill, section Queued work; this dashboard is its runner.
+
 Queue, Queue all, Retry, Re-check, Cancel run, Remove from queue, New task, Add item (and add-and-queue), Defer/Undefer and the run options are live. Queue, Queue all, Retry and add-and-queue start unattended Claude runs, one item each, in the project checkout and need llm-kit; without it they refuse with the reason shown, and everything else keeps working. Run options (worker, effort, time limit) belong to one queue entry and are saved while it waits. Pause worker is shown disabled. The dashboard's Resolve in Claude Code only prints commands to copy.
 
 Cancel run (POST /api/v1/runs/<id>/cancel) is process control on a run id and carries no task revision: a queued entry is normally taken out with Remove from queue (DELETE /api/v1/queue/<id>, ending `removed`, which is not retryable); a running one has its whole process tree stopped and its llm-kit ledger closed as cancelled (a run that hits its time limit closes its ledger the same way, reason `run-wide timeout`). A cancelled run is retryable like a timed-out one and does not block the task; look at the shared tree before retrying, because partial work stays there. A stop that leaves a process running, or a ledger that cannot be closed, blocks the task for inspection instead.
