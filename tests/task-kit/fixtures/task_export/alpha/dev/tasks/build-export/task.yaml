@@ -1,0 +1,8 @@
+task:
+  _schema_version: '1'
+  type: hand-off
+  title: Build the export
+  status: active
+  priority: P1
+  description: Export task facts as JSON for databench.
+  summary: The export reads task folders; the schema is frozen; the CLI is next.

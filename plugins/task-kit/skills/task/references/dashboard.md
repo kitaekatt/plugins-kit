@@ -167,3 +167,6 @@ once, default 2), `default_timeout_s` (default 7200), `default_worker` (claude o
 ## Related
 
 `review` still writes its one-off HTML snapshot; the dashboard is a separate, live view and does not replace it.
+
+`task-kit export` gives another program the same task facts as JSON without the dashboard running or its code
+loading; databench's Tasks view reads it. Its contract is `task-export-protocol.md` beside this file.

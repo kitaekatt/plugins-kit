@@ -42,7 +42,12 @@ The recorded defaults also bind this design, quoted without reinterpretation:
   worktrees, or a web framework.
 - Do not use OpenRouter or other transport endpoints as top-level task workers.
 ## Ten load-bearing decisions
-1. task-kit owns the launcher, HTTP server, UI, translation, and acceptance.
+1. task-kit owns the launcher, HTTP server, UI, translation, and acceptance. Superseded for the task view by the
+   2026-10-22 rulings ("All code related to the manager lives in databench."; "task-kit should remain entirely
+   functional as it is today without the dashboard running. It can provide necessary interface functionality so
+   that databench can interface iwth it."): the manager's view lives in databench's tasks module, which reads task
+   facts through `task-kit export` (`plugins/task-kit/skills/task/references/task-export-protocol.md`, task-kit
+   0.15.0); this dashboard remains until the cutover (databench-integration-plan.md, M3).
 2. llm-kit remains an optional REFUSE edge used only by autonomous run actions.
 3. Task folders are semantic truth; a task-kit SQLite database is runtime truth.
 4. Each run has one flat llm-kit job and its own schema-owned SQLite ledger.

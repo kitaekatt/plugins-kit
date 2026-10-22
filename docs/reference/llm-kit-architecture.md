@@ -127,6 +127,8 @@ Layer 0  schema             -> {}
          scaffold           -> {}
 ~~~
 
+Deployment-mode support sits outside the 16 components, like `bootstrap_guard`: `llm_kit._runtime` (`mode()`, the routed-contract `load()`, `require_legacy()`) may be imported by any component, imports no llm_kit module except `llm_kit._deployment`, and `llm_kit._deployment` (the marker the `katsoft-llm-kit` wheel replaces) is imported by `_runtime` alone. The guard `tests/llm-kit/test_import_graph.py` enforces all three. The package deployment, its contracts routing and the features it refuses are in `docs/planning/shared-lib-packaging/implementation-spec.md`, section C.
+
 ### Required moves and composition seams
 
 | Legacy source | Destination or rule | Dependency result |

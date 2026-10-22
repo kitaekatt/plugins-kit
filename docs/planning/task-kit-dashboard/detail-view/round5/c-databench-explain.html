@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>C in databench style - explained</title>
+<style>
+:root{color-scheme:dark;--bg:#080b10;--glow:#17243b;--text:#d7deea;--heading:#f3f6fb;--muted:#8b98aa;--line:#3d4a5e;--soft:#2b3547;--surface:rgba(14,19,27,.82);--link:#5789f4;--accent:#4f82f7;--fill:#426198;--green:#72d3a1;--amber:#c6a36b;--mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Consolas,monospace;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;color:var(--text);background:radial-gradient(circle at 52% -15%,var(--glow) 0,var(--bg) 44%);font-size:15px;line-height:1.6;overflow-wrap:anywhere}
+main{width:min(640px,100%);margin:0 auto;padding:28px 16px 40px}
+.eyebrow{margin:0 0 6px;color:var(--link);text-transform:uppercase;font-size:11px;font-weight:700;letter-spacing:.13em}
+h1{margin:0 0 10px;color:var(--heading);font-size:26px;line-height:1.15;letter-spacing:-.025em}h2{margin:0 0 6px;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.08em}p{margin:0}
+.lead{font-size:16px}.block{margin-top:20px;padding-top:16px;border-top:1px solid var(--soft)}
+ul{margin:6px 0 0;padding-left:1.3rem}li+li{margin-top:.4rem}li::marker{color:var(--link)}
+code{padding:.1em .35em;border:1px solid var(--soft);border-radius:4px;background:#151d29;color:#e4ebf5;font:.88em var(--mono)}
+.judge{margin-top:20px;padding:12px 14px;border:1px solid var(--line);border-left:3px solid var(--green);border-radius:8px;background:var(--surface)}
+.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:22px}.actions a{padding:7px 12px;border:1px solid var(--accent);border-radius:7px;color:#b9c5d5;text-decoration:none;font-size:13px}.actions a.primary{background:var(--fill);border-color:#627590;color:#edf2fa;font-weight:600}
+:where(a):focus-visible{outline:2px solid #75a7ff;outline-offset:2px}
+</style></head><body><main>
+<p class="eyebrow">Concept C &middot; databench style</p><h1>Intent lenses, inside databench</h1>
+<p class="lead">This is the approved task detail view, with the same content and the same three lenses, drawn as a page inside databench instead of as a separate dashboard.</p>
+<section class="block"><h2>What changed from round 4 C</h2><ul>
+<li><b>Styling source.</b> Colors, type, spacing, the top bar, the context toolbar, the list surface, the segmented controls and the footer come from the databench web client stylesheet and the shared index-pages style. The theme is databench's dark theme; the light and dark toggle is gone.</li>
+<li><b>Spend control removed.</b> The spend checkbox and the answering service on and off switch are gone from the task view. Spend is configured in databench settings only. The task view shows the service state, the answer order and whether paid answers are allowed as plain read-only text, plus a <code>Generation settings</code> link.</li>
+<li><b>Navigation.</b> A <code>Tasks</code> entry sits in the databench toolbar beside home, directory tree, comments and entities, and is selected. The breadcrumb reads plugins-kit &rsaquo; Tasks.</li>
+<li><b>Unchanged.</b> The list and its sorting, the row marks, the Orient, Decide and Trace tabs, the answer cards with their answerer and as-of labels, the exact state box, the decision box and the health line.</li>
+</ul></section>
+<section class="block"><h2>What you are looking at</h2><p>The list of open tasks with <code>task-kit-extraction</code> opened on the Orient lens. The sample answers come from that task's own record. One answer is marked stale because a later plan edit exists; the decision box says paid answers are waiting because the generation settings do not allow them.</p></section>
+<section class="judge"><h2>Judge this</h2><p>Does it read as a page of databench? Is the read-only settings link enough, or should the task view show nothing about generation at all?</p></section>
+<div class="actions"><a href="index.html">Round 5 index</a><a class="primary" href="c-databench-screen.html">See the screen</a></div>
+</main></body></html>

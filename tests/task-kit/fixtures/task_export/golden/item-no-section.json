@@ -1,0 +1,18 @@
+{
+  "kind": "item",
+  "payload": {
+    "checkout": "<checkout:alpha>",
+    "item": {
+      "id": "write-cli",
+      "note": null,
+      "priority": "P2",
+      "state": "available",
+      "title": "Write the CLI"
+    },
+    "path": "dev/tasks/build-export",
+    "plan_section": null,
+    "plan_section_truncated": false
+  },
+  "protocol": 1,
+  "task_kit_version": "<version>"
+}

@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "katsoft-llm-kit"
+version = "1.0.0"
+description = "LLM access, durable agent jobs and batch content pipelines in one library (import package llm_kit)"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+# The base library is standard-library plus the contracts distribution. Each
+# capability that needs a third-party package names it in an extra; the extras
+# mirror plugins/llm-kit/pyproject.toml (tests/llm-kit/test_dist_metadata_parity.py).
+dependencies = ["katsoft-contracts>=1.0,<2"]
+# [project.urls] Source is set by the build hook from the release identity.
+dynamic = ["urls"]
+
+[project.scripts]
+llm-kit = "llm_kit.cli:main"
+
+[project.optional-dependencies]
+config = ["pyyaml>=6.0"]
+sdk = ["openai>=1.0.0"]
+local = ["psutil>=6.0"]
+frontdoor = ["fastapi>=0.110", "uvicorn>=0.29", "httpx>=0.27"]
+jobs = ["pyyaml>=6.0"]
+pipeline = ["pyyaml>=6.0"]
+
+[tool.hatch.metadata.hooks.custom]
+path = "../_build/hatch_build.py"
+
+# Wheel-only. The library source stays in the plugin (plugins/llm-kit/lib) until
+# it moves here; the wheel force-includes the directory from outside this
+# project. Hatch skips a forced directory's file at a path an external forced
+# FILE targets, so the marker the build hook writes (packages/_build/
+# hatch_build.py; registry `marker`) replaces the committed legacy
+# llm_kit/_deployment.py. `exclude` does not apply to forced directories.
+[tool.hatch.build.targets.wheel]
+bypass-selection = true
+
+[tool.hatch.build.targets.wheel.force-include]
+"../../plugins/llm-kit/lib/llm_kit" = "llm_kit"
+
+[tool.hatch.build.targets.wheel.hooks.custom]
+path = "../_build/hatch_build.py"

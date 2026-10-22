@@ -1,0 +1,15 @@
+_schema_version: 1
+host: othermac
+machine: 0123456789abcdef
+os_instance: linux
+sessions:
+- session_id: 11111111-2222-3333-4444-555555555555
+  harness: claude-code
+  task: build-export
+  checkout: alpha
+  registered_at: '2026-10-22T13:00:00Z'
+  process:
+    pid: 4242
+    boot_id: 00000000-0000-0000-0000-000000000000
+    start_ticks: 123
+    recorded_at: '2026-10-22T13:05:00Z'

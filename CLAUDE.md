@@ -187,6 +187,16 @@ claude --plugin-dir ~/Dev/plugins-kit/plugins/my-plugin
 **Publishing** is `uv run python scripts/publish.py` -- the only user-gated action in this repo, and the source of truth for the flow; do not hand-run its steps. Definition of a publish, `marketplace.json` as derived data, the commit-scoped pre-commit check, and dev-only filtering:
 [docs/reference/publish-reconcile.md](docs/reference/publish-reconcile.md).
 
+**Packages.** `packages/` holds PyPI distributions released by `publish.py`'s
+package flow; mechanics: [docs/reference/package-release.md](docs/reference/package-release.md).
+`katsoft-contracts` (`packages/katsoft-contracts/src/katsoft_contracts/`) is the
+canonical source of `execution_event`, `interrupt_contract` and `model_declaration`;
+`plugins/bootstrap/bootstrap_lib/` holds byte copies. Edit the canonical file, then run
+`uv run --extra dev python scripts/sync_contracts_copy.py` (`--check` reports drift
+and changes nothing); `tests/contracts` guards the copies and the frozen goldens.
+Releases are tagged `<dist>-v<version>` (e.g. `katsoft-contracts-v1.0.0`);
+library versions are independent of plugin versions.
+
 **Publication completeness is conditional on configuration.** A plugin is
 correctly published when its manifest says `published: true` (or omits the
 flag) and it is present in the release. A plugin is correctly unpublished when
@@ -213,6 +223,7 @@ After publish:
 
 - Users with `autoUpdate: true` receive the update on next session start.
 - Users without auto-update run `/plugin marketplace update` then `/plugin update`.
+- The publishing agent runs `bootstrap run` right after a successful `publish.py`, so this machine picks up the release in the same session.
 
 ### Dev-only plugins -- do not publish to master
 

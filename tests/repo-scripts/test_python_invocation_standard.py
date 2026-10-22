@@ -57,12 +57,22 @@ _BARE_TOKEN_RE = re.compile(
     + _SAFE_AFTER
 )
 
-# `uv run [flags] python`. Only `--project <path>` / `--project=<path>`
-# consumes a following value; any other flag (e.g. `--no-project`) is treated
-# as a bare switch so it does not eat the trailing `python` word.
+# `uv run [flags] python`. A value-taking uv flag (`--project <path>`,
+# `--extra <name>`, `--with <pkg>`, `--python <ver>`, `-p <ver>`, ...), in
+# either the `--flag=value` or `--flag value` spelling, consumes its value so
+# the value is not mistaken for the command word; any other flag (e.g.
+# `--no-project`, `--frozen`) is treated as a bare switch so it does not eat
+# the trailing `python` word.
+_UV_RUN_VALUE_FLAGS = (
+    "--project", "--extra", "--with", "--with-editable", "--with-requirements",
+    "--group", "--only-group", "--package", "--directory", "--python", "-p",
+    "--env-file", "--index", "--default-index", "--index-url",
+    "--extra-index-url", "--find-links", "-f",
+)
 _UV_RUN_PYTHON_RE = re.compile(
     r"\buv\s+run\b"
-    r"(?:\s+--project(?:=|\s+)\S+"
+    r"(?:\s+(?:" + "|".join(re.escape(f) for f in _UV_RUN_VALUE_FLAGS) + r")"
+    r"(?:=|\s+)\S+"
     r"|\s+--[A-Za-z0-9][A-Za-z0-9_-]*(?!\S))*"
     r"\s+python\b"
 )
@@ -205,6 +215,27 @@ def test_scan_shell_text_catches_injected_violation():
     uv_run_with_project = 'uv run --project "$PLUGIN_ROOT" python -c "print(1)"\n'
     hits3 = scan_shell_text("plugins/example/scripts/example.sh", uv_run_with_project)
     assert hits3 and hits3[0].has_project_flag is True
+
+    # Value-taking uv flags are skipped before the interpreter token, so the
+    # maintainer form `uv run --extra dev python` is a uv_run hit (which the
+    # maintainer bypass accepts), not a misparsed bare `python`.
+    for value_flag_form in (
+        "uv run --extra dev python x.py",
+        "uv run --extra=dev python x.py",
+        "uv run --with pyyaml python x.py",
+        "uv run -p 3.12 python x.py",
+        "uv run --python 3.12 python x.py",
+        "uv run --extra dev --frozen python x.py",
+    ):
+        extra_hits = scan_shell_text("scripts/example.sh", value_flag_form + "\n")
+        assert [h.kind for h in extra_hits] == ["uv_run"], value_flag_form
+
+    # No interpreter word after the flags: not a python invocation at all.
+    assert scan_shell_text("scripts/example.sh", "uv run --extra dev pytest -q\n") == []
+    assert scan_shell_text("scripts/example.sh", "uv run --extra dev x.py\n") == []
+    # A genuinely bare interpreter is still flagged as bare.
+    bare_after = scan_shell_text("scripts/example.sh", "python x.py\n")
+    assert [h.kind for h in bare_after] == ["bare"]
 
     absolute_path_only = '"$REPO_ROOT/.venv/bin/python" "$@"\n'
     assert scan_shell_text("scripts/example.sh", absolute_path_only) == []

@@ -1,0 +1,205 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/kitaekatt/plugins-kit/plugins/task-kit/skills/task/references/task-export.schema.json",
+  "title": "task-kit export, protocol 1",
+  "description": "One document task-kit export writes to stdout. Normative text: task-export-protocol.md. The objects are closed (additionalProperties false) so task-kit's own tests catch an undocumented field; a consumer ignores fields it does not know, because fields are added within a protocol. Enums documented as open are plain strings here.",
+  "oneOf": [
+    {"$ref": "#/$defs/protocols_document"},
+    {"$ref": "#/$defs/tasks_document"},
+    {"$ref": "#/$defs/item_document"},
+    {"$ref": "#/$defs/error_document"}
+  ],
+  "$defs": {
+    "nullable_string": {"type": ["string", "null"]},
+    "strings": {"type": "array", "items": {"type": "string"}},
+    "envelope_protocol": {"type": "integer", "minimum": 1},
+    "protocols_document": {
+      "type": "object",
+      "required": ["protocol", "task_kit_version", "kind", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": {"$ref": "#/$defs/envelope_protocol"},
+        "task_kit_version": {"type": "string"},
+        "kind": {"const": "protocols"},
+        "payload": {
+          "type": "object",
+          "required": ["protocols"],
+          "additionalProperties": false,
+          "properties": {"protocols": {"type": "array", "items": {"type": "integer", "minimum": 1}}}
+        }
+      }
+    },
+    "tasks_document": {
+      "type": "object",
+      "required": ["protocol", "task_kit_version", "kind", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": {"$ref": "#/$defs/envelope_protocol"},
+        "task_kit_version": {"type": "string"},
+        "kind": {"const": "tasks"},
+        "payload": {"$ref": "#/$defs/tasks_payload"}
+      }
+    },
+    "item_document": {
+      "type": "object",
+      "required": ["protocol", "task_kit_version", "kind", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": {"$ref": "#/$defs/envelope_protocol"},
+        "task_kit_version": {"type": "string"},
+        "kind": {"const": "item"},
+        "payload": {"$ref": "#/$defs/item_payload"}
+      }
+    },
+    "error_document": {
+      "type": "object",
+      "required": ["protocol", "task_kit_version", "error"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": {"$ref": "#/$defs/envelope_protocol"},
+        "task_kit_version": {"type": "string"},
+        "error": {
+          "type": "object",
+          "required": ["code", "message"],
+          "additionalProperties": false,
+          "properties": {
+            "code": {"type": "string", "description": "usage | unknown_checkout | unknown_task | unknown_item | protocol_unsupported | discovery_failed | internal"},
+            "message": {"type": "string"}
+          }
+        }
+      }
+    },
+    "tasks_payload": {
+      "type": "object",
+      "required": ["generated_at", "revision", "repositories", "checkouts", "tasks", "errors"],
+      "additionalProperties": false,
+      "properties": {
+        "generated_at": {"type": "string", "description": "ISO 8601 UTC, YYYY-MM-DDTHH:MM:SSZ"},
+        "revision": {"type": "string"},
+        "repositories": {"type": "array", "items": {"$ref": "#/$defs/repository"}},
+        "checkouts": {"type": "array", "items": {"$ref": "#/$defs/checkout"}},
+        "tasks": {"type": "array", "items": {"$ref": "#/$defs/task"}},
+        "errors": {"type": "array", "items": {"$ref": "#/$defs/export_error"}}
+      }
+    },
+    "repository": {
+      "type": "object",
+      "required": ["id", "name", "checkouts"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "checkouts": {"$ref": "#/$defs/strings"}
+      }
+    },
+    "checkout": {
+      "type": "object",
+      "required": ["id", "root", "repository"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string"},
+        "root": {"type": "string", "description": "absolute path"},
+        "repository": {"type": "string"}
+      }
+    },
+    "task": {
+      "type": "object",
+      "required": [
+        "checkout", "path", "stub", "location", "revision", "title", "priority", "description", "summary",
+        "summary_source", "classification", "blocked_by", "last_activity", "updates", "updates_total",
+        "has_items_block", "items", "findings", "sessions"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "checkout": {"type": "string"},
+        "path": {"type": "string", "description": "project-relative, e.g. dev/tasks/<stub>"},
+        "stub": {"type": "string"},
+        "location": {"type": "string"},
+        "revision": {"type": "string"},
+        "title": {"$ref": "#/$defs/nullable_string"},
+        "priority": {"$ref": "#/$defs/nullable_string"},
+        "description": {"$ref": "#/$defs/nullable_string"},
+        "summary": {"$ref": "#/$defs/nullable_string"},
+        "summary_source": {"type": ["string", "null"], "description": "open enum: task.yaml"},
+        "classification": {"type": "string", "description": "open enum: active, blocked, deferred, closed, archived, orphaned, remote, invalid"},
+        "blocked_by": {"$ref": "#/$defs/strings"},
+        "last_activity": {"type": ["string", "null"], "description": "YYYY-MM-DD HH:MM, the newest update; a date-only entry reads as 12:00"},
+        "updates": {"type": "array", "items": {"$ref": "#/$defs/update"}},
+        "updates_total": {"type": "integer", "minimum": 0},
+        "has_items_block": {"type": "boolean"},
+        "items": {"type": "array", "items": {"$ref": "#/$defs/item"}},
+        "findings": {"$ref": "#/$defs/findings"},
+        "sessions": {"type": "array", "items": {"$ref": "#/$defs/session"}}
+      }
+    },
+    "update": {
+      "type": "object",
+      "required": ["date", "time", "detail"],
+      "additionalProperties": false,
+      "properties": {
+        "date": {"type": "string"},
+        "time": {"$ref": "#/$defs/nullable_string"},
+        "detail": {"type": "string"}
+      }
+    },
+    "item": {
+      "type": "object",
+      "required": ["id", "title", "state", "priority", "note"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string"},
+        "title": {"type": "string"},
+        "state": {"type": "string", "description": "open enum: available, in-flight, blocked-user, deferred"},
+        "priority": {"$ref": "#/$defs/nullable_string"},
+        "note": {"$ref": "#/$defs/nullable_string"}
+      }
+    },
+    "findings": {
+      "type": "object",
+      "required": ["errors", "warnings", "item_errors", "notes"],
+      "additionalProperties": false,
+      "properties": {
+        "errors": {"$ref": "#/$defs/strings"},
+        "warnings": {"$ref": "#/$defs/strings"},
+        "item_errors": {"$ref": "#/$defs/strings"},
+        "notes": {"$ref": "#/$defs/strings"}
+      }
+    },
+    "session": {
+      "type": "object",
+      "required": ["host", "session_id", "registered_at", "state", "local", "recorded_at", "task_state"],
+      "additionalProperties": false,
+      "properties": {
+        "host": {"type": "string"},
+        "session_id": {"type": "string"},
+        "registered_at": {"type": "string"},
+        "state": {"type": "string", "description": "open enum: running, not running, unverified"},
+        "local": {"type": "boolean"},
+        "recorded_at": {"$ref": "#/$defs/nullable_string"},
+        "task_state": {"$ref": "#/$defs/nullable_string"}
+      }
+    },
+    "export_error": {
+      "type": "object",
+      "required": ["code", "message", "root"],
+      "additionalProperties": false,
+      "properties": {
+        "code": {"type": "string", "description": "open enum: unreadable, repo_identity, sessions"},
+        "message": {"type": "string"},
+        "root": {"$ref": "#/$defs/nullable_string"}
+      }
+    },
+    "item_payload": {
+      "type": "object",
+      "required": ["checkout", "path", "item", "plan_section", "plan_section_truncated"],
+      "additionalProperties": false,
+      "properties": {
+        "checkout": {"type": "string"},
+        "path": {"type": "string"},
+        "item": {"$ref": "#/$defs/item"},
+        "plan_section": {"type": ["string", "null"], "description": "the item's plan.md section body, at most 8000 characters"},
+        "plan_section_truncated": {"type": "boolean"}
+      }
+    }
+  }
+}

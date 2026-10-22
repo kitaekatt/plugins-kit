@@ -14,6 +14,7 @@ dev = [
     "httpx>=0.27",
     "markdown-it-py",
     "psutil>=6.0",
+    "packaging>=24.0",
 ]
 
 [tool.pytest.ini_options]

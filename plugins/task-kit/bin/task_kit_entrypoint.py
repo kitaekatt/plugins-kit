@@ -6,6 +6,10 @@ Two copies of this file exist, and the same code serves both:
   beside it: ``../skills/task/scripts/task_system/dashboard``. It puts that
   scripts directory on ``sys.path``, moves into the plugin venv when it is not
   already there, and hands over to the dashboard launcher.
+- ``task-kit export ...`` (the task export databench reads) is dispatched
+  before any dashboard import: it runs ``task_system.export_cli`` and never
+  loads dashboard code. Every outcome, including a failure to start it,
+  writes one JSON document to stdout (``task-export-protocol.md``).
 - In task-kit's data directory ``bin/`` (the copy bootstrap syncs there and
   puts on PATH, so ``task-kit`` works in any terminal) no dashboard code is
   beside it. The bundle is thin on purpose: it locates the newest installed
@@ -16,6 +20,7 @@ Stdlib only until the dashboard launcher is imported.
 """
 from __future__ import annotations
 
+import json
 import re
 import runpy
 import sys
@@ -65,6 +70,46 @@ def installed_plugin_root(bundle_root: Path) -> Path:
     return max(candidates, key=lambda item: item[0])[1]
 
 
+EXPORT_COMMAND = "export"
+EXPORT_PROTOCOL = 1  # the highest export protocol; a start-up failure document names it
+EXPORT_INTERNAL_EXIT = 1
+
+
+def export_start_failure(root: Path, message: str) -> int:
+    """Answer ``task-kit export`` with one ``internal`` error document when the export cannot start.
+
+    Stdlib only: this runs when the plugin venv or the task system cannot be
+    loaded, which is exactly when nothing else could write the document.
+    """
+    try:
+        version = json.loads(root.joinpath(".claude-plugin", "plugin.json").read_text(encoding="utf-8"))["version"]
+    except (OSError, ValueError, KeyError):
+        version = "unknown"
+    document = {"protocol": EXPORT_PROTOCOL, "task_kit_version": version,
+                "error": {"code": "internal", "message": message}}
+    print(f"task-kit export: internal: {message}", file=sys.stderr)
+    sys.stdout.write(json.dumps(document, ensure_ascii=True, sort_keys=True, separators=(",", ":")) + "\n")
+    sys.stdout.flush()
+    return EXPORT_INTERNAL_EXIT
+
+
+def run_export(root: Path, argv: list[str]) -> int:
+    """``task-kit export ...``: the export CLI, reached without importing the dashboard."""
+    from bootstrap_guard import reexec_under_plugin_venv  # noqa: PLC0415
+
+    try:
+        reexec_under_plugin_venv(PLUGIN)
+    except SystemExit as exc:  # the guard refuses (a redirected venv is missing); its reason is on stderr
+        return export_start_failure(root, f"task-kit's plugin interpreter is not available (exit {exc.code}); see stderr")
+    try:
+        from task_system import export_cli  # noqa: PLC0415
+    except ImportError as exc:
+        return export_start_failure(
+            root, f"the task system cannot be loaded ({type(exc).__name__}: {exc}); task-kit's venv is not provisioned"
+        )
+    return export_cli.main(argv)
+
+
 def main() -> int:
     here = Path(__file__).resolve()
     root = here.parent.parent
@@ -75,6 +120,8 @@ def main() -> int:
     scripts = root.joinpath(*SCRIPTS_RELATIVE)
     if str(scripts) not in sys.path:
         sys.path.insert(0, str(scripts))
+    if sys.argv[1:2] == [EXPORT_COMMAND]:
+        return run_export(root, sys.argv[2:])
     from bootstrap_guard import reexec_under_plugin_venv, require_bootstrap  # noqa: PLC0415
 
     reexec_under_plugin_venv(PLUGIN)

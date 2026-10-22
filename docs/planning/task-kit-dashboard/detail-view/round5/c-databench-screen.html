@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Tasks - Databench (mockup)</title>
+<style>
+/* Tokens copied from the databench web client stylesheet (dark theme) and the shared index-pages asset. */
+:root{
+  color-scheme:dark;
+  --db-bg:#080b10;--db-bg-glow:#17243b;
+  --db-text:#dbe5f3;--db-body:#d7deea;--db-heading:#f3f6fb;--db-row:#d3dce9;
+  --db-muted:#8b98aa;--db-muted-2:#8290a5;--db-muted-3:#748298;
+  --db-bar:rgba(11,15,22,.94);--db-line:#3d4a5e;--db-line-soft:#2b3547;--db-line-bar:#202a38;
+  --db-surface:rgba(14,19,27,.82);--db-well:#0c1119;--db-panel:#111824;--db-hover:#17243a;--db-hover-2:#17202d;
+  --db-selected:rgba(66,97,152,.28);
+  --db-accent:#4f82f7;--db-link:#5789f4;--db-link-hover:#7ea3ff;--db-fill:#426198;--db-ctrl:#627590;--db-glyph:#6897ff;--db-focus:#75a7ff;
+  --db-green:#72d3a1;--db-dot:#52c98f;--db-amber:#c6a36b;--db-orange:#d7ab7a;--db-red:#ff858b;--db-purple:#c79ae0;
+  --topbar-h:58px;--toolbar-h:43px;--footer-h:32px;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Consolas,monospace;
+  font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--db-text);background:var(--db-bg);font-synthesis:none}
+*{box-sizing:border-box}
+body{margin:0;min-width:320px;min-height:100vh;background:radial-gradient(circle at 52% -15%,var(--db-bg-glow) 0,var(--db-bg) 44%);overflow-wrap:anywhere}
+button,input{font:inherit;color:inherit}
+h1,h2,h3,p{margin:0}
+.mono{font-family:var(--mono)}
+svg.i{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+:where(button,a,[tabindex],summary):focus-visible{outline:2px solid var(--db-focus);outline-offset:2px}
+
+/* Shell: topbar, toolbar, content, footer (same grid as databench). */
+.shell{min-width:0;max-width:100%;min-height:100vh;display:grid;grid-template-rows:var(--topbar-h) var(--toolbar-h) 1fr var(--footer-h);grid-template-columns:minmax(0,1fr)}
+.topbar,.toolbar,footer{display:flex;align-items:center;border-color:var(--db-line);background:var(--db-bar)}
+.topbar{position:sticky;top:0;z-index:20;padding:0 22px;border-bottom:1px solid var(--db-line);gap:14px}
+.brand{display:flex;align-items:center;gap:10px;letter-spacing:-.01em}
+.brand-mark{display:grid;place-items:center;width:27px;height:27px;border-radius:7px;background:var(--db-accent);color:#fff;font-weight:800}
+.status-dot{width:7px;height:7px;border-radius:50%;background:var(--db-dot);box-shadow:0 0 8px #52c98f66}
+.grow{flex:1}
+.picker{display:flex;align-items:center;gap:8px;height:31px;padding:0 8px;border:1px solid transparent;border-radius:7px;color:#a2aec0;background:transparent;font-size:13px;cursor:pointer}
+.picker:hover{color:#f0f5fc;border-color:var(--db-ctrl);background:var(--db-hover-2)}
+.search-control{display:flex;align-items:center;gap:7px;min-width:146px;height:31px;padding:0 8px;color:#8492a6;border:1px solid var(--db-ctrl);border-radius:7px;background:var(--db-well);font-size:12px}
+.search-control span{flex:1}
+kbd{padding:1px 5px;border:1px solid var(--db-ctrl);border-radius:4px;color:#78879d;background:#151d29;font:10px var(--mono)}
+.icon-button{position:relative;display:grid;place-items:center;width:31px;height:31px;color:#9cabbf;border:1px solid transparent;border-radius:7px;background:transparent;cursor:pointer}
+.icon-button:hover{color:#f0f5fc;border-color:var(--db-ctrl);background:var(--db-hover-2)}
+.icon-button:disabled{color:#55637a;cursor:default}
+.icon-button:disabled:hover{color:#55637a;border-color:transparent;background:transparent}
+.icon-button-active{color:#e7eef8;border-color:var(--db-accent);background:rgba(79,130,247,.18)}
+.icon-button-active:hover{border-color:#6a97ff;background:rgba(79,130,247,.26)}
+.icon-button.nav-label{width:auto;display:inline-flex;align-items:center;gap:7px;height:31px;padding:0 10px 0 8px;font-size:12px;font-weight:600;white-space:nowrap;border-radius:7px}
+.toolbar{position:sticky;top:var(--topbar-h);z-index:19;padding:0 18px;border-bottom:1px solid var(--db-line-bar);gap:5px}
+.toolbar-divider{width:1px;height:18px;margin:0 5px;background:var(--db-line)}
+.more{display:none}
+.breadcrumbs{display:flex;align-items:center;min-width:0;flex:1;overflow:hidden}
+.crumb{display:flex;align-items:center;color:var(--db-muted-3)}
+.crumb button{color:#b9c5d5;border:0;border-radius:5px;background:transparent;cursor:pointer;padding:5px 6px;white-space:nowrap}
+.crumb:last-child button{color:#edf2fa}
+.crumb button:hover{color:#f0f5fc;background:var(--db-hover-2)}
+footer{justify-content:flex-end;gap:18px;padding:0 24px;border-top:1px solid var(--db-line);color:#748197;font:10px var(--mono);text-transform:uppercase;letter-spacing:.08em}
+
+/* Context heading, same grid and type as databench's. */
+.context{width:100%;min-width:0;max-width:100%;padding:24px 28px 32px}
+.context-heading{display:grid;grid-template-columns:minmax(0,auto) auto minmax(0,1fr);align-items:end;gap:18px;min-width:0;margin-bottom:22px}
+.eyebrow{margin:0 0 6px;color:var(--db-link);text-transform:uppercase;font-size:11px;font-weight:700;letter-spacing:.13em}
+h1{min-width:0;color:var(--db-heading);font-size:clamp(24px,3vw,32px);letter-spacing:-.025em}
+.count{align-self:center;color:var(--db-muted);font-size:13px}
+.viewer-controls{align-self:center;justify-self:start;display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap}
+.mode-switch{display:flex;flex:none;padding:2px;border:1px solid var(--db-ctrl);border-radius:7px;background:var(--db-well)}
+.mode-option{min-height:27px;padding:0 9px;border:0;border-radius:5px;color:#b9c5d5;background:transparent;cursor:pointer;font-size:11px}
+.mode-option:hover{color:#f0f5fc;background:var(--db-hover-2)}
+.mode-option[aria-pressed="true"]{color:#e7eef8;background:var(--db-fill)}
+.comment-toggle{min-height:27px;padding:0 10px;border:1px solid var(--db-ctrl);border-radius:7px;color:#b9c5d5;background:var(--db-well);cursor:pointer;font-size:11px;white-space:nowrap}
+.comment-toggle:hover{color:#f0f5fc;background:var(--db-hover-2)}
+.primary-action{min-height:27px;padding:0 12px;border:1px solid var(--db-ctrl);border-radius:7px;color:#edf2fa;background:var(--db-fill);cursor:pointer;font-size:11px;font-weight:600;white-space:nowrap}
+.primary-action:hover{background:#4f72af}
+.filter{display:flex;align-items:center;gap:7px;height:29px;padding:0 8px;color:#8492a6;border:1px solid var(--db-ctrl);border-radius:7px;background:var(--db-well);font-size:12px}
+.filter input{width:150px;border:0;background:transparent;outline:0;color:var(--db-text);font-size:12px}
+.filter input::placeholder{color:#8492a6}
+
+/* Task list surface: databench tree-surface / file-row treatment. */
+.tree-surface{width:100%;min-width:0;overflow:hidden;border:1px solid var(--db-line);border-radius:10px;background:var(--db-surface);box-shadow:0 20px 60px #0007}
+.tree-toolbar{display:flex;align-items:center;gap:16px;flex-wrap:wrap;min-width:0;padding:10px 18px;border-bottom:1px solid var(--db-line-soft)}
+.tree-toolbar-label{color:var(--db-muted-2);font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+.legend{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-left:auto;font-size:11px;color:var(--db-muted)}
+.trow{border-bottom:1px solid var(--db-line-soft)}
+.trow:last-child{border-bottom:0}
+.row-main{display:grid;grid-template-columns:24px 34px minmax(0,1fr) 250px 150px;gap:12px;align-items:center;width:100%;min-height:52px;padding:8px 18px 8px 12px;border:0;background:transparent;color:var(--db-row);text-align:left;cursor:pointer}
+.row-main:hover{background:var(--db-hover)}
+.trow.open>.row-main{color:var(--db-heading);background:var(--db-selected);font-weight:600}
+.chev{display:grid;place-items:center;width:24px;height:32px;color:#8799b2}
+.chev svg{transition:transform 120ms ease}
+.trow.open .chev svg{transform:rotate(90deg)}
+.pri{justify-self:start;padding:1px 6px;border-radius:4px;color:var(--db-muted);background:var(--db-well);border:1px solid var(--db-line-soft);font-size:10px;font-weight:700;letter-spacing:.04em}
+.pri.P1{color:var(--db-red);border-color:#5a2e33}
+.pri.P2{color:var(--db-amber)}
+.c-title{display:flex;gap:2px 12px;align-items:baseline;flex-wrap:wrap;min-width:0}
+.ttl{font-weight:600}
+.ident{font:12px var(--mono);color:var(--db-muted);font-weight:400}
+.ident .repo{color:#a2aec0}
+.c-marks,.c-meta{display:flex;gap:6px;align-items:center;flex-wrap:wrap;min-width:0}
+.c-meta{justify-content:flex-end;color:var(--db-muted);font:12px var(--mono);font-weight:400;white-space:nowrap}
+.mk{display:inline-flex;align-items:center;padding:1px 8px;border-radius:99px;border:1px solid currentColor;font-size:11px;font-weight:600;line-height:1.5;white-space:nowrap}
+.mk.need{color:var(--db-amber);background:rgba(198,163,107,.12)}
+.mk.sess{color:var(--db-green);background:rgba(114,211,161,.10)}
+
+.tbody{padding:14px 18px 18px;border-top:1px solid var(--db-line-soft);background:rgba(8,11,16,.45)}
+.service{display:flex;align-items:center;gap:6px 14px;flex-wrap:wrap;padding:9px 14px;border:1px solid var(--db-line);border-radius:9px 9px 0 0;background:var(--db-panel);font-size:12px;color:var(--db-muted)}
+.service strong{color:var(--db-heading);font-size:12px;letter-spacing:.02em}
+.service .state{display:inline-flex;align-items:center;gap:6px;color:var(--db-green)}
+.service b{color:var(--db-text);font-weight:600}
+.dashboard-link{color:var(--db-link);text-decoration:underline;text-underline-offset:2px}
+.dashboard-link:hover{color:var(--db-link-hover)}
+.tree-action{min-height:28px;padding:0 10px;border:1px solid var(--db-ctrl);border-radius:6px;color:#b9c5d5;background:var(--db-panel);cursor:pointer;font-size:11px}
+.tree-action:hover{color:#f0f5fc;background:#17243a}
+.lensbox{border:1px solid var(--db-line);border-top:0;border-radius:0 0 9px 9px;overflow:hidden;background:var(--db-surface)}
+.tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));background:var(--db-panel);border-bottom:1px solid #37435a}
+.tab{border:0;border-bottom:2px solid transparent;background:transparent;padding:9px 10px;text-align:center;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--db-muted-2);cursor:pointer}
+.tab:hover{color:#d3dce9}
+.tab[aria-selected="true"]{color:var(--db-heading);border-bottom-color:var(--db-accent);background:rgba(79,130,247,.08)}
+.tab small{display:block;font-size:10px;font-weight:400;letter-spacing:0;text-transform:none;color:var(--db-muted)}
+.lenshead{padding:14px 16px 8px}
+.lenshead h2{color:var(--db-heading);font-size:16px;letter-spacing:-.015em}
+.lenshead p{font-size:12px;color:var(--db-muted);margin-top:2px}
+.orient-grid{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(260px,.65fr);gap:14px;padding:0 16px 16px}
+.answers{border:1px solid var(--db-line-soft);border-radius:8px;overflow:hidden;background:rgba(15,19,27,.88)}
+.answer{padding:11px 14px;border-top:1px solid var(--db-line-soft)}
+.answer:first-child{border-top:0}
+.question{font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--db-muted-2);font-weight:700}
+.answer h3{font-size:14px;margin-top:3px;color:var(--db-heading);font-weight:600}
+.answer p{font-size:13px;margin-top:3px;color:var(--db-body);line-height:1.55}
+.answer.stale-block{background:rgba(198,163,107,.07)}
+.source{display:flex;gap:4px 8px;flex-wrap:wrap;align-items:center;color:var(--db-muted);font-size:11px;margin-top:7px}
+.answerer{border:1px solid currentColor;border-radius:99px;padding:0 8px;font-weight:600;white-space:nowrap}
+.script{color:var(--db-green)}.local{color:var(--db-purple)}.paid{color:var(--db-orange)}
+.fresh{color:var(--db-green);font-weight:600}.stale{color:var(--db-amber);font-weight:700}
+.trace-preview{display:flex;flex-direction:column;gap:12px}
+.exact,.decision{border:1px solid var(--db-line-soft);border-radius:8px;padding:12px;background:rgba(15,19,27,.88)}
+.exact{border-left:3px solid var(--db-dot)}
+.decision{border-left:3px solid var(--db-amber);border-style:dashed;border-left-style:solid;border-color:#5b4d33;border-left-color:var(--db-amber)}
+.exact h3,.decision h3{font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--db-muted-2);font-weight:700}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:9px}
+.stat{border:1px solid var(--db-line-soft);border-radius:6px;background:var(--db-well);padding:7px 9px}
+.stat b{display:block;font:600 15px var(--mono);color:var(--db-heading)}
+.stat span{font-size:10.5px;color:var(--db-muted)}
+.decision strong{display:block;margin-top:5px;color:var(--db-amber);font-size:13px}
+.decision p{font-size:12px;margin-top:3px;color:var(--db-body);line-height:1.5}
+.health{display:flex;gap:6px 18px;flex-wrap:wrap;padding:9px 16px;border-top:1px solid var(--db-line-soft);background:var(--db-panel);font-size:11px;color:var(--db-muted)}
+.health b{color:var(--db-text)}
+.sections{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}
+.sec{border:1px solid var(--db-line);border-radius:9px;background:var(--db-surface)}
+.sec summary{padding:9px 14px;font-size:13px;font-weight:600;color:var(--db-heading);cursor:pointer}
+.sec summary:hover{background:var(--db-hover);border-radius:8px}
+.sec summary span{font-size:12px;color:var(--db-muted);font-weight:400;margin-left:6px}
+.sec-body{border-top:1px solid var(--db-line-soft);padding:10px 14px;font-size:12px;line-height:1.55;color:var(--db-muted)}
+.note{margin-top:14px;font-size:11px;color:var(--db-muted)}
+
+@media (max-width:900px){
+  .row-main{grid-template-columns:24px 34px minmax(0,1fr)}
+  .c-marks,.c-meta{grid-column:3;justify-content:flex-start}
+  .orient-grid,.sections{grid-template-columns:1fr}
+}
+@media (max-width:700px){
+  :root{--topbar-h:52px;--toolbar-h:76px}
+  .topbar{position:static;padding:0 14px}
+  .toolbar{position:sticky;top:0;flex-wrap:wrap;align-content:center;gap:0 5px;min-height:var(--toolbar-h);padding:0 10px}
+  .secondary,.toolbar-divider{display:none}
+  .more{display:grid;order:5;margin-left:auto}
+  .breadcrumbs{order:10;flex:0 0 100%;height:32px;overflow-x:auto}
+  .picker .cur,.search-control span,.search-control kbd{display:none}
+  .search-control{min-width:31px;width:31px;justify-content:center;padding:0}
+  .context{padding:16px 12px 24px}
+  .context-heading{grid-template-columns:minmax(0,1fr);gap:8px}
+  .count{align-self:start}
+  .filter,.filter input{width:100%}
+  .tree-toolbar{padding:10px 12px}
+  .legend{margin-left:0;width:100%}
+  .row-main{padding:9px 12px 9px 6px;gap:8px}
+  .tbody{padding:10px}
+  .lenshead{padding:12px 12px 6px}
+  .orient-grid{padding:0 10px 12px}
+  .answer{padding:10px 12px}
+  .tab{padding:8px 4px;font-size:11px}
+  footer{padding:0 14px}
+}
+@media (max-width:460px){
+  .row-main{grid-template-columns:20px 30px minmax(0,1fr)}
+  .chev{width:20px}
+  .c-title{flex-direction:column;gap:0}
+  .mode-switch{flex-wrap:wrap}
+  .service{padding:9px 12px}
+  .stats{grid-template-columns:1fr 1fr}
+}
+@media (prefers-reduced-motion:reduce){*{transition-duration:.01ms!important}}
+</style></head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs>
+<symbol id="i-back" viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7"/></symbol>
+<symbol id="i-fwd" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></symbol>
+<symbol id="i-home" viewBox="0 0 24 24"><path d="M3 11l9-8 9 8M5 10v10h14V10"/></symbol>
+<symbol id="i-tree" viewBox="0 0 24 24"><path d="M3 4h6v5H3zM15 12h6v5h-6zM15 4h6v5h-6zM6 9v8h9M6 6.5h9"/></symbol>
+<symbol id="i-comments" viewBox="0 0 24 24"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2zM18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/></symbol>
+<symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5M3 12c0 1.7 4 3 9 3s9-1.3 9-3"/></symbol>
+<symbol id="i-tasks" viewBox="0 0 24 24"><path d="M11 6h10M11 12h10M11 18h10M3 6l1.5 1.5L7 5M3 12l1.5 1.5L7 11M3 18l1.5 1.5L7 17"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></symbol>
+<symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/></symbol>
+<symbol id="i-chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+<symbol id="i-down" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+<symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+</defs></svg>
+<main class="shell">
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">D</span><strong>Databench</strong></div>
+    <span class="status-dot" title="connected"></span>
+    <span class="grow"></span>
+    <button class="picker" type="button" aria-label="Project: plugins-kit"><span class="cur">plugins-kit</span><svg class="i"><use href="#i-down"/></svg></button>
+    <button class="search-control" type="button" aria-label="Search"><svg class="i"><use href="#i-search"/></svg><span>Search</span><kbd>/</kbd></button>
+    <button class="icon-button" type="button" aria-label="Settings" title="Settings"><svg class="i"><use href="#i-gear"/></svg></button>
+  </header>
+  <nav class="toolbar" aria-label="Context navigation">
+    <button class="icon-button" type="button" aria-label="Back" title="Back"><svg class="i"><use href="#i-back"/></svg></button>
+    <button class="icon-button secondary" type="button" aria-label="Forward" title="Forward"><svg class="i"><use href="#i-fwd"/></svg></button>
+    <span class="toolbar-divider"></span>
+    <button class="icon-button" type="button" aria-label="Home directory" title="Home directory"><svg class="i"><use href="#i-home"/></svg></button>
+    <button class="icon-button" type="button" aria-label="Directory tree" title="Directory tree"><svg class="i"><use href="#i-tree"/></svg></button>
+    <button class="icon-button" type="button" aria-label="Comments dashboard" title="Comments dashboard"><svg class="i"><use href="#i-comments"/></svg></button>
+    <button class="icon-button secondary" type="button" aria-label="Browse entities" title="Browse entities"><svg class="i"><use href="#i-db"/></svg></button>
+    <button class="icon-button icon-button-active nav-label" type="button" aria-current="page" title="Tasks"><svg class="i"><use href="#i-tasks"/></svg>Tasks</button>
+    <button class="icon-button more" type="button" aria-label="More actions" title="More"><svg class="i"><use href="#i-more"/></svg></button>
+    <div class="breadcrumbs" role="group" aria-label="Breadcrumb">
+      <span class="crumb"><button type="button">plugins-kit</button></span>
+      <span class="crumb"><svg class="i" style="width:14px;height:14px"><use href="#i-chev"/></svg><button type="button">Tasks</button></span>
+    </div>
+  </nav>
+  <section class="context">
+    <div class="context-heading">
+      <div><p class="eyebrow">Tasks</p><h1>Open tasks</h1></div>
+      <span class="count">5 open &middot; 2 need you &middot; 0 running</span>
+      <div class="viewer-controls">
+        <div class="mode-switch" role="group" aria-label="Sort by"><button class="mode-option" type="button" aria-pressed="true">Priority</button><button class="mode-option" type="button" aria-pressed="false">Needs you first</button><button class="mode-option" type="button" aria-pressed="false">In progress first</button><button class="mode-option" type="button" aria-pressed="false">Latest activity</button></div>
+        <label class="filter"><svg class="i" style="width:14px;height:14px"><use href="#i-search"/></svg><input type="search" placeholder="Filter tasks and items"></label>
+        <button class="comment-toggle" type="button">Refresh</button>
+        <button class="primary-action" type="button">Add task</button>
+      </div>
+    </div>
+
+    <div class="tree-surface">
+      <div class="tree-toolbar"><span class="tree-toolbar-label">Open tasks &middot; sorted by priority</span><div class="legend"><span class="mk need">needs you</span><span class="mk sess">working session</span></div></div>
+
+      <article class="trow"><button class="row-main" type="button" aria-expanded="false"><span class="chev"><svg class="i"><use href="#i-chev"/></svg></span><span class="pri P1">P1</span><span class="c-title"><span class="ttl">Bootstrap admin queue fix</span><span class="ident"><span class="repo">plugins-kit</span>:bootstrap-admin-queue-fix</span></span><span class="c-marks"><span class="mk need">1 needs you</span></span><span class="c-meta"><span>3 items</span><span>3h ago</span></span></button></article>
+
+      <article class="trow open"><button class="row-main" type="button" aria-expanded="true"><span class="chev"><svg class="i"><use href="#i-chev"/></svg></span><span class="pri P1">P1</span><span class="c-title"><span class="ttl">Task kit extraction</span><span class="ident"><span class="repo">plugins-kit</span>:task-kit-extraction</span></span><span class="c-marks"><span class="mk need">2 need you</span><span class="mk sess">working on this machine</span></span><span class="c-meta"><span>4 items</span><span>18 min ago</span></span></button>
+      <div class="tbody">
+        <section class="service" aria-label="Answering service status"><strong>Answering service</strong><span class="state"><span class="status-dot"></span>running</span><span>Order: <b>script</b>, <b>local qwen</b>, <b>luna / haiku</b></span><span>Paid answers: <b>not allowed</b></span><a class="dashboard-link" href="#generation-settings" title="Opens the generation settings in databench settings">Generation settings</a><span class="grow"></span><button class="tree-action" type="button">Refresh answers</button></section>
+        <section class="lensbox">
+          <div class="tabs" role="tablist"><button class="tab" type="button" role="tab" aria-selected="true">Orient <small>3 answers</small></button><button class="tab" type="button" role="tab" aria-selected="false">Decide <small>2 waiting</small></button><button class="tab" type="button" role="tab" aria-selected="false">Trace <small>6 exact facts</small></button></div>
+          <header class="lenshead"><h2>Orient</h2><p>Enough context to resume, with exact state beside interpretation.</p></header>
+          <div class="orient-grid">
+            <div class="answers">
+              <article class="answer"><div class="question">What is this task for?</div><h3>Move task tracking onto databench; keep the task skill working without it.</h3><p>task-kit 0.13.0 is extracted and published. Since 2026-10-21 databench hosts the service and the view; task-kit keeps task.py, the skill and the task semantics.</p><div class="source"><span class="answerer local">local qwen</span><span>as of task record 09:12</span><span class="fresh">fresh</span></div></article>
+              <article class="answer"><div class="question">Where does it stand?</div><h3>The integration is re-planned; the databench distribution choice is waiting on you.</h3><p>llm-kit 0.4.0 (stage S1) is shipped. The first build step is S4-U0, the protocol freeze; open questions Q1 to Q6 are in the plan.</p><div class="source"><span class="answerer local">local qwen</span><span>as of CLAUDE.md + plan 09:12</span><span class="fresh">fresh</span></div></article>
+              <article class="answer stale-block"><div class="question">What changed since the last session?</div><h3>Stages S2 to S6 were re-planned; the answer predates it.</h3><p>The answer cites the 2026-10-21 review, but a plan.md edit at 09:12 re-ordered the stages and added the read-only Tasks view first.</p><div class="source"><span class="answerer local">local qwen</span><span>answer as of 20:47 yesterday</span><span>inputs at 09:12</span><span class="stale">stale</span></div></article>
+            </div>
+            <aside class="trace-preview">
+              <section class="exact"><h3>Exact state</h3><div class="stats"><div class="stat"><b>18m</b><span>activity age</span></div><div class="stat"><b>4</b><span>open items</span></div><div class="stat"><b>2</b><span>need you</span></div><div class="stat"><b>no</b><span>stale-task signal</span></div></div><div class="source"><span class="answerer script">script</span><span>task + git + sessions, read 09:30</span></div></section>
+              <section class="decision"><h3>Cross-stream next action</h3><strong>Waiting: paid answers are not allowed</strong><p>Local qwen declined this question. Luna is the next capable answerer; databench's generation settings do not allow it, so it has not run.</p><div class="source"><span class="answerer paid">luna - paid</span><span>not run</span></div></section>
+            </aside>
+          </div>
+          <div class="health"><span><b>Orient:</b> 2 fresh, 1 stale</span><span><b>Decide:</b> 2 waiting on you</span><span><b>Trace:</b> script facts read 09:30</span></div>
+        </section>
+        <div class="sections"><details class="sec"><summary>Items <span>4 &middot; 2 need you</span></summary><div class="sec-body">Choose the databench distribution (databench-integration); try the dashboard forms and answer three parked questions (dashboard-increment-4); two lower-priority follow-ups (dashboard-followups, inflight-evidence).</div></details><details class="sec"><summary>Run work <span>held by a working session</span></summary><div class="sec-body">A verified session on this machine is working the task. Queue actions stay unavailable until hand-off.</div></details></div>
+      </div></article>
+
+      <article class="trow"><button class="row-main" type="button" aria-expanded="false"><span class="chev"><svg class="i"><use href="#i-chev"/></svg></span><span class="pri P2">P2</span><span class="c-title"><span class="ttl">Optimize repo test suite</span><span class="ident"><span class="repo">plugins-kit</span>:optimize-repo-test-suite</span></span><span class="c-marks"></span><span class="c-meta"><span>4 items</span><span>yesterday</span></span></button></article>
+      <article class="trow"><button class="row-main" type="button" aria-expanded="false"><span class="chev"><svg class="i"><use href="#i-chev"/></svg></span><span class="pri P2">P2</span><span class="c-title"><span class="ttl">Task archive partial move</span><span class="ident"><span class="repo">plugins-kit</span>:task-archive-partial-move</span></span><span class="c-marks"></span><span class="c-meta"><span>2 items</span><span>2 days ago</span></span></button></article>
+      <article class="trow"><button class="row-main" type="button" aria-expanded="false"><span class="chev"><svg class="i"><use href="#i-chev"/></svg></span><span class="pri">P3</span><span class="c-title"><span class="ttl">Presence kit</span><span class="ident"><span class="repo">plugins-kit</span>:presence-kit</span></span><span class="c-marks"></span><span class="c-meta"><span>1 item</span><span>5 days ago</span></span></button></article>
+    </div>
+    <p class="note">Sample data from the task folder dev/tasks/task-kit-extraction; the other rows are placeholders.</p>
+  </section>
+  <footer><span>127.0.0.1:8765</span></footer>
+</main>
+</body></html>

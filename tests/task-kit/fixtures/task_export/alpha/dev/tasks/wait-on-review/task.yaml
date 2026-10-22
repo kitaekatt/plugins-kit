@@ -1,0 +1,8 @@
+task:
+  _schema_version: '1'
+  type: hand-off
+  title: Wait on review
+  status: blocked
+  priority: P2
+  blocked_by:
+  - dev/tasks/build-export

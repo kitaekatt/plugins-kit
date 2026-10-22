@@ -1,0 +1,232 @@
+{
+  "kind": "tasks",
+  "payload": {
+    "checkouts": [
+      {
+        "id": "<checkout:alpha>",
+        "repository": "b8b1a48164c12cbc",
+        "root": "<parent>/alpha"
+      },
+      {
+        "id": "<checkout:alpha-two>",
+        "repository": "b8b1a48164c12cbc",
+        "root": "<parent>/alpha-two"
+      }
+    ],
+    "errors": [],
+    "generated_at": "2026-10-22T15:00:00Z",
+    "repositories": [
+      {
+        "checkouts": [
+          "<checkout:alpha>",
+          "<checkout:alpha-two>"
+        ],
+        "id": "b8b1a48164c12cbc",
+        "name": "alpha"
+      }
+    ],
+    "revision": "<revision>",
+    "tasks": [
+      {
+        "blocked_by": [],
+        "checkout": "<checkout:alpha>",
+        "classification": "active",
+        "description": "Export task facts as JSON for databench.",
+        "findings": {
+          "errors": [],
+          "item_errors": [],
+          "notes": [
+            "version control will not carry dev/tasks/build-export: the folder is git-ignored, so nothing here is recoverable once removed -- treat it as scratch, and keep anything that must outlive the task in the repo it describes (declare it with update --durable-output)"
+          ],
+          "warnings": []
+        },
+        "has_items_block": true,
+        "items": [
+          {
+            "id": "write-schema",
+            "note": null,
+            "priority": "P1",
+            "state": "in-flight",
+            "title": "Write the schema"
+          },
+          {
+            "id": "pick-name",
+            "note": "Choose between export and dump.",
+            "priority": "P1",
+            "state": "blocked-user",
+            "title": "Pick the command name"
+          },
+          {
+            "id": "write-cli",
+            "note": null,
+            "priority": "P2",
+            "state": "available",
+            "title": "Write the CLI"
+          },
+          {
+            "id": "later-polish",
+            "note": null,
+            "priority": "P3",
+            "state": "deferred",
+            "title": "Polish the messages"
+          }
+        ],
+        "last_activity": "2026-10-22 14:30",
+        "location": "dev/tasks",
+        "path": "dev/tasks/build-export",
+        "priority": "P1",
+        "revision": "5d686d44201d24da",
+        "sessions": [
+          {
+            "host": "othermac",
+            "local": false,
+            "recorded_at": "2026-10-22T13:05:00Z",
+            "registered_at": "2026-10-22T13:00:00Z",
+            "session_id": "11111111-2222-3333-4444-555555555555",
+            "state": "unverified",
+            "task_state": "open"
+          }
+        ],
+        "stub": "build-export",
+        "summary": "The export reads task folders; the schema is frozen; the CLI is next.",
+        "summary_source": "task.yaml",
+        "title": "Build the export",
+        "updates": [
+          {
+            "date": "2026-10-22",
+            "detail": "Fixture written.",
+            "time": "14:30"
+          },
+          {
+            "date": "2026-10-21",
+            "detail": "Schema drafted.",
+            "time": null
+          },
+          {
+            "date": "2026-10-20",
+            "detail": "Task created.",
+            "time": "09:15"
+          }
+        ],
+        "updates_total": 3
+      },
+      {
+        "blocked_by": [],
+        "checkout": "<checkout:alpha-two>",
+        "classification": "deferred",
+        "description": null,
+        "findings": {
+          "errors": [],
+          "item_errors": [],
+          "notes": [
+            "version control will not carry dev/tasks/later-idea: the folder is git-ignored, so nothing here is recoverable once removed -- treat it as scratch, and keep anything that must outlive the task in the repo it describes (declare it with update --durable-output)"
+          ],
+          "warnings": [
+            "no task_items block: dev/tasks/later-idea/plan.md does not enumerate the open items -- run the one-time conversion (task skill references/handoff-template.md, 'Converting a pre-contract folder')"
+          ]
+        },
+        "has_items_block": false,
+        "items": [],
+        "last_activity": "2026-10-18 08:00",
+        "location": "dev/tasks",
+        "path": "dev/tasks/later-idea",
+        "priority": "P2",
+        "revision": "c611a477a245b21c",
+        "sessions": [],
+        "stub": "later-idea",
+        "summary": null,
+        "summary_source": null,
+        "title": "Later idea",
+        "updates": [
+          {
+            "date": "2026-10-18",
+            "detail": "Task created.",
+            "time": "08:00"
+          }
+        ],
+        "updates_total": 1
+      },
+      {
+        "blocked_by": [],
+        "checkout": "<checkout:alpha>",
+        "classification": "closed",
+        "description": null,
+        "findings": {
+          "errors": [],
+          "item_errors": [],
+          "notes": [
+            "version control will not carry dev/tasks/old-cleanup: the folder is git-ignored, so nothing here is recoverable once removed -- treat it as scratch, and keep anything that must outlive the task in the repo it describes (declare it with update --durable-output)"
+          ],
+          "warnings": [
+            "no task_items block: dev/tasks/old-cleanup/plan.md does not enumerate the open items -- run the one-time conversion (task skill references/handoff-template.md, 'Converting a pre-contract folder')"
+          ]
+        },
+        "has_items_block": false,
+        "items": [],
+        "last_activity": "2026-09-02 10:00",
+        "location": "dev/tasks",
+        "path": "dev/tasks/old-cleanup",
+        "priority": "P3",
+        "revision": "57e0e49486c0b4fe",
+        "sessions": [],
+        "stub": "old-cleanup",
+        "summary": null,
+        "summary_source": null,
+        "title": "Old cleanup",
+        "updates": [
+          {
+            "date": "2026-09-02",
+            "detail": "Closed.",
+            "time": "10:00"
+          },
+          {
+            "date": "2026-09-01",
+            "detail": "Task created.",
+            "time": "10:00"
+          }
+        ],
+        "updates_total": 2
+      },
+      {
+        "blocked_by": [
+          "dev/tasks/build-export"
+        ],
+        "checkout": "<checkout:alpha>",
+        "classification": "blocked",
+        "description": null,
+        "findings": {
+          "errors": [],
+          "item_errors": [],
+          "notes": [
+            "version control will not carry dev/tasks/wait-on-review: the folder is git-ignored, so nothing here is recoverable once removed -- treat it as scratch, and keep anything that must outlive the task in the repo it describes (declare it with update --durable-output)"
+          ],
+          "warnings": [
+            "no task_items block: dev/tasks/wait-on-review/plan.md does not enumerate the open items -- run the one-time conversion (task skill references/handoff-template.md, 'Converting a pre-contract folder')"
+          ]
+        },
+        "has_items_block": false,
+        "items": [],
+        "last_activity": "2026-10-19 11:00",
+        "location": "dev/tasks",
+        "path": "dev/tasks/wait-on-review",
+        "priority": "P2",
+        "revision": "310f66dab8558b38",
+        "sessions": [],
+        "stub": "wait-on-review",
+        "summary": null,
+        "summary_source": null,
+        "title": "Wait on review",
+        "updates": [
+          {
+            "date": "2026-10-19",
+            "detail": "Task created.",
+            "time": "11:00"
+          }
+        ],
+        "updates_total": 1
+      }
+    ]
+  },
+  "protocol": 1,
+  "task_kit_version": "<version>"
+}

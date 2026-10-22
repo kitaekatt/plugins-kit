@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": "usage",
+    "message": "export tasks requires --protocol"
+  },
+  "protocol": 1,
+  "task_kit_version": "<version>"
+}

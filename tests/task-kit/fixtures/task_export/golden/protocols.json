@@ -1,0 +1,10 @@
+{
+  "kind": "protocols",
+  "payload": {
+    "protocols": [
+      1
+    ]
+  },
+  "protocol": 1,
+  "task_kit_version": "<version>"
+}

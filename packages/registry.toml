@@ -1,0 +1,14 @@
+# Distributions scripts/publish.py releases to PyPI. Each entry is built from
+# packages/<name>/ (its pyproject.toml states the version) plus the source
+# roots it lists. Schema, release states and procedure:
+# docs/reference/package-release.md.
+#
+# [[package]]
+# name = "katsoft-llm-kit"                       # distribution; project dir packages/<name>/
+# import = "llm_kit"                             # import package, smoke-tested after upload
+# marker = "llm_kit/_deployment.py"              # wheel path of the hook-written release marker
+# sources = ["plugins/llm-kit/lib/llm_kit"]      # build inputs outside packages/<name>/
+# surface = { json = "plugins/llm-kit/contract/public-surface.json" }
+#   # or { all = "packages/<name>/src/<pkg>/__init__.py" } for an __all__ list
+schema = 1
+repository = "https://github.com/kitaekatt/plugins-kit"

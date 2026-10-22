@@ -108,6 +108,26 @@ bump (observed: unreal-kit, 2026-09-24). Ship the ready plugins with `--only
 does not advance, so the held-back plugin's commits ship whole at the next
 bare publish.
 
+### Packages
+
+A publish also releases the Python distributions registered in
+`packages/registry.toml` whose version has no entry in
+`packages/released.json`. Each is tagged, built and uploaded by
+`.github/workflows/release-packages.yml`, verified against a rebuild of its
+tag, and recorded in `packages/released.json` on dev BEFORE the projection, so
+master never carries a plugin ahead of a package it needs. While a package
+release is pending, `--only` is refused and the publish stops (exit 1) until
+the release is recorded; re-running `publish.py` resumes from the observed
+state. Procedure, states and commands:
+[package-release.md](package-release.md).
+
+Three identities make this safe in a shared tree: P (dev after the clean-tree
+gate; every preflight read is at P), B (P plus the regenerated
+`marketplace.json`, committed in a private index -- never an amend), and F
+(B or the last ledger commit), which may differ from P only in
+`marketplace.json` and `packages/released.json` and is what the projection,
+the fast-forward and verification use.
+
 ### Commit-scoped generated-data checks
 
 The pre-commit check is **index-aware and scoped to the commit**

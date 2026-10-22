@@ -33,9 +33,11 @@ IMPORTED_TASK_SYSTEM_MODULES = (
     "init.py",
     "machine.py",
     "oslock.py",
+    "plan_sections.py",
     "procspawn.py",
     "procstamp.py",
     "relocate.py",
+    "repo_identity.py",
     "resolve.py",
     "schemas.py",
     "session_publish.py",
@@ -44,6 +46,7 @@ IMPORTED_TASK_SYSTEM_MODULES = (
     "task_items.py",
     "types.py",
     "validate.py",
+    "vcs.py",
 )
 
 _ASSET_SUFFIXES = {".html", ".css", ".js", ".svg", ".png", ".ico"}

@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": "unknown_checkout",
+    "message": "no checkout with id '0000000000000000' holds a task"
+  },
+  "protocol": 1,
+  "task_kit_version": "<version>"
+}

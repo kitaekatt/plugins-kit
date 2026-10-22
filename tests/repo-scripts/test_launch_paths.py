@@ -1939,7 +1939,7 @@ def test_unguarding_llm_kit_cli_main_reopens_its_console_finding():
     assert text.count(call) == 1
     removed = tree.with_text(entry.module_path, text.replace(call, "            pass\n"))
     assert "never calls" in (console_problem(removed, entry) or "")
-    head = "    if argv is None:\n"
+    head = '    if argv is None and _runtime.mode() == "legacy":\n'
     assert text.count(head) == 1
     off_path = tree.with_text(entry.module_path, text.replace(head, "    if True:\n"))
     assert "argv is None" in (console_problem(off_path, entry) or "")

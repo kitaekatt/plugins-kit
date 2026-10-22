@@ -17,6 +17,28 @@ publish -- it is a state where users see something other than what you meant:
 Contract: you commit your code and the version bump on `dev`; this script owns
 everything derived from them and every git step after them.
 
+Three fixed identities, each resolved once and passed explicitly:
+
+  - P: refs/heads/dev, resolved right after the clean-tree gate. Every
+    preflight read is `git show P:<path>`, never the working tree.
+  - B: P plus the regenerated derived artifacts, committed in a PRIVATE index
+    (commit_derived). Nothing is ever amended; B is P when nothing changed.
+  - F: the commit master receives -- B, or the last package-ledger commit.
+    F may differ from P only in the publish-owned paths (marketplace.json,
+    packages/released.json). The projection, the fast-forward and verify()
+    all take F; no branch name is read once F is fixed.
+
+dev moves only through advance_dev(): a fast-forward-only push of the new
+commit, then the local ref and the publish-owned paths' copies when nothing
+else differs.
+
+Packages: when packages/registry.toml registers a distribution whose version
+has no entry in packages/released.json, the same run tags it, waits for the
+release workflow, verifies the PyPI wheel against a rebuild of the tag, and
+records it on dev BEFORE the projection, so master never exposes a plugin
+ahead of a package it needs. Mechanics: scripts/_packages.py; procedure and
+states: docs/reference/package-release.md.
+
 Why a script rather than a checklist -- the footguns it removes:
 
   - generate.py's default job is to describe the MACHINE it runs on: it reads
@@ -67,9 +89,15 @@ escapable pre-commit hooks):
     what it does NOT change (a dev-only plugin still never reaches the
     marketplace listing, so it stays uninstallable).
   - a plugin that does not declare the bootstrap dependency.
-  - no published plugin bumped at all, AND any published plugin whose files
-    changed in the range without a bump (the cache keys on version, so those
-    files would ship under a version consumers already hold and never refetch).
+  - no published plugin bumped at all (unless a package release is pending,
+    or dev records a package release master's ledger lacks), AND any
+    published plugin whose files changed in the range without a bump (the
+    cache keys on version, so those files would ship under a version
+    consumers already hold and never refetch).
+  - the package policy in _packages.plan(): --only while a package release
+    is pending, a dependency cycle or unsatisfiable first-party requirement,
+    a listed public name removed without a major bump, and a pending release
+    whose workflow is not on master.
   - a pyproject.toml version disagreeing with its plugin.json.
 
 The last two exist as pre-commit hooks too, but those are skippable with
@@ -84,11 +112,11 @@ content exactly as a dev-only plugin is, so master receives one plugin's release
 while the rest of dev stays unpublished. The derived artifacts are regenerated
 from the projected tree held in a temporary Git index, so master's
 marketplace.json lists the held-back plugins at the versions master
-actually carries. Nothing on dev is regenerated or committed: the dirty gate
-admits uncommitted work inside held-back plugins, and a dev-side regen would
-read those working-tree manifests while commit_derived would sweep another
-session's staged work along. Two things a partial release deliberately does
-NOT do:
+actually carries. Nothing on dev is regenerated or committed (B is P): the
+held-back plugins' listing entries on dev catch up at the next bare publish.
+--only is refused while a package release is pending, because a partial
+release could expose a plugin ahead of the package it needs. Two things a
+partial release deliberately does NOT do:
 
   - It does not advance `Published-From:`. The held-back plugins' commits stay
     in the range so the next full publish still sees them; the projection
@@ -115,6 +143,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLUGINS_DIR = REPO_ROOT / "plugins"
@@ -135,8 +164,42 @@ MARKETPLACE_NAME = "plugins-kit"
 REGEN_MARKETPLACE_PY = REPO_ROOT / "scripts" / "regen_marketplace.py"
 
 
+
 class PublishError(Exception):
     """A refusal. The message says what is wrong and what to do about it."""
+
+
+def _at(ref: str | None) -> dict[str, str]:
+    """The keyword form of a frozen commit for the helpers that take one.
+
+    main() fixes P (dev after the clean-tree gate) and F (the commit master
+    receives) once and passes them to every read; the helpers default to the
+    branch and working-tree reads they always made when called without one.
+    Passing nothing at all in that case keeps the call identical to the
+    historical call, which the seams in tests/repo-scripts/test_publish.py
+    replace with argument-less stand-ins.
+    """
+    return {} if ref is None else {"ref": ref}
+
+
+def _pk():
+    """scripts/_packages.py (docs/reference/package-release.md), imported on
+    first use rather than at module load: `--print-range-base` must answer
+    from a lone copy of this file, which is how the pre-commit bump gate
+    (scripts/check-staged-version-bump.sh) and its tests run it."""
+    if str(SCRIPTS_DIR) not in sys.path:
+        sys.path.insert(0, str(SCRIPTS_DIR))
+    import _packages
+    return _packages
+
+
+def package_repo() -> "_packages.Repo":
+    return _pk().Repo(REPO_ROOT, REMOTE)
+
+
+def package_services() -> "_packages.Services":
+    """Everything a package release does off this machine. Tests replace it."""
+    return _pk().Services.real(REPO_ROOT)
 
 
 # --- shell -----------------------------------------------------------------
@@ -185,9 +248,20 @@ def _manifest_path(plugin: str) -> Path:
     return PLUGINS_DIR / plugin / ".claude-plugin" / "plugin.json"
 
 
-def local_plugins() -> dict[str, dict]:
-    """Every plugin's manifest as it stands in the working tree."""
+def local_plugins(ref: str | None = None) -> dict[str, dict]:
+    """Every plugin's manifest at commit `ref`, or in the working tree without one.
+
+    A frozen identity (P or F) reads git objects only, so another session
+    editing the shared tree mid-run cannot change what this run judges.
+    """
     out = {}
+    if ref is not None:
+        listing = git("ls-tree", "-r", "--name-only", ref, "--", "plugins/")
+        for path in listing.splitlines():
+            parts = path.split("/")
+            if len(parts) == 4 and parts[2:] == [".claude-plugin", "plugin.json"]:
+                out[parts[1]] = json.loads(git("show", f"{ref}:{path}"))
+        return dict(sorted(out.items()))
     for plugin_dir in sorted(PLUGINS_DIR.iterdir()):
         manifest = _manifest_path(plugin_dir.name)
         if manifest.is_file():
@@ -200,15 +274,15 @@ def is_published(manifest: dict) -> bool:
     return manifest.get("published", True) is not False
 
 
-def published_plugins() -> set[str]:
-    return {name for name, m in local_plugins().items() if is_published(m)}
+def published_plugins(ref: str | None = None) -> set[str]:
+    return {name for name, m in local_plugins(**_at(ref)).items() if is_published(m)}
 
 
-def held_back_for(only: set[str] | None) -> set[str]:
+def held_back_for(only: set[str] | None, ref: str | None = None) -> set[str]:
     """Published plugins a partial (--only) release holds at master's content."""
     if not only:
         return set()
-    return published_plugins() - only
+    return published_plugins(**_at(ref)) - only
 
 
 def version_at(ref: str, plugin: str) -> str | None:
@@ -274,7 +348,7 @@ def _blobs_along(path: str, commits: list[str]) -> list[str]:
             if len(fields) == 1]
 
 
-def _dev_introduction_order(path: str) -> dict[str, int]:
+def _dev_introduction_order(path: str, tip: str = DEV_BRANCH) -> dict[str, int]:
     """When dev first INTRODUCED each state of `path`; 0 is the oldest.
 
     An ordering, not mere membership, is what `_master_only_paths` needs: dev
@@ -300,7 +374,7 @@ def _dev_introduction_order(path: str) -> dict[str, int]:
     precisely the case where master still carrying it is a real loss the
     operator should see.
     """
-    commits = git("rev-list", DEV_BRANCH, "--", path, check=False).split()
+    commits = git("rev-list", tip, "--", path, check=False).split()
     order: dict[str, int] = {}
     # rev-list is newest-first, so walk it backwards to number introductions
     # from dev's oldest commit forward.
@@ -325,7 +399,7 @@ def _is_projection_commit(commit: str) -> bool:
 
 
 def _master_holds_discardable_state(path: str, master_base: str, master: str,
-                                    master_blob: str) -> bool:
+                                    master_blob: str, tip: str = DEV_BRANCH) -> bool:
     """True when publishing over master's state at `path` would discard it.
 
     A publish overwrites master's CURRENT state with dev's, so that is the only
@@ -383,7 +457,7 @@ def _master_holds_discardable_state(path: str, master_base: str, master: str,
     direction is the safe one: the operator is shown a path both branches
     moved backwards on.
     """
-    order = _dev_introduction_order(path)
+    order = _dev_introduction_order(path, tip)
     current = order.get(master_blob)
     if current is None:
         return True
@@ -406,7 +480,7 @@ def _master_holds_discardable_state(path: str, master_base: str, master: str,
     return False
 
 
-def range_base() -> str:
+def range_base(tip: str = DEV_BRANCH) -> str:
     """The commit `..dev` should be measured from.
 
     Normally `origin/master` itself. After a PROJECTION release master's tip is
@@ -437,11 +511,11 @@ def range_base() -> str:
     than under-reports, which is the safe direction: a wider range costs noise,
     a narrower one silently drops a commit from the release.
     """
-    point = _recorded_publish_point()
+    point = _recorded_publish_point(tip)
     return point[1] if point else f"{REMOTE}/{MASTER_BRANCH}"
 
 
-def _recorded_publish_point() -> tuple[str, str] | None:
+def _recorded_publish_point(tip: str = DEV_BRANCH) -> tuple[str, str] | None:
     """The last release master carries: (its own commit, the dev sha it shipped).
 
     Both halves are needed and they are not interchangeable. The dev sha is the
@@ -468,13 +542,13 @@ def _recorded_publish_point() -> tuple[str, str] | None:
             if not line.startswith(PUBLISHED_FROM):
                 continue
             sha = line[len(PUBLISHED_FROM):].strip()
-            if sha and _rc("merge-base", "--is-ancestor", sha, DEV_BRANCH) == 0:
+            if sha and _rc("merge-base", "--is-ancestor", sha, tip) == 0:
                 return commit.strip(), sha
             break
     return None
 
 
-def _master_only_paths() -> list[str]:
+def _master_only_paths(ref: str | None = None) -> list[str]:
     """Paths where master holds content dev does not.
 
     The old guard for this was ancestry -- "master has commits dev lacks" --
@@ -516,13 +590,15 @@ def _master_only_paths() -> list[str]:
     which is exactly how a path master has not touched since the release reads
     as one master moved.
     """
-    dev_only = {name for name, m in local_plugins().items() if not is_published(m)}
+    tip = ref or DEV_BRANCH
+    dev_only = {name for name, m in local_plugins(**_at(ref)).items()
+                if not is_published(m)}
     master = f"{REMOTE}/{MASTER_BRANCH}"
-    point = _recorded_publish_point()
+    point = _recorded_publish_point(tip)
     if point:
         master_base, base = point
     else:
-        master_base = base = git("merge-base", master, DEV_BRANCH, check=False)
+        master_base = base = git("merge-base", master, tip, check=False)
     if not base:
         return []
     stray = []
@@ -535,7 +611,7 @@ def _master_only_paths() -> list[str]:
     # The trailing "--" is required, not tidiness: this repo has a `dev/`
     # directory, so `git diff <ref> dev` is ambiguous between a revision and a
     # path and git refuses outright.
-    for path in git("diff", "--name-only", master, DEV_BRANCH, "--").splitlines():
+    for path in git("diff", "--name-only", master, tip, "--").splitlines():
         path = path.strip()
         if not path or path in GENERATED_PATHS or _dev_only_owned(path, dev_only):
             continue
@@ -554,13 +630,13 @@ def _master_only_paths() -> list[str]:
                 and blob_at(master_base, path) is None):
             continue
         if master_blob is None or _master_holds_discardable_state(
-                path, master_base, master, master_blob):
+                path, master_base, master, master_blob, tip):
             stray.append(path)
     return stray
 
 
-def _require_no_master_only_content() -> None:
-    stray = _master_only_paths()
+def _require_no_master_only_content(ref: str | None = None) -> None:
+    stray = _master_only_paths(ref)
     if not stray:
         return
     raise PublishError(
@@ -574,10 +650,31 @@ def _require_no_master_only_content() -> None:
 
 # --- preflight -------------------------------------------------------------
 
+class Preflight(NamedTuple):
+    """What preflight fixed and decided: P, the bumps, the exclusions, and the
+    package plan (_packages.plan) with any ledger entries master still lacks."""
+
+    p: str
+    bumps: list[str]
+    excluded: dict[str, set[str]]
+    packages: "_packages.Plan"
+    unprojected: list[str]
+
+
 def preflight(allow_dev_only: set[str] | None = None,
               only: set[str] | None = None,
               ) -> tuple[list[str], dict[str, set[str]]]:
     """Refuse anything unsafe. Returns (publish summary, excluded commits).
+
+    The tuple view of `_preflight`, for callers that need only those two.
+    """
+    result = _preflight(allow_dev_only, only)
+    return result.bumps, result.excluded
+
+
+def _preflight(allow_dev_only: set[str] | None = None,
+               only: set[str] | None = None) -> Preflight:
+    """Refuse anything unsafe; fix P and judge everything at P.
 
     Every check here refuses rather than fixes: a publish is visible to other
     machines, so guessing is worse than stopping. The ONE thing it no longer
@@ -587,14 +684,19 @@ def preflight(allow_dev_only: set[str] | None = None,
     (see --allow-dev-only). `only` names the published plugins a partial
     release ships; every other published plugin is then held back, and the
     gates that judge shippable content judge only what ships.
+
+    P is refs/heads/dev resolved ONCE, right after the clean-tree gate (the
+    only check that must look at the working tree). Every later read --
+    manifests, plugin sets, bumps, pyproject sync, the package registry --
+    is `git show P:<path>`, so a session committing mid-run cannot change
+    what was judged.
     """
-    held_back = held_back_for(only)
     if git("rev-parse", "--abbrev-ref", "HEAD") != DEV_BRANCH:
         raise PublishError(
             f"not on {DEV_BRANCH} (publish releases {DEV_BRANCH} -> "
             f"{MASTER_BRANCH}); checkout {DEV_BRANCH} first")
 
-    dirty = _shippable_dirty_paths(held_back)
+    dirty = _shippable_dirty_paths(held_back_for(only))
     if dirty:
         raise PublishError(
             "working tree is dirty -- commit your work before publishing "
@@ -604,25 +706,39 @@ def preflight(allow_dev_only: set[str] | None = None,
             "owns the derived artifacts and the git flow, not your changes.\n"
             "Dirty files:\n" + "\n".join(dirty))
 
+    p = git("rev-parse", "--verify", f"refs/heads/{DEV_BRANCH}")
+    held_back = held_back_for(only, ref=p)
+
     git("fetch", REMOTE, "--quiet")
+    master = f"{REMOTE}/{MASTER_BRANCH}"
 
     # NOT "is master an ancestor of dev". A filtered release leaves master
     # carrying commits dev will never see, by design and permanently, so
     # ancestry reports a reconcile on every publish after the first one.
-    _require_no_master_only_content()
+    _require_no_master_only_content(p)
 
-    if git("rev-list", "--count", f"{range_base()}..{DEV_BRANCH}") == "0":
+    try:
+        packages = _pk().plan(
+            package_repo(), p, only=only,
+            shipping_plugins=published_plugins(ref=p) - held_back, master=master)
+        unprojected = _pk().unprojected_ledger(package_repo(), p, master)
+    except _pk().PackageError as exc:
+        raise PublishError(str(exc)) from exc
+
+    if (git("rev-list", "--count", f"{range_base(p)}..{p}") == "0"
+            and not packages.release_set):
         raise PublishError(
             f"{DEV_BRANCH} has nothing {REMOTE}/{MASTER_BRANCH} lacks -- "
             f"nothing to publish.")
 
-    excluded = excluded_dev_only_commits(allow_dev_only or set())
-    _refuse_mixed_dev_only_commit(excluded)
+    excluded = excluded_dev_only_commits(allow_dev_only or set(), ref=p)
+    _refuse_mixed_dev_only_commit(excluded, ref=p)
     _require_bootstrap_dependency()
-    _require_pyproject_sync()
-    bumps = _require_version_bump(only)
-    _require_bump_for_changed_plugins(held_back)
-    return bumps, excluded
+    _require_pyproject_sync(ref=p)
+    bumps = _require_version_bump(
+        only, ref=p, publishable=bool(packages.release_set or unprojected))
+    _require_bump_for_changed_plugins(held_back, ref=p)
+    return Preflight(p, bumps, excluded, packages, unprojected)
 
 
 def _load_rule_module(script_name: str):
@@ -674,7 +790,7 @@ def _require_bootstrap_dependency() -> None:
             "old manifest.")
 
 
-def _require_pyproject_sync() -> None:
+def _require_pyproject_sync(ref: str | None = None) -> None:
     """Refuse when a plugin's pyproject.toml states a version its plugin.json
     disagrees with.
 
@@ -688,7 +804,10 @@ def _require_pyproject_sync() -> None:
     called directly, bypassing the checker's main()).
     """
     module = _load_rule_module("check_pyproject_sync.py")
-    drift = module.find_drift(REAL_PLUGINS_DIR)
+    if ref is None:
+        drift = module.find_drift(REAL_PLUGINS_DIR)
+    else:
+        drift = _drift_at(module, ref)
     if drift:
         raise PublishError(
             "refusing: pyproject.toml versions disagree with the "
@@ -700,9 +819,33 @@ def _require_pyproject_sync() -> None:
               "does not apply to a publish.)")
 
 
-def _range_commits() -> list[str]:
+def _drift_at(module, ref: str) -> list[str]:
+    """find_drift over the plugin manifests and pyprojects AT `ref`.
+
+    Materialized into a scratch directory because the checker reads files;
+    `staged=[]` keeps it from consulting this checkout's index, which is not
+    the commit being judged.
+    """
+    scratch = Path(tempfile.mkdtemp(prefix="publish-pyproject-"))
+    try:
+        for path in git("ls-tree", "-r", "--name-only", ref, "--",
+                        "plugins/").splitlines():
+            parts = path.split("/")
+            if (len(parts) == 3 and parts[2] == "pyproject.toml") or (
+                    len(parts) == 4 and parts[2:] == [".claude-plugin", "plugin.json"]):
+                target = scratch / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(git("show", f"{ref}:{path}") + "\n", encoding="utf-8")
+        (scratch / "plugins").mkdir(exist_ok=True)
+        return module.find_drift(scratch / "plugins", staged=[], repo_root=scratch)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _range_commits(ref: str | None = None) -> list[str]:
     """The commits a publish would land on master, newest first."""
-    return git("rev-list", f"{range_base()}..{DEV_BRANCH}").split()
+    tip = ref or DEV_BRANCH
+    return git("rev-list", f"{range_base(tip)}..{tip}").split()
 
 
 def _commit_files(sha: str) -> list[str]:
@@ -710,7 +853,8 @@ def _commit_files(sha: str) -> list[str]:
     return [f for f in git("show", "--name-only", "--format=", sha).split("\n") if f]
 
 
-def excluded_dev_only_commits(allow: set[str]) -> dict[str, set[str]]:
+def excluded_dev_only_commits(allow: set[str],
+                              ref: str | None = None) -> dict[str, set[str]]:
     """Which commits in the range touch a dev-only plugin, so must NOT ship.
 
     `published: false` is a standing decision that a plugin does not go to
@@ -745,7 +889,8 @@ def excluded_dev_only_commits(allow: set[str]) -> dict[str, set[str]]:
     genuinely must not appear on a public master. Both the allowances and the
     exclusions are printed so they stay visible in the publish log.
     """
-    dev_only = {name for name, m in local_plugins().items() if not is_published(m)}
+    dev_only = {name for name, m in local_plugins(**_at(ref)).items()
+                if not is_published(m)}
     unknown = allow - dev_only
     if unknown:
         raise PublishError(
@@ -759,7 +904,7 @@ def excluded_dev_only_commits(allow: set[str]) -> dict[str, set[str]]:
         return {}
 
     offenders: dict[str, set[str]] = {}
-    for sha in _range_commits():
+    for sha in _range_commits(**_at(ref)):
         for f in _commit_files(sha):
             for plugin in dev_only:
                 if f.startswith(f"plugins/{plugin}/"):
@@ -838,7 +983,8 @@ def _dev_only_owned(path: str, dev_only: set[str]) -> bool:
     return False
 
 
-def _refuse_mixed_dev_only_commit(excluded: dict[str, set[str]]) -> None:
+def _refuse_mixed_dev_only_commit(excluded: dict[str, set[str]],
+                                  ref: str | None = None) -> None:
     """Refuse a commit touching BOTH a dev-only plugin and shippable files.
 
     Such a commit cannot be excluded or included without being wrong either way:
@@ -851,7 +997,8 @@ def _refuse_mixed_dev_only_commit(excluded: dict[str, set[str]]) -> None:
     who asked for an exclusion is asking for a master tree that diverges, and
     a mixed commit is exactly where that request cannot be honoured silently.
     """
-    dev_only = {name for name, m in local_plugins().items() if not is_published(m)}
+    dev_only = {name for name, m in local_plugins(**_at(ref)).items()
+                if not is_published(m)}
     mixed = []
     for sha in sorted(excluded):
         for f in _commit_files(sha):
@@ -873,14 +1020,20 @@ def _refuse_mixed_dev_only_commit(excluded: dict[str, set[str]]) -> None:
           "plugin from --exclude-dev-only (shipping is the default).")
 
 
-def _require_version_bump(only: set[str] | None = None) -> list[str]:
+def _require_version_bump(only: set[str] | None = None, ref: str | None = None,
+                          publishable: bool = False) -> list[str]:
     """A merge without a version bump is not a publish -- the cache keys on
     version, so consumers never refetch. Refuse rather than ship a no-op.
 
     Under --only, judge only the plugins that ship: a bump elsewhere on dev is
-    not this release's bump."""
+    not this release's bump.
+
+    `publishable` is the package side of the same question: a pending package
+    release (R non-empty), or ledger entries master's released.json lacks (a
+    run that recorded a release and stopped before projecting it), is work
+    to publish even when no plugin is bumped."""
     bumps = []
-    for name, manifest in local_plugins().items():
+    for name, manifest in local_plugins(**_at(ref)).items():
         if not is_published(manifest):
             continue
         if only and name not in only:
@@ -889,7 +1042,7 @@ def _require_version_bump(only: set[str] | None = None) -> list[str]:
         old = version_at(f"{REMOTE}/{MASTER_BRANCH}", name)
         if old != new:
             bumps.append(f"{name}: {old or '(new)'} -> {new}")
-    if not bumps:
+    if not bumps and not publishable:
         raise PublishError(
             ("none of the --only plugins" if only else "no published plugin")
             + "'s version differs from "
@@ -899,7 +1052,7 @@ def _require_version_bump(only: set[str] | None = None) -> list[str]:
     return bumps
 
 
-def _changed_plugins() -> set[str]:
+def _changed_plugins(ref: str | None = None) -> set[str]:
     """Published plugins whose files DIFFER between master and the dev tip.
 
     The commit walk finds candidates; the net diff decides. Both halves are
@@ -914,9 +1067,10 @@ def _changed_plugins() -> set[str]:
     So a plugin is "changed" only when master would actually receive different
     bytes. `git diff --quiet` exits 1 when they differ, 0 when they do not.
     """
-    known = set(local_plugins())
+    tip = ref or DEV_BRANCH
+    known = set(local_plugins(**_at(ref)))
     candidates = set()
-    for sha in _range_commits():
+    for sha in _range_commits(**_at(ref)):
         for path in _commit_files(sha):
             parts = path.split("/")
             if len(parts) > 2 and parts[0] == "plugins" and parts[1] in known:
@@ -925,14 +1079,15 @@ def _changed_plugins() -> set[str]:
     for name in candidates:
         differs = subprocess.run(
             ["git", "diff", "--quiet",
-             f"{REMOTE}/{MASTER_BRANCH}..{DEV_BRANCH}", "--", f"plugins/{name}"],
+             f"{REMOTE}/{MASTER_BRANCH}..{tip}", "--", f"plugins/{name}"],
             cwd=REPO_ROOT, capture_output=True, text=True).returncode != 0
         if differs:
             changed.add(name)
     return changed
 
 
-def _require_bump_for_changed_plugins(held_back: set[str] | None = None) -> None:
+def _require_bump_for_changed_plugins(held_back: set[str] | None = None,
+                                      ref: str | None = None) -> None:
     """Every published plugin whose FILES changed in the range must be bumped.
 
     _require_version_bump only asserts that SOMETHING was bumped, which is a
@@ -956,8 +1111,9 @@ def _require_bump_for_changed_plugins(held_back: set[str] | None = None) -> None
     publish.
     """
     offenders = []
-    for name in sorted(_changed_plugins()):
-        manifest = local_plugins()[name]
+    manifests = local_plugins(**_at(ref))
+    for name in sorted(_changed_plugins(**_at(ref))):
+        manifest = manifests[name]
         if not is_published(manifest):
             continue
         if held_back and name in held_back:
@@ -1045,47 +1201,78 @@ def regenerate() -> bool:
     --config supplies the page copy from the repo instead of the maintainer's
     ~/.claude/.local-data/awesome-kit/plugin-ecosystem-poster.yaml.
 
-    Always describes THIS working copy (dev). A partial release (--only) does
-    not call this function at all -- it regenerates against a projected tree
-    held in a temporary Git index instead, in _regenerate_derived_in.
+    Always describes THIS working copy (dev). main() does not call it: a
+    release builds B from P in a private index (commit_derived ->
+    _regenerate_derived_in), so the shared working tree is neither read nor
+    written. It remains the working-tree form of the same regeneration.
     """
     run([sys.executable, str(REGEN_MARKETPLACE_PY)], "marketplace.json regen")
 
     return bool(git("status", "--porcelain"))
 
 
-def commit_derived(bumps: list[str]) -> None:
-    """Land the derived artifacts in the release commit.
+def commit_derived(parent: str, bumps: list[str]) -> str:
+    """B: `parent` (P) plus the regenerated derived artifacts. Returns B.
 
-    Amend when HEAD is unpushed so the derived marketplace listing rides inside
-    the release commit.
-    When HEAD is already pushed, amending would rewrite published history --
-    make a follow-up commit instead; dev's tip is still correct before the
-    merge, which is what master inherits.
+    Built in a PRIVATE index (read-tree P, the regenerated blobs added,
+    write-tree, commit-tree -p P), so neither this project folder's index nor
+    its working tree is read or written, and nothing is ever amended: P stays
+    exactly the commit preflight judged, whether or not it was pushed. B is P
+    itself when the committed artifacts are already current. advance_dev()
+    then moves dev to B and brings the local copies of the publish-owned paths
+    along.
     """
-    git("add", str(MARKETPLACE_JSON))
-
-    head = git("rev-parse", "HEAD")
-    pushed = git("branch", "-r", "--contains", head, check=False)
-
-    if pushed:
-        git("commit", "-m",
+    tmp_dir = Path(tempfile.mkdtemp(prefix="publish-derived-"))
+    try:
+        env = _index_env(tmp_dir / "index")
+        git("read-tree", parent, env=env)
+        blobs = _regenerate_derived_in(env)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+    unknown = set(blobs) - set(_pk().PUBLISH_OWNED)
+    if unknown:
+        raise PublishError(f"derived artifacts outside the publish-owned paths: "
+                           f"{sorted(unknown)}")
+    try:
+        return package_repo().commit_in_private_index(
+            parent, blobs,
             "publish: regenerate derived artifacts\n\n" + "\n".join(bumps))
-        print("  committed derived artifacts (HEAD was already pushed, "
-              "so not amended)")
-    else:
-        git("commit", "--amend", "--no-edit")
-        print("  amended derived artifacts into the release commit")
+    except _pk().PackageError as exc:
+        raise PublishError(str(exc)) from exc
+
+
+def advance_dev(new: str) -> None:
+    """Move dev to `new` on the remote and, when safe, locally
+    (_packages.advance_dev). A rejected fast-forward refuses."""
+    try:
+        _pk().advance_dev(package_repo(), new)
+    except _pk()._PushRejected as exc:
+        raise PublishError(
+            f"{REMOTE}/{DEV_BRANCH} moved and does not fast-forward to "
+            f"{new[:9]}; run `git pull --no-rebase` and publish again.\n{exc}") from exc
+
+
+def _require_final_is_p_plus_owned(p: str, final: str) -> None:
+    """F may differ from P only in the paths publish.py itself writes."""
+    changed = [f for f in git("diff", "--name-only", p, final, "--").splitlines() if f]
+    stray = sorted(set(changed) - set(_pk().PUBLISH_OWNED))
+    if stray:
+        raise PublishError(
+            f"the commit master would receive ({final[:9]}) differs from the "
+            f"{DEV_BRANCH} commit preflight judged ({p[:9]}) outside the "
+            f"publish-owned paths: {', '.join(stray[:8])}. {DEV_BRANCH} moved "
+            f"during the run; any package release is already recorded. Run "
+            f"`git pull --no-rebase` and publish again.")
 
 
 # --- publish + verify ------------------------------------------------------
 
-def _master_is_ancestor_of_dev() -> bool:
+def _master_is_ancestor_of_dev(ref: str | None = None) -> bool:
     return _rc("merge-base", "--is-ancestor",
-               f"{REMOTE}/{MASTER_BRANCH}", DEV_BRANCH) == 0
+               f"{REMOTE}/{MASTER_BRANCH}", ref or DEV_BRANCH) == 0
 
 
-def _fast_forward_is_safe() -> bool:
+def _fast_forward_is_safe(ref: str | None = None) -> bool:
     """True when a fast-forward cannot carry dev-only work onto master.
 
     A fast-forward moves dev's TREE wholesale, so it bypasses the hold-back
@@ -1109,11 +1296,12 @@ def _fast_forward_is_safe() -> bool:
     and it is exactly then that the empty exclusion set stops meaning what it
     appears to mean.
     """
-    return not any(not is_published(m) for m in local_plugins().values())
+    return not any(not is_published(m) for m in local_plugins(**_at(ref)).values())
 
 
 def _projection_message(shipping: list[str], excluded: dict[str, set[str]],
-                        dev_sha: str, only: set[str] | None = None) -> str:
+                        dev_sha: str, only: set[str] | None = None,
+                        held_back: set[str] | None = None) -> str:
     """The projection's commit message: what shipped, what did not, and from where.
 
     The `Published-From:` trailer is load-bearing, not a courtesy -- range_base()
@@ -1139,7 +1327,7 @@ def _projection_message(shipping: list[str], excluded: dict[str, set[str]],
         lines += ["", f"Held back on {DEV_BRANCH} ({len(excluded)} commit(s), "
                       f"dev-only): {', '.join(held)}"]
     if only:
-        held = sorted(held_back_for(only))
+        held = sorted(held_back_for(only) if held_back is None else held_back)
         if held:
             lines += ["", f"Held back on {DEV_BRANCH} (published, not "
                           f"selected): {', '.join(held)}"]
@@ -1273,7 +1461,8 @@ def _regenerate_derived_in(env: dict[str, str]) -> dict[str, str]:
 
 
 def _publish_projection(excluded: dict[str, set[str]],
-                        only: set[str] | None = None) -> None:
+                        only: set[str] | None = None,
+                        ref: str | None = None) -> None:
     """Land one commit on master whose tree is dev's, minus the dev-only plugins.
 
     Computed with a TEMPORARY GIT INDEX and plumbing commands only (read-tree,
@@ -1292,9 +1481,11 @@ def _publish_projection(excluded: dict[str, set[str]],
     and the derived artifacts are regenerated from the projected tree rather
     than taken from dev, so master's listing describes master.
     """
-    dev_only = {name for name, m in local_plugins().items() if not is_published(m)}
-    held = dev_only | held_back_for(only)
-    shipping = [sha for sha in _range_commits() if sha not in excluded]
+    tip = ref or DEV_BRANCH
+    dev_only = {name for name, m in local_plugins(**_at(ref)).items()
+                if not is_published(m)}
+    held = dev_only | held_back_for(only, **_at(ref))
+    shipping = [sha for sha in _range_commits(**_at(ref)) if sha not in excluded]
     if only:
         shipping = [sha for sha in shipping if _commit_touches(sha, only)]
     if not shipping:
@@ -1303,7 +1494,7 @@ def _publish_projection(excluded: dict[str, set[str]],
             "nothing to publish. The bumps that passed preflight are on "
             "commits that cannot ship.")
 
-    dev_sha = git("rev-parse", DEV_BRANCH)
+    dev_sha = git("rev-parse", tip)
     master = f"{REMOTE}/{MASTER_BRANCH}"
 
     tmp_dir = Path(tempfile.mkdtemp(prefix="publish-index-"))
@@ -1313,7 +1504,7 @@ def _publish_projection(excluded: dict[str, set[str]],
         # master had them -- by PREFIX, never by passing per-file lists as
         # argv: under --only those lists cover most of the repo and would
         # exceed the Windows command-line limit.
-        git("read-tree", DEV_BRANCH, env=env)
+        git("read-tree", tip, env=env)
         for name in sorted(held):
             for top in ("plugins", "tests"):
                 prefix = f"{top}/{name}/"
@@ -1338,21 +1529,22 @@ def _publish_projection(excluded: dict[str, set[str]],
 
         message_file = tmp_dir / "message.txt"
         message_file.write_text(
-            _projection_message(shipping, excluded, dev_sha, only),
+            _projection_message(shipping, excluded, dev_sha, only, held - dev_only),
             encoding="utf-8")
         commit_sha = git("commit-tree", tree, "-p", master, "-F", str(message_file))
         git("push", REMOTE, f"{commit_sha}:refs/heads/{MASTER_BRANCH}")
         print(f"  projected {len(shipping)} commit(s) onto {MASTER_BRANCH}"
               + (f"; held back {len(excluded)} dev-only commit(s)"
                  if excluded else "")
-              + (f"; held back {', '.join(sorted(held_back_for(only)))}"
-                 if only and held_back_for(only) else ""))
+              + (f"; held back {', '.join(sorted(held - dev_only))}"
+                 if only and held - dev_only else ""))
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def push_and_merge(excluded: dict[str, set[str]] | None = None,
-                   only: set[str] | None = None) -> None:
+                   only: set[str] | None = None,
+                   ref: str | None = None) -> None:
     """Push dev, then land the release on master.
 
     Fast-forward only when nothing is excluded, master is still an ancestor
@@ -1371,20 +1563,27 @@ def push_and_merge(excluded: dict[str, set[str]] | None = None,
     local branch switch for anything to land on. The projection path (see
     _publish_projection) computes master's next tree in a temporary Git index
     and likewise never touches this tree's HEAD, branch, or working files.
-    """
-    git("push", REMOTE, DEV_BRANCH)
-    print(f"  pushed {DEV_BRANCH}")
 
-    if (not excluded and not only and _master_is_ancestor_of_dev()
-            and _fast_forward_is_safe()):
-        git("push", REMOTE, f"{DEV_BRANCH}:refs/heads/{MASTER_BRANCH}")
+    `ref` is F, the frozen commit master receives; main() always passes it,
+    has already advanced dev to it (advance_dev), and from here on no branch
+    name is read: the fast-forward pushes F itself, and the projection, its
+    manifest reads and its range are all taken at F. Without `ref` this pushes
+    dev and reads the branch, the historical form.
+    """
+    if ref is None:
+        git("push", REMOTE, DEV_BRANCH)
+        print(f"  pushed {DEV_BRANCH}")
+
+    if (not excluded and not only and _master_is_ancestor_of_dev(**_at(ref))
+            and _fast_forward_is_safe(**_at(ref))):
+        git("push", REMOTE, f"{ref or DEV_BRANCH}:refs/heads/{MASTER_BRANCH}")
         print(f"  fast-forwarded and pushed {MASTER_BRANCH}")
         return
 
-    _publish_projection(excluded or {}, only)
+    _publish_projection(excluded or {}, only, **_at(ref))
 
 
-def verify(only: set[str] | None = None) -> list[str]:
+def verify(only: set[str] | None = None, ref: str | None = None) -> list[str]:
     """Verify that master carries the expected marketplace listing.
 
     Identical tips are the strongest possible result, but they are only
@@ -1399,17 +1598,24 @@ def verify(only: set[str] | None = None) -> list[str]:
     its own tree. What must then hold instead is that master's listing agrees
     with master's manifests -- the only-plugins at their new versions, the
     held-back ones at the versions master still carries.
+
+    `ref` is F: master is compared to the commit this run released, never to
+    whatever origin/dev holds by now (another session may have pushed), and
+    the listing and manifests are read at F. Without it, the historical
+    comparison against origin/dev and the working tree.
     """
     problems = []
-    held_back = held_back_for(only)
+    held_back = held_back_for(only, **_at(ref))
 
     git("fetch", REMOTE, "--quiet")
-    dev_sha = git("rev-parse", f"{REMOTE}/{DEV_BRANCH}")
+    source = ref or f"{REMOTE}/{DEV_BRANCH}"
+    dev_sha = git("rev-parse", source)
     master_sha = git("rev-parse", f"{REMOTE}/{MASTER_BRANCH}")
     if dev_sha != master_sha:
-        dev_only = {n for n, m in local_plugins().items() if not is_published(m)}
+        dev_only = {n for n, m in local_plugins(**_at(ref)).items()
+                    if not is_published(m)}
         diff = git("diff", "--name-only", f"{REMOTE}/{MASTER_BRANCH}",
-                   f"{REMOTE}/{DEV_BRANCH}", "--")
+                   source, "--")
         leaked = [f for f in diff.splitlines()
                   if f.strip()
                   and not _dev_only_owned(f.strip(), dev_only | held_back)
@@ -1435,15 +1641,19 @@ def verify(only: set[str] | None = None) -> list[str]:
         where = f"{master} "
         marketplace_text = git(
             "show", f"{master}:{MARKETPLACE_JSON.relative_to(REPO_ROOT).as_posix()}")
-        expected = {name: version_at(master, name) for name in local_plugins()}
+        expected = {name: version_at(master, name)
+                    for name in local_plugins(**_at(ref))}
     else:
         where = ""
-        marketplace_text = MARKETPLACE_JSON.read_text(encoding="utf-8")
-        expected = {name: m.get("version") for name, m in local_plugins().items()}
+        marketplace_text = (
+            MARKETPLACE_JSON.read_text(encoding="utf-8") if ref is None else
+            git("show", f"{ref}:{MARKETPLACE_JSON.relative_to(REPO_ROOT).as_posix()}"))
+        expected = {name: m.get("version")
+                    for name, m in local_plugins(**_at(ref)).items()}
     marketplace = json.loads(marketplace_text)
     listed = {p["name"]: p.get("version") for p in marketplace.get("plugins", [])}
 
-    for name, manifest in local_plugins().items():
+    for name, manifest in local_plugins(**_at(ref)).items():
         if not is_published(manifest):
             if name in listed:
                 problems.append(f"dev-only plugin {name} is listed in marketplace.json")
@@ -1522,9 +1732,16 @@ def main(argv: list[str]) -> int:
             print(f"  partial release: {', '.join(sorted(only))} only; "
                   f"holding back: "
                   f"{', '.join(sorted(held_back_for(only))) or '(none)'}")
-        bumps, excluded = preflight(allow - held_back, only)
+        flight = _preflight(allow - held_back, only)
+        bumps, excluded, plan = flight.bumps, flight.excluded, flight.packages
         for bump in bumps:
             print(f"  publishing {bump}")
+        for dist in plan.release_set:
+            print(f"  releasing package {dist} {plan.versions[dist]}")
+        for entry in flight.unprojected:
+            print(f"  projecting recorded package release {entry}")
+        for note in plan.notes:
+            print(f"  note: {note}")
         if excluded:
             print(f"  excluding {len(excluded)} commit(s) for dev-only "
                   f"(published: false) plugin(s) -- they stay on {DEV_BRANCH}:")
@@ -1539,24 +1756,36 @@ def main(argv: list[str]) -> int:
 
         print("\nregenerating derived artifacts:")
         if only:
-            # Nothing on dev is touched. The dirty gate has let held-back
-            # plugins' uncommitted work through, so a working-tree regen here
-            # would bake their unpublished manifests into dev's listing, and
-            # commit_derived's commit would sweep another session's staged
-            # work along. master gets its own artifacts, regenerated from
-            # the projected tree; the dev-side listing catches up at the next
-            # bare publish.
+            # Nothing on dev is regenerated: B is P. The dirty gate has let
+            # held-back plugins' uncommitted work through, and master gets its
+            # own artifacts, regenerated from the projected tree; the dev-side
+            # listing catches up at the next bare publish.
             print(f"  --only: {DEV_BRANCH}'s derived artifacts left as "
                   f"committed; {MASTER_BRANCH}'s are regenerated from the "
                   f"projection")
-        elif regenerate():
-            commit_derived(bumps)
+            base = flight.p
         else:
-            print("  already current (nothing to commit)")
+            base = commit_derived(flight.p, bumps)
+            print("  already current (nothing to commit)" if base == flight.p
+                  else f"  committed derived artifacts as {base[:9]} on {flight.p[:9]}")
+
+        if plan.release_set:
+            print("\nreleasing packages:")
+            final = _pk().Release(package_repo(), plan, base,
+                                      package_services()).run()
+        else:
+            advance_dev(base)
+            final = base
+        _require_final_is_p_plus_owned(flight.p, final)
 
         print("\npublishing:")
-        push_and_merge(excluded, only)
+        print(f"  pushed {DEV_BRANCH} ({final[:9]})")
+        push_and_merge(excluded, only, ref=final)
 
+    except _pk().PackageError as exc:
+        sys.stdout.flush()
+        print(f"\npublish stopped: {exc}", file=sys.stderr)
+        return 1
     except PublishError as exc:
         # Flush first: stdout is block-buffered when piped and stderr is not, so
         # without this the refusal prints ABOVE the steps it refused at.
@@ -1565,16 +1794,15 @@ def main(argv: list[str]) -> int:
         return 1
 
     print("\nverifying:")
-    problems = verify(only)
+    problems = verify(only, ref=final)
     if problems:
         sys.stdout.flush()
         for problem in problems:
             print(f"  FAILED: {problem}", file=sys.stderr)
         return 1
 
-    print("  origin/dev == origin/master"
-          if git("rev-parse", f"{REMOTE}/{DEV_BRANCH}")
-          == git("rev-parse", f"{REMOTE}/{MASTER_BRANCH}")
+    print(f"  origin/master == {final[:9]}"
+          if final == git("rev-parse", f"{REMOTE}/{MASTER_BRANCH}")
           else ("  origin/master carries the --only plugin(s); the rest of "
                 "dev is held back" if only else
                 "  origin/master carries every shippable commit; "
