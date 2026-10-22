@@ -12,3 +12,10 @@
 #   # or { all = "packages/<name>/src/<pkg>/__init__.py" } for an __all__ list
 schema = 1
 repository = "https://github.com/kitaekatt/plugins-kit"
+
+[[package]]
+name = "katsoft-contracts"
+import = "katsoft_contracts"
+marker = "katsoft_contracts/_release.py"
+sources = []
+surface = { all = "packages/katsoft-contracts/src/katsoft_contracts/__init__.py" }

@@ -1,1 +1,13 @@
-{}
+{
+  "katsoft-contracts": {
+    "1.0.0": {
+      "commit": "4f824b5bb01bf0f066b9c061c0808344df79d47e",
+      "filename": "katsoft_contracts-1.0.0-py3-none-any.whl",
+      "tag": "katsoft-contracts-v1.0.0",
+      "tag_url": "https://github.com/kitaekatt/plugins-kit/tree/katsoft-contracts-v1.0.0",
+      "verified_at": "2026-10-22T20:09:08Z",
+      "version": "1.0.0",
+      "wheel_sha256": "ead596c8d60159303295b52fec81a4e71d4567de698d84818acc81a2a79808fd"
+    }
+  }
+}

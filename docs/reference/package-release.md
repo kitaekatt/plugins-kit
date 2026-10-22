@@ -152,9 +152,9 @@ Package mode (`llm_kit._runtime.mode() == "package"`, set by the hook-written
   uses the PATH + `--version` check.
 - The model registry reads the shipped defaults, and
   `MODEL_ENDPOINTS_REGISTRY` overrides the registry file. Behaviour when no
-  registry is configured is pending user ruling `model-list-decision` (shipped
-  defaults, as implemented, or refuse when unset); the single policy point is
-  `registry.models.package_mode_model_config`.
+  registry is configured is the shipped defaults, overridable by
+  `MODEL_ENDPOINTS_REGISTRY` (user ruling 2026-10-22); the single policy point
+  is `registry.models.package_mode_model_config`.
 - Do not install the package into an environment that also holds the plugin's
   linked `llm_kit` (the bootstrap shared-lib `.pth`). `mode()` raises
   `RuntimeIdentityError` there and removes nothing; use separate

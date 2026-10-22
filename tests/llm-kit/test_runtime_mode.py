@@ -389,14 +389,12 @@ def test_reachability_codex_path_check_in_package_mode(site, tmp_path):
     assert absent["ok"] == ["unreachable", "`codex` not found on PATH"]
 
 
-# --- the model-list policy point (pending user ruling `model-list-decision`) --
+# --- the model-list policy point (ruled 2026-10-22: shipped defaults) --
 
-def test_package_mode_model_list_policy_pending_model_list_decision(site, tmp_path):
-    """Recommended option: shipped defaults, silent, MODEL_ENDPOINTS_REGISTRY overrides the registry.
+def test_package_mode_model_list_uses_shipped_defaults(site, tmp_path):
+    """Shipped defaults, silent; MODEL_ENDPOINTS_REGISTRY overrides the registry.
 
-    ONE seam: llm_kit.registry.models.package_mode_model_config. The alternative
-    awaiting the ruling (refuse when MODEL_ENDPOINTS_REGISTRY is unset) changes
-    that function and this test together.
+    ONE seam: llm_kit.registry.models.package_mode_model_config.
     """
     registry = tmp_path / "registry.yaml"
     registry.write_text("default: only\nmodels:\n  only: {base_url: http://h.invalid/v1, model: m}\n",
