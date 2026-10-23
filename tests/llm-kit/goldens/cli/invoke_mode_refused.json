@@ -1,0 +1,21 @@
+{
+  "exit": 4,
+  "request": {
+    "mode": "workspace",
+    "model": "sonnet",
+    "project_root": "<T>/proj",
+    "prompt": "do it",
+    "protocol": 2,
+    "working_dir": "work"
+  },
+  "stderr": {
+    "json": {
+      "error": {
+        "kind": "mode",
+        "message": "claude-cli does not support the workspace mode (it supports: completion); nothing was dispatched"
+      },
+      "protocol": 2
+    }
+  },
+  "stdout": ""
+}

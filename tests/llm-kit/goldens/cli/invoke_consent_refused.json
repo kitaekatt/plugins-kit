@@ -1,0 +1,19 @@
+{
+  "exit": 4,
+  "request": {
+    "project_root": "<T>/proj",
+    "prompt": "do it",
+    "protocol": 2,
+    "selection": "art"
+  },
+  "stderr": {
+    "json": {
+      "error": {
+        "kind": "consent",
+        "message": "'openrouter' is a spend entry (no registry entry: billing undeclared) and the machine's consent does not allow spend calls (<T>/home/.config/llm-kit/consent.json); run `llm-kit consent set --spend on` to allow them; nothing was dispatched"
+      },
+      "protocol": 2
+    }
+  },
+  "stdout": ""
+}

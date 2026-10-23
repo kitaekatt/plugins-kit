@@ -366,12 +366,6 @@ def test_package_mode_uses_the_contracts_the_wheel_depends_on(site):
 # --- C4: features that need bootstrap_lib ----------------------------------
 
 UNSUPPORTED_CALLS = {
-    "codex backend": (
-        "from llm_kit.adapters.codex_backend import _codex_argv_builder\n"
-        "_codex_argv_builder(need_ignore_user_config=False)"),
-    "codex adapter": (
-        "from llm_kit.adapters.harness_adapters import CodexAdapter\n"
-        "CodexAdapter().is_available()"),
     "claudx (adapters)": (
         "from llm_kit.adapters.backends import _claudx_plugin_args\n_claudx_plugin_args()"),
     "claudx (jobs)": (
@@ -436,24 +430,95 @@ def test_package_mode_fleet_allows_review_lane(site):
     assert out["ok"] == ["package", "llm_kit.dispatch.review_lane"], out
 
 
-def test_package_mode_fleet_uses_codex_detection_for_reachability(site, tmp_path):
-    """The fleet reaches bootstrap_lib.codex.detect_codex; the off-fleet verdict is the PATH check."""
+# --- Codex in package mode: no bootstrap_lib anywhere ------------------------
+
+#: A stand-in `codex`: answers --version, drains stdin, and writes the `-o` file
+#: according to FAKE_CODEX_MODE (answer: text, empty: an empty file, none: no file).
+_FAKE_CODEX = """#!/bin/sh
+if [ "$1" = "--version" ]; then echo "codex-cli 9.9.9"; exit 0; fi
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-o" ]; then out="$2"; shift; fi
+  shift
+done
+cat >/dev/null
+case "$FAKE_CODEX_MODE" in
+  answer) printf '%s' "fake codex answer" > "$out" ;;
+  empty) : > "$out" ;;
+  none) ;;
+esac
+exit 0
+"""
+
+
+def _fake_codex_env(tmp_path, mode):
     bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
+    bin_dir.mkdir(exist_ok=True)
     stub = bin_dir / "codex"
-    stub.write_text('#!/bin/sh\necho "codex-cli 9.9.9"\n', encoding="utf-8")
+    stub.write_text(_FAKE_CODEX, encoding="utf-8")
     stub.chmod(stub.stat().st_mode | stat.S_IXUSR)
+    work = tmp_path / "work"
+    work.mkdir(exist_ok=True)
+    return {"PATH": f"{bin_dir}{os.pathsep}/usr/bin{os.pathsep}/bin", "FAKE_CODEX_MODE": mode}, work
+
+
+_CODEX_CALL = (
+    "from pathlib import Path\n"
+    "from llm_kit.adapters.codex_backend import CodexCliBackend\n"
+    "from llm_kit.completion.types import BackendOptions\n"
+    "response = CodexCliBackend().complete(\n"
+    "    'SYS', 'USER', model='gpt-x', options=BackendOptions(cwd=Path({work!r})))\n"
+    "result = [response.status, response.text]"
+)
+
+
+def test_package_mode_codex_backend_runs_without_bootstrap_lib(site, tmp_path):
+    """The backend resolves, builds and runs codex and reads its `-o` file, with
+    bootstrap_lib import-blocked and no fleet gate."""
+    env, work = _fake_codex_env(tmp_path, "answer")
+    out = package(site, _CODEX_CALL.format(work=str(work)), env=env)
+    assert out["ok"] == ["completed", "fake codex answer"], out
+    assert out["modules"] == []
+
+
+@pytest.mark.parametrize("mode,fragment", [("empty", "is empty"), ("none", "is empty")])
+def test_package_mode_codex_backend_rejects_a_missing_or_empty_output(site, tmp_path, mode, fragment):
+    """Exit 0 with no `-o` content is a failure, never an empty answer.
+
+    `none` leaves the `-o` file the backend pre-created untouched; `empty`
+    truncates it. Both read as an empty file.
+    """
+    env, work = _fake_codex_env(tmp_path, mode)
+    out = package(site, _CODEX_CALL.format(work=str(work)), env=env)
+    assert out["error"] == "CodexRunError" and fragment in out["message"], out
+    assert out["modules"] == []
+
+
+def test_package_mode_codex_adapter_detects_and_builds_without_bootstrap_lib(site, tmp_path):
+    env, work = _fake_codex_env(tmp_path, "answer")
     out = package(site, (
-        "import sys\n"
-        "from llm_kit.dispatch import reachability\n"
-        "r = reachability._check_codex(timeout=10.0)\n"
-        "result = [r.status, 'bootstrap_lib.codex' in sys.modules]"
-    ), fleet=True, env={"PATH": f"{bin_dir}{os.pathsep}/usr/bin{os.pathsep}/bin"})
-    assert out["ok"] == ["reachable", True], out
+        "from llm_kit.adapters.harness_adapters import CodexAdapter\n"
+        "from llm_kit.registry.model_endpoints import EndpointEntry\n"
+        "adapter = CodexAdapter()\n"
+        "entry = EndpointEntry(id='sol', base_url=None, model='gpt-x', kind='harness', harness='codex')\n"
+        f"argv = adapter.build_argv(entry, {str(work)!r}, prompt='p')\n"
+        "result = [adapter.is_available(), argv[0].endswith('codex'), argv[1], argv[-1]]"
+    ), env=env)
+    assert out["ok"] == [True, True, "exec", "-"], out
+    assert out["modules"] == []
 
 
-def test_reachability_codex_path_check_in_package_mode(site, tmp_path):
-    """A real verdict from the PATH + --version check, with bootstrap_lib blocked."""
+def test_package_mode_codex_refuses_relative_paths_before_spawn(site, tmp_path):
+    env, work = _fake_codex_env(tmp_path, "answer")
+    out = package(site, (
+        "from llm_kit.adapters import codex_command\n"
+        "codex_command.build_codex_exec_argv(root='relative/dir', argv_prefix=('codex',))"
+    ), env=env)
+    assert out["error"] == "ValueError" and "root must be an absolute path" in out["message"], out
+
+
+def test_reachability_codex_check_in_package_mode(site, tmp_path):
+    """A real verdict from the canonical detector, with bootstrap_lib blocked."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     stub = bin_dir / "codex"

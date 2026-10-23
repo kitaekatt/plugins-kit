@@ -1,0 +1,27 @@
+{
+  "argv": [
+    "models",
+    "project",
+    "write",
+    "--project-root",
+    "<T>/proj",
+    "--layer",
+    "local",
+    "--input",
+    "-"
+  ],
+  "exit": 0,
+  "stderr": "",
+  "stdout": {
+    "json": {
+      "changed": true,
+      "deleted": false,
+      "dropped_defaults": [],
+      "layer": "local",
+      "path": ".llm-kit/models.local.yaml",
+      "schema": "llm-kit.project-models/v1",
+      "selections": 2,
+      "sha256": "8a6c08ccd24edc9194737de2fdf9fab6a6b00115e55bc8ead1bc8c4d6681776e"
+    }
+  }
+}

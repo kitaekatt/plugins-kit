@@ -44,7 +44,8 @@ def test_requires_bootstrap_covers_every_bootstrap_lib_call() -> None:
         interrupts._INTERRUPT_CONTRACT_BOOTSTRAP,
     )
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    assert manifest.get("requires_bootstrap") == max(floors, key=_version)
+    # The manifest sits at the katsoft-llm-kit package floor (0.160.0), above the calls.
+    assert _version(manifest.get("requires_bootstrap")) >= _version(max(floors, key=_version))
 
 
 def test_execution_event_floor_is_0_136_0() -> None:
@@ -68,7 +69,7 @@ def test_interrupt_contract_floor_is_pinned_literally() -> None:
 
     assert interrupts._INTERRUPT_CONTRACT_BOOTSTRAP == "0.137.0"
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    assert manifest.get("requires_bootstrap") == "0.137.0"
+    assert manifest.get("requires_bootstrap") == "0.160.0"
 
 
 def test_validator_floor_is_pinned_literally() -> None:

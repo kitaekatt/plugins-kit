@@ -212,6 +212,20 @@ class LLMResponse:
       native ``usage.cost`` is ignored, and a call with no reported cost is
       priced by whatever estimator the consumer holds. See
       :func:`valid_reported_cost`.
+    - ``reported_model`` -- the model id the DOWNSTREAM reported serving the
+      call (an OpenAI-compatible response's ``model``, a Claude CLI envelope's
+      ``modelUsage`` key), else ``None``. ``model`` above echoes what was
+      requested after resolution; this is the only field that comes from the
+      other side, so equality between the two is the only evidence a request
+      was served by the model it named. ``None`` where the transport reports
+      none (the codex and opencode CLIs).
+    - ``estimated_cost_usd`` / ``estimated_cost_source`` -- a USD figure a
+      backend surfaced that is NOT authoritative pricing (for example the
+      Claude CLI's ``total_cost_usd``, or a native ``usage.cost`` from an
+      endpoint the registry does not mark ``provider-reported``) and the label
+      of where it came from. Both present or both ``None``; finite and
+      non-negative. Kept apart from ``reported_cost_usd`` on purpose: a consumer
+      must not total an estimate as a charge. ``None`` means unknown, never zero.
     - ``output_contract`` -- the :class:`~.contract_types.ContractReport` of a
       call made under ``BackendOptions.output_contract``: which contract was
       judged, how it was delivered, and the disposition. ``None`` when the call
@@ -256,6 +270,9 @@ class LLMResponse:
     reported_cost_source: Optional[str] = None
     output_contract: Optional[ContractReport] = None
     skill_context: Optional[SkillContextReport] = None
+    reported_model: Optional[str] = None
+    estimated_cost_usd: Optional[float] = None
+    estimated_cost_source: Optional[str] = None
 
 
 @dataclass(frozen=True)

@@ -3,6 +3,12 @@
 Carries the legacy ``complete``, ``request-schema`` and ``repair-json`` verbs.
 Exit codes and the JSON envelope (``protocol`` 1) are the legacy contract:
 0 completed, 1 failed, 3 a classified halt, 4 an unreadable request.
+
+``complete --request-file`` also speaks ``protocol`` 2
+(:mod:`llm_kit.completion.invoke_protocol`): the request names a row or selection
+of the project model file and the result carries requested and served model,
+effort, cost class, usage and, for a ``workspace`` call, the files written. The
+exit codes are the same table (4 = refused before any spawn, on stderr).
 """
 from __future__ import annotations
 
@@ -34,6 +40,7 @@ from llm_kit.cli._common import (
 from llm_kit.cli._compose import create_backend
 from llm_kit.completion.contract import OutputContractViolation
 from llm_kit.completion.halt import AgentTimeoutError, halt_payload
+from llm_kit.completion import invoke_protocol
 from llm_kit.completion.request_protocol import (
     PROTOCOL_VERSION,
     ProtocolError,
@@ -60,6 +67,9 @@ from llm_kit.dispatch.declaration import (
     RunRequest,
 )
 from llm_kit.dispatch.declaration import run as declaration_run
+from llm_kit.dispatch import invoke as dispatch_invoke
+from llm_kit.registry.model_endpoints import EndpointRegistryError
+from llm_kit.registry.models import EndpointResolveError, ModelResolveError
 from llm_kit.schema.json_repair import STATUS_REPAIRED, repair_json_structure
 from llm_kit.schema.json_schema import check_schema
 
@@ -141,10 +151,8 @@ def _request_from_flags(args: argparse.Namespace) -> "tuple[str, str, Any, Backe
     return system, user, selection, options
 
 
-def _request_from_protocol(
-    args: argparse.Namespace,
-) -> "tuple[str, str, Any, BackendOptions]":
-    """Parse a versioned request, then resolve the same way the flags do."""
+def _read_request_payload(args: argparse.Namespace) -> Any:
+    """The decoded ``--request-file`` JSON; flags that describe the call are refused beside it."""
     # `is not None` rather than a falsy test: `0 in (None, False, "")` is True
     # in Python, so a falsy comparison would let `--timeout 0` through as though
     # it had never been named.
@@ -161,10 +169,20 @@ def _request_from_protocol(
         args.request_file
     ).read_text(encoding="utf-8")
     try:
-        payload = json.loads(raw)
+        return json.loads(raw)
     except json.JSONDecodeError as exc:
         raise ProtocolError(f"request is not valid JSON: {exc}") from exc
 
+
+def _is_protocol_2(payload: Any) -> bool:
+    version = payload.get("protocol") if isinstance(payload, dict) else None
+    return type(version) is int and version == invoke_protocol.PROTOCOL_VERSION
+
+
+def _request_from_protocol(
+    args: argparse.Namespace, payload: Any
+) -> "tuple[str, str, Any, BackendOptions]":
+    """Parse a versioned (protocol 1) request, then resolve the same way the flags do."""
     request = parse_request(payload)
     selection = create_backend(
         request.endpoint,
@@ -181,6 +199,51 @@ def _request_from_protocol(
         log_prefix=f"[{selection.endpoint}]",
     )
     return request.system, request.prompt, selection, options
+
+
+def _refuse_v2(kind: str, message: str) -> int:
+    """A protocol 2 refusal: nothing ran, so stderr carries it and the exit is EXIT_PROTOCOL."""
+    _json(invoke_protocol.refusal_envelope(kind, message), stream=sys.stderr)
+    return EXIT_PROTOCOL
+
+
+def _cmd_invoke(args: argparse.Namespace, payload: Any) -> int:
+    """``complete --request-file`` with ``"protocol": 2``: one call from the project model file.
+
+    Exit 0 completed, 1 the call ran and failed (an unmet ``expect_files``
+    included), 3 it ran and halted, 4 it was refused before anything was
+    spawned (the refusal is on stderr, ``error.kind`` says what to fix).
+    """
+    try:
+        if args.format == "text":
+            raise invoke_protocol.InvokeRefusal(
+                invoke_protocol.KIND_PROTOCOL, "protocol 2 answers in JSON only; drop --format text"
+            )
+        request = invoke_protocol.parse_invoke_request(payload)
+        if (
+            args.project_root is not None
+            and request.project_root is not None
+            and Path(args.project_root).resolve() != Path(request.project_root).resolve()
+        ):
+            raise invoke_protocol.InvokeRefusal(
+                invoke_protocol.KIND_PATH,
+                "--project-root and the request's project_root name different directories",
+            )
+        result = dispatch_invoke.invoke(
+            request,
+            default_project_root=args.project_root,
+            backend_factory=_backend_factory,
+        )
+    except invoke_protocol.InvokeRefusal as exc:
+        return _refuse_v2(exc.kind, str(exc))
+    except ProtocolError as exc:
+        return _refuse_v2(invoke_protocol.KIND_PROTOCOL, str(exc))
+    except (EndpointRegistryError, EndpointResolveError, ModelResolveError) as exc:
+        return _refuse_v2(invoke_protocol.KIND_CONFIGURATION, str(exc))
+    _json(result.document)
+    if result.outcome == dispatch_invoke.OUTCOME_COMPLETED:
+        return EXIT_OK
+    return EXIT_HALT if result.outcome == dispatch_invoke.OUTCOME_HALTED else EXIT_FAILURE
 
 
 def _positive_int(text: str) -> int:
@@ -365,7 +428,10 @@ def _cmd_complete(args: argparse.Namespace) -> int:
         )
     try:
         if args.request_file:
-            system, user, selection, options = _request_from_protocol(args)
+            payload = _read_request_payload(args)
+            if _is_protocol_2(payload):
+                return _cmd_invoke(args, payload)
+            system, user, selection, options = _request_from_protocol(args, payload)
         else:
             system, user, selection, options = _request_from_flags(args)
     except ProtocolError as exc:
@@ -630,9 +696,16 @@ def _parser() -> argparse.ArgumentParser:
         "--request-file",
         help="Read a versioned JSON request (see `request-schema`); - for stdin.",
     )
-    sub.add_parser(
+    request_schema = sub.add_parser(
         "request-schema",
         help="Print the accepted `complete --request-file` request shape.",
+    )
+    request_schema.add_argument(
+        "--protocol",
+        type=int,
+        choices=(PROTOCOL_VERSION, invoke_protocol.PROTOCOL_VERSION),
+        default=PROTOCOL_VERSION,
+        help="Which request protocol to describe (default 1; 2 selects from the project model file).",
     )
     return parser
 
@@ -645,7 +718,11 @@ def run(argv: Sequence[str]) -> int:
         if args.cmd == "repair-json":
             return _cmd_repair_json(args.schema_file)
         if args.cmd == "request-schema":
-            _json(describe_request_schema())
+            _json(
+                invoke_protocol.describe_invoke_schema()
+                if args.protocol == invoke_protocol.PROTOCOL_VERSION
+                else describe_request_schema()
+            )
             return EXIT_OK
         if args.cmd == "complete":
             return _cmd_complete(args)

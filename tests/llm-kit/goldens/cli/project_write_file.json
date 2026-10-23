@@ -1,0 +1,25 @@
+{
+  "argv": [
+    "models",
+    "project",
+    "write",
+    "--project-root",
+    "<T>/proj",
+    "--file",
+    "cfg/m.yaml",
+    "--input",
+    "-"
+  ],
+  "exit": 0,
+  "stderr": "",
+  "stdout": {
+    "json": {
+      "catalog_rows": 2,
+      "changed": true,
+      "path": "cfg/m.yaml",
+      "schema": "llm-kit.project-models/v1",
+      "selections": 2,
+      "sha256": "aadf666abeeb13073f4423e90f3a010ae7fa03a4c4541103c21729c4ee7b820d"
+    }
+  }
+}

@@ -47,7 +47,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 
-from .codex import detect_codex
+from .codex_detection import detect_codex
 
 AGENTS_DIRNAME = ".agents"
 SKILLS_DIRNAME = "skills"

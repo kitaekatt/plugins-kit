@@ -214,10 +214,20 @@ def test_a_bootstrap_without_ignore_user_config_is_diagnosed_not_a_type_error(tm
     assert any(c[1] == "exec" for c in runner.calls)
 
 
-def test_an_absent_bootstrap_codex_module_names_install_not_update(tmp_path, monkeypatch):
+def test_an_absent_bootstrap_codex_module_names_katsoft_llm_kit_not_a_bootstrap_install(
+    tmp_path, monkeypatch
+):
     import sys
 
     monkeypatch.setitem(sys.modules, "bootstrap_lib.codex", None)  # import raises ImportError
     backend, _ = _codex(text_only=False)
-    with pytest.raises(RuntimeError, match=r"not importable.*plugin install bootstrap"):
+    with pytest.raises(RuntimeError) as caught:
         backend.complete("sys", "usr", model="m", options=BackendOptions(cwd=tmp_path))
+    message = str(caught.value)
+    assert "not importable" in message
+    assert "katsoft-llm-kit >= 1.3" in message
+    assert "katsoft-llm-kit>=1.3,<2" in message
+    # The remedy is the package in this plugin's venv, never a bootstrap plugin
+    # install or update, which would not change what the venv holds.
+    assert "claude plugin" not in message
+    assert "bootstrap@plugins-kit" not in message

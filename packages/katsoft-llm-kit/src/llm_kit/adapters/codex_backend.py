@@ -24,14 +24,14 @@ this is a separate module rather than another class in ``backends.py``:
   raises on a relative path, and this backend never supplies one -- an absent
   ``options.cwd`` resolves to ``Path.cwd().resolve()``.
 
-Argv is built EXCLUSIVELY by :func:`bootstrap_lib.codex.build_codex_exec_argv`,
-the single source of truth for codex detection and command construction. No
-flag is hand-assembled here; a new codex knob is added there and forwarded from
+Argv is built EXCLUSIVELY by
+:func:`llm_kit.adapters.codex_command.build_codex_exec_argv`, the single source
+of truth for codex detection and command construction. No flag is
+hand-assembled here; a new codex knob is added there and forwarded from
 ``options.extras``.
 """
 from __future__ import annotations
 
-import inspect
 import json
 import os
 import re
@@ -43,7 +43,9 @@ from pathlib import Path
 from typing import Any, Callable, ClassVar, Dict, Mapping, Optional
 
 from llm_kit.registry import conserve
-from . import usage_sources
+from llm_kit.registry.effort import CODEX_EFFORT_ORDER, CODEX_HARNESS
+from llm_kit.registry.model_profiles import check_effort
+from . import codex_command, usage_sources
 from llm_kit.completion import halt
 from .claude_runner import run_cli_streaming
 from .capabilities import (
@@ -74,44 +76,6 @@ from llm_kit.completion.types import BackendOptions, LLMResponse
 #: Decision 6). ``read_codex_pool`` remaps ``seven_day`` to codex's own
 #: ``primary`` window, so this is the same read an opted-in entry would get.
 _QUOTA_PROBE_SPEC = conserve.ConserveSpec(pool=conserve.POOL_SEVEN_DAY)
-
-
-#: First bootstrap whose ``build_codex_exec_argv`` accepts ``ignore_user_config``.
-IGNORE_USER_CONFIG_BOOTSTRAP = "0.146.0"
-
-
-def _codex_argv_builder(*, need_ignore_user_config: bool) -> Callable[..., list]:
-    """Return ``bootstrap_lib.codex.build_codex_exec_argv``, probed for the call shape.
-
-    Edge classification (plugins/CLAUDE.md, optional use of another plugin):
-    bootstrap is REQUIRED for every codex call (no argv without the builder),
-    and the text-only mode REFUSES on a bootstrap that lacks
-    ``ignore_user_config``: dropping the flag would leave the user's codex
-    config (MCP servers, hooks, plugins) loaded, so the mode would not deliver
-    what it advertises. Absent and too-old differ because the remedies do. The
-    version in a message is this plugin's own constant, never read from the
-    module.
-    """
-    from llm_kit import _runtime  # noqa: PLC0415
-    _runtime.require_fleet("the codex backend")
-    try:
-        from bootstrap_lib.codex import build_codex_exec_argv  # noqa: PLC0415
-    except ImportError as exc:
-        raise RuntimeError(
-            "bootstrap_lib.codex is not importable here, so the codex backend cannot "
-            "build its command; run `claude plugin install bootstrap@plugins-kit` "
-            f"(needs bootstrap >= {IGNORE_USER_CONFIG_BOOTSTRAP})"
-        ) from exc
-    if need_ignore_user_config and (
-        "ignore_user_config" not in inspect.signature(build_codex_exec_argv).parameters
-    ):
-        raise RuntimeError(
-            "the linked bootstrap_lib.codex.build_codex_exec_argv has no "
-            "ignore_user_config parameter, which codex text-only mode needs; it "
-            f"needs bootstrap >= {IGNORE_USER_CONFIG_BOOTSTRAP} -- run "
-            "`claude plugin update bootstrap@plugins-kit`, then restart the session"
-        )
-    return build_codex_exec_argv
 
 
 class CodexRunError(RuntimeError):
@@ -362,6 +326,17 @@ class CodexCliBackend:
                     f"{self.name} text-only mode patches the model's catalog "
                     "entry, so it needs a model id; nothing was dispatched"
                 )
+        # The effort is held to the exact model's measured menu here, before any
+        # temp file, argv or runner call -- the same validator CodexAdapter
+        # uses, so neither Codex path can bypass it. With no model id the
+        # harness-wide menu stands.
+        check_effort(
+            opts.effort,
+            route=CODEX_HARNESS,
+            model=model or None,
+            fallback=CODEX_EFFORT_ORDER,
+            subject=self.name,
+        )
         timeout_s = (
             opts.timeout_s if opts.timeout_s is not None else self.default_timeout_s
         )
@@ -499,8 +474,8 @@ class CodexCliBackend:
         """Which advertised controls THIS argv actually carries.
 
         Read off the built argv rather than re-derived from the options,
-        deliberately: argv construction is delegated to ``bootstrap_lib.codex``
-        in another plugin, so an option value is only a request for a flag and
+        deliberately: argv construction is delegated to
+        ``llm_kit.adapters.codex_command``, so an option value is only a request for a flag and
         this adapter is not the code that decides whether one is emitted. The
         argv is the emission, and the advertisement's rule is that a control is
         advertised only where something is emitted -- so reading the emission is
@@ -542,14 +517,10 @@ class CodexCliBackend:
         """
         prefix = self.argv_prefix
         if prefix is None:
-            from llm_kit import _runtime  # noqa: PLC0415
-            _runtime.require_fleet("codex text-only mode")
-            from bootstrap_lib.codex import CODEX_EXECUTABLE, resolve_cli  # noqa: PLC0415
-
-            prefix = resolve_cli(CODEX_EXECUTABLE)
+            prefix = codex_command.resolve_cli(codex_command.CODEX_EXECUTABLE)
             if prefix is None:
                 raise RuntimeError(
-                    f"`{CODEX_EXECUTABLE}` is not on PATH, so text-only mode "
+                    f"`{codex_command.CODEX_EXECUTABLE}` is not on PATH, so text-only mode "
                     "cannot read the model catalog"
                 )
         stdout, stderr, returncode = self.runner(
@@ -691,17 +662,7 @@ class CodexCliBackend:
         extras: Any,
         catalog_path: Optional[Path] = None,
     ) -> list:
-        """Delegate argv construction to the shared bootstrap_lib builder.
-
-        Imported inside the call rather than at module import so this module
-        stays importable (for its types and :func:`compose_prompt`) on a machine
-        whose venv has not yet been provisioned with the ``bootstrap_lib``
-        shared lib -- the failure then lands on the call that needs it, with the
-        import error intact, instead of poisoning ``llm_kit.adapters``'s whole
-        package import.
-        """
-        build_codex_exec_argv = _codex_argv_builder(need_ignore_user_config=self.text_only)
-
+        """Delegate argv construction to ``llm_kit.adapters.codex_command``."""
         kwargs: Dict[str, Any] = {
             "root": root,
             "output_file": output_file,
@@ -726,7 +687,7 @@ class CodexCliBackend:
                 *_CODEX_TEXT_ONLY_CONFIG,
                 f"model_catalog_json='{catalog_path}'",
             )
-        return build_codex_exec_argv(**kwargs)
+        return codex_command.build_codex_exec_argv(**kwargs)
 
     @staticmethod
     def _read_output(path: Path, *, stdout: str, stderr: str) -> str:

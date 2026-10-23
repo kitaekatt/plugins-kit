@@ -19,6 +19,7 @@ import shutil
 from dataclasses import dataclass
 from typing import ClassVar, Optional, Sequence, Union
 
+from llm_kit.adapters import codex_command
 from llm_kit.registry.model_endpoints import HARNESS_KIND, EndpointEntry
 from llm_kit.registry.effort import (
     CLAUDE_EFFORT_ORDER,
@@ -30,6 +31,7 @@ from llm_kit.registry.effort import (
     HarnessAdapterError,
     harness_effort_order,
 )
+from llm_kit.registry.model_profiles import check_effort
 
 
 PathLike = Union[str, os.PathLike[str]]
@@ -179,12 +181,15 @@ class HarnessAdapter:
             raise HarnessAdapterError(
                 f"{self.name} effort must be a non-empty string (got {value!r})"
             )
-        if self.effort_menu is not None and value not in self.effort_menu:
-            accepted = "|".join(sorted(self.effort_menu))
-            raise HarnessAdapterError(
-                f"{self.name} does not accept effort {value!r}; "
-                f"accepted efforts: {accepted}"
-            )
+        # One validator for every dispatch path: the exact model's measured
+        # menu when it has one, else this adapter's harness-wide menu.
+        check_effort(
+            value,
+            route=self.name,
+            model=entry.model,
+            fallback=None if self.effort_menu is None else harness_effort_order(self.name),
+            subject=self.name,
+        )
         return value
 
     def _validate_prompt_args(
@@ -205,7 +210,7 @@ class HarnessAdapter:
 
 @dataclass(frozen=True)
 class CodexAdapter(HarnessAdapter):
-    """Build the sanctioned Codex argv through ``bootstrap_lib.codex``.
+    """Build the sanctioned Codex argv through ``llm_kit.adapters.codex_command``.
 
     ``codex exec`` consumes its prompt from stdin (the shared builder emits a
     final ``-``) and can write its answer to ``output_file``. The adapter does
@@ -246,14 +251,6 @@ class CodexAdapter(HarnessAdapter):
         if output_file is not None:
             _absolute_path(output_file, "output_file")
 
-        # This import must stay inside dispatch. Consumers that only link this
-        # package are allowed to import its adapter types without provisioning
-        # bootstrap_lib; the missing shared library should fail only here.
-        from llm_kit import _runtime  # noqa: PLC0415
-
-        _runtime.require_fleet("the codex adapter")
-        from bootstrap_lib.codex import build_codex_exec_argv  # noqa: PLC0415
-
         kwargs = {"root": cwd, "model": entry.model}
         if effective_effort is not None:
             kwargs["effort"] = effective_effort
@@ -265,16 +262,11 @@ class CodexAdapter(HarnessAdapter):
             ]
         if self.argv_prefix is not None:
             kwargs["argv_prefix"] = self.argv_prefix
-        return build_codex_exec_argv(**kwargs)
+        return codex_command.build_codex_exec_argv(**kwargs)
 
     def is_available(self) -> bool:
-        """Use bootstrap's existing Codex presence detector, without a model run."""
-        from llm_kit import _runtime  # noqa: PLC0415
-
-        _runtime.require_fleet("the codex adapter")
-        from bootstrap_lib.codex import detect_codex  # noqa: PLC0415
-
-        return bool(detect_codex().available)
+        """Use the Codex presence detector, without a model run."""
+        return bool(codex_command.detect_codex().available)
 
 
 def resolve_opencode_cli() -> Optional[tuple[str, ...]]:

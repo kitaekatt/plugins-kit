@@ -1,0 +1,28 @@
+{
+  "argv": [
+    "models",
+    "project",
+    "validate",
+    "--project-root",
+    "<T>/proj",
+    "--layer",
+    "local",
+    "--input",
+    "-"
+  ],
+  "exit": 0,
+  "stderr": "",
+  "stdout": {
+    "json": {
+      "canonical_sha256": null,
+      "dropped_defaults": [
+        "first"
+      ],
+      "layer": "local",
+      "path": ".llm-kit/models.local.yaml",
+      "schema": "llm-kit.project-models/v1",
+      "selections": 0,
+      "valid": true
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "argv": [
+    "models",
+    "project",
+    "validate",
+    "--project-root",
+    "<T>/proj",
+    "--input",
+    "-"
+  ],
+  "exit": 0,
+  "stderr": "",
+  "stdout": {
+    "json": {
+      "canonical_sha256": "aadf666abeeb13073f4423e90f3a010ae7fa03a4c4541103c21729c4ee7b820d",
+      "catalog_rows": 2,
+      "path": ".llm-kit/models.yaml",
+      "schema": "llm-kit.project-models/v1",
+      "selections": 2,
+      "valid": true
+    }
+  }
+}

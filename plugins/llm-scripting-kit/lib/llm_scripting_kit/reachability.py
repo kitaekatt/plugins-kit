@@ -304,7 +304,8 @@ def _check_codex(*, timeout: float) -> Reachability:
     this plugin's CLAUDE.md: "consumers must declare bootstrap_lib
     themselves"). Its absence says nothing about whether codex ITSELF is
     installed and working -- codex-cli can be present and fully functional on
-    a machine whose llm-scripting-kit venv simply never linked bootstrap_lib.
+    a machine whose llm-scripting-kit venv simply never linked bootstrap_lib
+    or holds no katsoft-llm-kit >= 1.3 (the package the alias resolves to).
     Treating that ImportError as "codex unreachable" was a FALSE NEGATIVE
     (observed live: codex-cli 0.150.1 installed and in active use, reported
     unreachable purely because this module's own optional import failed).

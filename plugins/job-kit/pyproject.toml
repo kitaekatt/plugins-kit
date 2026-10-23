@@ -1,6 +1,6 @@
 [project]
 name = "job-kit"
-version = "0.14.1"
+version = "0.14.2"
 description = "Durable execution for heterogeneous agent jobs through a bounded worker pool."
 requires-python = ">=3.12"
 dependencies = [
@@ -11,6 +11,11 @@ dependencies = [
     # whether or not this package names the module itself.
     "openai>=1.0.0",
     "katsoft-contracts>=1.0,<2",
+    # bootstrap_lib.codex is an exact alias of llm_kit.adapters.codex_command
+    # (first shipped in katsoft-llm-kit 1.3.0); a codex dispatch through the
+    # linked llm_scripting_kit resolves it in this venv, so the package is
+    # declared here and not reached through a link.
+    "katsoft-llm-kit>=1.3,<2",
 ]
 
 [project.scripts]

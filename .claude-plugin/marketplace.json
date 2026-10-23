@@ -35,7 +35,7 @@
     {
       "name": "bootstrap",
       "description": "Installs each plugin's tools, Python venvs, and config automatically at session start.",
-      "version": "0.162.0",
+      "version": "0.163.0",
       "author": {
         "name": "Christina"
       },
@@ -45,7 +45,7 @@
     {
       "name": "p4-kit",
       "description": "Multi-agent code review for pending Perforce changelists (/p4-code-review) -- auto-shelves, reviews, cleans up.",
-      "version": "0.69.0",
+      "version": "0.69.1",
       "author": {
         "name": "Christina"
       },
@@ -58,7 +58,7 @@
     {
       "name": "git-kit",
       "description": "Multi-agent pre-push code review for git (/git-code-review) with per-finding validation and declined-findings memory.",
-      "version": "0.51.0",
+      "version": "0.51.1",
       "author": {
         "name": "Christina"
       },
@@ -97,7 +97,7 @@
     {
       "name": "awesome-kit",
       "description": "Provides plugin-ecosystem, orchestrate, debug-context, verbose-updates, and arewedone skills for plugin browsing, delegated work, answering why-did-you questions from context, progress communication, and auditing whether session work is complete.",
-      "version": "0.77.0",
+      "version": "0.78.0",
       "author": {
         "name": "Christina"
       },
@@ -111,7 +111,7 @@
     {
       "name": "llm-scripting-kit",
       "description": "Frozen legacy provider. Use llm-kit for LLM access, credentials, endpoint/model resolution, and completion.",
-      "version": "0.68.2",
+      "version": "0.68.3",
       "author": {
         "name": "Christina"
       },
@@ -150,7 +150,7 @@
     {
       "name": "content-pipeline-kit",
       "description": "Frozen legacy provider. Use llm-kit for the batch content pipeline library, skills, agent, and workflow.",
-      "version": "0.37.2",
+      "version": "0.37.3",
       "author": {
         "name": "Christina"
       },
@@ -202,7 +202,7 @@
     {
       "name": "job-kit",
       "description": "Frozen legacy provider. Use llm-kit for durable agent jobs, the jobs API, and jobs commands.",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "author": {
         "name": "Christina"
       },
@@ -243,7 +243,7 @@
     {
       "name": "llm-kit",
       "description": "LLM access, durable agent jobs and batch content pipelines in one library. Consolidation of llm-scripting-kit, job-kit and content-pipeline-kit.",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "author": {
         "name": "Christina"
       },

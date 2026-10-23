@@ -66,6 +66,8 @@ def world(monkeypatch, tmp_path):
     user_env = home / ".claude" / "plugins" / "data" / "plugins-kit" / "llm-scripting-kit" / ".env"
     for module in (constants, api_key_mod, account_cli):
         monkeypatch.setattr(module, "USER_ENV_FILE", user_env)
+    # llm-kit reads and writes the user key file at $LLM_KIT_ENV_FILE when it is set.
+    monkeypatch.setenv("LLM_KIT_ENV_FILE", str(user_env))
     network = FakeNetwork()
     monkeypatch.setattr(account_mod, "_get", network)
 

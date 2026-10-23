@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import Any, Callable, ClassVar, Dict, Mapping, Optional
 
 from .. import usage_budget
+from ..harness_adapters import codex_import_failure
 from . import halt
 from .claude_runner import run_cli_streaming
 from .adapter_capabilities import (
@@ -83,22 +84,20 @@ def _codex_argv_builder(*, need_ignore_user_config: bool) -> Callable[..., list]
     """Return ``bootstrap_lib.codex.build_codex_exec_argv``, probed for the call shape.
 
     Edge classification (plugins/CLAUDE.md, optional use of another plugin):
-    bootstrap is REQUIRED for every codex call (no argv without the builder),
-    and the text-only mode REFUSES on a bootstrap that lacks
-    ``ignore_user_config``: dropping the flag would leave the user's codex
-    config (MCP servers, hooks, plugins) loaded, so the mode would not deliver
-    what it advertises. Absent and too-old differ because the remedies do. The
-    version in a message is this plugin's own constant, never read from the
-    module.
+    the builder is REQUIRED for every codex call (no argv without it), and the
+    text-only mode REFUSES on a builder that lacks ``ignore_user_config``:
+    dropping the flag would leave the user's codex config (MCP servers, hooks,
+    plugins) loaded, so the mode would not deliver what it advertises. Absent
+    and too-old differ because the remedies do. Absent means the alias cannot
+    resolve, so the remedy is ``katsoft-llm-kit`` >= 1.3 in this plugin's venv
+    (``codex_import_failure``); too old means a ``bootstrap_lib.codex`` that
+    imported without the keyword, and names bootstrap. The versions in the
+    messages are this plugin's own constants, never read from the module.
     """
     try:
         from bootstrap_lib.codex import build_codex_exec_argv  # noqa: PLC0415
     except ImportError as exc:
-        raise RuntimeError(
-            "bootstrap_lib.codex is not importable here, so the codex backend cannot "
-            "build its command; run `claude plugin install bootstrap@plugins-kit` "
-            f"(needs bootstrap >= {IGNORE_USER_CONFIG_BOOTSTRAP})"
-        ) from exc
+        raise RuntimeError(codex_import_failure(exc)) from exc
     if need_ignore_user_config and (
         "ignore_user_config" not in inspect.signature(build_codex_exec_argv).parameters
     ):
@@ -539,7 +538,10 @@ class CodexCliBackend:
         """
         prefix = self.argv_prefix
         if prefix is None:
-            from bootstrap_lib.codex import CODEX_EXECUTABLE, resolve_cli  # noqa: PLC0415
+            try:
+                from bootstrap_lib.codex import CODEX_EXECUTABLE, resolve_cli  # noqa: PLC0415
+            except ImportError as exc:
+                raise RuntimeError(codex_import_failure(exc)) from exc
 
             prefix = resolve_cli(CODEX_EXECUTABLE)
             if prefix is None:

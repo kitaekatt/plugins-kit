@@ -294,7 +294,8 @@ def _in_final_wording(value: Any) -> Any:
     if isinstance(value, str):
         return to_final(value)
     if isinstance(value, dict):
-        return {key: _in_final_wording(item) for key, item in value.items()}
+        # call_modes: declared difference, only the final Capabilities record carries it.
+        return {key: _in_final_wording(item) for key, item in value.items() if key != "call_modes"}
     if isinstance(value, (list, tuple)):
         return type(value)(_in_final_wording(item) for item in value)
     return value
@@ -2129,8 +2130,9 @@ class TestFactorySeamParity:
     def test_selections_agree_and_each_candidate_is_built_at_most_once(self, sides, hermetic, tmp_path, name):
         legacy, final = _both(sides, tmp_path, lambda side, base: _seam_select(side, base, SEAM_SELECTIONS[name]))
         legacy_outcome = _in_final_wording(legacy["outcome"])
-        assert first_difference(final["outcome"], legacy_outcome) is None, first_difference(
-            final["outcome"], legacy_outcome
+        final_outcome = _in_final_wording(final["outcome"])  # drops the final-only call_modes
+        assert first_difference(final_outcome, legacy_outcome) is None, first_difference(
+            final_outcome, legacy_outcome
         )
         assert set(final["constructions"]) == set(legacy["constructions"])
         assert all(n == 1 for n in final["constructions"].values()), final["constructions"]

@@ -1,6 +1,6 @@
 [project]
 name = "content-pipeline-kit"
-version = "0.37.2"
+version = "0.37.3"
 description = "Library for LLM-in-the-loop batch content pipelines: attributed store, two-tier freshness, one-validator-many-sites, provider tiers, convergence gate, delivery modes, VCS seam, round-trip, audit."
 requires-python = ">=3.12"
 
@@ -9,6 +9,11 @@ dependencies = [
     "ruamel.yaml>=0.18",
     "openai>=1.0.0",
     "katsoft-contracts>=1.0,<2",
+    # bootstrap_lib.codex is an exact alias of llm_kit.adapters.codex_command
+    # (first shipped in katsoft-llm-kit 1.3.0); a codex dispatch through the
+    # linked llm_scripting_kit resolves it in this venv, so the package is
+    # declared here and not reached through a link.
+    "katsoft-llm-kit>=1.3,<2",
 ]
 
 [project.optional-dependencies]

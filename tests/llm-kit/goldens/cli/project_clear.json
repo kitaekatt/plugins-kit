@@ -1,0 +1,25 @@
+{
+  "argv": [
+    "models",
+    "project",
+    "clear",
+    "--project-root",
+    "<T>/proj",
+    "--key",
+    "first"
+  ],
+  "exit": 0,
+  "stderr": "",
+  "stdout": {
+    "json": {
+      "changed": true,
+      "deleted": true,
+      "dropped_defaults": [],
+      "layer": "local",
+      "path": ".llm-kit/models.local.yaml",
+      "schema": "llm-kit.project-models/v1",
+      "selections": 0,
+      "sha256": null
+    }
+  }
+}

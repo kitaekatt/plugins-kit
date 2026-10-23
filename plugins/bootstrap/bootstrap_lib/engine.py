@@ -6434,8 +6434,8 @@ def _run_codex_hook_setup(project_dir, *, console=False, existing_failures=()):
     # Use the bootstrap plugin's single Codex detector.  A project should not
     # acquire a Codex-only hook merely because Claude bootstrap happened to run;
     # installing Codex later causes the next normal pass to converge it.
-    from . import codex
-    if not codex.detect_codex().available:
+    from . import codex_detection
+    if not codex_detection.detect_codex().available:
         return [], [], []
 
     try:

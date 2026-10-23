@@ -19,7 +19,7 @@ import pytest
 
 from bootstrap_lib import agent_skills_check as asc
 from bootstrap_lib import engine
-from bootstrap_lib.codex import CodexDetection
+from bootstrap_lib.codex_detection import CodexDetection
 
 
 def _git(*args, cwd):

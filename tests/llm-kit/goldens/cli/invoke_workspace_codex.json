@@ -1,0 +1,67 @@
+{
+  "exit": 0,
+  "request": {
+    "expect_files": [
+      "poster.png"
+    ],
+    "mode": "workspace",
+    "project_root": "<T>/proj",
+    "prompt": "do it",
+    "protocol": 2,
+    "selection": "draft.generate.primary",
+    "working_dir": "work"
+  },
+  "stderr": "",
+  "stdout": {
+    "json": {
+      "cost": {
+        "class": "usage",
+        "estimated_source": null,
+        "estimated_usd": null,
+        "source": null,
+        "usd": null
+      },
+      "files": [
+        {
+          "path": "poster.png",
+          "sha256": "2d4566582844690f8634a8b2534ea5221560038c6c0650c99140759bad603ae2",
+          "size": 7
+        }
+      ],
+      "mode": "workspace",
+      "output": {
+        "structured": null,
+        "text": "answer"
+      },
+      "params": {
+        "dropped": [],
+        "forwarded": []
+      },
+      "protocol": 2,
+      "resolved": {
+        "adapter": "codex-cli",
+        "effort": {
+          "requested": "high",
+          "sent": "high",
+          "source": "selection"
+        },
+        "endpoint": "luna",
+        "model_verified": false,
+        "reported_model": null,
+        "requested_model": "gpt-6-luna"
+      },
+      "selection": {
+        "id": "draft.generate.primary",
+        "model": "luna"
+      },
+      "status": "completed",
+      "usage": {
+        "cache_hit_tokens": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 1234,
+        "wall_ms": "<ms>"
+      }
+    }
+  }
+}

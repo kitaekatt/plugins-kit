@@ -1,6 +1,6 @@
 {
   "name": "job-kit",
-  "version": "0.14.1",
+  "version": "0.14.2",
   "description": "Frozen legacy provider. Use llm-kit for durable agent jobs, the jobs API, and jobs commands.",
   "author": {
     "name": "Christina"

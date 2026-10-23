@@ -7,10 +7,12 @@ OpenRouter credential:
    ``katsoft-llm-kit`` installs there) for the credential state. The script
    runs inside the bootstrap engine's process, so it imports no ``llm_kit``
    module: the library is the installed ``katsoft-llm-kit`` package in the
-   plugin venv, and the check runs there as a subprocess. The
-   credential locations are the shared legacy ones (the user ``.env`` is
-   ``user_env_file`` in the document); this script reads them through the CLI
-   and seeds none.
+   plugin venv, and the check runs there as a subprocess. The library owns the
+   credential lookup (the environment variable, the project ``.env``, then the
+   user key file, which is ``user_env_file`` in the document: ``$LLM_KIT_ENV_FILE``,
+   else ``$XDG_CONFIG_HOME/llm-kit/.env``, else the legacy file when the neutral
+   one does not exist); this script reads the outcome through the CLI and seeds
+   none.
 2. If the key is missing (``state == "missing_key"``), records a DEFERRED
    REQUIREMENT -- never a fix-all entry. An OpenRouter key is a precondition
    only some sessions need, so bootstrap does not ask for it at session start;

@@ -47,7 +47,7 @@ def test_skill_material_floor_is_pinned_literally() -> None:
     from llm_scripting_kit.completion import skill_context
 
     assert skill_context.SKILL_MATERIAL_BOOTSTRAP == "0.138.0"
-    assert _manifest()["requires_bootstrap"] == "0.146.0"
+    assert _manifest()["requires_bootstrap"] == "0.160.0"
 
 
 def test_manifest_adds_no_edge() -> None:

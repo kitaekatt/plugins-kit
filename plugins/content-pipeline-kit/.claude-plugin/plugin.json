@@ -1,6 +1,6 @@
 {
   "name": "content-pipeline-kit",
-  "version": "0.37.2",
+  "version": "0.37.3",
   "description": "Frozen legacy provider. Use llm-kit for the batch content pipeline library, skills, agent, and workflow.",
   "author": {
     "name": "Christina"

@@ -190,12 +190,28 @@ class World:
         self.tamper_upload = False
         self.smoke_result: dict | None = None
         self.run_id = 100
+        self.simple_lag = 0
+        self.simple_polls = 0
 
     # Services surface
     def services(self) -> _packages.Services:
         return _packages.Services(pypi_json=self.pypi_json, download=self.download,
                                   gh=self.gh, build=self.build, smoke=self.smoke,
-                                  sleep=self.sleep, now=lambda: self.clock)
+                                  sleep=self.sleep, now=lambda: self.clock,
+                                  simple_index=self.simple_index)
+
+    def simple_index(self, url: str):
+        """PEP 691 page; lists a wheel only after `simple_lag` polls of it."""
+        self.calls.append(("simple", url))
+        _, _, rest = url.partition("/simple/")
+        dist = rest.strip("/")
+        self.simple_polls += 1
+        files = []
+        if self.simple_polls > self.simple_lag:
+            files = [{"filename": r["files"][0]["filename"]}
+                     for (d, _v), r in self.pypi.items()
+                     if rb.normalize_dist(d) == dist]
+        return 200, {"name": dist, "files": files}
 
     def upload(self, dist: str, version: str, data: bytes, *, yanked: bool = False,
                extra: bool = False) -> None:
@@ -424,6 +440,32 @@ class TestRows:
         assert world.clock > 0  # it polled
         assert json.loads(git(root, "show", f"{final}:{rb.RELEASED_PATH}"))[DIST]["1.0.0"][
             "commit"] == head
+
+    def test_simple_index_lag_is_waited_out_before_recording(self, root):
+        head = git(root, "rev-parse", "dev")
+        push_tag(root, TAG, head)
+        world = World(root)
+        world.upload(DIST, "1.0.0", fake_wheel_bytes(root, head, DIST))
+        world.simple_lag = 3
+
+        final = release_for(root, world).run()
+
+        assert world.simple_polls == 4
+        assert world.clock >= 3 * _packages.POLL_SECONDS
+        assert DIST in json.loads(git(root, "show", f"{final}:{rb.RELEASED_PATH}"))
+
+    def test_simple_index_never_listing_times_out_and_records_nothing(self, root):
+        head = git(root, "rev-parse", "dev")
+        push_tag(root, TAG, head)
+        world = World(root)
+        world.upload(DIST, "1.0.0", fake_wheel_bytes(root, head, DIST))
+        world.simple_lag = 10**9
+
+        with pytest.raises(_packages.Waiting, match="simple index.*1.0.0|1.0.0.*simple index"):
+            release_for(root, world).run()
+
+        assert not any(c[0] == "download" for c in world.calls)
+        assert world.clock >= _packages.SIMPLE_INDEX_WAIT_SECONDS
 
     def test_row7_anomaly_refuses(self, root):
         head = git(root, "rev-parse", "dev")

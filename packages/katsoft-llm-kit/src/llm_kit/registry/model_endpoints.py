@@ -9,9 +9,13 @@ module ships only the READER: the declarations live in a file the user owns.
 Location, in order:
 
 1. ``$MODEL_ENDPOINTS_REGISTRY`` when set -- an explicit path (``~`` expanded).
-2. otherwise ``~/.claude/config/model-endpoints.yaml`` -- the convention. The
-   expression is home-relative, so it is the same on every machine and names
-   none.
+2. otherwise ``$XDG_CONFIG_HOME/llm-kit/model-endpoints.yaml`` (fallback
+   ``$HOME/.config/llm-kit/model-endpoints.yaml``) -- the neutral convention.
+   The expression is home-relative, so it is the same on every machine and
+   names none.
+3. otherwise ``~/.claude/config/model-endpoints.yaml``, READ ONLY and only when
+   the neutral file does not exist -- the location an earlier release used.
+   Nothing here ever writes it.
 
 Absence semantics differ by how the path was chosen, deliberately:
 
@@ -94,11 +98,13 @@ from .effort import (
     EffortDelivery,
 )
 from .conserve import ConserveConfigError, ConserveSpec, parse_conserve_usage
+from .user_paths import neutral_registry_file
 
 #: Environment variable overriding the registry path.
 REGISTRY_ENV = "MODEL_ENDPOINTS_REGISTRY"
 
-#: The conventional location, relative to the user's home directory.
+#: The LEGACY location, relative to the user's home directory. The neutral
+#: convention is :func:`llm_kit.registry.user_paths.neutral_registry_file`.
 REGISTRY_RELATIVE_PATH = Path(".claude") / "config" / "model-endpoints.yaml"
 
 # Entry kinds are deliberately strings: the registry is a YAML seam shared by
@@ -108,14 +114,32 @@ TRANSPORT_KIND = "transport"
 HARNESS_KIND = "harness"
 
 
+def legacy_registry_path() -> Path:
+    """The legacy registry path: ``~/.claude/config/model-endpoints.yaml`` (read-only fallback)."""
+    return Path.home() / REGISTRY_RELATIVE_PATH
+
+
 def default_registry_path() -> Path:
     """The conventional registry path for the current user.
 
-    Resolved per call rather than bound at import time: the home directory is
-    a runtime fact (and tests redirect it), so a module constant would freeze
-    whichever home happened to exist when the module was first imported.
+    The neutral file when anything exists at that path, else the legacy file
+    when it exists, else the neutral path (absent). Resolved per call rather
+    than bound at import time: the home directory is a runtime fact (and tests
+    redirect it), so a module constant would freeze whichever home happened to
+    exist when the module was first imported. Touches nothing.
     """
-    return Path.home() / REGISTRY_RELATIVE_PATH
+    return _convention_registry_path(None)
+
+
+def _convention_registry_path(environ: Optional[Mapping[str, str]]) -> Path:
+    """:func:`default_registry_path` against an explicit environment (``None``: the process's)."""
+    neutral = neutral_registry_file(environ)
+    if os.path.lexists(neutral):
+        return neutral
+    legacy = legacy_registry_path()
+    if os.path.lexists(legacy):
+        return legacy
+    return neutral
 
 
 class EndpointRegistryError(Exception):
@@ -518,7 +542,7 @@ def _resolve_registry_path(env: Mapping[str, str]) -> "tuple[Path, bool]":
     override = (env.get(REGISTRY_ENV) or "").strip()
     if override:
         return Path(os.path.expanduser(override)), True
-    return default_registry_path(), False
+    return _convention_registry_path(env), False
 
 
 def load_endpoint_registry(
@@ -762,6 +786,7 @@ __all__ = [
     "TRANSPORT_KIND",
     "HARNESS_KIND",
     "default_registry_path",
+    "legacy_registry_path",
     "EndpointEntry",
     "EndpointRegistry",
     "EndpointRegistryError",

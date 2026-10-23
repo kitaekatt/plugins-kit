@@ -397,7 +397,7 @@ link — the mechanism has nothing to run from.
 
 After all automatic work completes, `_run_codex_hook_setup` always removes
 bootstrap-owned entries from the project's legacy `.codex/hooks.json`. On a
-clean non-console pass, it also uses `bootstrap_lib.codex.detect_codex()` and,
+clean non-console pass, it also uses `bootstrap_lib.codex_detection.detect_codex()` and,
 when Codex is available, merges one guarded `SessionStart` hook into the
 user-level `$CODEX_HOME/hooks.json` (default `~/.codex/hooks.json`). The user
 directory may be a symlink; `hooks.json` itself is never followed when it is a

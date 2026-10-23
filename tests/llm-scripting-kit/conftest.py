@@ -25,6 +25,16 @@ for p in (lib_path, PLUGIN_ROOT):
     if p not in sys.path:
         sys.path.insert(0, p)
 
+# The frozen plugin reaches Codex command construction through the
+# bootstrap_lib.codex alias, which resolves to llm_kit.adapters.codex_command in
+# the katsoft-llm-kit package (its pyproject requirement is >=1.3). A source
+# checkout has no installed package, so its source root goes on the path.
+_KIT_SRC = os.path.normpath(
+    os.path.join(PLUGIN_ROOT, os.pardir, os.pardir, "packages", "katsoft-llm-kit", "src")
+)
+if _KIT_SRC not in sys.path:
+    sys.path.append(_KIT_SRC)
+
 
 @pytest.fixture
 def plugin_root():

@@ -233,6 +233,40 @@ class HarnessAdapter:
             raise HarnessAdapterError("prompt must be text")
 
 
+#: ``bootstrap_lib.codex`` is an exact alias of ``llm_kit.adapters.codex_command``
+#: in the ``katsoft-llm-kit`` package, first shipped in 1.3.0. This plugin's
+#: ``pyproject.toml`` declares the matching requirement and bootstrap installs
+#: it into the plugin's venv, so an absent alias is a missing package in the
+#: running venv, never a missing bootstrap plugin.
+LLM_KIT_CODEX_MIN = "1.3"
+LLM_KIT_CODEX_REQUIREMENT = "katsoft-llm-kit>=1.3,<2"
+
+
+def codex_import_failure(exc: BaseException) -> str:
+    """Message for an ImportError of ``bootstrap_lib.codex``, naming the remedy.
+
+    The remedy is ``katsoft-llm-kit`` >= 1.3 in the venv that runs this code
+    (declared in the plugin's ``pyproject.toml``, installed by bootstrap), or,
+    when ``bootstrap_lib`` itself is not linked, running under the plugin's
+    bootstrap-provisioned venv. It is distinct from the too-old-signature
+    message in ``completion.codex_backend``, which concerns a module that
+    imported but lacks a keyword.
+    """
+    return (
+        f"bootstrap_lib.codex is not importable here ({exc}), so the codex "
+        "command cannot be built. It is an alias of "
+        "llm_kit.adapters.codex_command from the katsoft-llm-kit package: this "
+        f"plugin's venv needs katsoft-llm-kit >= {LLM_KIT_CODEX_MIN} "
+        f"('{LLM_KIT_CODEX_REQUIREMENT}' in the plugin's pyproject.toml, which "
+        "bootstrap installs). Run under the plugin's bootstrap-provisioned "
+        "venv and let a bootstrap pass finish."
+    )
+
+
+def _codex_unavailable(exc: ImportError) -> ModuleNotFoundError:
+    return ModuleNotFoundError(codex_import_failure(exc), name=exc.name)
+
+
 @dataclass(frozen=True)
 class CodexAdapter(HarnessAdapter):
     """Build the sanctioned Codex argv through ``bootstrap_lib.codex``.
@@ -279,7 +313,10 @@ class CodexAdapter(HarnessAdapter):
         # This import must stay inside dispatch. Consumers that only link this
         # package are allowed to import its adapter types without provisioning
         # bootstrap_lib; the missing shared library should fail only here.
-        from bootstrap_lib.codex import build_codex_exec_argv  # noqa: PLC0415
+        try:
+            from bootstrap_lib.codex import build_codex_exec_argv  # noqa: PLC0415
+        except ImportError as exc:
+            raise _codex_unavailable(exc) from exc
 
         kwargs = {"root": cwd, "model": entry.model}
         if effective_effort is not None:
@@ -296,7 +333,10 @@ class CodexAdapter(HarnessAdapter):
 
     def is_available(self) -> bool:
         """Use bootstrap's existing Codex presence detector, without a model run."""
-        from bootstrap_lib.codex import detect_codex  # noqa: PLC0415
+        try:
+            from bootstrap_lib.codex import detect_codex  # noqa: PLC0415
+        except ImportError as exc:
+            raise _codex_unavailable(exc) from exc
 
         return bool(detect_codex().available)
 

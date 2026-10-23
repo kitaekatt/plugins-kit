@@ -79,6 +79,17 @@ with the run URL and the resume commands below. `publish.py` never
 re-dispatches a run. On the next `publish.py` run the newest run decides;
 older failures are ignored.
 
+Before UPLOADED verifies and records, it waits for the simple index.
+`https://pypi.org/pypi/<d>/<v>/json` can list a wheel before
+`https://pypi.org/simple/<norm(d)>/` (PEP 691 JSON form, the page `uv` resolves
+from) does, and a consumer that syncs in that gap fails "unsatisfiable".
+`_wait_simple_index` polls the simple page every 10 s until it lists the
+wheel's filename, for up to 10 min; on timeout it stops with a message naming
+the distribution, version and filename, records nothing, and the next
+`publish.py` run resumes at UPLOADED. It applies to both the TAGGED path and a
+re-run that finds the wheel already uploaded. The fetch is `Services.simple_index`
+(injectable).
+
 ## Build (B3) and verify (B4)
 
 Build: `git archive <commit> -- <inputs>` (sources, `packages/<d>/`,
@@ -125,11 +136,19 @@ the publishing machine; and a publish go-signal.
 ## katsoft-llm-kit
 
 Install and extras (the llm-kit plugin's venv requires
-`katsoft-llm-kit[<every extra below>]>=1.2,<2`; 1.2.0 added
+`katsoft-llm-kit[<every extra below>]>=1.3,<2`; 1.2.0 added
 `llm-kit account status --json`, the document the plugin's
-`custom_bootstrap.py` reads, so the plugin's floor is 1.2;
+`custom_bootstrap.py` reads, and 1.3.0 is the first release carrying what the
+plugin documents (Codex in package mode, the project model file and
+`models catalog`, protocol 2 of `completion complete`, local selection
+overrides and the neutral user paths), so the plugin's floor is 1.3;
 `tests/llm-kit/test_dist_metadata_parity.py` holds the requirement to the
-extras the distribution offers):
+extras the distribution offers). The released ledger holds 1.0.0 through
+1.2.1; the package's `pyproject.toml` declares version 1.3.0, which has no entry in
+`packages/released.json`, and
+`awesome-kit`, `llm-scripting-kit`, `content-pipeline-kit`, `job-kit` and the
+llm-kit plugin require `katsoft-llm-kit>=1.3,<2`, so `publish.py` releases the
+package before or with them:
 
 ```bash
 pip install katsoft-llm-kit
@@ -152,19 +171,19 @@ Package mode (`llm_kit._runtime.mode() == "package"`, set by the hook-written
 - Fleet availability is a separate question from package mode:
   `llm_kit._runtime.fleet()` is True when `bootstrap_lib` imports in the
   environment (cached per process), as in a plugin venv bootstrap links to the
-  marketplace's shared libraries. Features that need `bootstrap_lib` (the Codex
-  backend and adapter, claudx propagation, skill context, the code-review
-  lane) call `require_fleet`, which raises `UnsupportedInPackageMode` only when
+  marketplace's shared libraries. Features that need `bootstrap_lib` (claudx
+  propagation, skill context, the code-review lane) call `require_fleet`, which raises `UnsupportedInPackageMode` only when
   `fleet()` is False. Whether the linked `bootstrap_lib` is new enough stays
   with each feature's own probe, not with the gate.
-- Without the fleet, Codex reachability uses the PATH + `--version` check and
-  the model registry reads the shipped defaults, and
-  `MODEL_ENDPOINTS_REGISTRY` overrides the registry file (user ruling
-  2026-10-22); the single policy point is
-  `registry.models.package_mode_model_config`. With the fleet, Codex
-  reachability uses `bootstrap_lib.codex.detect_codex` and the model registry
-  reads the layered config (fleet, machine and project layers). The wheel's
-  off-fleet closure is unchanged: `tests/packaging` blocks `bootstrap_lib`.
+- Codex needs no fleet: reachability, the completion backend and the harness
+  adapter all use `llm_kit.adapters.codex_command`, with or without
+  `bootstrap_lib`. Without the fleet, the model registry reads the shipped
+  defaults and the registry file is `MODEL_ENDPOINTS_REGISTRY` when set, else
+  `$XDG_CONFIG_HOME/llm-kit/model-endpoints.yaml` (`~/.config/llm-kit/` when it is unset or not absolute; user ruling 2026-10-22); the single policy point is
+  `registry.models.package_mode_model_config`. With the fleet, the model
+  registry reads the layered config (fleet, machine and project layers). The
+  wheel's off-fleet closure is unchanged: `tests/packaging` blocks
+  `bootstrap_lib`.
 - Do not install the package into an environment that also holds the plugin's
   linked `llm_kit` (the bootstrap shared-lib `.pth`). `mode()` raises
   `RuntimeIdentityError` there and removes nothing; use separate

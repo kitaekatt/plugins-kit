@@ -1,10 +1,13 @@
 [project]
 name = "llm-scripting-kit"
-version = "0.68.2"
+version = "0.68.3"
 description = "LLM access, local model launch profiles, and completion backends for Claude Code plugins"
 requires-python = ">=3.12"
 
-dependencies = ["pyyaml", "psutil>=6.0", "katsoft-contracts>=1.0,<2"]
+# katsoft-llm-kit carries llm_kit.adapters.codex_command, the module the
+# bootstrap_lib.codex alias resolves to (first shipped in 1.3.0); this frozen
+# plugin reaches Codex command construction only through that alias.
+dependencies = ["pyyaml", "psutil>=6.0", "katsoft-contracts>=1.0,<2", "katsoft-llm-kit>=1.3,<2"]
 
 [project.scripts]
 llm-scripting-kit = "llm_scripting_kit.cli:main"

@@ -2,7 +2,8 @@
 
 ``consent show [--json]`` prints what :func:`llm_kit.registry.consent.load_consent`
 reports: ``usage``, ``spend``, ``source`` (``file``, ``absent`` or ``unreadable``),
-``path`` and ``note``. ``consent set [--usage on|off] [--spend on|off]`` is a
+``path`` (the file read), ``write_path`` (the file ``consent set`` writes: the
+``LLM_KIT_CONSENT_FILE`` override, else the neutral ``consent.json``) and ``note``. ``consent set [--usage on|off] [--spend on|off]`` is a
 partial update: a flag that is not given keeps its current value. With neither
 flag it changes nothing and exits 2.
 
@@ -41,6 +42,7 @@ def _cmd_show(as_json: bool) -> int:
             "spend": loaded.spend,
             "source": loaded.source,
             "path": str(loaded.path),
+            "write_path": str(consent_store.default_consent_path()),
             "note": loaded.note,
         })
         return EXIT_OK
@@ -48,6 +50,7 @@ def _cmd_show(as_json: bool) -> int:
     print(f"spend: {_flag(loaded.spend)}")
     print(f"source: {loaded.source}")
     print(f"path: {loaded.path}")
+    print(f"write_path: {consent_store.default_consent_path()}")
     print(f"note: {loaded.note}")
     return EXIT_OK
 

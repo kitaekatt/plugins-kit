@@ -77,6 +77,13 @@ from llm_kit.completion.types import (
     LLMResponse,
     valid_reported_cost,
 )
+from llm_kit.registry.effort import CLAUDE_EFFORT_ORDER, CLAUDE_HARNESS
+from llm_kit.registry.model_profiles import check_effort
+
+#: ``LLMResponse.estimated_cost_source`` labels. The label says which field of
+#: which transport the figure came from, and that it is an estimate.
+ESTIMATE_SOURCE_USAGE_COST = "openrouter.usage.cost"
+ESTIMATE_SOURCE_CLAUDE_CLI = "claude-cli.total_cost_usd"
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +107,22 @@ def _usage_field(usage: Any, key: str) -> Any:
         if isinstance(extra, dict):
             value = extra.get(key)
     return value
+
+
+def _untrusted_native_cost(
+    usage: Any, trusts: Callable[[], bool]
+) -> "tuple[Optional[float], Optional[str]]":
+    """A valid native ``usage.cost`` the endpoint is NOT trusted for, as an estimate.
+
+    The trusted case is :meth:`OpenRouterBackend._reported_cost`; this is its
+    complement, so a figure lands in exactly one of the two places and is never
+    both. ``trusts`` is asked only when a valid figure is present, so a call
+    without one reads no configuration.
+    """
+    amount = valid_reported_cost(_usage_field(usage, "cost"))
+    if amount is None or trusts():
+        return None, None
+    return amount, ESTIMATE_SOURCE_USAGE_COST
 
 
 @dataclass
@@ -453,6 +476,9 @@ class OpenRouterBackend:
             cache_hit_tokens = int(getattr(usage, "prompt_cache_hit_tokens", 0) or 0)
 
         reported_cost_usd, reported_cost_source = self._reported_cost(usage)
+        estimated_cost_usd, estimated_cost_source = _untrusted_native_cost(usage, self._trusts_native_cost)
+        served = getattr(response, "model", None)
+        reported_model = served if isinstance(served, str) and served else None
         dropped_params, forwarded_params = self.params_report(opts, plan)
         response = LLMResponse(
             text=text,
@@ -467,6 +493,9 @@ class OpenRouterBackend:
             from_cache=False,
             reported_cost_usd=reported_cost_usd,
             reported_cost_source=reported_cost_source,
+            reported_model=reported_model,
+            estimated_cost_usd=estimated_cost_usd,
+            estimated_cost_source=estimated_cost_source,
             dropped_params=dropped_params,
             forwarded_params=forwarded_params,
             # This adapter emits no execution control: it builds an HTTP request,
@@ -489,6 +518,22 @@ class OpenRouterBackend:
 # ---------------------------------------------------------------------------
 # Claude CLI backend
 # ---------------------------------------------------------------------------
+
+
+def _claude_reported_model(envelope: Dict[str, Any]) -> Optional[str]:
+    """The model the Claude CLI envelope reports serving the call, or None.
+
+    ``modelUsage`` maps every model id the run used to its usage. Exactly one
+    key is a statement of which model answered; several (the CLI also spends
+    tokens on helper models) leave the answer ambiguous, and an absent or
+    malformed map reports nothing -- none of which is guessed into a value.
+    """
+    usage = envelope.get("modelUsage")
+    if isinstance(usage, dict) and len(usage) == 1:
+        (served,) = usage
+        if isinstance(served, str) and served:
+            return served
+    return None
 
 
 def _resolve_claude_executable() -> str:
@@ -678,6 +723,17 @@ class ClaudeCliBackend:
             # appended to the system prompt sent through the system-prompt
             # flag. The answer is judged at the seam by finalize_contract.
             system = system + contract_plan.instruction
+        # The effort is held to the exact model's measured menu here, before argv
+        # or the runner -- the validator both Codex paths use. A model with no
+        # measured profile (a CLI alias such as ``opus``) keeps the harness-wide
+        # menu, which is what ``claude --effort`` lists.
+        check_effort(
+            opts.effort,
+            route=CLAUDE_HARNESS,
+            model=model or None,
+            fallback=CLAUDE_EFFORT_ORDER,
+            subject=self.name,
+        )
         timeout_s = (
             opts.timeout_s if opts.timeout_s is not None else self.default_timeout_s
         )
@@ -838,6 +894,7 @@ class ClaudeCliBackend:
 
         usage = data.get("usage") or {}
         wall_ms = int((time.monotonic() - start) * 1000)
+        estimate = valid_reported_cost(data.get("total_cost_usd"))
         text = data["result"]
         if contract_plan is not None and contract_plan.schema_json is not None:
             # With --json-schema the CLI puts the schema-shaped answer in the
@@ -860,6 +917,9 @@ class ClaudeCliBackend:
             wall_ms=wall_ms,
             attempts=attempts_made,
             from_cache=False,
+            reported_model=_claude_reported_model(data),
+            estimated_cost_usd=estimate,
+            estimated_cost_source=ESTIMATE_SOURCE_CLAUDE_CLI if estimate is not None else None,
             dropped_params=derive_dropped_params(self.capabilities, opts),
             forwarded_params=derive_forwarded_params(self.capabilities, opts),
             execution_controls_applied=self._applied_controls(opts),

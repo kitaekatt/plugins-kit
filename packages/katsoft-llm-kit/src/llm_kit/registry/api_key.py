@@ -3,33 +3,37 @@
 Precedence (highest to lowest), for the endpoint's ``key_env`` variable:
 
 1. the ``<key_env>`` environment variable
-2. ``<project_root>/.local-data/plugins-kit/llm-scripting-kit/.env``
-   (per-project override -- canonical)
-3. ``<project_root>/.local-data/llm-scripting-kit/.env`` (the superseded
+2. ``<project_root>/.llm-kit/.env`` (per-project override -- neutral)
+3. ``<project_root>/.local-data/plugins-kit/llm-scripting-kit/.env``
+   (per-project override -- the plugin-namespaced location, still read)
+4. ``<project_root>/.local-data/llm-scripting-kit/.env`` (the superseded
    project location, still read; see below)
-4. ``~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.env`` (user default)
-5. the endpoint's configured ``key_file`` (a path whose entire, stripped
+5. the user key file: ``$LLM_KIT_ENV_FILE`` when set (that file alone), else
+   ``$XDG_CONFIG_HOME/llm-kit/.env`` (fallback ``$HOME/.config/llm-kit/.env``),
+   else -- only when that neutral file does not exist --
+   ``~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.env`` (legacy,
+   read only)
+6. the endpoint's configured ``key_file`` (a path whose entire, stripped
    content is the key), if the endpoint's config declares one
 
-Layer 5 is the escape hatch for a credential that already exists as a
+Layer 6 is the escape hatch for a credential that already exists as a
 bare-value file -- e.g. one materialized by secrets-kit -- so it does not also
 need to be copied into a ``.env``. It sits at the bottom deliberately: every
 higher layer is something the user set explicitly (an env var, or a ``.env``
 they wrote), and those must keep winning so adding this layer cannot change
 what any already-working machine resolves. Because it is consulted last, it is
-looked up lazily -- only once layers 1-4 have all missed -- so a normal
+looked up lazily -- only once layers 1-5 have all missed -- so a normal
 resolution never pays the cost of loading the endpoint's config. See
 ``_read_key_file`` and ``_default_endpoint_key_file``.
 
-Layers 2 and 3 are the same layer in two places. Through 0.6.5 only layer 3
+Layers 3 and 4 are the same layer in two places. Through 0.6.5 only layer 4
 existed, which left the key path asymmetric with the user layer and with the
 project CONFIG layer (``.local-data/plugins-kit/llm-scripting-kit/config.yaml``,
 bootstrap's generic ``<marketplace>/<plugin>`` project namespace) -- so a key
-file placed at the config path, by analogy, was silently ignored. Layer 2 is
-now canonical and matches config; layer 3 keeps every already-placed file
-working. A key resolved from layer 3 sets ``KeyLookupResult.legacy_location``
-and prints a one-time notice to stderr, so the mismatch is visible instead of
-silent.
+file placed at the config path, by analogy, was silently ignored. Layer 3 keeps
+that namespaced path; layer 4 keeps every already-placed file working. A key
+resolved from layer 4 sets ``KeyLookupResult.legacy_location`` and prints a
+one-time notice to stderr, so the mismatch is visible instead of silent.
 
 The default endpoint (``openrouter``) uses ``OPENROUTER_API_KEY``; a named
 endpoint uses its own ``key_env``. Keys for multiple endpoints coexist as
@@ -53,6 +57,12 @@ from .constants import (
     project_env_file,
 )
 from .env_file import read_env_file
+from .user_paths import (
+    ENV_ENV_FILE,
+    neutral_project_env_file,
+    neutral_user_env_file,
+    override_path,
+)
 
 # Paths already reported by _warn_legacy_location, so a process that resolves
 # the key repeatedly emits the notice once rather than per call.
@@ -165,6 +175,25 @@ def _default_endpoint_key_file(project_root: Optional[Path]) -> Optional[str]:
     return key_file if isinstance(key_file, str) and key_file.strip() else None
 
 
+def user_key_file() -> Path:
+    """The user-layer key file a lookup reads.
+
+    ``$LLM_KIT_ENV_FILE`` when set (alone, even if it does not exist); else the
+    neutral ``.env`` when anything exists at that path; else the legacy
+    :data:`~llm_kit.registry.constants.USER_ENV_FILE` when it exists; else the
+    neutral path (absent). Touches nothing.
+    """
+    explicit = override_path(ENV_ENV_FILE)
+    if explicit is not None:
+        return explicit
+    neutral = neutral_user_env_file()
+    if os.path.lexists(neutral):
+        return neutral
+    if os.path.lexists(USER_ENV_FILE):
+        return USER_ENV_FILE
+    return neutral
+
+
 def _resolve_key(
     key_env: str,
     project_root: Optional[Path],
@@ -184,6 +213,11 @@ def _resolve_key(
         return KeyLookupResult(key=env_value, source="env", source_path=None)
 
     root = Path(project_root) if project_root is not None else Path.cwd()
+    neutral_project = neutral_project_env_file(root)
+    neutral_project_key = read_env_file(neutral_project).get(key_env)
+    if neutral_project_key:
+        return KeyLookupResult(key=neutral_project_key, source="project", source_path=neutral_project)
+
     project_file = project_env_file(root)
     project_key = read_env_file(project_file).get(key_env)
     if project_key:
@@ -200,10 +234,10 @@ def _resolve_key(
             legacy_location=True,
         )
 
-    user_values = read_env_file(USER_ENV_FILE)
-    user_key = user_values.get(key_env)
+    user_file = user_key_file()
+    user_key = read_env_file(user_file).get(key_env)
     if user_key:
-        return KeyLookupResult(key=user_key, source="user", source_path=USER_ENV_FILE)
+        return KeyLookupResult(key=user_key, source="user", source_path=user_file)
 
     if key_file_provider is not None:
         key_file = key_file_provider()

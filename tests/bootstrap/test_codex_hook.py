@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from bootstrap_lib import codex, codex_hook, engine
+from bootstrap_lib import codex_detection as codex, codex_hook, engine
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

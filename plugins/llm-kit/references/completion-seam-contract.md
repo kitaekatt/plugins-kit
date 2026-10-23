@@ -34,13 +34,22 @@ once and pinned by tests:
   `network=False`; the absence of a flag is not a deny, and no such control is
   advertised.
 - **A value menu is advertised only where the request-building code validates
-  it.** `CodexCliBackend` calls the shared argv builder directly and bypasses
-  `CodexAdapter`'s effort validation, so codex advertises no effort `values`.
+  it, and an effort menu is a property of the exact model.** A single validator,
+  `llm_kit.registry.model_profiles.check_effort`, holds an effort to the measured
+  menu of the exact model over its route (`gpt-6-luna` stops at `max`,
+  `gpt-6.1-sol` also takes `ultra`, no Codex or Claude CLI model takes `none`, one
+  OpenRouter model takes `none` and another does not). `CodexCliBackend`,
+  `CodexAdapter` and `ClaudeCliBackend` call it, so no backend path bypasses it; the
+  project model file shares the menu table (`exact_effort_menu`,
+  `library_effort_menu_with_source`) but does not call the validator. A model without a measured profile falls back to the
+  harness-wide menu, and the Codex record advertises no effort `values` because
+  the menu belongs to the model, not to the adapter: `llm-kit models catalog`
+  reports it per row.
 
 When an adapter changes what it emits, its record changes in the same commit.
 The capability facts live in adapter code and are hand-authored per adapter --
-codex's argv is built in `bootstrap_lib.codex`, a different plugin, so deriving
-the map mechanically would mean reaching across that boundary. The seam tests
+codex's argv is built in `llm_kit.adapters.codex_command`, a separate module that
+spells flags as literals, so deriving the map mechanically would mean parsing it. The seam tests
 are what keep the hand-authored record honest; a param applied but unadvertised
 is what they exist to catch. Never keep a second copy of these facts in YAML or
 a docs table: that copy is free to disagree with the adapter, which is the drift
@@ -367,6 +376,35 @@ drops what an ADAPTER does not read -- a fact about the adapter, reported
 truthfully -- whereas a key that is no `BackendOptions` field at all is a fact
 about the caller, which nothing advertises and no adapter could read, so there
 is no honest per-call report to make.
+
+**Protocol 2 selects from the project model file.** A request with `"protocol": 2` on
+`complete --request-file -` (JSON only; `request-schema --protocol 2` prints the shape)
+names a `selection` key or a catalogue row `model` of the project model file
+(`.llm-kit/models.yaml`, confined to `project_root`) instead of an endpoint and model.
+The row carries the endpoint, the exact wire model and the narrowed effort menu. Its
+keys are `project_root`, `file`, `selection` or `model` (exactly one), `prompt`,
+`system`, `mode`, `working_dir`, `expect_files`, `output_schema`, `effort` (absent
+means the selection's; `null` sends none), `max_tokens` and `timeout_s`; an unknown
+key is refused. `mode` is `completion` (default) or `workspace`; there is no image or
+build mode, and a caller that writes files names the files in `expect_files`. A
+`workspace` call needs a `working_dir` beneath the project root, which the library
+scans before and after the call; a call whose `expect_files` are not all regular files
+afterwards is reported failed, not completed. Only an adapter that lists `workspace` in
+`Capabilities.call_modes` serves it (Codex does; transports and the Claude CLI do not).
+
+The call refuses, before anything is spawned, in this order: the project file, the
+selection, the effort (held to the exact-model menu), the mode, the working directory,
+the output contract, the effort's wire delivery (what the endpoint can put on the wire),
+and consent (the
+entry's cost class must be allowed by the per-machine consent file). A refusal exits 4
+with `{"protocol": 2, "error": {"kind", "message"}}` on stderr; `kind` is one of
+`protocol`, `project-file`, `selection`, `effort`, `mode`, `path`, `contract`,
+`consent` and `configuration`. A call that ran exits 0 when completed, 1 when failed
+and 3 when it ended in a classified halt, with the result document on stdout: `status`,
+`mode`, the `selection`, a `resolved` block that separates `requested_model` from
+`reported_model` and sets `model_verified` only when the two agree, the `effort` block
+(`requested`, `sent`, `source`), `output`, `usage`, `cost` (class, authoritative USD and
+a separate estimate; null means unknown) and, for `workspace`, the `files` written.
 
 **A protocol error is not an endpoint error, and the exit codes say so.**
 `EXIT_PROTOCOL` (4) means the request could not be understood and no call was

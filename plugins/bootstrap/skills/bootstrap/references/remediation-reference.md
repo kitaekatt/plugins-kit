@@ -101,7 +101,7 @@ reaches the user.
 | `.agents/skills` already exists (any kind) | `os.lstat` | None -- quick-exit `ok`. Delete `.agents/skills` to make bootstrap rebuild it; bootstrap never repairs a dangling or misdirected link in place. The parent `.agents` is NOT the sentinel -- it is shared with Codex's own `.agents/plugins/` config and is adopted, not treated as an opt-out |
 | Project root is not the git repository root (v1 scope) | `git rev-parse --show-toplevel` compared to the project dir; no `.git` at all is a separate skip | None -- `ok` skip. Codex resolves a project root by walking up to a `.git` marker, so linking anywhere else would never be discovered |
 | `agent_skills_link` present but not a strict JSON boolean | `type(value) is bool` | None auto -- fix the manifest value (`null`/strings/numbers including `0`/`1` are invalid) |
-| Codex CLI unavailable | `bootstrap_lib.codex.detect_codex()` | None -- `ok` skip; nothing to link against |
+| Codex CLI unavailable | `bootstrap_lib.codex_detection.detect_codex()` | None -- `ok` skip; nothing to link against |
 | `.claude/skills` missing, not a directory, or empty | `os.path.isdir` + `os.scandir` | None -- `ok` skip; nothing to link |
 | `.agents/skills` (or a Git/P4-tracked ancestor) is tracked by version control | `git ls-files --literal-pathspecs` (Git); Perforce mapping check | Refuses to write an exclusion over a tracked path -- untrack the path first |
 | `.agents` exists but is not a directory | `os.lstat` on the child returns ENOTDIR | None auto -- `failed; cannot stat .agents/skills` carries the OS message; remove or rename the file at `.agents` |

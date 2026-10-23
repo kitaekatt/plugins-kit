@@ -16,7 +16,7 @@ import pytest
 
 from bootstrap.link_compat import CAN_SYMLINK, requires_symlinks
 from bootstrap_lib import agent_skills_check as asc
-from bootstrap_lib.codex import CodexDetection
+from bootstrap_lib.codex_detection import CodexDetection
 
 
 def _git(*args, cwd):

@@ -26,3 +26,18 @@ if _LIB not in sys.path:
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
+
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_user_state(monkeypatch):
+    """No test reads the developer's own neutral user files through an ambient variable.
+
+    The neutral directory follows ``XDG_CONFIG_HOME`` and three variables replace
+    a default file; a value left in the environment would silently steer every
+    test that does not set its own HOME. Tests that need one set it themselves.
+    """
+    for name in ("XDG_CONFIG_HOME", "LLM_KIT_CONSENT_FILE", "LLM_KIT_ENV_FILE", "MODEL_ENDPOINTS_REGISTRY"):
+        monkeypatch.delenv(name, raising=False)

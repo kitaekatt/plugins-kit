@@ -503,5 +503,5 @@ def test_manifests_gain_no_entry_for_interrupts():
         }
     ]
     assert manifest["shared_lib_imports"] == ["llm_scripting_kit", "bootstrap_lib"]
-    # Existing launcher call shapes need this floor; interrupts add none.
-    assert manifest["requires_bootstrap"] == "0.120.0"
+    # The katsoft-llm-kit package handling needs 0.160.0; interrupts add none.
+    assert manifest["requires_bootstrap"] == "0.160.0"

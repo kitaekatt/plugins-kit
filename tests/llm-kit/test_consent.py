@@ -71,7 +71,7 @@ def test_absent_free_only_with_note(tmp_path):
 
 def test_default_path_absent_uses_fake_home(fake_home):
     result = load_consent()
-    expected = fake_home / ".claude/plugins/data/plugins-kit/llm-kit/consent.json"
+    expected = fake_home / ".config/llm-kit/consent.json"
     assert default_consent_path() == expected
     _assert_free_only(result, expected, "absent")
 
@@ -152,8 +152,8 @@ def test_path_resolved_per_call(tmp_path, monkeypatch):
     first = default_consent_path()
     _set_home(monkeypatch, home_b)
     second = default_consent_path()
-    assert first == home_a / ".claude/plugins/data/plugins-kit/llm-kit/consent.json"
-    assert second == home_b / ".claude/plugins/data/plugins-kit/llm-kit/consent.json"
+    assert first == home_a / ".config/llm-kit/consent.json"
+    assert second == home_b / ".config/llm-kit/consent.json"
     # The default path is also honoured by load and save, not only by the accessor.
     saved = save_consent(usage=True, spend=False)
     assert saved == second

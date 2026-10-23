@@ -262,8 +262,9 @@ Routing is per pipeline when you pass the declaration: `route(models=[...])`, `r
 ### The model-endpoint backend
 
 `CONTENT_PIPELINE_LLM_MODELS=<entry id>` naming a transport entry of the
-registry at `~/.claude/config/model-endpoints.yaml` (or whichever file
-`MODEL_ENDPOINTS_REGISTRY` names) talks to that OpenAI-compatible endpoint --
+registry at `$XDG_CONFIG_HOME/llm-kit/model-endpoints.yaml` (`~/.config/llm-kit/` when the
+variable is unset; the legacy `~/.claude/config/model-endpoints.yaml` is read only when that
+file is absent, and `MODEL_ENDPOINTS_REGISTRY` names a different file) talks to that OpenAI-compatible endpoint --
 typically a locally hosted keyless server, though keyed entries are supported
 too. A `ModelEndpointBackend()` constructed with no `endpoint` uses the
 registry's own `default`.

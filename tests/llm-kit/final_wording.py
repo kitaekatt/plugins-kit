@@ -107,6 +107,31 @@ def claude_contract_deep(value):
 
 RENAMES: tuple[Rename, ...] = (
     Rename(
+        "shipped sol entry names the current Codex catalogue id",
+        _LSK + "models.py", "gpt-5.6-sol",
+        _KIT + "registry/models.py", "gpt-6.1-sol",
+    ),
+    Rename(
+        "shipped luna entry names the current Codex catalogue id",
+        _LSK + "models.py", "gpt-5.6-luna",
+        _KIT + "registry/models.py", "gpt-6-luna",
+    ),
+    Rename(
+        "codex effort note states the exact-model validation",
+        _LSK + "completion/adapter_capabilities.py",
+        "any truthy string is emitted. The [low, medium, high, xhigh, max] "
+        "menu is validated on CodexAdapter, which this backend BYPASSES by "
+        "calling the shared argv builder directly, so no menu is advertised",
+        _KIT + "adapters/capabilities.py",
+        "validated before dispatch against the exact model's measured menu "
+        "(llm_kit.registry.model_profiles; gpt-6-luna stops at max, "
+        "gpt-6.1-sol also takes ultra, no Codex model takes none); a model "
+        "without a measured profile is held to the harness-wide "
+        "[low, medium, high, xhigh, max] menu. Omit it to send nothing. "
+        "No menu is advertised here because the menu is a property of the "
+        "model: the model catalogue reports it",
+    ),
+    Rename(
         "make_openai_client names the llm-kit CLI environment",
         _LSK + "client.py", "Use the bootstrap-provisioned llm-scripting-kit CLI environment",
         _KIT + "adapters/client.py", "Use the bootstrap-provisioned llm-kit CLI environment",
@@ -354,3 +379,32 @@ def floors_in_text_to_final(text: str) -> str:
     for _name, legacy, final in FLOORS:
         text = text.replace(f">= {legacy}", f">= {final}").replace(f" {legacy} or newer", f" {final} or newer")
     return text
+
+
+#: The shipped ``openrouter`` endpoint declares ``effort_style: top-level`` in llm-kit so the
+#: exact-model efforts it validates are actually put on the wire; the frozen legacy baseline
+#: declares none, so a legacy direct call dropped every effort. The difference shows up as a
+#: config key (``DEFAULT_MODEL_CONFIG``, layered configs) and as a resolved delivery
+#: (``effort_style`` / ``effort_style_source``).
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+
+def openrouter_style_to_legacy(value):
+    """``value`` (a dict) with the shipped openrouter endpoint's declared effort style removed.
+
+    Recognised by the shipped endpoint's base URL and key variable together with
+    ``effort_style == "top-level"``, and idempotent, so a harness may pass both sides
+    through it. A resolved endpoint (it carries ``effort_style_source``) is rewritten to
+    the legacy "no style" delivery; a config endpoint loses the key.
+    """
+    if (
+        isinstance(value, dict)
+        and value.get("base_url") == OPENROUTER_BASE_URL
+        and value.get("key_env") == "OPENROUTER_API_KEY"
+        and value.get("effort_style") == "top-level"
+        and value.get("effort_style_source", "endpoint") == "endpoint"
+    ):
+        if "effort_style_source" in value:
+            return {**value, "effort_style": None, "effort_style_source": "none"}
+        return {k: v for k, v in value.items() if k != "effort_style"}
+    return value

@@ -18,14 +18,33 @@ Two consequences worth stating, because both were mis-designed once:
   ``-c`` pair when ``network=False``; nothing is emitted, so no control is
   advertised for that case.
 - A value menu is advertised only where the code that builds the request
-  validates it. ``CodexCliBackend`` calls the shared argv builder directly and
-  bypasses ``CodexAdapter``'s effort validation, so codex advertises no effort
-  ``values``.
+  validates it. ``CodexAdapter`` and ``CodexCliBackend`` both validate effort
+  against the exact model's measured menu
+  (``llm_kit.registry.model_profiles.check_effort``), but a model without a
+  measured profile falls back to the harness-wide menu, so no per-adapter effort
+  ``values`` list is advertised: the menu is a property of the model, and the
+  model catalogue (``llm-kit models catalog``) reports it.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Optional, Tuple
+
+# -- call modes ------------------------------------------------------------
+
+MODE_COMPLETION = "completion"
+"""One prompt in, one answer out: no working directory, no files written."""
+
+MODE_WORKSPACE = "workspace"
+"""The agent runs inside a caller-named working directory and may write files there.
+
+There is no image or build mode: a workspace call can create files, and what
+they are is the caller's to check.
+"""
+
+#: Every mode a caller may name. ``Capabilities.call_modes`` lists the subset an
+#: adapter honors; :func:`require_call_mode` refuses the rest before any spawn.
+CALL_MODES = (MODE_COMPLETION, MODE_WORKSPACE)
 
 # -- param handling --------------------------------------------------------
 
@@ -399,6 +418,11 @@ class Capabilities:
     ``skill_context`` is the :class:`SkillContextCapability` of an adapter that
     delivers skill context, serialized only when set; a record without it
     refuses skill context before dispatch.
+
+    ``call_modes`` lists the call modes the adapter honors (:data:`CALL_MODES`).
+    Every adapter honors ``completion``; only an adapter that runs an agent
+    inside a caller-named directory lists ``workspace``. A mode outside the
+    list is refused by :func:`require_call_mode` before anything is spawned.
     """
 
     adapter: str
@@ -415,6 +439,7 @@ class Capabilities:
     conditional_params: Mapping[str, ParamCapability] = field(default_factory=dict)
     endpoint: Optional[str] = None
     skill_context: Optional[SkillContextCapability] = None
+    call_modes: Tuple[str, ...] = (MODE_COMPLETION,)
 
     def honors(self, param: str) -> bool:
         """True when this adapter reads ``param`` at all."""
@@ -445,6 +470,7 @@ class Capabilities:
             "guarantees": list(self.guarantees),
             "structured_output": self.structured_output.to_json(),
             "system_prompt": self.system_prompt.to_json(),
+            "call_modes": list(self.call_modes),
         }
         if self.conditional_params:
             result["conditional_params"] = {
@@ -457,7 +483,36 @@ class Capabilities:
         return result
 
 
+class CallModeError(ValueError):
+    """A call mode was unknown, or the adapter does not honor it. Nothing was dispatched."""
+
+
+def require_call_mode(capabilities: Capabilities, mode: Any) -> str:
+    """Return ``mode`` when ``capabilities`` honors it, else raise :class:`CallModeError`.
+
+    Refuses, before any spawn: a value that is not one of :data:`CALL_MODES`
+    (``image`` and ``build`` are not modes), and a known mode the adapter does
+    not list (``workspace`` on a transport or on the Claude CLI).
+    """
+    if not isinstance(mode, str) or mode not in CALL_MODES:
+        raise CallModeError(
+            f"unknown call mode {mode!r}; the modes are {', '.join(CALL_MODES)} "
+            "(there is no image or build mode); nothing was dispatched"
+        )
+    if mode not in capabilities.call_modes:
+        raise CallModeError(
+            f"{capabilities.adapter} does not support the {mode} mode "
+            f"(it supports: {', '.join(capabilities.call_modes)}); nothing was dispatched"
+        )
+    return mode
+
+
 __all__ = [
+    "CALL_MODES",
+    "CallModeError",
+    "MODE_COMPLETION",
+    "MODE_WORKSPACE",
+    "require_call_mode",
     "Capabilities",
     "ParamCapability",
     "ExecutionControl",

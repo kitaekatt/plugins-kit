@@ -54,7 +54,8 @@ class _NoNetwork:
         def boom(*args, **kwargs):
             raise AssertionError(f"network-facing service called: {args}")
         return _packages.Services(pypi_json=boom, download=boom, gh=boom,
-                                  build=boom, smoke=boom, sleep=boom, now=lambda: 0.0)
+                                  build=boom, smoke=boom, sleep=boom, now=lambda: 0.0,
+                                  simple_index=boom)
 
 
 def _wire(monkeypatch, root: Path, world) -> None:

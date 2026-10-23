@@ -1,0 +1,22 @@
+{
+  "argv": [
+    "models",
+    "project",
+    "write",
+    "--project-root",
+    "<T>/proj",
+    "--input",
+    "-"
+  ],
+  "exit": 2,
+  "stderr": {
+    "json": {
+      "error": {
+        "code": "invalid",
+        "kind": "project-models",
+        "message": "selections['first'].effort: 'none' is not accepted for 'b' (accepted: ['low', 'high'])"
+      }
+    }
+  },
+  "stdout": ""
+}

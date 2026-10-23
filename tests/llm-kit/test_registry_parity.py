@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from final_wording import to_final
+from final_wording import openrouter_style_to_legacy, to_final
 
 _REPO = Path(__file__).resolve().parents[2]
 _LEGACY_LIB = _REPO / "plugins" / "llm-scripting-kit" / "lib"
@@ -77,6 +77,7 @@ def norm(value):
             **{f.name: norm(getattr(value, f.name)) for f in dataclasses.fields(value)},
         }
     if isinstance(value, dict):
+        value = openrouter_style_to_legacy(value)  # declared difference (final_wording)
         out = {"__dict__": [(norm(k), norm(v)) for k, v in value.items()]}
         if type(value) is not dict:
             out["__type__"] = type(value).__name__
@@ -88,6 +89,8 @@ def norm(value):
         return (type(value).__name__, sorted(norm(v) for v in value))
     if isinstance(value, Path):
         return ("Path", str(value))
+    if isinstance(value, str):
+        return to_final(value)  # named deliberate wording differences (final_wording.RENAMES)
     return value
 
 
@@ -643,9 +646,13 @@ def test_load_endpoint_registry_parity(L, F, home, tmp_path):
 
 
 def test_registry_path_resolution_parity(L, F, home, tmp_path, monkeypatch):
-    assert norm(F.model_endpoints.default_registry_path()) == norm(L.model_endpoints.default_registry_path())
+    # Declared difference: with no file anywhere llm-kit's convention is the NEUTRAL path
+    # (``$XDG_CONFIG_HOME/llm-kit``, fallback ``~/.config/llm-kit``); the frozen legacy one
+    # is ``~/.claude/config``. The legacy file stays readable (the legacy loads below pass).
+    assert L.model_endpoints.default_registry_path() == home / ".claude" / "config" / "model-endpoints.yaml"
+    assert F.model_endpoints.default_registry_path() == home / ".config" / "llm-kit" / "model-endpoints.yaml"
     assert F.model_endpoints.REGISTRY_ENV == L.model_endpoints.REGISTRY_ENV == "MODEL_ENDPOINTS_REGISTRY"
-    assert F.model_endpoints.default_registry_path() == home / ".claude" / "config" / "model-endpoints.yaml"
+    assert F.model_endpoints.legacy_registry_path() == home / ".claude" / "config" / "model-endpoints.yaml"
     # convention path, file absent: an empty registry
     left = outcome(L.model_endpoints.load_endpoint_registry, {})
     right = outcome(F.model_endpoints.load_endpoint_registry, {})

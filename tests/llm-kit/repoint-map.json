@@ -345,6 +345,12 @@
       "old": "lib=str(PLUGIN_ROOT / \"lib\")",
       "new": "lib=str(PLUGIN_ROOT / \"..\" / \"..\" / \"packages\" / \"katsoft-llm-kit\" / \"src\")",
       "reason": "The final library is the katsoft-llm-kit package source, not a lib/ directory of the llm-kit plugin."
+    },
+    {
+      "file": "tests/llm-scripting-kit/test_completion_capabilities.py",
+      "old": "@pytest.mark.parametrize(\"dropped\", sorted(OPENROUTER_CAPABILITIES.dropped_params))\ndef test_openrouter_dropped_params_change_nothing(dropped):",
+      "new": "@pytest.mark.parametrize(\n    \"dropped\",\n    [\n        pytest.param(name, marks=pytest.mark.skip(reason=\"llm-kit's shipped openrouter endpoint declares effort_style top-level, so an effort is placed in the request body and no longer a dropped no-op; see tests/llm-kit/test_invoke_protocol.py::test_deepseek_effort_reaches_the_wire.\"))\n        if name == \"effort\" else name\n        for name in sorted(OPENROUTER_CAPABILITIES.dropped_params)\n    ],\n)\ndef test_openrouter_dropped_params_change_nothing(dropped):",
+      "reason": "The effort parameter keeps its node id and is skipped, as a declared difference: llm-kit's shipped openrouter endpoint declares effort_style top-level, so an effort is delivered rather than dropped."
     }
   ],
   "packages": {

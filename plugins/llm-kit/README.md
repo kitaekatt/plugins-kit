@@ -69,9 +69,12 @@ otherwise `claude auth status` must report `authMethod` `claude.ai` and `apiProv
 provider `openai`, ChatGPT auth and no stored API key. A probe that cannot run, times out or
 returns an unrecognized report is unknown, which counts as `spend`.
 
-Consent is one file per machine, `~/.claude/plugins/data/plugins-kit/llm-kit/consent.json`.
-`free` is always allowed; `usage` and `spend` are off until the user turns them on. An absent
-or malformed file means free-only.
+Consent is one file per machine, `$XDG_CONFIG_HOME/llm-kit/consent.json` (`$HOME/.config/llm-kit/consent.json`
+when `XDG_CONFIG_HOME` is unset or not absolute). `LLM_KIT_CONSENT_FILE` names a different file and replaces the
+location, for reads and writes. When the neutral file does not exist, the file an earlier release kept at
+`~/.claude/plugins/data/plugins-kit/llm-kit/consent.json` is read; a write always targets the neutral file (or the
+override) and carries the legacy values across, after which the neutral file wins. `free` is always allowed;
+`usage` and `spend` are off until the user turns them on. An absent or malformed file means free-only.
 
 ```
 llm-kit consent show [--json]                       # usage, spend, source, path, note
@@ -95,6 +98,24 @@ whose class is not allowed gets the disposition `switched-off`: it is shown (a `
 line in `render()`, a `switched_off` key in `to_json()`, and in the `NoUsableRoutingTarget`
 floor), never hidden and never dispatched to or probed. `llm-kit models describe <ids> --allow
 free,usage` applies the same filter from the command line.
+
+## Project model file
+
+A project that picks models for several call sites keeps one tracked file, `.llm-kit/models.yaml`:
+an ordered catalogue of rows (id, label, endpoint, exact model, optional narrowed effort menu) and named
+selections of `{model, effort}`. A personal, untracked layer `.llm-kit/models.local.yaml` overrides
+selections per key.
+
+```
+llm-kit models project show|validate|write|clear     # read, check, store (atomic, canonical) or clear an override
+llm-kit models catalog [--probe-auth]                # the ordered catalogue as JSON: menus, modes, cost
+llm-kit completion complete --request-file -         # {"protocol": 2, "selection": "<key>", "prompt": "..."}
+```
+
+Each effort menu is the measured menu of the exact model (`gpt-6-luna` stops at `max`, `gpt-6.1-sol` also
+takes `ultra`). A protocol 2 call refuses before spawning anything (exit 4, `error.kind` on stderr) when the
+project file, selection, effort, mode, path, contract or consent is wrong. Codex runs in package mode with no
+`bootstrap_lib`. Details: `references/llm-access.md` and `references/completion-seam-contract.md`.
 
 ## Local model servers and the front door
 
@@ -152,6 +173,9 @@ package, CLI and plugin-root references, and the interpreter rule.
 - The base library path is standard-library only. Extras: `config` (pyyaml),
   `sdk` (openai), `local` (psutil), `frontdoor` (fastapi, uvicorn, httpx),
   `jobs` and `pipeline` (pyyaml).
-- Credentials, configuration and routing use the legacy names, precedence and
-  locations (for example the user-scoped `.env` under
-  `plugins-kit/llm-scripting-kit/.env`). llm-kit seeds no configuration of its own.
+- The user-scoped files live under `$XDG_CONFIG_HOME/llm-kit/` (`$HOME/.config/llm-kit/` as the fallback):
+  `consent.json`, `model-endpoints.yaml` and the key file `.env`, with the overrides `LLM_KIT_CONSENT_FILE`,
+  `MODEL_ENDPOINTS_REGISTRY` and `LLM_KIT_ENV_FILE`. The files an earlier release kept under `~/.claude` are read
+  when the neutral file is absent and are never written. The layered `config.yaml` files and the usage-verdict
+  cache keep their historical locations (`CLAUDE.md`, "Persisted state keeps its historical names").
+  llm-kit seeds no configuration of its own.

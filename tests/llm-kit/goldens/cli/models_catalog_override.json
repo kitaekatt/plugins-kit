@@ -1,0 +1,312 @@
+{
+  "argv": [
+    "models",
+    "catalog",
+    "--project-root",
+    "<T>/proj"
+  ],
+  "exit": 0,
+  "stderr": "",
+  "stdout": {
+    "json": {
+      "consent": {
+        "source": "absent",
+        "spend": false,
+        "usage": false
+      },
+      "local": {
+        "path": ".llm-kit/models.local.yaml",
+        "present": true,
+        "sha256": "a02020ab922a67aa31e2f722ff75b2f6ad88b4c54da8cf6d2f2bda8bb9713bab"
+      },
+      "models": [
+        {
+          "adapter": "codex-cli",
+          "cost": {
+            "allowed": null,
+            "class": null,
+            "reason": "codex cost class depends on its authentication, which was not probed"
+          },
+          "effort_delivery": {
+            "deliverable": true,
+            "style": null
+          },
+          "effort_source": "library-model",
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "endpoint": "luna",
+          "id": "luna",
+          "kind": "harness",
+          "label": "Luna",
+          "model": "gpt-6-luna",
+          "modes": [
+            "completion",
+            "workspace"
+          ]
+        },
+        {
+          "adapter": "claude-cli",
+          "cost": {
+            "allowed": null,
+            "class": null,
+            "reason": "claude cost class depends on its authentication, which was not probed"
+          },
+          "effort_delivery": {
+            "deliverable": true,
+            "style": null
+          },
+          "effort_source": "library-model+project-subset",
+          "efforts": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "endpoint": "sonnet",
+          "id": "sonnet",
+          "kind": "harness",
+          "label": "Sonnet",
+          "model": "claude-sonnet-5-5",
+          "modes": [
+            "completion"
+          ]
+        },
+        {
+          "adapter": "openrouter",
+          "cost": {
+            "allowed": false,
+            "class": "spend",
+            "reason": "billing not declared unmetered"
+          },
+          "effort_delivery": {
+            "deliverable": true,
+            "style": "top-level"
+          },
+          "effort_source": "library-model+project-subset",
+          "efforts": [
+            "none",
+            "low",
+            "high"
+          ],
+          "endpoint": "or-deepseek",
+          "id": "deepseek-flash",
+          "kind": "transport",
+          "label": "DeepSeek Flash",
+          "model": "deepseek/deepseek-v4.1-flash",
+          "modes": [
+            "completion"
+          ],
+          "request_defaults": {
+            "extras": {
+              "provider": {
+                "sort": "latency"
+              }
+            }
+          }
+        },
+        {
+          "adapter": "codex-cli",
+          "cost": {
+            "allowed": null,
+            "class": null,
+            "reason": "codex cost class depends on its authentication, which was not probed"
+          },
+          "effort_delivery": {
+            "deliverable": true,
+            "style": null
+          },
+          "effort_source": "library-model",
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra"
+          ],
+          "endpoint": "sol",
+          "id": "sol",
+          "kind": "harness",
+          "label": "Sol",
+          "model": "gpt-6.1-sol",
+          "modes": [
+            "completion",
+            "workspace"
+          ]
+        },
+        {
+          "adapter": "claude-cli",
+          "cost": {
+            "allowed": null,
+            "class": null,
+            "reason": "claude cost class depends on its authentication, which was not probed"
+          },
+          "effort_delivery": {
+            "deliverable": true,
+            "style": null
+          },
+          "effort_source": "library-model",
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "endpoint": "opus",
+          "id": "opus",
+          "kind": "harness",
+          "label": "Opus",
+          "model": "claude-opus-5-5",
+          "modes": [
+            "completion"
+          ]
+        },
+        {
+          "adapter": "codex-cli",
+          "cost": {
+            "allowed": null,
+            "class": null,
+            "reason": "codex cost class depends on its authentication, which was not probed"
+          },
+          "effort_delivery": {
+            "deliverable": true,
+            "style": null
+          },
+          "effort_source": "library-model+project-subset",
+          "efforts": [
+            "medium",
+            "high",
+            "ultra"
+          ],
+          "endpoint": "astra",
+          "id": "astra",
+          "kind": "harness",
+          "label": "Astra",
+          "model": "gpt-6-astra",
+          "modes": [
+            "completion",
+            "workspace"
+          ]
+        },
+        {
+          "adapter": "claude-cli",
+          "cost": {
+            "allowed": null,
+            "class": null,
+            "reason": "claude cost class depends on its authentication, which was not probed"
+          },
+          "effort_delivery": {
+            "deliverable": true,
+            "style": null
+          },
+          "effort_source": "library-model",
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "endpoint": "fable",
+          "id": "fable",
+          "kind": "harness",
+          "label": "Fable",
+          "model": "claude-fable-5-1",
+          "modes": [
+            "completion"
+          ]
+        },
+        {
+          "adapter": "codex-cli",
+          "cost": {
+            "allowed": null,
+            "class": null,
+            "reason": "codex cost class depends on its authentication, which was not probed"
+          },
+          "effort_delivery": {
+            "deliverable": true,
+            "style": null
+          },
+          "effort_source": "library-model",
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra"
+          ],
+          "endpoint": "sol",
+          "id": "gpt-6-sol",
+          "kind": "harness",
+          "label": "gpt-6-sol",
+          "model": "gpt-6-sol",
+          "modes": [
+            "completion",
+            "workspace"
+          ]
+        }
+      ],
+      "notes": [
+        "consent: no consent file (<T>/home/.config/llm-kit/consent.json); only free models are allowed; run `llm-kit consent set --usage on` to allow usage-billed models"
+      ],
+      "path": ".llm-kit/models.yaml",
+      "resolved_selections": {
+        "art": {
+          "default": {
+            "effort": "none",
+            "model": "deepseek-flash"
+          },
+          "effective": {
+            "effort": "none",
+            "model": "deepseek-flash"
+          },
+          "source": "default"
+        },
+        "build": {
+          "default": {
+            "effort": null,
+            "model": "sol"
+          },
+          "effective": {
+            "effort": null,
+            "model": "sol"
+          },
+          "source": "default"
+        },
+        "draft.generate.primary": {
+          "default": {
+            "effort": "high",
+            "model": "luna"
+          },
+          "effective": {
+            "effort": "low",
+            "model": "luna"
+          },
+          "source": "override"
+        }
+      },
+      "schema": "llm-kit.model-catalog/v1",
+      "selections": {
+        "art": {
+          "effort": "none",
+          "model": "deepseek-flash"
+        },
+        "build": {
+          "effort": null,
+          "model": "sol"
+        },
+        "draft.generate.primary": {
+          "effort": "high",
+          "model": "luna"
+        }
+      },
+      "sha256": "db1d400a0a7d890e2df2ff79e0e9406f0106c6b16f51df2244dd855f17ca454d"
+    }
+  }
+}

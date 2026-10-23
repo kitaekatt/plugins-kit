@@ -18,10 +18,10 @@ import time
 from typing import Any, Sequence
 
 # Re-exec under awesome-kit's bootstrap-provisioned venv before importing
-# bootstrap_lib: a bare `python` / `uv run python` invocation builds a
-# different environment that has no such `.pth`. No-op when already there.
-# The guard is the vendored, stdlib-only bootstrap_guard next to this script.
-# See plugins/CLAUDE.md.
+# llm_kit: a bare `python` / `uv run python` invocation builds a different
+# environment that has no katsoft-llm-kit. No-op when already there. The guard
+# is the vendored, stdlib-only bootstrap_guard next to this script. See
+# plugins/CLAUDE.md.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from bootstrap_guard import (  # noqa: E402
     EXIT_BOOTSTRAP_MISSING,
@@ -31,18 +31,19 @@ from bootstrap_guard import (  # noqa: E402
 
 reexec_under_plugin_venv("awesome-kit")
 
-# Launching Codex is dispatch.py's entire job, so bootstrap_lib.codex -- "the
-# ONE sanctioned codex exec invocation" -- is a REQUIRED dependency, not an
-# optional DEGRADE: there is no fallback command to hand-roll if it is
-# unavailable (the hand-rolled fallback is exactly the bug this closes). The
-# module is a shared_lib_import already declared in this plugin's
-# bootstrap.json, so an ImportError here means bootstrap has not provisioned
-# this venv at all. "Absent" and "too old" are diagnosed separately: the
-# newest symbol this script calls -- build_codex_exec_argv -- first shipped
-# in bootstrap 0.79.0, alongside the module itself, so any bootstrap_lib
-# lacking it is that old or older.
+# Launching Codex is dispatch.py's entire job, so llm_kit.adapters.codex_command
+# -- "the ONE sanctioned codex exec invocation" -- is a REQUIRED dependency, not
+# an optional DEGRADE: there is no fallback command to hand-roll if it is
+# unavailable (the hand-rolled fallback is exactly the bug this closes). It is
+# part of the katsoft-llm-kit package in awesome-kit's own venv (pyproject.toml
+# pins `katsoft-llm-kit>=1.3,<2`), imported directly with no bootstrap_lib in
+# between. "Absent" and "too old" are diagnosed separately: the module first
+# shipped in katsoft-llm-kit 1.3.0, so an llm_kit that imports without it is
+# a 1.2 or older install, and running anything else would be a stale builder.
+LLM_KIT_REQUIREMENT = "katsoft-llm-kit>=1.3,<2"
+CODEX_COMMAND_MODULE = "llm_kit.adapters.codex_command"
 try:
-    import bootstrap_lib.codex as codex_lib  # noqa: E402
+    import llm_kit.adapters.codex_command as codex_lib  # noqa: E402
 except ImportError as exc:
     # Print the real exception before the canonical message: an ImportError
     # here is usually an unprovisioned venv, but it can also be a symptom of
@@ -52,20 +53,20 @@ except ImportError as exc:
         f"[awesome-kit] underlying error: {type(exc).__name__}: {exc}",
         file=sys.stderr,
     )
+    if getattr(exc, "name", None) == CODEX_COMMAND_MODULE:
+        print(
+            "[awesome-kit] the katsoft-llm-kit installed in this venv predates "
+            f"{CODEX_COMMAND_MODULE} (first shipped in katsoft-llm-kit 1.3.0), "
+            f"so codex dispatch cannot build its argv. Upgrade it to "
+            f"'{LLM_KIT_REQUIREMENT}': update awesome-kit, run `bootstrap run`, "
+            "and start a new session.",
+            file=sys.stderr,
+        )
+        sys.exit(EXIT_BOOTSTRAP_MISSING)
     require_bootstrap(
-        "awesome-kit", feature="codex dispatch", missing="bootstrap_lib", force=True
+        "awesome-kit", feature="codex dispatch", missing="llm_kit", force=True
     )
     raise  # pragma: no cover - require_bootstrap always exits the process
-
-if not callable(getattr(codex_lib, "build_codex_exec_argv", None)):
-    print(
-        "[awesome-kit] the plugins-kit:bootstrap plugin installed here predates "
-        "bootstrap_lib.codex.build_codex_exec_argv (first shipped in bootstrap "
-        "0.79.0), so codex dispatch cannot build its argv. Update with "
-        "`claude plugin update bootstrap`.",
-        file=sys.stderr,
-    )
-    sys.exit(EXIT_BOOTSTRAP_MISSING)
 
 
 # `--model` is a model-declaration id (orchestrate's routing rows name ids,

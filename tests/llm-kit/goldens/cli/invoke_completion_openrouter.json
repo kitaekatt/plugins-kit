@@ -1,0 +1,59 @@
+{
+  "exit": 0,
+  "request": {
+    "project_root": "<T>/proj",
+    "prompt": "do it",
+    "protocol": 2,
+    "selection": "art"
+  },
+  "stderr": "",
+  "stdout": {
+    "json": {
+      "cost": {
+        "class": "spend",
+        "estimated_source": "openrouter.usage.cost",
+        "estimated_usd": 0.0007,
+        "source": null,
+        "usd": null
+      },
+      "mode": "completion",
+      "output": {
+        "structured": null,
+        "text": "answer"
+      },
+      "params": {
+        "dropped": [
+          "log_prefix"
+        ],
+        "forwarded": [
+          "extras.provider"
+        ]
+      },
+      "protocol": 2,
+      "resolved": {
+        "adapter": "openrouter",
+        "effort": {
+          "requested": "max",
+          "sent": "max",
+          "source": "selection"
+        },
+        "endpoint": "openrouter",
+        "model_verified": true,
+        "reported_model": "deepseek/deepseek-v4.1-flash",
+        "requested_model": "deepseek/deepseek-v4.1-flash"
+      },
+      "selection": {
+        "id": "art",
+        "model": "deepseek"
+      },
+      "status": "completed",
+      "usage": {
+        "cache_hit_tokens": 4,
+        "input_tokens": 11,
+        "output_tokens": 7,
+        "total_tokens": 0,
+        "wall_ms": "<ms>"
+      }
+    }
+  }
+}

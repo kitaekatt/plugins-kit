@@ -1,0 +1,65 @@
+{
+  "exit": 1,
+  "request": {
+    "expect_files": [
+      "poster.png"
+    ],
+    "mode": "workspace",
+    "model": "luna",
+    "project_root": "<T>/proj",
+    "prompt": "do it",
+    "protocol": 2,
+    "working_dir": "work"
+  },
+  "stderr": "",
+  "stdout": {
+    "json": {
+      "cost": {
+        "class": "usage",
+        "estimated_source": null,
+        "estimated_usd": null,
+        "source": null,
+        "usd": null
+      },
+      "error": {
+        "code": "expected-files-missing",
+        "message": "expected file(s) are not regular files in working_dir: poster.png"
+      },
+      "files": [],
+      "mode": "workspace",
+      "output": {
+        "structured": null,
+        "text": "answer"
+      },
+      "params": {
+        "dropped": [],
+        "forwarded": []
+      },
+      "protocol": 2,
+      "resolved": {
+        "adapter": "codex-cli",
+        "effort": {
+          "requested": null,
+          "sent": null,
+          "source": "none"
+        },
+        "endpoint": "luna",
+        "model_verified": false,
+        "reported_model": null,
+        "requested_model": "gpt-6-luna"
+      },
+      "selection": {
+        "id": null,
+        "model": "luna"
+      },
+      "status": "failed",
+      "usage": {
+        "cache_hit_tokens": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 1234,
+        "wall_ms": "<ms>"
+      }
+    }
+  }
+}

@@ -146,6 +146,8 @@ def _text(value: str) -> str:
 # side has no such argument), so the differential ignores them only while default;
 # a non-default value still reaches the comparison. ``test_allow_filter.py`` pins the
 # allow=None output byte for byte against literals captured before the filter existed.
+# Capabilities.call_modes; LLMResponse.reported_model and its estimated_cost_* pair.
+_FINAL_ONLY_FIELD_NAMES = frozenset({"call_modes", "reported_model", "estimated_cost_usd", "estimated_cost_source"})
 _FINAL_ONLY_DEFAULT_FIELDS = {("Disposition", "cost_class"): None, ("Ranking", "switched_off"): ()}
 
 
@@ -163,6 +165,8 @@ def norm(value):
         value = claude_contract_to_final(value)  # llm-kit delivers a claude contract natively
         out = {"__type__": type(value).__name__}
         for f in dataclasses.fields(value):
+            if f.name in _FINAL_ONLY_FIELD_NAMES:
+                continue  # declared difference: the final records carry these
             item = getattr(value, f.name)
             key = (type(value).__name__, f.name)
             if key in _FINAL_ONLY_DEFAULT_FIELDS and item == _FINAL_ONLY_DEFAULT_FIELDS[key]:
@@ -171,7 +175,8 @@ def norm(value):
         return out
     if isinstance(value, Mapping):
         return ("map", type(value).__name__,
-                [(norm(k), "<masked>" if k in _MASKED_FIELDS else norm(v)) for k, v in value.items()])
+                [(norm(k), "<masked>" if k in _MASKED_FIELDS else norm(v))
+                 for k, v in value.items() if k not in _FINAL_ONLY_FIELD_NAMES])
     if isinstance(value, (list, tuple)):
         return (type(value).__name__, [norm(v) for v in value])
     if isinstance(value, (set, frozenset)):
@@ -1066,16 +1071,24 @@ def test_reachability_harness_paths(par):
                              ("slow", "/bin/claude-slow"), ("gone", "/bin/claude-gone")):
             with mock.patch.object(s.reach.shutil, "which", lambda name, which=which: which):
                 out[f"claude_{label}"] = outcome(lambda: s.reach.check_harness("claude", timeout=3))
-        with mock.patch.object(s.reach.shutil, "which", lambda name: "/bin/codex-ok"), \
-                mock.patch.dict(sys.modules, {"bootstrap_lib.codex": None}):
-            out["codex_fallback"] = outcome(lambda: s.reach.check_harness("codex"))
-        with mock.patch.object(s.reach.shutil, "which", lambda name: None), \
-                mock.patch.dict(sys.modules, {"bootstrap_lib.codex": None}):
+        # Both sides detect through the one canonical module (the legacy library
+        # reaches it through the bootstrap_lib.codex alias), so each case starts
+        # from a cleared detection cache.
+        from llm_kit.adapters import codex_command  # noqa: PLC0415
+
+        codex_command.reset_detection_cache()
+        with mock.patch.object(s.reach.shutil, "which", lambda name: "/bin/codex-ok"):
+            out["codex_found"] = outcome(lambda: s.reach.check_harness("codex"))
+        codex_command.reset_detection_cache()
+        with mock.patch.object(s.reach.shutil, "which", lambda name: None):
             out["codex_missing"] = outcome(lambda: s.reach.check_harness("codex"))
-        fake_codex = types.ModuleType("bootstrap_lib.codex")
-        fake_codex.detect_codex = lambda timeout: types.SimpleNamespace(available=True, reason="codex 9.9")
-        with mock.patch.dict(sys.modules, {"bootstrap_lib.codex": fake_codex}):
+        codex_command.reset_detection_cache()
+        with mock.patch.object(
+            codex_command, "detect_codex",
+            lambda timeout: types.SimpleNamespace(available=True, reason="codex 9.9"),
+        ):
             out["codex_detected"] = outcome(lambda: s.reach.check_harness("codex"))
+        codex_command.reset_detection_cache()
         for label, prefix in (("opencode_found", ["/bin/oc-ok"]), ("opencode_missing", None)):
             with mock.patch.object(s.reach, "resolve_opencode_cli", lambda prefix=prefix: prefix):
                 out[label] = outcome(lambda: s.reach.check_harness("opencode"))

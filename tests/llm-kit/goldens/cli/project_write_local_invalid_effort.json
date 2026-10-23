@@ -1,0 +1,28 @@
+{
+  "argv": [
+    "models",
+    "project",
+    "write",
+    "--project-root",
+    "<T>/proj",
+    "--layer",
+    "local",
+    "--key",
+    "first",
+    "--model",
+    "b",
+    "--effort",
+    "none"
+  ],
+  "exit": 2,
+  "stderr": {
+    "json": {
+      "error": {
+        "code": "invalid",
+        "kind": "project-models",
+        "message": ".llm-kit/models.local.yaml: selections['first'].effort: 'none' is not accepted for 'b' (accepted: ['low', 'high'])"
+      }
+    }
+  },
+  "stdout": ""
+}

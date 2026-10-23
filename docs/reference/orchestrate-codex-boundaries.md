@@ -11,7 +11,7 @@ The two look like one fact stated twice and are not. orchestration.yaml
 describes a `codex exec` command the ORCHESTRATOR types and runs itself,
 rendered through CodexAdapter.build_argv; CODEX_CAPABILITIES describes what
 CodexCliBackend emits through the COMPLETION SEAM. They are siblings
-converging only at bootstrap_lib.codex.build_codex_exec_argv, which is the
+converging only at llm_kit.adapters.codex_command.build_codex_exec_argv, which is the
 single source of the argv CONSTRUCTION CODE. Scope that precisely: the
 construction is deduplicated, the argv SPELLINGS are not. Fourteen flags are
 restated as string literals across up to five files (`codex exec`,
@@ -30,13 +30,16 @@ concurrent writers land, judging by the -o file); references/codex-dispatch.md
 owns those.
 
 THE CONCRETE DAMAGE, which is why this is an insight and not a preference:
-the YAML asserts the effort menu low|medium|high|xhigh|max and the
+the YAML asserts the harness-wide effort menu low|medium|high|xhigh|max and the
 advertisement deliberately carries NO `values` for codex effort. Not a
-contradiction -- CodexAdapter owns and VALIDATES that menu
-(CODEX_EFFORT_MENU, harness_adapters.py, whose comment says the accepted menu
-is a runtime contract rather than a transcription of one version's help
-text), while CodexCliBackend BYPASSES that validator, which is exactly why
-its advertisement advertises no menu. Deriving the rendered menu from the
+contradiction -- the menu a Codex call is held to is the exact model's
+(`llm_kit.registry.model_profiles.check_effort`, which both CodexAdapter and
+CodexCliBackend call: `gpt-6-luna` stops at `max`, `gpt-6.1-sol` also takes
+`ultra`), with the harness-wide CODEX_EFFORT_MENU (harness_adapters.py, whose
+comment says the accepted menu is a runtime contract rather than a
+transcription of one version's help text) as the fallback for a model with no
+measured profile. The advertisement carries no menu because the menu is a
+property of the model, not of the adapter. Deriving the rendered menu from the
 advertisement deletes xhigh, a value verified against a live run and
 carrying an explicit do-not-remove warning in two places.
 
@@ -76,10 +79,11 @@ orchestrate DOES consume llm-scripting-kit -- orchestration_guidance.py
 imports it and calls discover_model_entries, and orchestration.yaml states
 that every routing name without the `agent:` prefix resolves against it.
 EXECUTION: orchestrate does NOT go through the completion seam
-(CodexCliBackend), but it is NOT independent of bootstrap_lib.codex --
+(CodexCliBackend), but it is NOT independent of llm_kit.adapters.codex_command --
 orchestration_guidance.py's adapter_command_text_provider resolves a harness
 adapter via llm_scripting_kit.resolve_harness_adapter and calls
-CodexAdapter.build_argv, which calls bootstrap_lib.codex.build_codex_exec_argv.
+CodexAdapter.build_argv, which calls llm_kit.adapters.codex_command.build_codex_exec_argv
+(`bootstrap_lib.codex` is an exact alias of that module).
 The literal `command:` string in orchestration.yaml's backends record is the
 DISCLOSED FALLBACK (_command_fallback), reached only when llm_scripting_kit
 is unavailable, version-skewed, or the adapter raises, and it appends a note

@@ -29,6 +29,7 @@ from llm_kit.registry.api_key import get_api_key
 from llm_kit.registry.constants import USER_ENV_FILE, cli_command
 from llm_kit.registry.env_file import read_env_file, write_env_file
 from llm_kit.registry.models import EndpointResolveError, resolve_endpoint
+from llm_kit.registry.user_paths import ENV_ENV_FILE, override_path, user_env_file
 
 
 def _resolve_endpoint_or_exit(endpoint: Optional[str], project_root: Optional[str] = None) -> Optional[dict]:
@@ -95,7 +96,7 @@ def _status_document(
         "rate_limit": None,
         "error": None,
         "set_key_command": f"{cli_command()} account set-key",
-        "user_env_file": str(USER_ENV_FILE),
+        "user_env_file": str(user_env_file()),
     }
     if lookup.key is None:
         return document
@@ -210,10 +211,16 @@ def _cmd_set_key(provided: Optional[str], *, validate: bool, endpoint: Optional[
         if status is not None and not status.ok:
             print(f"Validation failed: {status.failure_reason}", file=sys.stderr)
             return EXIT_FAILURE
-    existing = read_env_file(USER_ENV_FILE)
+    # The write target (override or neutral). A first write on a machine that
+    # still holds only the legacy file starts from that file's keys: once the
+    # neutral file exists it shadows the legacy one, so it must not drop them.
+    target = user_env_file()
+    existing = read_env_file(target)
+    if not existing and not target.exists() and override_path(ENV_ENV_FILE) is None:
+        existing = read_env_file(USER_ENV_FILE)
     existing[ep["key_env"]] = key
-    write_env_file(USER_ENV_FILE, existing)
-    print(f"Wrote {ep['key_env']} to {USER_ENV_FILE}")
+    write_env_file(target, existing)
+    print(f"Wrote {ep['key_env']} to {target}")
     return EXIT_OK
 
 

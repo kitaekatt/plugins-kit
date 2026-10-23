@@ -33,7 +33,7 @@ from typing import Any, Callable, Iterator, Mapping, Optional, Sequence
 
 import pytest
 
-from final_wording import claude_contract_to_final
+from final_wording import claude_contract_to_final, to_final
 
 REPO = Path(__file__).resolve().parents[2]
 LEGACY_LIBS = (
@@ -43,10 +43,18 @@ LEGACY_LIBS = (
 )
 LEGACY_ROOTS = ("job_kit", "llm_scripting_kit", "content_pipeline", "bootstrap_guard")
 
+#: Keys the final library emits that the frozen legacy CLI does not: the adapter records carry
+#: ``call_modes`` and every completion response carries ``reported_model`` and the
+#: ``estimated_cost_*`` pair. Dropped from both sides before a parity comparison.
+FINAL_ONLY_KEYS = frozenset({"call_modes", "reported_model", "estimated_cost_usd", "estimated_cost_source"})
+
 #: Variables that steer credentials, the registry, routing or pacing. Every CLI
 #: test starts with all of them unset.
 SCRUBBED_ENV = (
     "MODEL_ENDPOINTS_REGISTRY",
+    "LLM_KIT_CONSENT_FILE",
+    "LLM_KIT_ENV_FILE",
+    "XDG_CONFIG_HOME",
     "OPENROUTER_API_KEY",
     "CLAUDE_BOOTSTRAP_DATA_ROOT",
     "CLAUDE_PLUGIN_TEST",
@@ -132,9 +140,13 @@ def scrub_json(value: Any) -> Any:
         return claude_contract_to_final({
             k: ("<t>" if (k in _TIME_KEYS or k.endswith("_at")) else scrub_json(v))
             for k, v in value.items()
+            # Declared difference: llm-kit adapter records carry ``call_modes``.
+            if k not in FINAL_ONLY_KEYS
         })
     if isinstance(value, list):
         return [scrub_json(v) for v in value]
+    if isinstance(value, str):
+        return to_final(value)  # named deliberate wording differences (final_wording.RENAMES)
     return value
 
 
@@ -265,3 +277,18 @@ class FakeBackend:
 
     def classify_halt(self, exc: BaseException) -> Optional[str]:
         return self.halt
+
+
+@pytest.fixture()
+def shipped_openrouter_without_style(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The shipped ``openrouter`` endpoint without llm-kit's declared ``effort_style``.
+
+    llm-kit's baseline declares ``effort_style: top-level`` on ``openrouter`` so the
+    exact-model efforts it validates reach the wire; the frozen legacy baseline declares
+    none. A parity comparison clears the one key on the final side so everything ELSE
+    about the endpoint is still compared; ``test_openrouter_effort_style.py`` pins the key.
+    """
+    models = importlib.import_module("llm_kit.registry.models")
+    shipped = models.DEFAULT_MODEL_CONFIG["endpoints"]["openrouter"]
+    assert shipped.get("effort_style") == "top-level"
+    monkeypatch.delitem(shipped, "effort_style")

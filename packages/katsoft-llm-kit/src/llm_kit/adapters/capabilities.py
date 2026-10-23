@@ -16,6 +16,8 @@ from dataclasses import fields
 
 from llm_kit.completion.capabilities import (
     FILESYSTEM_WRITE,
+    MODE_COMPLETION,
+    MODE_WORKSPACE,
     SHELL_EXEC,
     SUBAGENT_SPAWN,
     TEXT_ONLY_MODE,
@@ -497,10 +499,11 @@ CLAUDE_CAPABILITIES = Capabilities(
 
 # -- codex-cli -------------------------------------------------------------
 #
-# CodexCliBackend delegates argv construction to bootstrap_lib.codex, in a
-# DIFFERENT plugin. Two consequences the records must respect: the effort menu
-# validated on CodexAdapter is bypassed on this path, and network=False emits
-# nothing at all rather than a deny.
+# CodexCliBackend delegates argv construction to codex_command, a SEPARATE
+# module the capability records do not derive from. Two consequences the
+# records must respect: effort is validated by the backend itself
+# (model_profiles.check_effort, the same validator CodexAdapter uses), and
+# network=False emits nothing at all rather than a deny.
 
 #: Codex text-only mode has three parts, because codex's tools come from three
 #: places:
@@ -581,9 +584,13 @@ _CODEX_PARAMS = {
         type="string",
         emits="-c model_reasoning_effort=<value>",
         note=(
-            "any truthy string is emitted. The [low, medium, high, xhigh, max] "
-            "menu is validated on CodexAdapter, which this backend BYPASSES by "
-            "calling the shared argv builder directly, so no menu is advertised"
+            "validated before dispatch against the exact model's measured menu "
+            "(llm_kit.registry.model_profiles; gpt-6-luna stops at max, "
+            "gpt-6.1-sol also takes ultra, no Codex model takes none); a model "
+            "without a measured profile is held to the harness-wide "
+            "[low, medium, high, xhigh, max] menu. Omit it to send nothing. "
+            "No menu is advertised here because the menu is a property of the "
+            "model: the model catalogue reports it"
         ),
     ),
     "log_prefix": ParamCapability(
@@ -727,6 +734,11 @@ CODEX_CAPABILITIES = Capabilities(
         emits="stdin",
         note="system text is concatenated ahead of the user text into one prompt",
     ),
+    # workspace: codex exec runs inside the absolute -C directory under
+    # `-s workspace-write` (measured behavior: a unit writes files there). It
+    # is the only adapter that advertises it; the image or build meaning of
+    # what gets written is the caller's.
+    call_modes=(MODE_COMPLETION, MODE_WORKSPACE),
 )
 
 # -- opencode-cli ----------------------------------------------------------

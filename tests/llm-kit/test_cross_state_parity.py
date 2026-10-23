@@ -70,6 +70,8 @@ from typing import Any, Callable, Mapping, Optional, Sequence
 
 import pytest
 
+from final_wording import openrouter_style_to_legacy, to_final
+
 _HERE = Path(__file__).resolve().parent
 _REPO = _HERE.parents[1]
 _FIXTURES = _HERE / "fixtures" / "cross_state"
@@ -295,6 +297,8 @@ class Scrub:
         if isinstance(value, float):
             return "<EPOCH>" if value > 1e9 else value
         if isinstance(value, Mapping):
+            if isinstance(value, dict):
+                value = openrouter_style_to_legacy(value)  # declared difference (final_wording)
             return {
                 str(k): ("<MS>" if str(k) in _TIMING_KEYS else self.value(v, column=str(k)))
                 for k, v in value.items()
@@ -323,6 +327,9 @@ def first_difference(a: Any, b: Any, path: str = "$") -> Optional[str]:
             if found:
                 return found
         return None
+    if isinstance(a, str) and isinstance(b, str):
+        # named deliberate wording differences, including the shipped sol/luna model ids
+        return None if to_final(a) == to_final(b) else f"{path}: {a!r} != {b!r}"
     return None if a == b else f"{path}: {a!r} != {b!r}"
 
 

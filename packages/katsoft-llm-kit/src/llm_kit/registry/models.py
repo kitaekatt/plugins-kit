@@ -91,6 +91,12 @@ DEFAULT_MODEL_CONFIG = {
             "base_url": "https://openrouter.ai/api/v1",
             "key_env": "OPENROUTER_API_KEY",
             "account_check": "openrouter",
+            # OpenRouter takes ``reasoning_effort`` as a top-level body field
+            # (measured 2026-10-23: deepseek/deepseek-v4.1-flash lists it, with
+            # reasoning, in supported_parameters). Without a style the
+            # direct seam drops every effort, so the exact-model menu in
+            # model_profiles would be validated and then never sent.
+            "effort_style": "top-level",
         },
         # HARNESS entries: no base_url, so nothing here calls them over HTTP.
         # They are shipped because they are codex SUBSCRIPTION models -- nothing
@@ -99,12 +105,15 @@ DEFAULT_MODEL_CONFIG = {
         # models are deliberately NOT shipped: they name providers from the
         # user's own opencode config, which this repo neither ships nor reads,
         # so there is no default that would resolve anywhere but here.
+        # sol and luna name the current ids of the Codex catalogue (measured
+        # 2026-10-23, llm_kit.registry.model_profiles); the gpt-5.6 ids are
+        # listed there as an older generation.
         "sol": {
-            "harness": "codex", "model": "gpt-5.6-sol", "effort": "high",
+            "harness": "codex", "model": "gpt-6.1-sol", "effort": "high",
             "tier": 3, "family": "openai",
         },
         "luna": {
-            "harness": "codex", "model": "gpt-5.6-luna", "effort": "high",
+            "harness": "codex", "model": "gpt-6-luna", "effort": "high",
             "tier": 2, "family": "openai",
         },
         # Astra (gpt-6-astra) is OpenAI's frontier tier, a peer of fable, so
@@ -663,7 +672,8 @@ def resolve_endpoint(
     Passing ``config=`` skips loading the LAYERED config.yaml -- it does not
     skip every file read. A name absent from ``config`` still falls through to
     the model-endpoints registry (below), which is read from
-    ``$MODEL_ENDPOINTS_REGISTRY`` / ``~/.claude/config/model-endpoints.yaml``
+    ``$MODEL_ENDPOINTS_REGISTRY`` / ``$XDG_CONFIG_HOME/llm-kit/model-endpoints.yaml``
+    (the legacy ``~/.claude/config`` file when that is absent)
     regardless of whether ``config`` was supplied. An unparseable registry
     surfaces as the registry's own :class:`EndpointResolveError` (naming the
     parse defect); a registry that is simply absent leaves the lookup empty and

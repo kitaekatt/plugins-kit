@@ -208,8 +208,9 @@ How the effort reaches the model depends on the entry's harness:
 - Any other entry runs through `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${P4_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/run_review_lane.py"` with `--effort <effort>`, which hands the level to
   llm-kit. The runner refuses the lane with exit 2 when a codex entry's effort menu
   does not include the level, or when a transport entry cannot deliver an effort at all; the
-  review reports that refusal as a configuration error. The runner's JSON envelope records the
-  effort it sent in its `effort` field.
+  review reports that refusal as a configuration error. The Codex and Claude CLI backends also
+  hold the level to the exact model's measured menu (`gpt-6-luna` has no `ultra`) before they run.
+  The runner's JSON envelope records the effort it sent in its `effort` field.
 
 `model` and `effort` are therefore independent: any model may pair with any effort the model's
 harness accepts, and neither is ever traded for the other.
@@ -257,7 +258,7 @@ how that lane is dispatched:
 `sonnet`, `opus`, `haiku` and `fable` are routable without llm-kit, because the Agent
 tool itself defines them. Every other id is resolved by llm-kit, so it may name a CLI
 harness or an OpenAI-compatible transport -- whatever that plugin's configuration and your
-`~/.claude/config/model-endpoints.yaml` declare. Endpoint ids are private to your fleet; the
+endpoint registry (`$XDG_CONFIG_HOME/llm-kit/model-endpoints.yaml`, or `~/.config/llm-kit/model-endpoints.yaml` when `XDG_CONFIG_HOME` is unset or not absolute) declare. Endpoint ids are private to your fleet; the
 example below uses a placeholder. Naming such an id is the whole override mechanism -- there is
 no separate field to set.
 
@@ -372,7 +373,7 @@ profiles:
 ```
 
 `my-local-endpoint` is a placeholder: use an id your llm-kit configuration or
-`~/.claude/config/model-endpoints.yaml` actually declares. Replace each `<level>` with the
+endpoint registry (`$XDG_CONFIG_HOME/llm-kit/model-endpoints.yaml`, or `~/.config/llm-kit/model-endpoints.yaml` when `XDG_CONFIG_HOME` is unset or not absolute) actually declares. Replace each `<level>` with the
 effort you want that entry to run at; the two entries need not match. A transport endpoint
 must be able to deliver an effort, or the runner refuses the lane. Everything else about the
 review is unchanged -- the other reviewers and all validators keep their shipped declarations,

@@ -369,7 +369,7 @@ def detect_backend(backend: Dict[str, Any]) -> Tuple[bool, str]:
         # this reports a CLI absent on exactly the machines where it was
         # installed by npm or scoop.
         #
-        # Deliberately duplicated from bootstrap_lib.codex.resolve_cli rather
+        # Deliberately duplicated from llm_kit.adapters.codex_command.resolve_cli rather
         # than imported: this module is stdlib-only by design and detect_backend
         # is generic over every backend, not codex-specific. Change both
         # together. That module additionally REFUSES cmd metacharacters, which

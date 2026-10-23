@@ -9,20 +9,25 @@ import os
 import sys
 from pathlib import Path
 
+from .user_paths import neutral_project_env_file
+
 # Default endpoint (``openrouter``) values. Aliases of
 # DEFAULT_MODEL_CONFIG["endpoints"]["openrouter"] in models.py.
 BASE_URL = "https://openrouter.ai/api/v1"
 API_KEY_ENV = "OPENROUTER_API_KEY"
 
-# User-scoped credential file. Bootstrap-engine plugin data dirs follow the
-# layout ``~/.claude/plugins/data/<marketplace>/<plugin>/``, so the namespace is
-# the plugin name, ``llm-scripting-kit``. Keys for multiple endpoints coexist as
-# separate lines in this file.
+# LEGACY user-scoped credential file, read only when the neutral file is absent.
+# Bootstrap-engine plugin data dirs follow the layout
+# ``~/.claude/plugins/data/<marketplace>/<plugin>/``, so the namespace is the
+# plugin name, ``llm-scripting-kit``. Keys for multiple endpoints coexist as
+# separate lines in a key file.
 #
-# A developer who needs a different key per project can drop a file at
-# ``<project_root>/.local-data/plugins-kit/llm-scripting-kit/.env``;
-# ``get_api_key`` checks the project file first and only falls back to
-# USER_ENV_FILE.
+# The neutral user key file is ``$XDG_CONFIG_HOME/llm-kit/.env`` (see
+# :mod:`llm_kit.registry.user_paths`), and ``$LLM_KIT_ENV_FILE`` replaces the
+# whole user layer with one explicit file. ``get_api_key`` reads the override or
+# the neutral file first and falls back to USER_ENV_FILE only when neither
+# exists; ``account set-key`` writes the override or the neutral file, never
+# this one. The per-project files are listed by :func:`project_env_files`.
 USER_ENV_FILE = (
     Path.home() / ".claude" / "plugins" / "data" / "plugins-kit" / "llm-scripting-kit" / ".env"
 )
@@ -97,5 +102,13 @@ def legacy_project_env_file(project_root: Path) -> Path:
 
 
 def project_env_files(project_root: Path) -> list:
-    """Both project-layer key locations, HIGHEST precedence first."""
+    """Both plugin-era project-layer key locations, HIGHEST precedence first."""
     return [project_env_file(project_root), legacy_project_env_file(project_root)]
+
+
+def layered_project_env_files(project_root: Path) -> list:
+    """Every project-layer key location a lookup reads, HIGHEST precedence first.
+
+    ``<project_root>/.llm-kit/.env`` (neutral), then :func:`project_env_files`.
+    """
+    return [neutral_project_env_file(project_root), *project_env_files(project_root)]

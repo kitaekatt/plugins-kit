@@ -20,7 +20,7 @@ NOTICE = (
 
 
 def _consent_file(home: Path) -> Path:
-    return home / ".claude" / "plugins" / "data" / "plugins-kit" / "llm-kit" / "consent.json"
+    return home / ".config" / "llm-kit" / "consent.json"
 
 
 def _stored(home: Path) -> dict:
@@ -32,7 +32,8 @@ class TestShow:
         out = run(final_mods.cli.main, ["consent", "show", "--json"], capsys)
         assert out.code == 0
         payload = json.loads(out.out)
-        assert set(payload) == {"usage", "spend", "source", "path", "note"}
+        assert set(payload) == {"usage", "spend", "source", "path", "write_path", "note"}
+        assert payload["write_path"] == str(_consent_file(home))
         assert payload["usage"] is False and payload["spend"] is False
         assert payload["source"] == "absent"
         assert payload["path"] == str(_consent_file(home))
@@ -46,7 +47,8 @@ class TestShow:
         assert lines[0] == "usage: off" and lines[1] == "spend: off"
         assert lines[2] == "source: absent"
         assert lines[3] == f"path: {_consent_file(home)}"
-        assert lines[4].startswith("note: ") and len(lines[4]) > len("note: ")
+        assert lines[4] == f"write_path: {_consent_file(home)}"
+        assert lines[5].startswith("note: ") and len(lines[5]) > len("note: ")
 
     def test_show_reads_the_stored_file(self, final_mods, home, capsys):
         run(final_mods.cli.main, ["consent", "set", "--usage", "on"], capsys)

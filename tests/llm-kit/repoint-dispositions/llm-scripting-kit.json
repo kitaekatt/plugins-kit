@@ -152,13 +152,37 @@
     {
       "path": "tests/llm-scripting-kit/test_completion_capabilities.py",
       "disposition": "rewrite",
-      "reason": "Re-pointed at llm-kit's final module names: import statements.",
+      "reason": "Re-pointed at llm-kit's final module names: skips injected on declared-difference tests, import statements; 5 declared difference(s) below.",
       "rewrite_classes": [
+        "declared-skip",
         "import",
         "text-edit"
       ],
       "collection_count": 90,
-      "baseline_failures": []
+      "baseline_failures": [],
+      "declared_differences": {
+        "llm-scripting-kit/test_completion_capabilities.py::test_codex_effort_is_forwarded_unvalidated": {
+          "mirror_status": "skipped",
+          "reason": "The legacy test pins that CodexCliBackend forwards any effort string unvalidated. llm-kit holds both Codex paths to the exact model's measured effort menu (llm_kit.registry.model_profiles.check_effort) and refuses an effort outside it before dispatch; the final behavior is pinned by tests/llm-kit/test_model_profiles.py::test_codex_backend_refuses_an_effort_outside_the_exact_model_menu."
+        },
+        "llm-scripting-kit/test_completion_capabilities.py::test_harness_family_records_serialize_byte_identically": {
+          "mirror_status": "skipped",
+          "reason": "The legacy test hashes the serialized family record. llm-kit's record also carries call_modes (which call modes an adapter honors), so the digest differs by construction; the final records and their call_modes are pinned by tests/llm-kit/test_call_modes.py."
+        },
+        "llm-scripting-kit/test_completion_capabilities.py::test_openrouter_family_record_only_gains_conditional_effort": {
+          "mirror_status": "skipped",
+          "reason": "The legacy test hashes the serialized family record. llm-kit's record also carries call_modes (which call modes an adapter honors), so the digest differs by construction; the final records and their call_modes are pinned by tests/llm-kit/test_call_modes.py."
+        },
+        "llm-scripting-kit/test_completion_capabilities.py::test_claude_effort_is_conditional_and_unvalidated": {
+          "mirror_status": "skipped",
+          "reason": "The legacy test pins that ClaudeCliBackend forwards any effort string unvalidated. llm-kit holds the Claude CLI to the exact model's measured effort menu (llm_kit.registry.model_profiles.check_effort) and, for a model with no measured profile, to the harness-wide menu, and refuses an effort outside it before dispatch; the final behavior is pinned by tests/llm-kit/test_invoke_protocol.py::test_claude_refuses_an_effort_outside_the_exact_model_menu."
+        },
+        "llm-scripting-kit/test_completion_capabilities.py::test_openrouter_dropped_params_change_nothing[effort]": {
+          "mirror_status": "skipped",
+          "injected": false,
+          "reason": "The legacy test pins that the openrouter family drops an effort without changing the request. llm-kit's shipped openrouter endpoint declares effort_style top-level, so an effort IS placed in the request body (reasoning_effort) and the exact-model menu it validates is actually sent; the final behavior is pinned by tests/llm-kit/test_invoke_protocol.py::test_deepseek_effort_reaches_the_wire."
+        }
+      }
     },
     {
       "path": "tests/llm-scripting-kit/test_completion_claude_runner.py",
@@ -185,12 +209,19 @@
       "disposition": "rewrite",
       "reason": "Re-pointed at llm-kit's final module names: import statements, module-name strings, test_text_edits rows; 2 test_text_edits row(s) in repoint-map.json adapt the test to the final layout.",
       "rewrite_classes": [
+        "declared-skip",
         "import",
         "module-string",
         "text-edit"
       ],
       "collection_count": 72,
-      "baseline_failures": []
+      "baseline_failures": [],
+      "declared_differences": {
+        "llm-scripting-kit/test_completion_contract.py::test_get_type_hints_resolves_output_contract_fields": {
+          "mirror_status": "skipped",
+          "reason": "The legacy test pins output_contract and skill_context as the LAST TWO fields of LLMResponse. llm-kit's LLMResponse appends reported_model, estimated_cost_usd and estimated_cost_source after them (the downstream-reported model and a non-authoritative cost figure, for protocol 2); the field types are still resolved by typing.get_type_hints and the final order is pinned by tests/llm-kit/test_invoke_protocol.py::test_response_carries_the_reported_model_and_estimate_fields."
+        }
+      }
     },
     {
       "path": "tests/llm-scripting-kit/test_completion_contract_adapters.py",
@@ -489,14 +520,21 @@
     {
       "path": "tests/llm-scripting-kit/test_harness_adapters.py",
       "disposition": "rewrite",
-      "reason": "Re-pointed at llm-kit's final module names: module names inside subprocess/exec code strings, import statements, plugins/<kit> path to plugins/llm-kit.",
+      "reason": "Re-pointed at llm-kit's final module names: skips injected on declared-difference tests, module names inside subprocess/exec code strings, import statements, plugins/<kit> path to plugins/llm-kit; 1 declared difference(s) below.",
       "rewrite_classes": [
         "code-string",
+        "declared-skip",
         "import",
         "path-package-src"
       ],
       "collection_count": 12,
-      "baseline_failures": []
+      "baseline_failures": [],
+      "declared_differences": {
+        "llm-scripting-kit/test_harness_adapters.py::test_codex_module_imports_without_bootstrap_and_fails_only_on_dispatch": {
+          "mirror_status": "skipped",
+          "reason": "The legacy test asserts Codex dispatch FAILS without bootstrap_lib. llm_kit.adapters.codex_command owns Codex command construction and imports no bootstrap_lib, so the same dispatch succeeds; the final behavior is pinned by tests/llm-kit/test_runtime_mode.py::test_package_mode_codex_adapter_detects_and_builds_without_bootstrap_lib."
+        }
+      }
     },
     {
       "path": "tests/llm-scripting-kit/test_llm_scripting_cli.py",
@@ -529,15 +567,22 @@
       "disposition": "rewrite",
       "reason": "Re-pointed at llm-kit's final module names: import statements.",
       "rewrite_classes": [
+        "declared-skip",
         "import"
       ],
       "collection_count": 59,
-      "baseline_failures": []
+      "baseline_failures": [],
+      "declared_differences": {
+        "llm-scripting-kit/test_model_endpoints.py::TestPathResolution::test_convention_path_is_home_relative": {
+          "mirror_status": "skipped",
+          "reason": "The legacy test pins the endpoint registry convention as ~/.claude/config/model-endpoints.yaml. llm-kit's convention is the neutral $XDG_CONFIG_HOME/llm-kit/model-endpoints.yaml (fallback ~/.config/llm-kit/), with ~/.claude/config/model-endpoints.yaml read only when the neutral file does not exist; both are pinned by tests/llm-kit/test_neutral_user_state.py."
+        }
+      }
     },
     {
       "path": "tests/llm-scripting-kit/test_model_resolve.py",
       "disposition": "rewrite",
-      "reason": "Re-pointed at llm-kit's final module names: skips injected on declared-difference tests, import statements; 1 declared difference(s) below.",
+      "reason": "Re-pointed at llm-kit's final module names: skips injected on declared-difference tests, import statements; 2 declared difference(s) below.",
       "rewrite_classes": [
         "declared-skip",
         "import"
@@ -548,6 +593,10 @@
         "llm-scripting-kit/test_model_resolve.py::TestBaselineSync::test_default_yaml_matches_constant": {
           "mirror_status": "skipped",
           "reason": "Compares the shipped default_config.yaml seed file with DEFAULT_MODEL_CONFIG. llm-kit carries no seed file by design (decision 7: it seeds no user config and reads the legacy locations unchanged), so there is nothing to compare; the constant itself is exercised by the rest of this file."
+        },
+        "llm-scripting-kit/test_model_resolve.py::TestShippedHarnessEntries::test_shipped_harness_entries_are_discoverable_by_kind": {
+          "mirror_status": "skipped",
+          "reason": "The legacy test pins the shipped sol and luna model ids gpt-5.6-sol and gpt-5.6-luna. llm-kit ships the current Codex catalogue ids gpt-6.1-sol and gpt-6-luna (measured 2026-10-23, llm_kit.registry.model_profiles); the shipped ids are pinned by tests/llm-kit/test_model_profiles.py::test_shipped_codex_defaults_name_measured_current_models."
         }
       }
     },
@@ -580,12 +629,19 @@
     {
       "path": "tests/llm-scripting-kit/test_reachability.py",
       "disposition": "rewrite",
-      "reason": "Re-pointed at llm-kit's final module names: import statements.",
+      "reason": "Re-pointed at llm-kit's final module names: skips injected on declared-difference tests, import statements; 1 declared difference(s) below.",
       "rewrite_classes": [
+        "declared-skip",
         "import"
       ],
       "collection_count": 45,
-      "baseline_failures": []
+      "baseline_failures": [],
+      "declared_differences": {
+        "llm-scripting-kit/test_reachability.py::TestCheckHarnessCodexFallback::test_falls_back_and_reports_unreachable_when_codex_truly_absent": {
+          "mirror_status": "skipped",
+          "reason": "The legacy test pins the PATH-probe fallback taken when bootstrap_lib.codex does not import. The final reachability check detects Codex through llm_kit.adapters.codex_command with no fallback, and that detector caches its verdict for the process, so a patched-out shutil.which no longer changes the answer after an earlier test; the final detection paths are pinned by tests/llm-kit/test_dispatch_parity.py::test_reachability_harness_paths."
+        }
+      }
     },
     {
       "path": "tests/llm-scripting-kit/test_readme_exit_code_summary.py",
@@ -723,12 +779,23 @@
     {
       "path": "tests/llm-scripting-kit/test_text_only_codex.py",
       "disposition": "rewrite",
-      "reason": "Re-pointed at llm-kit's final module names: import statements.",
+      "reason": "Re-pointed at llm-kit's final module names: skips injected on declared-difference tests, import statements; 2 declared difference(s) below.",
       "rewrite_classes": [
+        "declared-skip",
         "import"
       ],
       "collection_count": 14,
-      "baseline_failures": []
+      "baseline_failures": [],
+      "declared_differences": {
+        "llm-scripting-kit/test_text_only_codex.py::test_a_bootstrap_without_ignore_user_config_is_diagnosed_not_a_type_error": {
+          "mirror_status": "skipped",
+          "reason": "The legacy test patches bootstrap_lib.codex.build_codex_exec_argv with a builder that lacks ignore_user_config and expects a diagnosed refusal. The final backend calls llm_kit.adapters.codex_command.build_codex_exec_argv, which always has the keyword, so it carries no version probe and the patched alias is never called."
+        },
+        "llm-scripting-kit/test_text_only_codex.py::test_an_absent_bootstrap_codex_module_names_install_not_update": {
+          "mirror_status": "skipped",
+          "reason": "The legacy test blocks bootstrap_lib.codex and expects a RuntimeError naming the bootstrap install. The final backend does not import bootstrap_lib.codex, so there is no such failure to name; an absent or old distribution is refused where it is imported (tests/bootstrap/test_codex_alias.py)."
+        }
+      }
     },
     {
       "path": "tests/llm-scripting-kit/test_text_only_mode.py",

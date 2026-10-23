@@ -1,0 +1,86 @@
+{
+  "argv": [
+    "models",
+    "project",
+    "show",
+    "--project-root",
+    "<T>/proj"
+  ],
+  "exit": 0,
+  "stderr": "",
+  "stdout": {
+    "json": {
+      "document": {
+        "catalog": [
+          {
+            "efforts": [
+              "low",
+              "high"
+            ],
+            "endpoint": "cdx",
+            "id": "b",
+            "label": "Beta",
+            "model": "gpt-6-luna"
+          },
+          {
+            "endpoint": "local",
+            "id": "a",
+            "label": "Alpha",
+            "model": "m-local",
+            "request_defaults": {
+              "extras": {
+                "provider": {
+                  "sort": "latency"
+                }
+              }
+            }
+          }
+        ],
+        "selections": {
+          "first": {
+            "effort": "high",
+            "model": "b"
+          },
+          "second": {
+            "effort": null,
+            "model": "a"
+          }
+        },
+        "version": 1
+      },
+      "local": {
+        "path": ".llm-kit/models.local.yaml",
+        "present": false,
+        "selections": {},
+        "sha256": null
+      },
+      "path": ".llm-kit/models.yaml",
+      "resolved_selections": {
+        "first": {
+          "default": {
+            "effort": "high",
+            "model": "b"
+          },
+          "effective": {
+            "effort": "high",
+            "model": "b"
+          },
+          "source": "default"
+        },
+        "second": {
+          "default": {
+            "effort": null,
+            "model": "a"
+          },
+          "effective": {
+            "effort": null,
+            "model": "a"
+          },
+          "source": "default"
+        }
+      },
+      "schema": "llm-kit.project-models/v1",
+      "sha256": "aadf666abeeb13073f4423e90f3a010ae7fa03a4c4541103c21729c4ee7b820d"
+    }
+  }
+}

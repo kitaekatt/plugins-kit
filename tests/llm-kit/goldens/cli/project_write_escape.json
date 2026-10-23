@@ -1,0 +1,24 @@
+{
+  "argv": [
+    "models",
+    "project",
+    "write",
+    "--project-root",
+    "<T>/proj",
+    "--file",
+    "../elsewhere.yaml",
+    "--input",
+    "-"
+  ],
+  "exit": 2,
+  "stderr": {
+    "json": {
+      "error": {
+        "code": "path",
+        "kind": "project-models",
+        "message": "'../elsewhere.yaml' resolves outside the project root <T>/proj"
+      }
+    }
+  },
+  "stdout": ""
+}

@@ -267,7 +267,9 @@ Option B restructures the private llm_kit tree to the final package boundaries b
 
 ### Credentials, config, and verdict cache
 
-llm-kit uses the legacy credential and config locations and preserves all public environment-variable spelling and precedence until old-plugin deletion. It does not seed competing llm-kit user layers. CLI_COMMAND is the exception: it names the llm-kit venv and executable.
+llm-kit preserves all public environment-variable spelling and the historical configuration layers (the fleet file `~/.claude/config/llm-scripting-kit.yaml`, the user and project `config.yaml` files) until old-plugin deletion, and seeds no competing llm-kit configuration layer. CLI_COMMAND is the exception: it names the llm-kit venv and executable.
+
+The three user-scoped files do not follow the legacy locations. They live under `$XDG_CONFIG_HOME/llm-kit/` (fallback `$HOME/.config/llm-kit/`), resolved on every call by `llm_kit.registry.user_paths`: `.env` (user keys; override `LLM_KIT_ENV_FILE`), `model-endpoints.yaml` (override `MODEL_ENDPOINTS_REGISTRY`) and `consent.json` (override `LLM_KIT_CONSENT_FILE`), plus `<project>/.llm-kit/.env` per project. An override names one explicit file and replaces the location. The files the old plugins kept under `~/.claude` (`plugins/data/plugins-kit/llm-scripting-kit/.env`, `config/model-endpoints.yaml`, `plugins/data/plugins-kit/llm-kit/consent.json`) are read only when the neutral file does not exist and are never written; the first write on a machine that holds only a legacy file starts the neutral file from the legacy values. A read creates nothing, and the library opens no path under `~/.claude` for a session under an empty home.
 
 LEGACY_LLM_DATA/usage-verdicts.json remains exactly the legacy single-session pacing cache. The legacy implementation reads one session's dictionary, rewrites the whole file, and uses atomic replacement without an interprocess lock. llm-kit retains those semantics during coexistence:
 

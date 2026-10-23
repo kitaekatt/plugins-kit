@@ -1,4 +1,4 @@
-"""The standalone interpreter never needs katsoft-contracts.
+"""The standalone interpreter never needs katsoft-contracts or katsoft-llm-kit.
 
 The bootstrap engine, its hooks and bootstrap's scripts run under the
 standalone interpreter, a Python that holds no plugin venv and therefore no
@@ -6,7 +6,9 @@ standalone interpreter, a Python that holds no plugin venv and therefore no
 ``interrupt_contract`` and ``model_declaration`` are aliases of
 ``katsoft_contracts``, and ``bootstrap_lib.code_review`` imports them, so none
 of those may sit in the import closure of anything the standalone interpreter
-runs. This test walks the static import graph (every ``import`` statement,
+runs. ``bootstrap_lib.codex`` is likewise an alias, of ``llm_kit`` (the
+``katsoft-llm-kit`` distribution), so it and ``llm_kit`` itself are forbidden
+too; the engine's Codex question is answered by ``bootstrap_lib.codex_detection``. This test walks the static import graph (every ``import`` statement,
 nested ones included, and constant ``importlib.import_module`` arguments) from
 each entry point and fails on the first path that reaches one.
 
@@ -31,7 +33,11 @@ def forbidden(dotted: str) -> bool:
     """True for a module the standalone interpreter must not import."""
     if dotted == "katsoft_contracts" or dotted.startswith("katsoft_contracts."):
         return True
+    if dotted == "llm_kit" or dotted.startswith("llm_kit."):
+        return True
     if dotted == f"{LIB}.code_review" or dotted.startswith(f"{LIB}.code_review."):
+        return True
+    if dotted in (f"{LIB}.codex", f"{LIB}._llm_kit_alias"):
         return True
     return any(dotted == f"{LIB}.{name}" for name in CONTRACT_MODULES) or \
         dotted == f"{LIB}._contracts_alias"
@@ -159,6 +165,8 @@ def test_the_scan_is_not_vacuous():
                 queue.append(target)
     names = {p.relative_to(PLUGIN).as_posix() for p in reached}
     assert f"{LIB}/engine.py" in names and f"{LIB}/shared_lib.py" in names
+    # The engine's Codex question reaches the stdlib probe, never the alias.
+    assert f"{LIB}/codex_detection.py" in names and f"{LIB}/codex.py" not in names
     assert len(names) > 20
 
 
@@ -184,6 +192,13 @@ def _tree(tmp_path: Path, extra: str) -> tuple[Path, list[Path]]:
     "def f():\n    from bootstrap_lib.code_review import lane\n",
     "from bootstrap_lib.code_review.lane import x\n",
     "import katsoft_contracts\n",
+    "from bootstrap_lib import codex\n",
+    "from .codex import detect_codex\n",
+    "import bootstrap_lib.codex\n",
+    "import bootstrap_lib._llm_kit_alias\n",
+    "import llm_kit.adapters.codex_command\n",
+    "def f():\n    from llm_kit.adapters import codex_command\n",
+    "import importlib\nimportlib.import_module('llm_kit.adapters.codex_command')\n",
     "import importlib\nimportlib.import_module('bootstrap_lib.model_declaration')\n",
 ])
 def test_a_planted_import_is_found(tmp_path, extra):
@@ -193,4 +208,10 @@ def test_a_planted_import_is_found(tmp_path, extra):
 
 def test_a_clean_tree_has_no_violation(tmp_path):
     plugin, entries = _tree(tmp_path, "import json\nfrom . import mid\n")
+    assert closure_violations(plugin, entries) == []
+
+
+def test_the_codex_detection_probe_is_not_the_codex_alias(tmp_path):
+    plugin, entries = _tree(tmp_path, "from . import codex_detection\nfrom .codex_detection import detect_codex\n")
+    (plugin / LIB / "codex_detection.py").write_text("import shutil\n")
     assert closure_violations(plugin, entries) == []

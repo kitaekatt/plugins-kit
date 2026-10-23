@@ -128,7 +128,10 @@ and temperature is unset, so the endpoint/model default applies; set it per job
 to override. `effort` overrides the reasoning effort the endpoint registry entry
 carries: effort is a property of the ENDPOINT, so a job that needs more
 deliberation than its endpoint's default says so here, and leaving it unset
-emits exactly the argv an existing job file always did.
+emits exactly the argv an existing job file always did. The value must be one the
+selected entry's exact model accepts: the Codex and Claude CLI backends hold an
+effort to that model's measured menu before dispatch (`gpt-6-luna` stops at `max`,
+`gpt-6.1-sol` also takes `ultra`), and `llm-kit models catalog` lists the menus.
 
 A job may instead state the effort per declared entry, in a `model_efforts`
 mapping beside `models` (a sidecar, so `models` stays the shared declaration

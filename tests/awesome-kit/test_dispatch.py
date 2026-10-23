@@ -19,6 +19,13 @@ _BOOTSTRAP_DIR = str(_REPO_ROOT / "plugins" / "bootstrap")
 if _BOOTSTRAP_DIR not in sys.path:
     sys.path.insert(0, _BOOTSTRAP_DIR)
 
+# dispatch.py imports llm_kit.adapters.codex_command (the katsoft-llm-kit package
+# in awesome-kit's provisioned venv) at module load; a source checkout has no
+# installed package, so its source root is put on the path directly.
+_KIT_SRC = str(_REPO_ROOT / "packages" / "katsoft-llm-kit" / "src")
+if _KIT_SRC not in sys.path:
+    sys.path.append(_KIT_SRC)
+
 import pytest
 
 import dispatch
@@ -293,7 +300,7 @@ def test_cache_hit_rejects_context_mismatch_in_metadata(tmp_path):
 
 
 def test_windows_cmd_launcher_argv_begins_with_cmd_slash_c(tmp_path, monkeypatch):
-    """dispatch.py must consume the shared bootstrap_lib.codex builder.
+    """dispatch.py must consume the shared llm_kit.adapters.codex_command builder.
 
     A resolved codex.cmd launcher (an npm/scoop install) is not directly
     executable by CreateProcess, so the shared builder wraps it in `cmd /c`.
@@ -446,3 +453,62 @@ def test_a_present_but_broken_model_library_fails_loudly_not_as_a_refusal(
 def test_list_needs_no_model_library(tmp_path, monkeypatch, capsys):
     monkeypatch.setitem(sys.modules, "llm_kit", None)
     assert dispatch.main(["--list", "--cache-dir", str(tmp_path / "none")]) == 0
+
+
+# --- the canonical Codex builder, imported directly --------------------------
+
+import ast  # noqa: E402
+import subprocess  # noqa: E402
+import textwrap  # noqa: E402
+
+
+def test_dispatch_imports_the_canonical_codex_module_not_bootstrap_lib():
+    assert dispatch.codex_lib.__name__ == "llm_kit.adapters.codex_command"
+    tree = ast.parse(Path(dispatch.__file__).read_text(encoding="utf-8"))
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            imported.add(node.module or "")
+    assert not {name for name in imported if name.split(".")[0] == "bootstrap_lib"}
+
+
+def _run_dispatch(tmp_path, *, llm_kit_tree=None, absent=False):
+    """Run dispatch.py in a fresh interpreter whose llm_kit is the given tree or absent."""
+    prelude = textwrap.dedent("""
+        import runpy, sys
+        class Absent:
+            def find_spec(self, name, path=None, target=None):
+                if name == "llm_kit":
+                    raise ModuleNotFoundError("No module named 'llm_kit'", name="llm_kit")
+        if {absent!r}:
+            sys.meta_path.insert(0, Absent())
+        sys.argv = [{script!r}, "--list"]
+        runpy.run_path({script!r}, run_name="__main__")
+    """).format(absent=absent, script=dispatch.__file__)
+    env = {"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path),
+           "_BOOTSTRAP_GUARD_SKIP_REEXEC": "1"}
+    if llm_kit_tree is not None:
+        env["PYTHONPATH"] = str(llm_kit_tree)
+    return subprocess.run([sys.executable, "-c", prelude], capture_output=True, text=True, env=env)
+
+
+def test_an_llm_kit_that_predates_the_codex_module_is_refused_by_name(tmp_path):
+    """The katsoft-llm-kit 1.2 shape: llm_kit imports, codex_command does not exist."""
+    package = tmp_path / "old" / "llm_kit"
+    (package / "adapters").mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "adapters" / "__init__.py").write_text("", encoding="utf-8")
+    proc = _run_dispatch(tmp_path, llm_kit_tree=tmp_path / "old")
+    assert proc.returncode == dispatch.EXIT_BOOTSTRAP_MISSING, proc.stderr
+    assert "predates llm_kit.adapters.codex_command" in proc.stderr
+    assert "katsoft-llm-kit>=1.3,<2" in proc.stderr
+    assert "ARGV" not in proc.stdout           # nothing was built or run
+
+
+def test_an_absent_llm_kit_is_refused_as_unprovisioned(tmp_path):
+    proc = _run_dispatch(tmp_path, absent=True)
+    assert proc.returncode == dispatch.EXIT_BOOTSTRAP_MISSING, proc.stderr
+    assert "has not provisioned" in proc.stderr and "missing: llm_kit" in proc.stderr
+    assert "predates" not in proc.stderr

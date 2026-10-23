@@ -94,11 +94,11 @@ def test_the_requirement_asks_for_every_extra_the_distribution_offers(plugin, di
 
 
 def test_the_floor_is_a_version_the_distribution_can_satisfy(plugin, dist):
-    """The floor (1.2) is where `account status --json` shipped; the distribution is at or past it, below the cap."""
+    """The floor (1.3) is the release carrying the surface the plugin documents; the distribution is at or past it, below the cap."""
     from bootstrap_lib.venv_check import parse_restricted_requirement
 
     _name, floor, cap = parse_restricted_requirement(_requirement(plugin, "katsoft-llm-kit"))
-    assert floor == (1, 2, 0)
+    assert floor == (1, 3, 0)
     assert floor <= version_tuple(dist["project"]["version"]) and version_tuple(dist["project"]["version"])[0] < cap
 
 
@@ -114,7 +114,7 @@ def test_the_venv_names_no_extras_and_checks_every_import_the_extras_bring(manif
 
 
 def test_bootstrap_resolves_the_requirement_against_the_released_ledger(tmp_path):
-    """With 1.2.0 released, the venv target is the highest 1.x; with only 1.1.x released, no target satisfies it."""
+    """With 1.3.1 released, the venv target is the highest 1.x; with only 1.1.x released, no target satisfies it."""
     from bootstrap_lib.venv_check import package_targets
 
     def ledger(*versions):
@@ -129,7 +129,7 @@ def test_bootstrap_resolves_the_requirement_against_the_released_ledger(tmp_path
     assert errors == [] and targets == [("katsoft-contracts", "1.0.0"), ("katsoft-llm-kit", "1.3.1")]
     _targets, errors = package_targets(str(PLUGIN_ROOT), ledger("1.0.0", "1.1.0"))
     assert len(errors) == 1 and "no released version of katsoft-llm-kit" in errors[0]
-    _targets, errors = package_targets(str(PLUGIN_ROOT), ledger("1.2.0", "2.0.0"))
+    _targets, errors = package_targets(str(PLUGIN_ROOT), ledger("1.3.0", "2.0.0"))
     assert errors == [], "a major above the cap is not a candidate"
 
 

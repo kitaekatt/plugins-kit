@@ -47,6 +47,7 @@ from test_cli_harness import (  # noqa: F401 -- fixtures
     normalize_json_text,
     run,
     scrub_json,
+    shipped_openrouter_without_style,
     write,
 )
 
@@ -115,6 +116,12 @@ class Side:
         owner = self.m.cli if self.name == "legacy" else self.m.account
         monkeypatch.setattr(owner, "USER_ENV_FILE", path)
         monkeypatch.setattr(self.m.api_key, "USER_ENV_FILE", path)
+        if self.name == "final":
+            # llm-kit WRITES the user key file at $LLM_KIT_ENV_FILE (else the neutral
+            # path) and reads the legacy constant above only as a fallback.
+            monkeypatch.setenv("LLM_KIT_ENV_FILE", str(path))
+        else:
+            monkeypatch.delenv("LLM_KIT_ENV_FILE", raising=False)
 
     @property
     def BackendSelection(self) -> Any:
@@ -193,8 +200,28 @@ def same_json(left: Outcome, right: Outcome) -> Outcome:
     """Equal exit code and stderr; stdout equal after parsing and clock scrubbing."""
     assert left.code == right.code, (left, right)
     assert left.err == right.err, (left.err, right.err)
-    assert normalize_json_text(left.out, {}) == normalize_json_text(right.out, {}), (left.out, right.out)
+    a, b = normalize_json_text(left.out, {}), normalize_json_text(right.out, {})
+    assert a == b, _first_difference(a, b)
     return left
+
+
+def _first_difference(a: Any, b: Any, path: str = "$") -> str:
+    """The path and the two values of the first place two parsed JSON documents differ."""
+    if isinstance(a, dict) and isinstance(b, dict):
+        for key in sorted(set(a) | set(b)):
+            if key not in a or key not in b:
+                return f"{path}.{key}: present on one side only"
+            where = _first_difference(a[key], b[key], f"{path}.{key}")
+            if where:
+                return where
+        return ""
+    if isinstance(a, list) and isinstance(b, list) and len(a) == len(b):
+        for index, (x, y) in enumerate(zip(a, b)):
+            where = _first_difference(x, y, f"{path}[{index}]")
+            if where:
+                return where
+        return ""
+    return "" if a == b else f"{path}: {a!r} != {b!r}"
 
 
 @pytest.fixture()
@@ -497,6 +524,7 @@ class TestCompletion:
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("shipped_openrouter_without_style")  # declared difference, see the fixture
 class TestModels:
     def test_endpoints_lists_the_registry_identically(self, sides, registry, capsys, monkeypatch, tmp_path):
         left, right = both(sides, "models", "endpoints", capsys=capsys, monkeypatch=monkeypatch, tmp=tmp_path)

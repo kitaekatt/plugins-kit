@@ -27,6 +27,8 @@
           "code": "rate_limit",
           "message": "limited"
         },
+        "estimated_cost_source": null,
+        "estimated_cost_usd": null,
         "finish_reason": null,
         "forwarded_params": [],
         "from_cache": false,
@@ -37,6 +39,7 @@
         "reasoning": "",
         "reported_cost_source": null,
         "reported_cost_usd": null,
+        "reported_model": null,
         "skill_context": null,
         "started_at": "<t>",
         "status": "error",

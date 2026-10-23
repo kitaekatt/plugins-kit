@@ -1,4 +1,12 @@
-"""Tests for bootstrap_lib/codex.py -- Codex CLI detection + command building.
+"""Tests for Codex CLI detection and command building.
+
+The behavior under test lives in ``llm_kit.adapters.codex_command`` (the
+katsoft-llm-kit package), loaded here from its source file by path so this suite
+does not put the package on ``sys.path``: bootstrap's own interpreter never
+imports it. The refusal and argv tests target that canonical module.
+``bootstrap_lib.codex`` is only an alias of it (tests/bootstrap/test_codex_alias.py),
+and bootstrap's own availability question is ``bootstrap_lib.codex_detection``,
+whose focused tests are at the end of this file.
 
 Hermetic: the real ``codex`` binary is never invoked. ``shutil.which`` and
 ``subprocess.run`` are monkeypatched in the module's own namespace, mirroring
@@ -11,19 +19,41 @@ Windows sandbox key are the load-bearing parts, and a spot check would not
 catch a reordering that moves stdin `-` off the end.
 """
 
+import importlib.util
 import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
-from bootstrap_lib import codex
-from bootstrap_lib.codex import CodexDetection
+from bootstrap_lib import codex_detection
+
+CANONICAL_SOURCE = (
+    Path(__file__).resolve().parents[2]
+    / "packages" / "katsoft-llm-kit" / "src" / "llm_kit" / "adapters" / "codex_command.py"
+)
+
+
+def _load_canonical():
+    name = "llm_kit_adapters_codex_command_source"
+    spec = importlib.util.spec_from_file_location(name, CANONICAL_SOURCE)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module  # dataclass resolves its module through sys.modules
+    spec.loader.exec_module(module)
+    return module
+
+
+codex = _load_canonical()
+CodexDetection = codex.CodexDetection
 
 
 @pytest.fixture(autouse=True)
 def _clear_cache():
     codex.reset_detection_cache()
+    codex_detection.reset_detection_cache()
     yield
     codex.reset_detection_cache()
+    codex_detection.reset_detection_cache()
 
 
 class _Proc:
@@ -471,3 +501,57 @@ class TestBuildCodexExecArgv:
         )
         assert all(isinstance(part, str) for part in argv)
 
+
+
+# --------------------------------------------------------------------------
+# bootstrap_lib.codex_detection -- the engine's pre-provisioning probe
+# --------------------------------------------------------------------------
+
+
+class TestBootstrapDetector:
+    """The engine and agent-skills check detect Codex without the library.
+
+    The probe and the canonical detector are two owners of one question, so each
+    case runs against both and requires the same verdict.
+    """
+
+    @pytest.fixture(params=[codex_detection, codex], ids=["codex_detection", "canonical"])
+    def detector(self, request):
+        return request.param
+
+    def test_success_reports_the_banner_and_version(self, detector, monkeypatch):
+        monkeypatch.setattr(detector.shutil, "which", lambda name: "/usr/bin/codex")
+        monkeypatch.setattr(
+            detector.subprocess, "run",
+            _fake_run(_Proc(0, b"codex-cli 0.146.0\n")),
+        )
+        result = detector.detect_codex()
+        assert (result.available, result.reason, result.version) == (
+            True, "codex-cli 0.146.0", (0, 146, 0))
+        assert result.argv_prefix == ("/usr/bin/codex",)
+
+    def test_not_on_path_fails_closed(self, detector, monkeypatch):
+        monkeypatch.setattr(detector.shutil, "which", lambda name: None)
+        result = detector.detect_codex()
+        assert not result.available and "not found on PATH" in result.reason
+
+    @pytest.mark.parametrize("failure", [
+        OSError("boom"), subprocess.TimeoutExpired("codex", 1), _Proc(2, b"")])
+    def test_a_failing_cli_fails_closed(self, detector, monkeypatch, failure):
+        monkeypatch.setattr(detector.shutil, "which", lambda name: "/usr/bin/codex")
+        monkeypatch.setattr(detector.subprocess, "run", _fake_run(failure))
+        assert detector.detect_codex().available is False
+
+    def test_the_verdict_is_cached_for_the_process(self, detector, monkeypatch):
+        calls = []
+        monkeypatch.setattr(detector.shutil, "which", lambda name: "/usr/bin/codex")
+        monkeypatch.setattr(
+            detector.subprocess, "run", _fake_run(_Proc(0, b"codex-cli 0.146.0"), calls))
+        detector.detect_codex()
+        detector.detect_codex()
+        assert len(calls) == 1
+
+    def test_the_probe_builds_no_command(self):
+        """Command construction belongs to the library, not to bootstrap."""
+        assert not hasattr(codex_detection, "build_codex_exec_argv")
+        assert not hasattr(codex_detection, "_reject_cmd_metacharacters")

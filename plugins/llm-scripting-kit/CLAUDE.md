@@ -380,9 +380,21 @@ need.
 
 **Its consumers must declare `bootstrap_lib` themselves.** `CodexCliBackend`
 builds argv exclusively via `bootstrap_lib.codex.build_codex_exec_argv`, and
-imports it LAZILY so this package stays stdlib-only at import. A consumer venv
-that links `llm_scripting_kit` but not `bootstrap_lib` therefore imports the
-codex backend cleanly and dies on the first dispatch, not at load. A shared lib
+imports it LAZILY so this package stays stdlib-only at import.
+`bootstrap_lib.codex` is an exact alias of `llm_kit.adapters.codex_command` in
+the `katsoft-llm-kit` package (>=1.3), which this plugin's `pyproject.toml`
+therefore requires; a venv that links `llm_scripting_kit` and `bootstrap_lib`
+but holds no `katsoft-llm-kit` fails the alias import at the first dispatch.
+The failure names `katsoft-llm-kit >= 1.3`, the `katsoft-llm-kit>=1.3,<2`
+requirement and the plugin's venv as the remedy (`codex_import_failure` in
+`harness_adapters.py`: `CodexCliBackend` raises it as a `RuntimeError`,
+`CodexAdapter` as a `ModuleNotFoundError`), and never a bootstrap plugin
+install; the distinct too-old branch (a `bootstrap_lib.codex` that imports but
+lacks `ignore_user_config`) still names bootstrap >= 0.146.0. Every venv that
+links `llm_scripting_kit` and `bootstrap_lib` declares the requirement itself
+(job-kit and content-pipeline-kit do). A consumer venv that links `llm_scripting_kit` but not
+`bootstrap_lib` imports the codex backend cleanly and dies on the first
+dispatch, not at load. A shared lib
 does not carry its own shared-lib edges to a consumer -- each venv declares what
 it needs (`plugins/CLAUDE.md`, "Why shared libs rather than published
 packages"). content-pipeline-kit declares both.

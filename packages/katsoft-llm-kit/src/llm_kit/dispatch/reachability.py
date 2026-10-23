@@ -48,7 +48,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from llm_kit import _runtime
+from llm_kit.adapters import codex_command
 from llm_kit.adapters.account import EndpointProbe, get_authenticated, probe_endpoint
 from llm_kit.adapters.harness_adapters import resolve_opencode_cli
 
@@ -125,10 +125,8 @@ class Reachability:
 def _resolve_cli(name: str) -> Optional[List[str]]:
     """Resolve ``name`` to a launchable argv prefix, honoring Windows shims.
 
-    Stdlib-only local twin of ``bootstrap_lib.codex.resolve_cli`` -- kept
-    dependency-free deliberately so it works as the PATH-only FALLBACK for
-    codex when ``bootstrap_lib`` itself is not importable, and so claude gets
-    the identical Windows-safe resolution opencode already has via
+    The claude check's twin of :func:`llm_kit.adapters.codex_command.resolve_cli`
+    (codex resolves through that module itself) and of
     :func:`llm_kit.adapters.harness_adapters.resolve_opencode_cli`.
     """
     resolved = shutil.which(name)
@@ -299,43 +297,17 @@ def check_harness(harness: Optional[str], *, timeout: float = DEFAULT_VERIFY_TIM
 
 
 def _check_codex(*, timeout: float) -> Reachability:
-    """Prefer ``bootstrap_lib.detect_codex``; fall back to a bare PATH probe.
+    """Check Codex with :func:`llm_kit.adapters.codex_command.detect_codex`.
 
-    ``bootstrap_lib`` is this plugin's OPTIONAL shared-lib dependency (see
-    this plugin's CLAUDE.md: "consumers must declare bootstrap_lib
-    themselves"). Its absence says nothing about whether codex ITSELF is
-    installed and working -- codex-cli can be present and fully functional on
-    a machine whose llm-scripting-kit venv simply never linked bootstrap_lib.
-    Treating that ImportError as "codex unreachable" was a FALSE NEGATIVE
-    (observed live: codex-cli 0.150.1 installed and in active use, reported
-    unreachable purely because this module's own optional import failed).
-
-    So on ImportError this falls back to exactly the PATH + ``--version``
-    check claude and opencode already use -- a real, checked verdict rather
-    than a manufactured one. ``detect_codex`` stays the PREFERRED path when
-    importable: it is cached, it parses a structured version, and it is the
-    same detector bootstrap's own tooling relies on elsewhere.
-
-    Package mode without the fleet (``bootstrap_lib`` not importable) takes the
-    same PATH + ``--version`` check as its verdict, the same real check.
+    The detector is cached for the process, parses a structured version and is
+    the same one the Codex backend and harness adapter use, so a verdict here
+    and a dispatch agree on whether Codex is installed. It fails closed: a CLI
+    that is not on PATH, does not run, times out or exits nonzero is
+    :data:`STATUS_UNREACHABLE` with the specific reason.
     """
-    if _runtime.mode() == "package" and not _runtime.fleet():
-        return _codex_path_check(timeout=timeout)
-    try:
-        from bootstrap_lib.codex import detect_codex  # noqa: PLC0415
-    except ImportError:
-        return _codex_path_check(timeout=timeout)
-    detection = detect_codex(timeout=timeout)
+    detection = codex_command.detect_codex(timeout=timeout)
     status = STATUS_REACHABLE if detection.available else STATUS_UNREACHABLE
     return Reachability(status=status, checked="cli-version", detail=detection.reason)
-
-
-def _codex_path_check(*, timeout: float) -> Reachability:
-    """The PATH + ``--version`` check codex shares with claude and opencode."""
-    resolved = _resolve_cli("codex")
-    if resolved is None:
-        return Reachability(status=STATUS_UNREACHABLE, checked="cli-version", detail="`codex` not found on PATH")
-    return _run_version_probe(resolved, label="codex", timeout=timeout)
 
 
 def _run_version_probe(argv: List[str], *, label: str, timeout: float) -> Reachability:

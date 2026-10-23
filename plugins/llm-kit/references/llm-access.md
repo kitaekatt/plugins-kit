@@ -14,13 +14,14 @@ credentials, configuration), `llm_kit.completion` (the call contracts),
 `llm-kit` command is the host-neutral interface to them.
 
 > One name for the plugin, the importable package (`llm_kit`) and the CLI
-> command (`llm-kit`). The credential and configuration locations keep their
-> historical namespace (the user `.env`, the layered `config.yaml` files and
-> the fleet layer file; for example
-> `~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.env`), and llm-kit
-> seeds no competing layer of its own. The name *OpenRouter* survives where it
-> names the service itself (`OPENROUTER_API_KEY`, the `openrouter` endpoint,
-> openrouter.ai).
+> command (`llm-kit`). The user-scoped files (key file, endpoint registry,
+> consent) live under `$XDG_CONFIG_HOME/llm-kit/` (see "User files and where
+> they live"); the layered `config.yaml` files and the fleet layer file keep
+> their historical namespace (for example
+> `~/.claude/plugins/data/plugins-kit/llm-scripting-kit/config.yaml`), and
+> llm-kit seeds no competing layer of its own. The name *OpenRouter* survives
+> where it names the service itself (`OPENROUTER_API_KEY`, the `openrouter`
+> endpoint, openrouter.ai).
 
 ## Invoking the CLI
 
@@ -58,9 +59,9 @@ version-keyed plugin cache directory, so a bare name works there and fails in
 PowerShell, Codex, and other shells. In the examples below, `llm-kit` stands for
 the contract path; an agent or script that runs the command uses that path.
 
-The CLI has seven groups: `account`, `completion`, `models`, `jobs`, `pipeline`,
-`frontdoor` and `local`. This document covers all of them except `jobs` (see
-`jobs.md`) and `pipeline` (see `pipeline-library.md`).
+The CLI has eight groups: `account`, `completion`, `models`, `jobs`, `pipeline`,
+`frontdoor`, `local` and `consent`. This document covers all of them except `jobs`
+(see `jobs.md`) and `pipeline` (see `pipeline-library.md`).
 
 ```bash
 llm-kit models endpoints
@@ -71,6 +72,9 @@ llm-kit models list --endpoint openrouter
 llm-kit models describe fable sol opus --self opus
 llm-kit models record-halt sol
 llm-kit models resolve --models sol,opus
+llm-kit models catalog
+llm-kit models project show
+llm-kit consent show
 llm-kit completion repair-json --schema-file "${PWD}/schema.json" < answer.txt
 printf 'Review this design' | llm-kit completion complete --models sol,opus
 llm-kit completion complete --models openrouter --model qwen \
@@ -186,11 +190,9 @@ a completion, ever** -- verification costs zero LLM tokens:
   This establishes the harness is *invocable*, not that a completion would
   succeed -- a real completion would spawn an agent and cost real time (and,
   for a subscription CLI, real quota), so it is never attempted. `codex-cli`
-  prefers `bootstrap_lib`'s cached detector when that optional shared lib is
-  importable, and falls back to the identical PATH + `--version` check the
-  other two harnesses use when it is not -- the absence of an optional
-  dependency of the library's own is not evidence about whether codex
-  itself is installed and working.
+  uses `llm_kit.adapters.codex_command.detect_codex`, the process-cached
+  detector the Codex backend and harness adapter also use, with or without
+  `bootstrap_lib`; the other two harnesses use the PATH + `--version` check.
 
 #### Three-state status, not a bool
 
@@ -366,8 +368,11 @@ distinguishable from "the seat above me is spent"; an under-quota seat stays in
   generic `GET /models` probe or skip validation (`account_check: none`).
 - **Resolution with source attribution.** A key resolves in order:
   `<endpoint key_env>` env var > project `.env`
-  (`<project>/.local-data/plugins-kit/llm-scripting-kit/.env`) > user `.env`
-  (`~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.env`) > the endpoint's
+  (`<project>/.llm-kit/.env`, then the namespaced
+  `<project>/.local-data/plugins-kit/llm-scripting-kit/.env`) > user `.env`
+  (`$LLM_KIT_ENV_FILE`, else `$XDG_CONFIG_HOME/llm-kit/.env`, else the legacy
+  `~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.env` when the neutral
+  file does not exist) > the endpoint's
   configured `key_file` (a bare-value credential file whose whole, stripped
   content is the key; source `key_file`). Keys for multiple
   endpoints coexist in the same `.env`. `llm-kit account which` tells you which
@@ -787,15 +792,92 @@ file, over budget) raises `SkillContextError` with the library's message; the
 
 `llm_kit.registry.effort.effort_menu(endpoint)` returns the efforts an endpoint
 accepts, low to high, and `lower_effort(endpoint, effort)` the next one down, for
-retrying a length stop. Harness entries (codex-cli, claude-cli) have fixed
-menus; opencode-cli has none. The menus and the retry rule are in
-[CLAUDE.md](../CLAUDE.md) ("`effort_menu` and `lower_effort`").
+retrying a length stop. Harness entries (codex-cli, claude-cli) resolve to a
+harness-wide menu that serves as the fallback; opencode-cli has none. The menu a
+call is held to is the exact model's: `llm_kit.registry.model_profiles` ships
+measured menus per model and route (Codex, Claude CLI, OpenRouter), and
+`llm-kit models catalog` reports each catalogue row's menu. The menus and the
+retry rule are in [CLAUDE.md](../CLAUDE.md) ("`effort_menu` and `lower_effort`"
+and "An effort menu belongs to one exact model over one route").
 
 ## Key handling
 
 Interactive `set-key` uses a hidden prompt (`getpass`), the `.env` file is
 created with mode 0600 on Unix (at creation time, not post-hoc chmod), and
-writes are atomic (temp file + rename).
+writes are atomic (temp file + rename). `set-key` writes `$LLM_KIT_ENV_FILE`
+when set, else `$XDG_CONFIG_HOME/llm-kit/.env`; a first neutral file on a machine
+that holds only the legacy key file starts from that file's keys.
+
+## User files and where they live
+
+Three per-user files sit under one directory, `$XDG_CONFIG_HOME/llm-kit/`
+(`$HOME/.config/llm-kit/` when `XDG_CONFIG_HOME` is unset, empty or not an
+absolute path). The library resolves them on every call and creates nothing on a
+read. None of them names a harness.
+
+| File | Holds | Override |
+|---|---|---|
+| `.env` | user API keys, one `KEY=VALUE` per line | `LLM_KIT_ENV_FILE` |
+| `model-endpoints.yaml` | the endpoint registry | `MODEL_ENDPOINTS_REGISTRY` |
+| `consent.json` | per-machine consent to the `usage` and `spend` cost classes | `LLM_KIT_CONSENT_FILE` |
+
+An override names one explicit file and replaces the location. For the registry,
+a missing override file is an error; a missing neutral file is the normal
+not-opted-in state and gives an empty registry. When a neutral file does not
+exist, the file an earlier release kept is read instead: the legacy
+`~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.env`,
+`~/.claude/config/model-endpoints.yaml` and
+`~/.claude/plugins/data/plugins-kit/llm-kit/consent.json`. A legacy file is never
+written. The first `set-key` or `consent set` on a machine that holds only a
+legacy file writes the neutral file with the legacy values carried over, and the
+neutral file then shadows the legacy one. A project may also keep its own keys in
+`<project>/.llm-kit/.env`, which wins over the user file.
+
+The layered `config.yaml` files and the fleet layer file
+`~/.claude/config/llm-scripting-kit.yaml` are not among these and keep their
+historical locations.
+
+## The project model file, `models catalog` and protocol 2
+
+A project that picks models for several call sites keeps one tracked file,
+`.llm-kit/models.yaml`: an ordered `catalog` of rows (`id`, `label`, `endpoint`,
+`model`, optional `efforts` subset and `request_defaults.extras`) and
+`selections` that map keys the project chooses to `{model, effort}`. The file
+holds no keys, base URLs or consent: the row's `endpoint` names a registry entry,
+which supplies credentials and billing. A row may narrow the exact model's effort
+menu and never widen it.
+
+```bash
+llm-kit models project show                       # the file as JSON, its sha256, resolved selections
+llm-kit models project validate --input - < doc.json
+llm-kit models project write --input - [--if-match SHA256] < doc.json
+llm-kit models project write --layer local --key draft.generate.primary --model luna --effort high
+llm-kit models project clear --key draft.generate.primary
+llm-kit models catalog [--probe-auth]
+```
+
+`--project-root` and `--file` select the project and the file (the file stays
+beneath the root; a symlink or an escaping path is refused). `write` validates the
+document and stores it atomically as canonical YAML; `--if-match` refuses the write
+when the stored file has a different digest. The personal layer
+`<file-stem>.local.yaml` (default `.llm-kit/models.local.yaml`) overrides the
+tracked selections per key and is meant to stay untracked; the library does not
+edit `.gitignore`. `show` and `catalog` report each selection as
+`{effective, default, source}` under `resolved_selections`, where `source` is
+`default` or `override`. `models catalog` prints, without dispatching, each row in
+the project's order with its exact-model effort menu, whether the endpoint can
+deliver an effort, its call modes and its cost class.
+
+`llm-kit completion complete --request-file -` with `"protocol": 2` then runs one
+call from a row or selection: the library resolves the endpoint and exact model,
+holds the effort to the row's menu, refuses a mode the adapter does not serve, and
+enforces the per-machine consent before anything is spawned. Codex serves
+`workspace` calls, which run in a confined `working_dir` and report the files
+written; Codex needs the `codex` executable and nothing from `bootstrap_lib`, so a venv that
+installs only `katsoft-llm-kit` can run it. The request
+keys, refusal kinds, exit codes and result document are in
+[completion-seam-contract.md](completion-seam-contract.md) ("Protocol 2 selects
+from the project model file").
 
 ## Install and first move
 

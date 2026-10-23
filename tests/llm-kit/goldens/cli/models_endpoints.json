@@ -10,6 +10,9 @@
       "capabilities": {
         "claude-cli": {
           "adapter": "claude-cli",
+          "call_modes": [
+            "completion"
+          ],
           "dropped_params": [
             "max_tokens",
             "temperature",
@@ -173,6 +176,10 @@
         },
         "codex-cli": {
           "adapter": "codex-cli",
+          "call_modes": [
+            "completion",
+            "workspace"
+          ],
           "dropped_params": [
             "max_tokens",
             "temperature",
@@ -258,7 +265,7 @@
             "effort": {
               "emits": "-c model_reasoning_effort=<value>",
               "handling": "mapped",
-              "note": "any truthy string is emitted. The [low, medium, high, xhigh, max] menu is validated on CodexAdapter, which this backend BYPASSES by calling the shared argv builder directly, so no menu is advertised",
+              "note": "validated before dispatch against the exact model's measured menu (llm_kit.registry.model_profiles; gpt-6-luna stops at max, gpt-6.1-sol also takes ultra, no Codex model takes none); a model without a measured profile is held to the harness-wide [low, medium, high, xhigh, max] menu. Omit it to send nothing. No menu is advertised here because the menu is a property of the model: the model catalogue reports it",
               "type": "string"
             },
             "extras.add_dirs": {
@@ -337,6 +344,9 @@
         },
         "opencode-cli": {
           "adapter": "opencode-cli",
+          "call_modes": [
+            "completion"
+          ],
           "dropped_params": [
             "max_tokens",
             "temperature",
@@ -510,6 +520,9 @@
         },
         "openrouter": {
           "adapter": "openrouter",
+          "call_modes": [
+            "completion"
+          ],
           "conditional_params": {
             "effort": {
               "emits": "reasoning_effort | chat_template_kwargs.reasoning_effort",
@@ -672,7 +685,7 @@
           "effort": "high",
           "harness": "codex",
           "kind": "harness",
-          "model": "gpt-5.6-luna",
+          "model": "gpt-6-luna",
           "name": null
         },
         "openrouter": {
@@ -680,10 +693,10 @@
           "base_url": "https://openrouter.ai/api/v1",
           "default_model": "gpt-mini",
           "effort_delivery": {
-            "deliverable": false,
-            "emits": null,
-            "source": "none",
-            "style": null
+            "deliverable": true,
+            "emits": "reasoning_effort",
+            "source": "endpoint",
+            "style": "top-level"
           },
           "key_env": "OPENROUTER_API_KEY",
           "kind": "transport",
@@ -766,7 +779,7 @@
           "effort": "high",
           "harness": "codex",
           "kind": "harness",
-          "model": "gpt-5.6-sol",
+          "model": "gpt-6.1-sol",
           "name": null
         },
         "sonnet": {

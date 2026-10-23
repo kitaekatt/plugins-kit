@@ -8,7 +8,7 @@ description: Use when checking, setting, or rotating the OpenRouter API key, or 
 
 # OpenRouter Account
 
-Manage the shared OpenRouter API key that other plugins and project scripts depend on. The key is stored in a user-scoped `.env` file at `~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.env` and consulted by anything that imports `llm_kit` (today: loc-ops; future: any plugin that calls OpenRouter).
+Manage the shared OpenRouter API key that other plugins and project scripts depend on. The key is stored in a user-scoped `.env` file at `$XDG_CONFIG_HOME/llm-kit/.env` (`~/.config/llm-kit/.env` when the variable is unset) and consulted by anything that imports `llm_kit` (today: loc-ops; future: any plugin that calls OpenRouter).
 
 ## Technique
 
@@ -81,12 +81,12 @@ Do NOT use for translating strings, choosing models, debugging chunk failures, o
 
 ## The CLI
 
-The plugin ships one CLI, `llm-kit` (console script `llm_kit.cli:main`), with the groups `account`, `completion`, `models`, `jobs`, `pipeline`, `frontdoor` and `local`. This skill covers the three key-management verbs of the `account` group; see README.md for the other groups. Everywhere below, a bare `status`, `set-key` or `which` means `llm-kit account <verb>`.
+The plugin ships one CLI, `llm-kit` (console script `llm_kit.cli:main`), with the groups `account`, `completion`, `models`, `jobs`, `pipeline`, `frontdoor`, `local` and `consent`. This skill covers the three key-management verbs of the `account` group; see README.md for the other groups. Everywhere below, a bare `status`, `set-key` or `which` means `llm-kit account <verb>`.
 
 | Command | What it does |
 |---------|--------------|
 | `account status [--json] [--no-validate] [--project-root DIR]` | Resolves the key from env / project / user .env (in that order), calls `GET /auth/key`, prints account label, usage, limit, free-tier flag, rate limit. Exit 0 = OK; non-zero = missing or rejected. With `--json` it prints one document whose `state` field is `missing_key`, `key_present`, `not_validated`, `ok`, `rejected_key`, `no_credit` or `check_failed` (never the key; `key_sha256` identifies it) and exits 0 whenever the document was printed. `--no-validate` resolves the key and its source without calling the endpoint. |
-| `account set-key [--key VALUE] [--no-validate]` | Writes a new key to the user-scoped .env. With no `--key`, prompts via `getpass` (input hidden). Validates the key against `/auth/key` before writing unless `--no-validate` is passed. |
+| `account set-key [--key VALUE] [--no-validate]` | Writes a new key to the user-scoped .env (`$LLM_KIT_ENV_FILE` when set, else the neutral file; a first neutral file starts from the legacy file's keys). With no `--key`, prompts via `getpass` (input hidden). Validates the key against `/auth/key` before writing unless `--no-validate` is passed. |
 | `account which` | Prints the source path of the resolved key (`env`, `project: <path>`, `user: <path>`, or `missing`). Useful when the user is confused about which file is being read. |
 
 ### Invocation
@@ -130,7 +130,7 @@ Bootstrap will NOT have prompted for this at session start -- an OpenRouter key 
 
 **Account out of credit (HTTP 402)** -- the key is valid but the account has no balance. Top up at <https://openrouter.ai/credits>. The next bootstrap session-start automatically clears the cached `last_validated.sha256` once a successful `/auth/key` call happens, so no manual cache reset is needed.
 
-**Key loaded from the wrong place** -- run `which` to see which file Wins the precedence resolution (env var > project `.env` > user `.env` > the endpoint's configured `key_file`, source `key_file`). If the user wants the user-scoped file to win but a project file is shadowing it, delete `<project>/.local-data/plugins-kit/llm-scripting-kit/.env` (and `<project>/.local-data/llm-scripting-kit/.env`, the superseded location, if it exists -- `which` names whichever one actually won).
+**Key loaded from the wrong place** -- run `which` to see which file Wins the precedence resolution (env var > project `.env` > user `.env` > the endpoint's configured `key_file`, source `key_file`). If the user wants the user-scoped file to win but a project file is shadowing it, delete the project file `which` names: `<project>/.llm-kit/.env`, `<project>/.local-data/plugins-kit/llm-scripting-kit/.env`, or `<project>/.local-data/llm-scripting-kit/.env` (the superseded location).
 
 **Bootstrap plugin not installed** -- llm-kit declares a dependency on `plugins-kit:bootstrap`. If bootstrap isn't installed/enabled, the session-start credential check never runs, so `deferred_requirements.json` is absent and the preflight has no recorded statement to present. Without bootstrap the venv console script under Invocation is absent, because bootstrap never provisioned that venv. The shim the plugin ships at its own `bin/llm-kit` (`bin/llm-kit.cmd` on Windows), under the plugin's install directory, is what falls back to system Python, so run `status` through that shim and fall back to the two options above. Installing/enabling bootstrap restores the recorded diagnosis on the next session.
 
@@ -138,9 +138,11 @@ Bootstrap will NOT have prompted for this at session start -- an OpenRouter key 
 
 | Path | Purpose |
 |------|---------|
-| `~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.env` | Canonical user-scoped credential file. 0600 perms on Unix. |
-| `<project>/.local-data/plugins-kit/llm-scripting-kit/.env` | Canonical per-project override. Wins over the user file when present. Same `<marketplace>/<plugin>` namespace as the project `config.yaml`. |
-| `<project>/.local-data/llm-scripting-kit/.env` | Superseded per-project location (no marketplace segment). Still read, below the canonical project path, so existing files keep working; a key resolved from it prints a one-time "move the file" notice. |
+| `$XDG_CONFIG_HOME/llm-kit/.env` (`~/.config/llm-kit/.env` when the variable is unset) | Canonical user-scoped credential file, the one `set-key` writes. 0600 perms on Unix. `LLM_KIT_ENV_FILE` names a different file and replaces the whole user layer. |
+| `~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.env` | Legacy user-scoped file. Read only when the neutral file does not exist; never written. |
+| `<project>/.llm-kit/.env` | Canonical per-project override. Wins over the user file when present. |
+| `<project>/.local-data/plugins-kit/llm-scripting-kit/.env` | Namespaced per-project override, read below `<project>/.llm-kit/.env`. Same `<marketplace>/<plugin>` namespace as the project `config.yaml`. |
+| `<project>/.local-data/llm-scripting-kit/.env` | Superseded per-project location (no marketplace segment). Still read, below the namespaced project path, so existing files keep working; a key resolved from it prints a one-time "move the file" notice. |
 | `OPENROUTER_API_KEY` env var | Highest priority. Useful for CI / one-shot overrides. |
 | the endpoint's configured `key_file` | Lowest priority. A bare-value credential file (its whole, stripped content is the key), consulted only when every layer above misses. The escape hatch for a credential already materialized as a file (e.g. by secrets-kit) so it need not also be copied into a `.env`. Reported as source `key_file` by `which`. |
 | `~/.claude/plugins/data/plugins-kit/llm-kit/deferred_requirements.json` | Bootstrap's recorded diagnosis when the key is missing/rejected, including the verbatim ask the preflight presents. The engine writes it into llm-kit's own data directory after each session-start run of `custom_bootstrap.py`, and removes it once the key validates. |

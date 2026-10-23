@@ -66,6 +66,7 @@ from unittest import mock
 
 import pytest
 
+from test_cli_harness import shipped_openrouter_without_style  # noqa: F401 -- fixture
 from final_wording import claude_contract_to_final, to_final
 
 _REPO = Path(__file__).resolve().parents[2]
@@ -127,6 +128,28 @@ def sides():
 # --------------------------------------------------------------------------
 
 _MASKED_FIELDS = frozenset({"wall_ms", "started_at", "ended_at"})
+
+# Declared difference: the final Capabilities record carries ``call_modes`` (which
+# modes an adapter honors); the frozen legacy record has no such field. Both the
+# dataclass shape and its comparable value leave the field out, and a dedicated
+# test below pins the final side's values.
+# The final LLMResponse also carries ``reported_model`` and the ``estimated_cost_*`` pair (a
+# downstream-reported model id and a non-authoritative cost figure); the frozen legacy one has neither.
+_FINAL_ONLY_FIELDS = frozenset({"call_modes", "reported_model", "estimated_cost_usd", "estimated_cost_source"})
+_CALL_MODES_PARAM = ", call_modes: 'Tuple[str, ...]' = ('completion',)"
+# LLMResponse's final-only trailing parameters (see _FINAL_ONLY_FIELDS).
+_RESPONSE_EXTRA_PARAMS = (
+    ", reported_model: 'Optional[str]' = None",
+    ", estimated_cost_usd: 'Optional[float]' = None",
+    ", estimated_cost_source: 'Optional[str]' = None",
+)
+
+
+def _without_final_only_params(text: str) -> str:
+    text = text.replace(_CALL_MODES_PARAM, "")
+    for param in _RESPONSE_EXTRA_PARAMS:
+        text = text.replace(param, "")
+    return text
 _TEXT_SUBS: list[str] = []
 
 
@@ -162,6 +185,8 @@ def norm(value):
         value = claude_contract_to_final(value)  # llm-kit delivers a claude contract natively
         out = {"__type__": type(value).__name__}
         for f in dataclasses.fields(value):
+            if f.name in _FINAL_ONLY_FIELDS:
+                continue
             item = getattr(value, f.name)
             out[f.name] = "<masked>" if f.name in _MASKED_FIELDS else norm(item)
         return out
@@ -361,7 +386,7 @@ _FN_ADDR = re.compile(r"<function (\w+) at 0x[0-9a-fA-F]+>")
 
 
 def _sig(fn) -> str:
-    text = _SIG_PREFIX.sub("X.", str(inspect.signature(fn)))
+    text = _without_final_only_params(_SIG_PREFIX.sub("X.", str(inspect.signature(fn))))
     # Deliberate: codex_backend names Budget through registry.conserve.
     text = text.replace("usage_budget.Budget", "conserve.Budget")
     return _FN_ADDR.sub(r"<function \1>", text)
@@ -394,9 +419,12 @@ def shape(value):
                     f.default if f.default is not dataclasses.MISSING and _simple(f.default) else "<d>",
                 )
                 for f in dataclasses.fields(value)
+                if f.name not in _FINAL_ONLY_FIELDS
             ]
         for key, item in vars(value).items():
             if key.startswith("__") and key.endswith("__") and key not in ("__init__", "__call__"):
+                continue
+            if dataclasses.is_dataclass(value) and key in _FINAL_ONLY_FIELDS:
                 continue
             raw = item.__func__ if isinstance(item, (staticmethod, classmethod)) else item
             if inspect.isfunction(raw):
@@ -438,12 +466,19 @@ def assert_same_surface(legacy_mod, final_mod, *, only_legacy=(), only_final=())
 
 # (attr, names only the legacy module has, names only the final module has)
 _SURFACE_CASES = [
-    ("acap", (), ()),
+    ("acap", (), ("MODE_COMPLETION", "MODE_WORKSPACE")),
     ("profile", (), ()),
-    ("harness", (), ()),
+    ("harness", (), ("check_effort", "codex_command")),
     ("runner", (), ()),
-    ("backends", (), ()),
-    ("codex", ("usage_budget",), ("conserve", "usage_sources")),
+    # Final-only: the Claude effort check (check_effort over the harness-wide menu) and the
+    # estimated-cost labels / reported-model reader that fill LLMResponse's final-only fields.
+    ("backends", (), ("CLAUDE_EFFORT_ORDER", "CLAUDE_HARNESS", "ESTIMATE_SOURCE_CLAUDE_CLI",
+                      "ESTIMATE_SOURCE_USAGE_COST", "_claude_reported_model", "_untrusted_native_cost",
+                      "check_effort")),
+    # The final backend delegates to llm_kit.adapters.codex_command directly, so
+    # the legacy probe constant, probe function and its signature import are gone.
+    ("codex", ("IGNORE_USER_CONFIG_BOOTSTRAP", "_codex_argv_builder", "inspect", "usage_budget"),
+     ("CODEX_EFFORT_ORDER", "CODEX_HARNESS", "check_effort", "codex_command", "conserve", "usage_sources")),
     ("opencode", (), ()),
     ("account", (), ()),
     ("client", (), ()),
@@ -562,6 +597,7 @@ def registry(tmp_path, monkeypatch):
     return path
 
 
+@pytest.mark.usefixtures("shipped_openrouter_without_style")
 def test_resolve_endpoint_profile_over_a_registry(par, registry):
     def scenario(S):
         return {
@@ -696,8 +732,9 @@ def test_codex_adapter_builds_the_same_argv(par, tmp_path):
     assert result["relative_cwd"][0] == "raise"
 
 
-def test_codex_adapter_bootstrap_edges(par, tmp_path, monkeypatch):
-    import bootstrap_lib.codex as bcodex
+def test_codex_adapter_detection_goes_through_the_canonical_module(par, tmp_path, monkeypatch):
+    """Both sides detect through llm_kit.adapters.codex_command (legacy via the alias)."""
+    from llm_kit.adapters import codex_command
 
     root = tmp_path / "root"
     root.mkdir()
@@ -707,24 +744,21 @@ def test_codex_adapter_bootstrap_edges(par, tmp_path, monkeypatch):
         calls.append("detect")
         return types.SimpleNamespace(available=len(calls) % 2 == 1)
 
-    monkeypatch.setattr(bcodex, "detect_codex", fake_detect)
+    monkeypatch.setattr(codex_command, "detect_codex", fake_detect)
 
     def scenario(S):
         calls.clear()
         adapter = S.harness.CodexAdapter(argv_prefix=("codex",))
         entry = _harness_entry(S)
-        out = {"first": adapter.is_available(), "second": adapter.is_available()}
-        # REQUIRED edge: bootstrap_lib.codex absent means no argv and no detection.
-        with monkeypatch.context() as m:
-            m.setitem(sys.modules, "bootstrap_lib.codex", None)
-            out["argv_without_bootstrap"] = outcome(adapter.build_argv, entry, root, prompt="p")
-            out["available_without_bootstrap"] = outcome(adapter.is_available)
-        return out
+        return {
+            "first": adapter.is_available(),
+            "second": adapter.is_available(),
+            "argv": outcome(adapter.build_argv, entry, root, prompt="p"),
+        }
 
     result = par(scenario)
     assert result["first"] is True and result["second"] is False
-    assert result["argv_without_bootstrap"][0] == "raise"
-    assert result["available_without_bootstrap"][0] == "raise"
+    assert result["argv"][0] == "ok"
 
 
 def test_opencode_adapter_builds_the_same_argv(par, tmp_path, monkeypatch):
@@ -1071,6 +1105,7 @@ def test_openrouter_request_building(par, named_registry):
     assert result["skill_context_wrong_type"]["res"][0] == "raise"
 
 
+@pytest.mark.usefixtures("shipped_openrouter_without_style")
 def test_openrouter_endpoint_introspection(par, named_registry):
     def scenario(S):
         out = {}
@@ -1444,8 +1479,7 @@ def test_codex_token_total_and_prompt_folding(par):
             )],
             "compose": [S.codex.compose_prompt("sys", "user"), S.codex.compose_prompt("", "user"),
                         S.codex.compose_prompt("sys", "")],
-            "constants": [S.codex.PROMPT_SEPARATOR, S.codex.CODEX_EXTRA_KEYS,
-                          S.codex.IGNORE_USER_CONFIG_BOOTSTRAP],
+            "constants": [S.codex.PROMPT_SEPARATOR, S.codex.CODEX_EXTRA_KEYS],
         }
 
     result = par(scenario)
@@ -1615,20 +1649,13 @@ def test_codex_text_only_mode(par, tmp_path, monkeypatch):
     assert result["prefix_resolved"]["res"][0] == "ok"
 
 
-def test_codex_bootstrap_edges(par, tmp_path, monkeypatch):
-    """REQUIRED edge (the argv builder) and REFUSE edge (text-only needs ignore_user_config)."""
-    import bootstrap_lib.codex as bcodex
+def test_codex_backend_builds_through_the_canonical_module(par, tmp_path, monkeypatch):
+    """Plain and text-only calls build through codex_command on both sides.
 
-    real_builder = bcodex.build_codex_exec_argv
-
-    def old_builder(*, root, model=None, effort=None, output_file=None, add_dirs=(), sandbox="workspace-write",
-                    network=True, output_schema=None, argv_prefix=None, scratch_dir=None,
-                    json_events=False, extra_config=()):
-        return real_builder(root=root, model=model, effort=effort, output_file=output_file,
-                            add_dirs=add_dirs, sandbox=sandbox, network=network,
-                            output_schema=output_schema, argv_prefix=argv_prefix,
-                            scratch_dir=scratch_dir, json_events=json_events, extra_config=extra_config)
-
+    The legacy backend reaches the same module through the bootstrap_lib.codex
+    alias; the final backend imports it directly. The builder accepts
+    ``ignore_user_config``, so text-only mode runs and no version probe exists.
+    """
     catalog = json.dumps({"models": [{"slug": "gpt-x"}]})
 
     def scenario(S):
@@ -1638,22 +1665,14 @@ def test_codex_bootstrap_edges(par, tmp_path, monkeypatch):
             backend = S.codex.CodexCliBackend(argv_prefix=("codex",), runner=runner, **backend_kwargs)
             out[key] = {"res": outcome(backend.complete, "SYS", "USER", model="gpt-x"), "calls": runner.calls}
 
-        with monkeypatch.context() as m:
-            m.setitem(sys.modules, "bootstrap_lib.codex", None)
-            run("absent", _CodexRunner())
-            run("absent_text_only", _CodexRunner(catalog=(catalog, "", 0)), text_only=True)
-        with monkeypatch.context() as m:
-            m.setattr(bcodex, "build_codex_exec_argv", old_builder)
-            run("old_plain_ok", _CodexRunner())
-            run("old_text_only_refused", _CodexRunner(catalog=(catalog, "", 0)), text_only=True)
+        run("plain", _CodexRunner())
+        run("text_only", _CodexRunner(catalog=(catalog, "", 0)), text_only=True)
         return out
 
     result = par(scenario)
-    for key in ("absent", "absent_text_only"):
-        assert result[key]["res"][0] == "raise" and "RuntimeError" in result[key]["res"][1], key
-        assert "bootstrap_lib.codex is not importable" in result[key]["res"][2], key
-    assert result["old_plain_ok"]["res"][0] == "ok"
-    assert "ignore_user_config" in result["old_text_only_refused"]["res"][2]
+    assert result["plain"]["res"][0] == "ok"
+    assert result["text_only"]["res"][0] == "ok"
+    assert "--ignore-user-config" in result["text_only"]["calls"][-1]["cmd"]
 
 
 # --------------------------------------------------------------------------

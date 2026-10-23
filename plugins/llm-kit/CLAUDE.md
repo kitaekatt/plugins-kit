@@ -71,18 +71,22 @@ refuses at the call rather than at import. The library source is
 distribution; this plugin holds no library source and publishes no shared lib. A consumer
 venv installs the package with the extras it reaches (`katsoft-llm-kit[<extras>]>=A.B,<N` in
 its `pyproject.toml`). The plugin's own venv does the same: its `pyproject.toml` is a
-non-package project that requires the released `katsoft-llm-kit[<every extra>]>=1.2,<2` and
+non-package project that requires the released `katsoft-llm-kit[<every extra>]>=1.3,<2` and
 `katsoft-contracts>=1.0,<2`, so the extras flow from that distribution and `bootstrap.json`
-names none. The floor is 1.2 because `custom_bootstrap.py` reads `llm-kit account status
---json`, which first shipped in 1.2.0; bootstrap holds the venv at the highest released
+names none. The floor is 1.3 because the surface this plugin documents (Codex in package
+mode, the project model file, `models catalog`, protocol 2 of `completion complete`, local
+selection overrides and the neutral user paths) first ships in 1.3.0, and because
+`custom_bootstrap.py` reads `llm-kit account status --json`, which first shipped in 1.2.0;
+bootstrap holds the venv at the highest released
 version the requirement admits, so a change under `packages/katsoft-llm-kit/src/llm_kit/`
 reaches the plugin's venv only through a `katsoft-llm-kit` release.
 
 `bootstrap_lib` is a shared library with its own owner. The library reaches it
-lazily (the codex argv builder, skill material, execution events, the interrupt
-contract, model-declaration validation). A consumer venv that installs `llm_kit` but
-not `bootstrap_lib` imports `llm_kit.adapters.codex_backend` cleanly and fails on
-the first dispatch, because the package does not carry the shared-lib edge to a consumer:
+lazily (skill material, claudx propagation, the code-review lane). Codex command
+construction is not one of those edges: `llm_kit.adapters.codex_command` owns it and
+imports nothing outside the standard library. A consumer venv that installs `llm_kit` but
+not `bootstrap_lib` imports `llm_kit.completion.skill_context` cleanly and fails on
+the first skill-context call, because the package does not carry the shared-lib edge to a consumer:
 each consumer declares what it needs (`plugins/CLAUDE.md`, "Why shared libs rather than
 published packages"). `shared_lib_imports` in `bootstrap.json` declares the edge for
 llm-kit's own venv.
@@ -107,18 +111,19 @@ choosing a side:
   them from `katsoft_contracts` and the legacy probes are skipped; in legacy
   mode the existing probes and their diagnostics run unchanged. Add no fourth
   routed name without extending `ROUTED_CONTRACTS` and its test.
-- Any other `bootstrap_lib` use (codex, claudx, skill material, the code-review
+- Any other `bootstrap_lib` use (claudx, skill material, the code-review
   lane) calls `_runtime.require_fleet("<feature>")` before the import. It
   raises `UnsupportedInPackageMode` in package mode only when `_runtime.fleet()`
   is False, that is, when `bootstrap_lib` does not import (cached per process).
   `fleet()` tests availability only; whether the linked `bootstrap_lib` is new
-  enough stays in each feature's own probe (skill context, the codex argv
-  builder), never in a global gate.
+  enough stays in each feature's own probe (skill context), never in a global
+  gate. Codex needs no `bootstrap_lib` and has no gate: the backend, the harness
+  adapter and reachability import `llm_kit.adapters.codex_command` directly.
 - `cli.main()` re-execs into the plugin venv only in legacy mode.
 - Package-mode model config without the fleet is the one policy point
   `registry.models.package_mode_model_config`; with the fleet, package mode
-  uses the layered registry like legacy mode, and codex reachability uses
-  `bootstrap_lib.codex.detect_codex`.
+  uses the layered registry like legacy mode. Codex reachability uses
+  `llm_kit.adapters.codex_command.detect_codex` in both.
 - `_runtime` is a support module outside the 16 components: any component may
   import it, it imports only `_deployment`, and only `_runtime` imports
   `_deployment`. `tests/llm-kit/test_import_graph.py` enforces this. Import it
@@ -132,17 +137,33 @@ keep the spellings they had before the plugin was consolidated. A name that look
 like a leftover is a deliberate compatibility choice
 (`docs/reference/llm-kit-architecture.md`, "Persisted-state compatibility"):
 
-- **Credentials and configuration** resolve from the historical locations and
-  precedence: the endpoint's `key_env` variable, the project `.env` at
+- **Credentials** resolve in this order: the endpoint's `key_env` variable, the project
+  `.env` at `<project>/.llm-kit/.env`, the namespaced project `.env` at
   `.local-data/plugins-kit/llm-scripting-kit/.env` (and the superseded
-  `.local-data/llm-scripting-kit/.env`), the user `.env` at
-  `~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.env`, then the
-  endpoint's `key_file`; configuration layers resolve from the fleet file
-  `~/.claude/config/llm-scripting-kit.yaml`, the user `config.yaml` beside the
-  user `.env` and the project `config.yaml`. llm-kit seeds no competing layer of
-  its own, and its `custom_bootstrap.py` migrates no legacy file. The one
-  exception is `llm_kit.registry.constants.CLI_COMMAND`, which names the llm-kit
-  venv and executable.
+  `.local-data/llm-scripting-kit/.env`), the user key file, then the endpoint's
+  `key_file`. The user key file is `$LLM_KIT_ENV_FILE` when set (that file alone),
+  else `$XDG_CONFIG_HOME/llm-kit/.env` (`$HOME/.config/llm-kit/.env` when the
+  variable is unset or not absolute), else, only when that neutral file does not
+  exist, the legacy `~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.env`,
+  which is read and never written. `account set-key` writes the override or the
+  neutral file and starts a first neutral file from the legacy file's keys, so the
+  neutral file that then shadows the legacy one drops none.
+- **The model-endpoints registry and consent** follow the same shape. The registry is
+  `$MODEL_ENDPOINTS_REGISTRY` when set (an explicit path; a missing file is an error),
+  else `$XDG_CONFIG_HOME/llm-kit/model-endpoints.yaml`, else, only when the neutral
+  file does not exist, the read-only legacy `~/.claude/config/model-endpoints.yaml`.
+  Consent is `$LLM_KIT_CONSENT_FILE` when set, else
+  `$XDG_CONFIG_HOME/llm-kit/consent.json`, else the read-only legacy
+  `~/.claude/plugins/data/plugins-kit/llm-kit/consent.json`; `consent set` writes the
+  override or the neutral file, carrying the legacy values across on the first write.
+  `llm_kit.registry.user_paths` is the one place the neutral directory is spelled, and
+  it names no harness. The library creates nothing on a read.
+- **Configuration layers** keep the historical files: the fleet file
+  `~/.claude/config/llm-scripting-kit.yaml`, the user
+  `~/.claude/plugins/data/plugins-kit/llm-scripting-kit/config.yaml`, and the
+  project `config.yaml`. llm-kit seeds no competing layer of its own, and its
+  `custom_bootstrap.py` migrates no legacy file. The one exception is
+  `llm_kit.registry.constants.CLI_COMMAND`, which names the llm-kit venv and executable.
 - **Environment variables** keep their spelling (`LLM_SCRIPTING_KIT_USAGE_SESSION`, `CONTENT_PIPELINE_LLM_MODELS`,
   `CONTENT_PIPELINE_SPEND_LEDGER`, `JOB_KIT_BACKPRESSURE_CAP_S`, the `JOB_KIT_*`
   contract variables).
@@ -225,13 +246,54 @@ and rejects `high`, `top-level` and `chat_template_kwargs` give
 `lower_effort(endpoint, effort)` returns the next value below `effort` (remapping
 `high` to `xhigh` on ninfer first) and `None` at the bottom, for a value outside
 the menu, or for an empty menu. Harness entries resolve through
-`harness_effort_order(harness)`: codex and claude give the fixed menu
+`harness_effort_order(harness)`: codex and claude give the harness-wide menu
 `("low", "medium", "high", "xhigh", "max")`, and `opencode-cli` gives `()` because
-its effort values are provider-defined. The claude menu is not advertised as a
-validated capability: the claude adapter record states that it validates no value
-menu, and the menu serves `lower_effort` only. The retry rule: on a length stop
+its effort values are provider-defined. That harness-wide menu is a fallback, not the
+menu of a model: it serves `lower_effort` and validates a model the library has not
+measured. The retry rule: on a length stop
 (`EmptyCompletionError`, reasoning ate the budget) retry once per level at
 `lower_effort`; stop at `None`. An unknown endpoint raises `EndpointRegistryError`.
+
+**An effort menu belongs to one exact model over one route.**
+`llm_kit.registry.model_profiles` is the library's table of measured menus, keyed on
+(route, exact model id) for the routes `codex`, `claude` and `openrouter`. The data is
+measured at build time and shipped; each profile records its source (the Codex CLI's
+model catalogue, the Claude Code model table, the OpenRouter `/models` listing) and the
+day it was taken, and nothing at runtime reads `~/.codex`, `~/.claude` or the network, so
+an install with no AI harness sees the same menus. `gpt-6-luna` stops at `max`,
+`gpt-6.1-sol` also takes `ultra`, no Codex or Claude CLI model takes `none`, and an
+OpenRouter model takes `none` only where its vendor lists it. `check_effort` is the one
+validator: `CodexCliBackend`, `CodexAdapter` and `ClaudeCliBackend` call it, so no
+backend path bypasses a menu; the project model file shares the menu table
+(`exact_effort_menu`, `library_effort_menu_with_source`) but does not call the validator. A model with no profile has no
+exact menu and the library invents none: it falls back to the harness-wide order, and a
+project row for it declares no `efforts` and selects a null effort. A new model enters by
+adding a measured profile (with its source and date), never by widening a harness table.
+A profile does not make an endpoint deliver an effort: the endpoint still needs a
+resolved `effort_style`.
+
+**The project model file is a tracked catalogue plus named selections.**
+`llm_kit.registry.project_models` owns `.llm-kit/models.yaml` (`version: 1`, an ordered
+`catalog` of rows `{id, label, endpoint, model, efforts, request_defaults}`, and
+`selections` mapping consumer-chosen keys to `{model, effort}`). It holds no key, key file,
+base URL, consent or vendor capability claim: endpoints, credentials and billing resolve
+through the endpoint registry, and a row may narrow the library menu and never widen it.
+The path is confined to the project root (a symlink or an escaping path is refused).
+`llm-kit models project show|validate|write` read, check and atomically store the file in
+canonical form (`show` prints the sha256 that `--if-match` compares); `validate` and
+`write` take the JSON document on stdin. A second, personal layer `<file-stem>.local.yaml`
+(default `.llm-kit/models.local.yaml`, `{version: 1, selections: {...}}`) overrides the
+tracked selections per key: `models project write --layer local` replaces it, or with
+`--key K --model M [--effort E]` sets one override, and `models project clear --key K`
+removes one (the file is deleted when none remains). An override equal to the tracked
+default is dropped, and the library never edits `.gitignore`. `models catalog` prints the
+ordered catalogue as JSON without dispatching: each row's exact-model menu and the source
+of that menu (`effort_source`), whether the endpoint can deliver an effort, its `modes`
+(the adapter's call modes), its cost and the `consent` state, and `resolved_selections`, which reports per key
+`{effective, default, source}` (`source` is `default` or `override`); a caller reads
+`resolved_selections`, not `selections`, for what a call uses. `catalog --probe-auth` asks
+the `claude` and `codex` CLIs how they are authenticated so a harness row reports a cost
+class; without it that class is null.
 
 **Marker and billing are explicit metadata, never inferred.** `frontdoor: true`
 (strict boolean) on a transport entry says only that its `base_url` is a front
@@ -476,8 +538,10 @@ algorithm rather than only similar syntax.
   runner. The runner's `(stdout, stderr, returncode)` contract does not carry a
   codex result -- codex returns via `-o <FILE>` -- so `CodexCliBackend` manages a
   temp output file around the call rather than parsing stdout.
-- `CodexCliBackend` builds argv exclusively through `bootstrap_lib.codex`
-  (`build_codex_exec_argv`), imported lazily; see the `bootstrap_lib` rule above.
+- `CodexCliBackend` builds argv exclusively through
+  `llm_kit.adapters.codex_command.build_codex_exec_argv`, the one owner of Codex
+  detection and command construction. `bootstrap_lib.codex` is an exact alias of that
+  module for older callers and never a second implementation.
 
 **Effort delivery is specialized per endpoint and reported per call.** The openrouter
 family record keeps `effort` in `dropped_params` (the truth for an unknown endpoint) and
@@ -628,16 +692,16 @@ reachable, `1` unreachable, `5` unknown -- `EXIT_INDETERMINATE`
 `EXIT_USAGE` (2), which means the endpoint *name* never resolved to configuration at
 all, decided before any check is attempted.
 
-**`codex-cli` prefers `bootstrap_lib.detect_codex` and falls back; it does not report
-the import failure as a verdict.** `bootstrap_lib` is an OPTIONAL shared-lib
-dependency of the reachability path -- its absence says nothing about whether codex
-ITSELF is installed and working on the machine. `detect_codex` stays the preferred
-path when importable (it is cached and reads a structured version), but its absence
-must degrade to the ordinary PATH + `--version` check the other harnesses use, never
-to a wrong answer. Any future per-harness check with a "preferred path, PATH-based
-fallback" shape follows the same rule: an optional dependency failing to import is
-`unknown`-shaped information about the CHECK, not `unreachable`-shaped information
-about the TARGET, unless a real fallback check exists to produce an actual verdict.
+**`codex-cli` reachability is `llm_kit.adapters.codex_command.detect_codex`, the same
+detector the backend and the harness adapter use.** It is cached for the process, reads a
+structured version and fails closed: a CLI that is not on PATH, does not run, times out or
+exits nonzero is `unreachable` with the specific reason, so a verdict here and a dispatch
+agree on whether Codex is installed. The module is standard-library only and imports
+nothing from a plugin or a harness, so there is no optional import whose failure could be
+mistaken for a verdict about the target. Any per-harness check that adds a "preferred path,
+PATH-based fallback" shape keeps the rule: an optional dependency failing to import is
+`unknown`-shaped information about the CHECK, not `unreachable`-shaped information about
+the TARGET, unless a real fallback check exists to produce an actual verdict.
 
 ### Usage pacing is a third axis, and it fails open
 
@@ -1099,11 +1163,14 @@ off the classes it may not use. Classes are `free`, `usage` and `spend`; classif
 - **`spend`**: everything else, including a metered transport, an entry with no registry
   entry, and an unknown kind.
 
-**Per-machine consent.** The file is
-`~/.claude/plugins/data/plugins-kit/llm-kit/consent.json` (resolved on each call), with
+**Per-machine consent.** The file is `$LLM_KIT_CONSENT_FILE` when set, else
+`$XDG_CONFIG_HOME/llm-kit/consent.json`, else the legacy
+`~/.claude/plugins/data/plugins-kit/llm-kit/consent.json` when the neutral file does not
+exist (resolved on each call; "Persisted state keeps its historical names"), with
 `{"schema": 1, "usage": bool, "spend": bool, "updated_at": ...}`. `free` is always allowed.
 `llm-kit consent show [--json]` prints `usage`, `spend`, `source` (`file`, `absent` or
-`unreadable`), `path` and `note`. `llm-kit consent set [--usage on|off] [--spend on|off]`
+`unreadable`), `path` (the file read), `write_path` (where `consent set` writes) and
+`note`. `llm-kit consent set [--usage on|off] [--spend on|off]`
 changes only the flags given and exits 2 when given neither; it states that operations that
 opt in send their inputs unredacted to the providers of those models.
 `llm_kit.registry.consent.load_consent()` returns `Consent` with `usage`, `spend`, `source`,
@@ -1146,6 +1213,14 @@ a call without the argument. With it:
 `llm-kit models describe <ids> --allow free,usage` applies the same filter from the command
 line (comma-separated or repeated; an unknown class exits 2) and shows the switched-off
 entries.
+
+Protocol 2 of `completion complete` (`references/completion-seam-contract.md`) enforces
+consent without going through `describe`: a project selection names exactly one entry, so
+the call classifies that entry's cost class (probing harness authentication in the request
+workspace) and refuses it with `error.kind` `consent` when `load_consent()` does not allow
+the class. The refusal is raised before any workspace scan, argv or runner call, so a
+refused call spawns nothing. The refusal message names the `consent set` flag that would
+allow the class.
 
 ## `llm_kit.cli`, launchers and bootstrap
 
@@ -1193,4 +1268,4 @@ adaptive-gate and job-backpressure tables above are part of this register.
 | JSON repair `max_edits` / `max_walks` | Seam: parameters of `repair_json_structure` (and `repair_and_evaluate_output`); defaults `MAX_REPAIR_EDITS=24`, `MAX_REPAIR_WALKS=1500`. `finalize_contract` and the CLI do not forward them: a caller that needs other bounds calls the library function. |
 | `_MAX_CLOSER_RUN=8`, `_MAX_REF_DEPTH=16`, `_MISQUOTED_KEY_LOOKBACK=2` | Razor verdict: no seam. Scenarios considered: a run of more than 8 stray closers, a schema `$ref` chain deeper than 16, a misquoted key more than 2 tokens behind the failure. Each is outside the one-slip repair the module promises (a run that long is a different document, and the repair applies only when exactly one fit exists), and a deeper `$ref` chain is a schema fault the caller fixes. Raising them widens the guess space and the ambiguity risk without helping a slip. |
 | Claude text-only flags (`_CLAUDE_TEXT_ONLY_ARGS`) and codex text-only config and catalog sets (`_CODEX_TEXT_ONLY_CONFIG`, `_CODEX_TEXT_ONLY_CATALOG_SET`, `_CODEX_TEXT_ONLY_CATALOG_DROP`) | Razor verdict: no seam. They ARE the guarantee the mode advertises (no filesystem write, shell or subagent); a user-editable set would let the advertisement and the argv disagree. Scenarios considered: a user wanting one tool kept (then they do not want text-only mode; use a mode that allows it), a new codex tool source (a plugin change, re-measured per "A guarantees requirement admits AND arms"). |
-| Effort `_MENUS`, `CODEX_EFFORT_ORDER`, `CLAUDE_EFFORT_ORDER` | Razor verdict: no seam. The tables mirror what each wire style accepts (ninfer rejects `high` with a 400). A user-set menu could only disagree with the server; a server with a different menu declares a different `effort_style` in the registry, which is the existing seam. The harness orders mirror the values each CLI accepts (`codex exec -c model_reasoning_effort`, `claude --effort`); a user-set order could only disagree with the CLI, and a CLI that changes its menu is a plugin change. |
+| Effort `_MENUS`, `CODEX_EFFORT_ORDER`, `CLAUDE_EFFORT_ORDER`, and the measured `model_profiles.PROFILES` | Razor verdict: no seam. The tables mirror what each wire style accepts (ninfer rejects `high` with a 400). A user-set menu could only disagree with the server; a server with a different menu declares a different `effort_style` in the registry, which is the existing seam. The harness orders mirror the values each CLI accepts (`codex exec -c model_reasoning_effort`, `claude --effort`) and are the fallback for a model without a profile. The exact-model profiles are measurements with a recorded source and date; a project may narrow a menu in its model file (`efforts`) and never widen it, and a CLI or vendor that changes a menu is a library change (a new measured profile). |

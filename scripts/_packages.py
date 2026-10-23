@@ -83,6 +83,7 @@ POLL_SECONDS = 10
 RUN_APPEAR_SECONDS = 120
 RUN_WAIT_SECONDS = 20 * 60
 PYPI_WAIT_SECONDS = 15 * 60
+SIMPLE_INDEX_WAIT_SECONDS = 10 * 60
 LEDGER_TRIES = 3
 
 ABSENT = "ABSENT"
@@ -543,6 +544,26 @@ def _real_pypi_json(url: str) -> tuple[int, object]:
         raise ObservationFailed(f"GET {url}: malformed JSON: {exc}") from exc
 
 
+def _real_simple_index(url: str) -> tuple[int, object]:
+    """PEP 691 JSON form of the simple index page (the form uv reads)."""
+    request = urllib.request.Request(
+        url, headers={"Accept": "application/vnd.pypi.simple.v1+json"})
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            body = response.read()
+            status = response.status
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return 404, None
+        raise ObservationFailed(f"GET {url}: HTTP {exc.code}") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise ObservationFailed(f"GET {url}: {exc}") from exc
+    try:
+        return status, json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise ObservationFailed(f"GET {url}: malformed JSON: {exc}") from exc
+
+
 def _real_download(url: str) -> bytes:
     try:
         with urllib.request.urlopen(url, timeout=120) as response:
@@ -627,6 +648,7 @@ class Services:
     smoke: Callable[[Path, object, list[str]], dict]
     sleep: Callable[[float], None] = time.sleep
     now: Callable[[], float] = time.monotonic
+    simple_index: Callable[[str], tuple[int, object]] = _real_simple_index
 
     @classmethod
     def real(cls, root: Path) -> "Services":
@@ -657,6 +679,21 @@ def observe_pypi(services: Services, dist: str, version: str) -> tuple[str, dict
             return FILES_PRESENT, {"url": only["url"], "sha256": digest,
                                    "filename": only["filename"]}
     return ANOMALY, {"files": [f.get("filename") for f in files]}
+
+
+def simple_index_lists(services: Services, dist: str, filename: str) -> bool:
+    """True when https://pypi.org/simple/<dist>/ lists `filename`. uv resolves
+    from this page, not from the JSON API, and the two become visible at
+    different times."""
+    url = f"https://pypi.org/simple/{rb.normalize_dist(dist)}/"
+    status, data = services.simple_index(url)
+    if status == 404:
+        return False
+    if status != 200 or not isinstance(data, dict) \
+            or not isinstance(data.get("files"), list):
+        raise ObservationFailed(f"GET {url}: unexpected response (HTTP {status})")
+    return any(f.get("filename") == filename for f in data["files"]
+               if isinstance(f, dict))
 
 
 def observe_tag(repo: Repo, tag: str) -> str | None:
@@ -833,7 +870,20 @@ class Release:
                               f"{PYPI_WAIT_SECONDS // 60} min; run publish.py again.")
             self.services.sleep(POLL_SECONDS)
 
+    def _wait_simple_index(self, dist: str, version: str, filename: str) -> None:
+        """Do not record a release uv cannot yet resolve."""
+        start = self.services.now()
+        while not simple_index_lists(self.services, dist, filename):
+            if self.services.now() - start >= SIMPLE_INDEX_WAIT_SECONDS:
+                raise Waiting(
+                    f"PyPI's JSON API lists {dist} {version} but the simple index "
+                    f"https://pypi.org/simple/{rb.normalize_dist(dist)}/ does not "
+                    f"list {filename} after {SIMPLE_INDEX_WAIT_SECONDS // 60} min; "
+                    "nothing was recorded. Run publish.py again to keep waiting.")
+            self.services.sleep(POLL_SECONDS)
+
     def _uploaded(self, dist: str, version: str, tag: str, t: str, info: dict) -> None:
+        self._wait_simple_index(dist, version, info["filename"])
         sha = self._verify(dist, version, t, info)
         entry = {
             "version": version, "tag": tag,
