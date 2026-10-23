@@ -575,12 +575,35 @@ class TestModels:
     def test_describe_renders_a_declaration(self, sides, registry, capsys, monkeypatch, home):
         def setup(side: Side) -> None:
             side.patch_declaration_reachability(monkeypatch)
+            if side.name != "legacy":
+                from llm_kit.adapters import harness_auth
+                from llm_kit.registry import cost
 
-        text = same(*both(sides, "models", "describe", "cl", "cdx", "--caller", "session", capsys=capsys,
-                          monkeypatch=monkeypatch, setup=setup))
+                monkeypatch.setattr(
+                    harness_auth, "probe_harness_auth",
+                    lambda harnesses, env=None, *, cwd: {
+                        h.lower(): cost.HarnessAuth(cost.SUBSCRIPTION, "fixture subscription") for h in harnesses
+                    },
+                )
+
+        # The final describe always reports each entry's cost class and the optional-consent note; the legacy
+        # one reports neither. That is the one declared divergence: strip exactly those additions from the final
+        # output, assert they are there, and compare everything else byte for byte.
+        left, right = both(sides, "models", "describe", "cl", "cdx", "--caller", "session", capsys=capsys,
+                           monkeypatch=monkeypatch, setup=setup)
+        consent_lines = [line for line in right.out.splitlines() if line.startswith("Consent layer: optional")]
+        assert len(consent_lines) == 1
+        right = Outcome(right.code, right.out.replace(consent_lines[0] + "\n", ""), right.err)
+        text = same(left, right)
         assert text.code == 0 and text.out
-        as_json = same(*both(sides, "models", "describe", "cl", "cdx", "--json", capsys=capsys,
-                             monkeypatch=monkeypatch, setup=setup))
+        left, right = both(sides, "models", "describe", "cl", "cdx", "--json", capsys=capsys,
+                           monkeypatch=monkeypatch, setup=setup)
+        document = json.loads(right.out)
+        assert document.pop("consent")["optional"] is True
+        for entry in document["rendered_entries"]:
+            assert entry.pop("cost")["class"] == "subscription"
+        right = Outcome(right.code, json.dumps(document), right.err)
+        as_json = same_json(left, right)
         assert json.loads(as_json.out)
 
     def test_describe_with_nothing_usable_reports_the_floor(self, sides, registry, capsys, monkeypatch, home):

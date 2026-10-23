@@ -14,8 +14,8 @@ Three surfaces, kept apart:
   out-of-quota entries (with their reset time) and unreachable entries, which
   are all real on this machine. Unresolved, unroutable-here,
   requirements-mismatch, excluded and shadowed-core entries are HIDDEN.
-  Entries switched off by the cost-class ``allow`` filter are SHOWN, never
-  hidden: :attr:`Ranking.switched_off` lists them, and :meth:`Ranking.render`
+  Entries switched off by the cost-class ``allow`` filter (or a consent
+  policy) are SHOWN, never hidden: :attr:`Ranking.switched_off` lists them, and :meth:`Ranking.render`
   and :meth:`Ranking.to_json` name them (and only when there are any).
 - **SKIP** -- selection passes over every non-usable entry silently: no
   notice, no warning, no log line.
@@ -373,6 +373,24 @@ class EntryState:
         }
 
 
+@dataclass(frozen=True)
+class CostedEntryState(EntryState):
+    """An :class:`EntryState` that also reports its registry cost class and the reason for it.
+
+    :func:`describe` builds these only for ``discovery=True``; the classification
+    is information and is independent of any consent. A separate class keeps the
+    base state, and everything built without ``discovery``, unchanged.
+    """
+
+    cost_class: Optional[str] = None
+    cost_reason: str = ""
+
+    def to_json(self) -> Dict[str, Any]:
+        data = super().to_json()
+        data["cost"] = {"class": self.cost_class, "reason": self.cost_reason}
+        return data
+
+
 class NoUsableRoutingTarget(Exception):
     """The floor: no usable rendered entry remains.
 
@@ -466,8 +484,15 @@ class Ranking:
                 "Switched off: "
                 + ", ".join(f"{d.id} ({d.cost_class})" for d in self.switched_off)
             )
+        lines.extend(self._discovery_lines())
         lines.append(self.rule)
         return "\n".join(lines)
+
+    def _discovery_lines(self) -> List[str]:
+        return []
+
+    def _discovery_json(self) -> Dict[str, Any]:
+        return {}
 
     def to_json(self) -> Dict[str, Any]:
         default = self.default
@@ -480,7 +505,32 @@ class Ranking:
         }
         if self.switched_off:
             data["switched_off"] = [d.to_json() for d in self.switched_off]
+        data.update(self._discovery_json())
         return data
+
+
+@dataclass(frozen=True)
+class DiscoveryRanking(Ranking):
+    """A :class:`Ranking` that also carries the structured consent-layer note.
+
+    ``consent`` is :func:`llm_kit.registry.consent.discovery_note`: the layer is
+    optional, how a caller opts in, and (when a policy was applied) that policy.
+    :func:`describe` returns this class only for ``discovery=True`` or a consent
+    policy; every other ranking is a plain :class:`Ranking`, byte-for-byte as
+    before. :meth:`render` adds one line and :meth:`to_json` one ``consent`` key.
+    """
+
+    consent: Optional[Mapping[str, Any]] = field(default=None, repr=False)
+
+    def _discovery_lines(self) -> List[str]:
+        if self.consent is None:
+            return []
+        from llm_kit.registry.consent import discovery_line  # noqa: PLC0415
+
+        return [discovery_line(self.consent)]
+
+    def _discovery_json(self) -> Dict[str, Any]:
+        return {"consent": dict(self.consent)} if self.consent is not None else {}
 
 
 def _fresh_reading(entry_id: str, spec: ConserveSpec, harness: Optional[str]) -> Budget:
@@ -593,6 +643,12 @@ class _LazyHarnessAuth(Mapping):
         return len(self._auth)
 
 
+def _consent_note(policy: Any) -> Dict[str, Any]:
+    from llm_kit.registry.consent import discovery_note  # noqa: PLC0415
+
+    return discovery_note(policy_in_use=policy)
+
+
 def describe(
     names: Any,
     *,
@@ -607,6 +663,8 @@ def describe(
     entries: Optional[Mapping[str, Any]] = None,
     dispatchable: Iterable[str] = (),
     allow: Optional[Iterable[str]] = None,
+    consent_policy: Optional[Any] = None,
+    discovery: bool = False,
     harness_auth: Optional[Mapping[str, Any]] = None,
 ) -> Ranking:
     """Classify, filter, pace-order and default a declaration.
@@ -633,8 +691,8 @@ def describe(
     transport is unroutable for a session caller. A process caller already
     routes every resolvable kind, so the argument changes nothing there.
 
-    ``allow`` is the cost-class filter: an iterable of ``"free"``, ``"usage"``
-    and ``"spend"`` (normalized once through
+    ``allow`` is the cost-class filter, owned by the caller: an iterable of
+    ``"local"``, ``"subscription"`` and ``"metered"`` (normalized once through
     :func:`~llm_kit.registry.cost.normalize_allow`; ``ValueError`` on an
     unknown class). An entry whose class (:func:`~llm_kit.registry.cost.classify`)
     is not allowed gets the disposition ``switched-off``, with its cost class
@@ -651,6 +709,23 @@ def describe(
     :class:`~llm_kit.registry.cost.HarnessAuth`, in which case nothing is
     probed.
 
+    ``consent_policy`` is the opt-in alternative to ``allow``: a
+    :class:`llm_kit.registry.consent.Policy` the caller obtained from
+    ``consent.policy(scope=...)``. It filters exactly as ``allow=policy.allowed``
+    would, the switched-off detail names the exact ``llm-kit consent set`` command
+    that would allow the class, and the ranking is a :class:`DiscoveryRanking`
+    carrying the consent note with the policy applied. Passing both ``allow`` and ``consent_policy`` is a
+    ``ValueError``.
+
+    ``discovery=True`` makes the ranking a discovery report: every rendered entry
+    carries its cost class and the reason for it (``cost`` in
+    :meth:`CostedEntryState.to_json`), independent of any filter, and the ranking is
+    a :class:`DiscoveryRanking` carrying the structured consent note. Harness authentication
+    is probed lazily, as ``allow`` does. An ``allow`` filter or a consent policy
+    classifies to filter and reports a class only on the entries it switches off,
+    unless ``discovery=True`` is also passed. With none of the three nothing is
+    classified and the result is unchanged.
+
     Raises :class:`NoUsableRoutingTarget` when nothing usable remains, and
     ``bootstrap_lib.model_declaration.DeclarationError`` for a structurally
     invalid declaration (empty, duplicate, non-string). Skipping is silent.
@@ -664,9 +739,18 @@ def describe(
             f"dispatchable kinds must be among {_DISPATCHABLE_KINDS}, got {unknown_kinds}"
         )
     session_transport = caller == CALLER_SESSION and DISPATCHABLE_TRANSPORT in extra_kinds
-    allow_set = _cost.normalize_allow(allow) if allow is not None else None
+    if allow is not None and consent_policy is not None:
+        raise ValueError(
+            "allow and consent_policy are alternatives: allow is the caller's own filter, "
+            "consent_policy applies the optional consent layer; pass one"
+        )
+    if consent_policy is not None:
+        allow_set: Optional[frozenset] = frozenset(consent_policy.allowed)
+    else:
+        allow_set = _cost.normalize_allow(allow) if allow is not None else None
+    classifying = discovery or allow_set is not None
     auth: Optional[Mapping[str, Any]] = None
-    if allow_set is not None:
+    if classifying:
         auth = harness_auth
         if auth is None:
             auth = _LazyHarnessAuth(Path(project_root or Path.cwd()).resolve())
@@ -744,14 +828,18 @@ def describe(
         ):
             settle(DISPOSITION_UNROUTABLE, f"harness {harness!r} has no completion backend")
             continue
-        if allow_set is not None:
+        verdict = None
+        if classifying:
             if isinstance(auth, _LazyHarnessAuth) and kind == HARNESS_KIND:
                 auth.ensure((harness or "").lower())
             verdict = _cost.classify(merged, entries=entries, harness_auth=auth)
-            if verdict.cost_class not in allow_set:
+            if allow_set is not None and verdict.cost_class not in allow_set:
+                detail = f"{verdict.cost_class} not allowed: {verdict.reason}"
+                if consent_policy is not None:
+                    detail += f"; {consent_policy.remedy(verdict.cost_class)}"
                 settle(
                     DISPOSITION_SWITCHED_OFF,
-                    f"{verdict.cost_class} not allowed: {verdict.reason}",
+                    detail,
                     cost_class=verdict.cost_class,
                 )
                 continue
@@ -776,6 +864,7 @@ def describe(
             "index": index, "name": name, "merged": merged, "kind": kind,
             "harness": harness, "backend_name": backend_name, "spec": spec,
             "pinned": pinned, "model": getattr(merged, "model", None) or getattr(selection, "model", None),
+            "verdict": verdict,
         }
         if pinned is not None and not pinned.usable:
             settle(DISPOSITION_OUT_OF_QUOTA, pinned.detail, pinned.resets_at)
@@ -819,7 +908,10 @@ def describe(
         if c["spec"] is not None and not out_of_quota:
             fresh = _fresh_reading(name, c["spec"], c["harness"])
         pace, note = (None, "") if out_of_quota else _pace(fresh)
-        states.append(EntryState(
+        costed: Dict[str, Any] = {}
+        if discovery and c["verdict"] is not None:
+            costed = {"cost_class": c["verdict"].cost_class, "cost_reason": c["verdict"].reason}
+        states.append((CostedEntryState if costed else EntryState)(
             id=name,
             declared_index=index,
             resolved=True,
@@ -840,6 +932,7 @@ def describe(
             resets_at=pinned.resets_at if pinned is not None else None,
             pool=c["spec"].pool if c["spec"] is not None else None,
             reachability_detail=reach.detail if reach is not None else "",
+            **costed,
         ))
 
     ordered_dispositions = tuple(dispositions[i] for i in range(len(declared)))
@@ -863,7 +956,7 @@ def describe(
         )
         finished.append(replace(state, shares_quota_with=shares, default=state.id == first_usable))
 
-    return Ranking(
+    ranking_fields: Dict[str, Any] = dict(
         names=tuple(declared),
         caller=caller,
         rendered_entries=tuple(finished),
@@ -873,6 +966,9 @@ def describe(
             d for d in ordered_dispositions if d.disposition == DISPOSITION_SWITCHED_OFF
         ),
     )
+    if discovery or consent_policy is not None:
+        return DiscoveryRanking(consent=_consent_note(consent_policy), **ranking_fields)
+    return Ranking(**ranking_fields)
 
 
 # ---------------------------------------------------------------------------

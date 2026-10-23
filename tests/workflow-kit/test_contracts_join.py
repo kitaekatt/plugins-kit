@@ -114,6 +114,10 @@ from llm_kit.dispatch.reachability import STATUS_REACHABLE, Reachability
 declaration.check_many = lambda entries, **_kw: {{
     n: Reachability(STATUS_REACHABLE, "models-probe", "x") for n in entries
 }}
+# The package ships no default model declaration; the workflow names no model, so this stands
+# for a user who deliberately configured ``default_endpoint: openrouter``.
+from llm_kit.registry import models
+models.default_declaration = lambda project_root=None: ["openrouter"]
 
 
 class _Completions:

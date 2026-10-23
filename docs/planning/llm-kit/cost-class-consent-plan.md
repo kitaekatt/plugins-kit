@@ -1,6 +1,8 @@
 # llm-kit cost classes and per-machine consent (S1) -- plan
 
-Status: plan revision 2 by opus 2026-10-21 after a codex/sol cross-check (verdict UNSOUND on revision 1); source design docs/planning/task-kit-dashboard/databench-integration-review.md.
+Status: superseded by [consent-design.md](../shared-lib-packaging/consent-design.md). The class names `free`, `usage` and `spend` in the body below were renamed to `local`, `subscription` and `metered`.
+
+Plan revision: 2 by opus 2026-10-21 after a codex/sol cross-check (verdict UNSOUND on revision 1); source design docs/planning/task-kit-dashboard/databench-integration-review.md.
 
 
 I changed no files. **[E]** means I checked it (file:line, or a command run on this machine). **[H]** means it is a hypothesis.

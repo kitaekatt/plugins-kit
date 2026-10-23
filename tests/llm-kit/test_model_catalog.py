@@ -186,17 +186,22 @@ def test_cost_class_is_null_for_a_harness_until_auth_is_probed(project, capsys, 
     _out, got = _catalog(capsys, monkeypatch, project)
     rows = {m["id"]: m for m in got["models"]}
     for ident in ("luna", "sonnet", "opus"):
-        assert rows[ident]["cost"]["class"] is None and rows[ident]["cost"]["allowed"] is None
+        assert rows[ident]["cost"]["class"] is None
         assert "not probed" in rows[ident]["cost"]["reason"]
+        assert set(rows[ident]["cost"]) == {"class", "reason"}  # classification is information; no `allowed`
     # a transport classifies without asking anyone: metered unless declared unmetered
-    assert rows["deepseek-flash"]["cost"]["class"] == "spend"
-    assert rows["deepseek-flash"]["cost"]["allowed"] is False
-    assert got["consent"] == {"source": "absent", "spend": False, "usage": False}
+    assert rows["deepseek-flash"]["cost"]["class"] == "metered"
+    assert rows["deepseek-flash"]["cost"]["reason"]
+    assert set(rows["deepseek-flash"]["cost"]) == {"class", "reason"}
+    # the catalogue never applies the optional consent layer; it only says the layer exists
+    assert got["consent"]["optional"] is True and got["consent"]["in_use"] is False
+    assert got["consent"]["scope"] is None and "policy" not in got["consent"]
+    assert got["consent"]["commands"]["set"].startswith("llm-kit consent set")
 
 
-def test_probe_auth_gives_a_harness_row_its_class_and_consent_decides_allowed(project, capsys, monkeypatch):
+def test_probe_auth_gives_a_harness_row_its_class_whatever_the_consent_says(project, capsys, monkeypatch):
     from llm_kit.adapters import harness_auth
-    from llm_kit.registry.consent import save_consent
+    from llm_kit.registry.consent import update_config
     from llm_kit.registry.cost import SUBSCRIPTION, HarnessAuth
 
     asked = []
@@ -206,14 +211,14 @@ def test_probe_auth_gives_a_harness_row_its_class_and_consent_decides_allowed(pr
         return {name: HarnessAuth(SUBSCRIPTION, "fake subscription") for name in harnesses}
 
     monkeypatch.setattr(harness_auth, "probe_harness_auth", fake)
-    save_consent(usage=True, spend=False)
+    update_config({"subscription": False, "metered": False})  # a restrictive consent file changes no row
     _out, got = _catalog(capsys, monkeypatch, project, "--probe-auth")
     assert asked == [["claude", "codex"]]
     rows = {m["id"]: m for m in got["models"]}
-    assert rows["luna"]["cost"] == {"class": "usage", "allowed": True, "reason": "codex on subscription auth: fake subscription"}
-    assert rows["opus"]["cost"]["class"] == "usage" and rows["opus"]["cost"]["allowed"] is True
-    assert rows["deepseek-flash"]["cost"]["allowed"] is False  # spend is not consented
-    assert got["consent"] == {"source": "file", "spend": False, "usage": True}
+    assert rows["luna"]["cost"] == {"class": "subscription", "reason": "codex on subscription auth: fake subscription"}
+    assert rows["opus"]["cost"]["class"] == "subscription"
+    assert rows["deepseek-flash"]["cost"]["class"] == "metered"
+    assert got["consent"]["in_use"] is False  # the file exists, but nothing opted in to it
 
 
 # --- listing never dispatches, probes or reads a cache --------------------------------
@@ -305,14 +310,11 @@ def test_an_invalid_stored_file_is_refused_rather_than_shown(project, capsys, mo
 
 def test_the_python_api_matches_the_cli(project, capsys, monkeypatch):
     from llm_kit.adapters.capabilities import adapter_capabilities
-    from llm_kit.registry.consent import load_consent
-
     tracked = pm.read_project_models(project_root=str(project))
     built = catalog_mod.build_catalog(
         tracked,
         project_root=str(project),
         modes_by_adapter={n: c.call_modes for n, c in adapter_capabilities().items()},
-        consent=load_consent(),
         local=pm.read_local_overrides(tracked, project_root=str(project)),
     )
     _out, got = _catalog(capsys, monkeypatch, project)

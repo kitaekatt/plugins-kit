@@ -269,7 +269,7 @@ Option B restructures the private llm_kit tree to the final package boundaries b
 
 llm-kit preserves all public environment-variable spelling and the historical configuration layers (the fleet file `~/.claude/config/llm-scripting-kit.yaml`, the user and project `config.yaml` files) until old-plugin deletion, and seeds no competing llm-kit configuration layer. CLI_COMMAND is the exception: it names the llm-kit venv and executable.
 
-The three user-scoped files do not follow the legacy locations. They live under `$XDG_CONFIG_HOME/llm-kit/` (fallback `$HOME/.config/llm-kit/`), resolved on every call by `llm_kit.registry.user_paths`: `.env` (user keys; override `LLM_KIT_ENV_FILE`), `model-endpoints.yaml` (override `MODEL_ENDPOINTS_REGISTRY`) and `consent.json` (override `LLM_KIT_CONSENT_FILE`), plus `<project>/.llm-kit/.env` per project. An override names one explicit file and replaces the location. The files the old plugins kept under `~/.claude` (`plugins/data/plugins-kit/llm-scripting-kit/.env`, `config/model-endpoints.yaml`, `plugins/data/plugins-kit/llm-kit/consent.json`) are read only when the neutral file does not exist and are never written; the first write on a machine that holds only a legacy file starts the neutral file from the legacy values. A read creates nothing, and the library opens no path under `~/.claude` for a session under an empty home.
+The three user-scoped files do not follow the legacy locations. They live under `$XDG_CONFIG_HOME/llm-kit/` (fallback `$HOME/.config/llm-kit/`), resolved on every call by `llm_kit.registry.user_paths`: `.env` (user keys; override `LLM_KIT_ENV_FILE`), `model-endpoints.yaml` (override `MODEL_ENDPOINTS_REGISTRY`) and `consent.json` (override `LLM_KIT_CONSENT_FILE`; see "Caller consent"), plus `<project>/.llm-kit/.env` per project. An override names one explicit file and replaces the location. The files the old plugins kept under `~/.claude` (`plugins/data/plugins-kit/llm-scripting-kit/.env`, `config/model-endpoints.yaml`, `plugins/data/plugins-kit/llm-kit/consent.json`) are read only when the neutral file does not exist and are never written; the first write on a machine that holds only a legacy file starts the neutral file from the legacy values. A read creates nothing, and the library opens no path under `~/.claude` for a session under an empty home.
 
 LEGACY_LLM_DATA/usage-verdicts.json remains exactly the legacy single-session pacing cache. The legacy implementation reads one session's dictionary, rewrites the whole file, and uses atomic replacement without an interprocess lock. llm-kit retains those semantics during coexistence:
 
@@ -311,6 +311,16 @@ Decision: the user ruled "(8) llm-kit (unpublished) may change its frozen format
 - Ownership: unchanged. `jobs cancel` requires the run process to be stopped already; llm-kit adds no lease, lock or refusal signal to detect a live runner.
 - Visible status changes: `counts` in the status payload gains a `cancelled` key, and a run with a cancelled job exits 1 from `run`/`resume` like any job that did not end accepted.
 - Tests: `tests/llm-kit/test_jobs_cancelled_state.py` covers the state, the cancel from every non-terminal state, idempotence, the migration and the refusal; `test_jobs_parity.py` (`TestLedgerSchema`, `TestDeliberateDifferences`) pins the schema-12 prefix and the frozen-job-kit refusal; `test_cross_state_parity.py` (`TestJobLedgerRollbackRefusal`) pins the handover directions.
+
+## Caller consent
+
+User rulings (2026-10-23, verbatim):
+
+> the library does not make any llm calls, the user of the library makes the llm calls, we don't need the user to consent to writing code that makes llm calls
+
+> this principle should be durable
+
+Operative rule: katsoft-* libraries enforce no consent gate on calls a caller's code makes. Cost-class classification may be reported as information. This section supersedes any statement that the library refuses a call without consent. Callers may opt into the library's optional consent layer; its design is docs/planning/shared-lib-packaging/consent-design.md.
 
 ## Python, bootstrap, marketplace, and guard changes
 

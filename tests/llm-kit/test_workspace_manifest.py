@@ -45,6 +45,24 @@ def test_scan_of_a_missing_directory_raises(tmp_path):
         wm.scan(tmp_path / "nope")
 
 
+def test_watch_scan_reads_only_the_listed_files(tmp_path, monkeypatch):
+    _put(tmp_path, "listed.txt", "yes")
+    _put(tmp_path, "unlisted.txt", "no")
+    opened = []
+    real_open = os.open
+
+    def recording_open(path, *args, **kwargs):
+        opened.append(Path(path).name)
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", recording_open)
+    monkeypatch.setattr(os, "walk", lambda *_a, **_k: pytest.fail("watch scan walked the tree"))
+    got = wm.scan(tmp_path, ["listed.txt"])
+    assert list(got) == ["listed.txt"]
+    assert opened[-1] == "listed.txt"
+    assert "unlisted.txt" not in opened
+
+
 def test_diff_lists_created_and_modified_files_in_path_order(tmp_path):
     _put(tmp_path, "keep.txt", "k")
     _put(tmp_path, "edit.txt", "old")

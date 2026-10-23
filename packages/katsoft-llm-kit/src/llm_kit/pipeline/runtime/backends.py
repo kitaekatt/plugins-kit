@@ -932,7 +932,8 @@ Resolved through ``llm_kit.dispatch.declaration.describe`` (the routing
 layer) via :func:`resolve_declaration`, so quota pacing, reachability, and the
 itemised :class:`~llm_kit.dispatch.declaration.NoUsableRoutingTarget` floor
 apply exactly as they do for every other declaration-driven caller. Unset
-means the default entry: :class:`OpenRouterBackend`.
+uses a deliberately configured default_endpoint; with no declaration or
+configured default, routing fails before execution.
 """
 
 
@@ -975,6 +976,21 @@ def declared_model_names(
     if not raw:
         return None
     return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+def _configured_default_names(project_root: Optional[str]) -> List[str]:
+    """Resolve a deliberate config default or refuse before any backend runs."""
+    from llm_kit.registry.models import default_declaration  # noqa: PLC0415
+
+    root = project_root or os.getcwd()
+    names = default_declaration(project_root=root)
+    if not names:
+        raise platform.ConfigurationError(
+            f"No model is declared. Set {MODELS_ENV}, configure "
+            "default_endpoint in your llm-kit config, or supply an "
+            "explicit backend (workflow-kit users can pass --model)."
+        )
+    return names
 
 
 def resolve_declaration(
@@ -1096,9 +1112,8 @@ REMOVED_ROUTING_ENVS = (
 )
 """Routing settings that no longer route anything. Setting one without
 :data:`MODELS_ENV` is refused (:func:`_refuse_removed_routing_env`) rather
-than ignored, because ignoring it silently moves the run to the default
-entry -- a metered API when a subscription backend was meant -- and changes
-every response-cache key."""
+than ignored, because ignoring it could change the selected model and every
+response-cache key."""
 
 
 def _refuse_removed_routing_env(models: "Optional[Sequence[str]]" = None) -> None:
@@ -1119,8 +1134,8 @@ def _refuse_removed_routing_env(models: "Optional[Sequence[str]]" = None) -> Non
             f"{', '.join(stale)} no longer select a backend or model. "
             f"Unset {'it' if len(stale) == 1 else 'them'} and set {MODELS_ENV} "
             "to a comma-separated list of llm-scripting-kit model ids instead "
-            f"(for example {MODELS_ENV}=<entry id>); without it the run would "
-            "silently use the default OpenRouter entry."
+            f"(for example {MODELS_ENV}=<entry id>); without it no model is "
+            "selected unless default_endpoint is configured."
         )
 
 
@@ -1130,6 +1145,7 @@ def route(
     mock: Optional[Any] = None,
     output_contract: Optional[Any] = None,
     models: "Optional[Sequence[str]]" = None,
+    project_root: Optional[str] = None,
 ) -> Any:
     """Return the backend for this call's declaration.
 
@@ -1146,9 +1162,10 @@ def route(
     declaration (:func:`_resolve_declared_entry`) --
     ``NoUsableRoutingTarget`` (R23) propagates uncaught. A ``model-endpoint``-kind entry is probed before
     being returned: a registry server is up only if somebody started it, so
-    a dead one refuses here rather than once per unit. Unset, the default
-    entry runs: the supplied ``openrouter`` instance, else a new
-    :class:`OpenRouterBackend`. When the declaration resolves to the
+    a dead one refuses here rather than once per unit. Unset, a deliberately
+    configured ``default_endpoint`` is used; with no declaration or configured
+    default, routing raises before execution. A supplied ``openrouter`` instance
+    remains an explicit backend selection. When the declaration resolves to the
     ``openrouter`` entry and an ``openrouter`` instance was supplied, that
     instance is returned (never a fresh one), so the caller's client, endpoint
     pin and budget wrapper survive a declaration; an entry naming another
@@ -1168,8 +1185,16 @@ def route(
     if mock is not None:
         return mock
     _refuse_removed_routing_env(models)
-    if declared_model_names(models) is not None:
-        entry = _resolve_declared_entry(output_contract=output_contract, models=models)
+    names = declared_model_names(models)
+    if names is None and openrouter is not None:
+        return openrouter
+    if names is None:
+        project_root = project_root or os.getcwd()
+        names = _configured_default_names(project_root)
+    if names is not None:
+        entry = _resolve_declared_entry(
+            output_contract=output_contract, models=names, project_root=project_root
+        )
         if entry.id == "openrouter" and openrouter is not None:
             # The caller's instance IS the openrouter entry: it carries the
             # client, endpoint pin and budget wrapper a bare per-call
@@ -1188,53 +1213,62 @@ def route(
                     f"yours) or change {MODELS_ENV}."
                 )
         return backend
-    return openrouter if openrouter is not None else OpenRouterBackend()
+    raise platform.ConfigurationError(
+        f"No model is declared. Set {MODELS_ENV} or configure default_endpoint."
+    )
 
 
 def routed_model(
     requested_model: str,
     *,
     backend_name: Optional[str] = None,
+    openrouter: Optional[Any] = None,
+    mock: Optional[Any] = None,
     output_contract: Optional[Any] = None,
     models: "Optional[Sequence[str]]" = None,
+    project_root: Optional[str] = None,
 ) -> str:
     """Resolve the model a routed call should run, truthfully.
 
-    When :data:`MODELS_ENV` is set, ``backend_name`` is ignored in favour of
-    the declaration's resolved entry. If that entry is ``openrouter`` and the
-    caller requested a model (non-empty ``requested_model``), the request
-    wins: an OpenRouter slug is meaningful to that transport and the caller
-    chose it explicitly. Otherwise the entry's own concrete model IS the
-    truthful answer (Y1: a CLI or endpoint entry cannot run an OpenRouter
-    slug, and an empty request defers to the declaration).
+    When :data:`MODELS_ENV` (or ``models``) is set, ``backend_name`` is
+    ignored in favour of the declaration's resolved entry. If that entry is
+    ``openrouter`` and the caller requested a model (non-empty
+    ``requested_model``), the request wins: an OpenRouter slug is meaningful
+    to that transport and the caller chose it explicitly. Otherwise the
+    entry's own concrete model IS the truthful answer (Y1: a CLI or endpoint
+    entry cannot run an OpenRouter slug, and an empty request defers to the
+    declaration).
 
-    Otherwise the requested id runs unchanged, with one exception: a
-    ``model-endpoint`` backend runs the registry default entry's own model,
-    because an OpenRouter-style slug means nothing to that server. The
-    returned id is what lands on ``LLMResponse.model`` and therefore on
+    A supplied ``mock`` wins first, as in :func:`route`: it runs
+    ``requested_model``. With no explicit declaration, an explicitly supplied
+    ``openrouter`` instance (as for :func:`route`) is preserved and never
+    raises: that backend runs ``requested_model``. With neither a declaration nor a
+    supplied backend, the configured default declaration selects the entry,
+    and when there is none this raises ``ConfigurationError`` rather than
+    returning an implicit OpenRouter model. ``backend_name`` does not
+    select anything: it is accepted for call-site compatibility and ignored.
+    The returned id is what lands on ``LLMResponse.model`` and therefore on
     audit records.
 
-    Pass the same ``models`` and ``output_contract`` given to :func:`route`: a contract can
-    select a different entry, and the model must be that entry's.
+    Pass the same ``models``, ``openrouter``, ``mock`` and ``output_contract`` given to
+    :func:`route`: a contract can select a different entry, and the model
+    must be that entry's.
     """
+    if mock is not None:
+        return requested_model
     _refuse_removed_routing_env(models)
-    if declared_model_names(models) is not None:
-        entry = _resolve_declared_entry(output_contract=output_contract, models=models)
-        if entry.id == "openrouter" and requested_model:
-            return requested_model
-        return entry.model or requested_model
-    if backend_name == "model-endpoint":
-        try:
-            from llm_kit.registry.models import resolve_model  # noqa: PLC0415
-
-            return resolve_model(
-                None, endpoint=ModelEndpointBackend()._entry_id()
-            )
-        except Exception as exc:  # noqa: BLE001 -- truthful fallback beats a guess
-            if _is_harness_refusal(exc):
-                raise
-            return requested_model
-    return requested_model
+    names = declared_model_names(models)
+    if names is None and openrouter is not None:
+        return requested_model
+    if names is None:
+        project_root = project_root or os.getcwd()
+        names = _configured_default_names(project_root)
+    entry = _resolve_declared_entry(
+        output_contract=output_contract, models=names, project_root=project_root
+    )
+    if entry.id == "openrouter" and requested_model:
+        return requested_model
+    return entry.model or requested_model
 
 
 __all__ = [

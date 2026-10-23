@@ -92,8 +92,11 @@ technique_skill:
       Treat the rendered block as authoritative over anything you believe about model
       lineups or dispatch mechanics: a model or harness absent from the rendered policy must
       not be dispatched to. Each routing row lists the models it declares that are real on
-      this machine -- usable, out of quota until a stated reset, or unreachable -- and the
-      backends listed are the only ones that exist here. A declared model that resolves to
+      this machine -- usable, out of quota until a stated reset, unreachable, or marked
+      UNUSABLE because the llm-kit consent scope `orchestrate` does not allow its cost class
+      (never delegate to an UNUSABLE entry; its line gives the reason and the exact
+      `llm-kit consent set` command) -- and the backends listed are the only ones that
+      exist here. A declared model that resolves to
       nothing or that this policy cannot drive is left out without comment, and anything not
       installed on this machine is omitted from the output entirely, so do not reach for a
       backend or model you remember but cannot see, and do not tell the user something is

@@ -9,10 +9,16 @@
   "stderr": "",
   "stdout": {
     "json": {
+      "consent": {
+        "applied": false,
+        "opted_in": false,
+        "scope": null
+      },
       "cost": {
-        "class": "spend",
+        "class": "metered",
         "estimated_source": "openrouter.usage.cost",
         "estimated_usd": 0.0007,
+        "reason": "no registry entry: billing undeclared",
         "source": null,
         "usd": null
       },
@@ -51,6 +57,7 @@
         "cache_hit_tokens": 4,
         "input_tokens": 11,
         "output_tokens": 7,
+        "reasoning_tokens": 0,
         "total_tokens": 0,
         "wall_ms": "<ms>"
       }

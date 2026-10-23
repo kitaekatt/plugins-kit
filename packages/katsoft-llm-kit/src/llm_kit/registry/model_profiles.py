@@ -37,7 +37,10 @@ Measurement sources (no model call was made for any of them):
     model also lists ``reasoning`` and ``reasoning_effort`` in
     ``supported_parameters``. The vendor's list is unordered; the menu is stored
     low to high on the scale below. ``none`` is an explicit disable and appears
-    only where the vendor lists it.
+    only where the vendor lists it. A model that lists ``reasoning`` but neither
+    ``reasoning_effort`` nor any ``supported_efforts`` has NO effort dial: its
+    profile has an empty menu (``no_effort_dial=True``), which is a measured
+    "send no effort", distinct from an unmeasured model (no profile at all).
 
 Stdlib only; imports nothing outside ``registry``.
 """
@@ -79,12 +82,18 @@ class ModelProfile:
     source: str
     measured_on: str
     note: str = ""
+    no_effort_dial: bool = False
 
     def __post_init__(self) -> None:
         if self.route not in ROUTES:
             raise ValueError(f"profile {self.model!r}: unknown route {self.route!r}")
-        if not self.model or not self.efforts:
-            raise ValueError(f"profile {self.route}/{self.model!r}: model and efforts are required")
+        if not self.model:
+            raise ValueError(f"profile {self.route}/{self.model!r}: model is required")
+        if bool(self.efforts) == self.no_effort_dial:
+            raise ValueError(
+                f"profile {self.route}/{self.model!r}: efforts are required, or an empty menu "
+                "must say no_effort_dial=True (the model has no effort dial); the two must agree"
+            )
         indexes = []
         for effort in self.efforts:
             if effort not in EFFORT_SCALE:
@@ -177,6 +186,18 @@ PROFILES: "tuple[ModelProfile, ...]" = (
         "reasoning is mandatory; vendor default effort is max; the endpoint must "
         "resolve an effort_style (top-level) for an effort to be sent",
     ),
+    # No effort dial: the vendor lists ``reasoning`` and omits ``reasoning_effort``
+    # and ``supported_efforts``. A row for it must not inherit the endpoint's menu.
+    ModelProfile(
+        ROUTE_OPENROUTER,
+        "xiaomi/mimo-v2.6-pro",
+        (),
+        SOURCE_OPENROUTER,
+        _MEASURED_ON,
+        "no effort dial: the vendor lists reasoning but not reasoning_effort; any effort is "
+        "refused and none is sent",
+        no_effort_dial=True,
+    ),
 )
 
 _INDEX = {(profile.route, profile.model): profile for profile in PROFILES}
@@ -220,6 +241,11 @@ def check_effort(
     if profile is not None:
         if effort in profile.efforts:
             return
+        if not profile.efforts:
+            raise HarnessAdapterError(
+                f"{subject} accepts no effort for model {model!r} ({profile.source}, measured "
+                f"{profile.measured_on}): the model has no effort dial; omit the effort (null)"
+            )
         hint = ""
         if effort == "none":
             hint = (

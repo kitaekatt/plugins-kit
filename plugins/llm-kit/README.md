@@ -49,15 +49,16 @@ and 2 when the contract cannot be read.
 
 ## Cost classes and consent
 
-Every declared model entry has a cost class, and a caller that opts in with `allow=` is
-limited to the classes it names. Classification fails closed: what cannot be shown to be
-`free` or `usage` is `spend`.
+Every declared model entry has a cost class, reported with its reason whether or not any
+consent layer is in use. Classification fails closed: what cannot be shown to be `local` or
+`subscription` is `metered`, which states that billing is paid or could not be verified, not
+that a charge occurred.
 
 | Class | Meaning |
 |---|---|
-| `free` | A transport with `billing.mode` `unmetered`, or a front door whose every tier is unmetered (a front door with no tiers is `spend`). |
-| `usage` | A `claude` or `codex` harness on a subscription session pool. |
-| `spend` | Everything else: a metered transport, an undeclared entry, any other harness, or a harness whose authentication is metered or unknown. |
+| `local` | A transport declared `billing: {mode: unmetered, owner: self}`, a front door whose every tier is, or a harness entry other than claude and codex whose `endpoint` names one (a front door with no tiers is `metered`; `unmetered` without `owner: self` is `metered`, because the billing mode states cost, not who owns the hardware). |
+| `subscription` | A `claude` or `codex` harness on a subscription session pool. |
+| `metered` | Everything else: a metered transport, an undeclared entry, any other harness, or a harness whose authentication is metered or unknown. |
 
 Harness authentication is probed, never assumed. Claude is metered when a billing-diverting
 variable is set and non-empty (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
@@ -67,37 +68,39 @@ otherwise `claude auth status` must report `authMethod` `claude.ai` and `apiProv
 `firstParty`. Codex is metered when `CODEX_API_KEY` or `OPENAI_API_KEY` is set; otherwise
 `codex doctor --json` (run in the call's working directory and environment) must report
 provider `openai`, ChatGPT auth and no stored API key. A probe that cannot run, times out or
-returns an unrecognized report is unknown, which counts as `spend`.
+returns an unrecognized report is unknown, which counts as `metered`.
 
-Consent is one file per machine, `$XDG_CONFIG_HOME/llm-kit/consent.json` (`$HOME/.config/llm-kit/consent.json`
-when `XDG_CONFIG_HOME` is unset or not absolute). `LLM_KIT_CONSENT_FILE` names a different file and replaces the
-location, for reads and writes. When the neutral file does not exist, the file an earlier release kept at
-`~/.claude/plugins/data/plugins-kit/llm-kit/consent.json` is read; a write always targets the neutral file (or the
-override) and carries the legacy values across, after which the neutral file wins. `free` is always allowed;
-`usage` and `spend` are off until the user turns them on. An absent or malformed file means free-only.
+The library makes no model calls of its own; the caller's code makes them. Classification and
+the consent layer are designed as follows. The consent layer is optional and applies only when a
+caller opts in; a protocol 2 request without a `consent` field is never refused for its cost
+class, and a caller may build its own policy instead. Opt in
+with `--consent [--consent-scope NAME]` on `models describe`, with the protocol 2 request
+field `"consent": true` (global policy) or `"consent": {"scope": "NAME"}`, or with
+`llm_kit.registry.consent.policy(scope=None)`. An explicit caller-owned `--allow <classes>`
+filter replaces the layer; `--allow` and `--consent` are not combinable.
+
+When the layer is applied and there is no consent file, the policy is `local` on,
+`subscription` on, `metered` off, with provenance `default`; reading creates nothing. The
+file is `$XDG_CONFIG_HOME/llm-kit/consent.json` (`$HOME/.config/llm-kit/consent.json` when
+`XDG_CONFIG_HOME` is unset or not absolute), or the file `LLM_KIT_CONSENT_FILE` names, which
+replaces the location for reads and writes. When the neutral file does not exist, the legacy
+file `~/.claude/plugins/data/plugins-kit/llm-kit/consent.json` is read; a
+write always targets the neutral file (or the override) and carries the legacy values across,
+after which the neutral file wins. The file is `{schema: 2, local, subscription, metered,
+scopes, updated_at}`. The global classes are a ceiling; a scope may only restrict, and an
+absent scope key inherits.
 
 ```
-llm-kit consent show [--json]                       # usage, spend, source, path, note
-llm-kit consent set [--usage on|off] [--spend on|off]   # only the flags given change; none given exits 2
+llm-kit consent show [--scope NAME] [--json]                      # effective policy and where each value comes from
+llm-kit consent set [--scope NAME] --local|--subscription|--metered on|off   # only the class given changes
 ```
 
-Opt-in is per caller. `describe(..., allow=...)` and `run(..., allow=...)` take class names,
-and a caller passes what the user consented to:
-
-```python
-from llm_kit.registry.consent import load_consent
-
-consent = load_consent()
-if consent.note:
-    print(consent.note)        # the caller prints it; the library never does
-result = run(names, request, allow=consent.allowed)
-```
-
-Without `allow`, nothing is classified or probed and behavior is unchanged. With it, an entry
-whose class is not allowed gets the disposition `switched-off`: it is shown (a `Switched off:`
-line in `render()`, a `switched_off` key in `to_json()`, and in the `NoUsableRoutingTarget`
-floor), never hidden and never dispatched to or probed. `llm-kit models describe <ids> --allow
-free,usage` applies the same filter from the command line.
+With the layer applied, an entry whose class is not allowed gets the disposition
+`switched-off`: it is shown (a `Switched off:` line in `render()`, a `switched_off` key in
+`to_json()`, and in the `NoUsableRoutingTarget` floor), never hidden and never dispatched to
+or probed. `llm-kit models catalog` and `models describe` print a structured `consent` note
+that the layer is optional and how to opt in; each catalog row carries `cost` as
+`{class, reason}`.
 
 ## Project model file
 

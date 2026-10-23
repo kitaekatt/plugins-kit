@@ -10,6 +10,7 @@ project's own repository):
         endpoint: luna           # a registry endpoint (credentials, adapter)
         model: gpt-6-luna        # the exact wire model for that endpoint
         efforts: [low, high]     # optional; a menu-ordered subset of the library menu
+                                 # (efforts: [] declares NO effort for the row)
         request_defaults:        # optional; only ``extras`` (a JSON mapping)
           extras: {provider: {sort: latency}}
     selections:                  # opaque consumer keys -> {model, effort}
@@ -20,7 +21,10 @@ claims: endpoints, credentials and billing resolve through the endpoint
 registry, and the effort menu is the library's, measured per exact model
 (``model_profiles``). A project may narrow a menu and never widen it; a harness
 model the library has not measured has no menu, so its row declares no
-``efforts`` and its selections carry a null effort. ``null`` effort means "omit"; the string ``none`` is an explicit
+``efforts`` and its selections carry a null effort. ``efforts: []`` declares that a
+row has no effort dial at all (any model; the shipped profile of a model the vendor
+lists without one has the same empty menu): every selection of it carries a null
+effort and a request for it refuses any effort. ``null`` effort means "omit"; the string ``none`` is an explicit
 disable value accepted only where the library menu lists it. Nothing here
 translates ``off`` or any other word.
 
@@ -426,8 +430,8 @@ def _request_defaults(value: Any, where: str) -> dict:
 
 
 def _efforts(value: Any, where: str, menu: "tuple[str, ...]", endpoint: str, model: str) -> list[str]:
-    if not isinstance(value, (list, tuple)) or not value:
-        raise _invalid(where, "must be a non-empty list (omit the key for no list)")
+    if not isinstance(value, (list, tuple)):
+        raise _invalid(where, f"must be a list, not {value!r} (an empty list declares no effort)")
     out: list[str] = []
     last = -1
     for i, item in enumerate(value):

@@ -50,6 +50,7 @@ the schema can grow additively)::
                                             #   front door and `model` names its group
         billing:                            # optional; transport entries only
           mode: unmetered                   # unmetered | provider-reported
+          owner: self                       # optional; the user owns the hardware (see below)
         routing:                            # optional; transport entries only
           group: <front-door model name>
           order: 1                          # lower tiers fill first
@@ -60,8 +61,18 @@ the schema can grow additively)::
         harness: <harness name>             # required instead of base_url
         model: <model id>                   # required, what the harness drives
         effort: <effort>                    # optional harness setting
+        endpoint: <transport entry id>      # optional; the endpoint this harness runs on
         name: <human label>                 # optional
         conserve_usage: <bool | mapping>    # optional; see conserve.py
+Cost-class metadata. ``billing.mode: unmetered`` states marginal cost (USD 0),
+not who owns the hardware: a provider free tier is unmetered too. The cost class
+``local`` therefore also needs ``billing.owner: self``, the user's own statement
+that the endpoint runs on hardware they own; an unmetered entry without it is
+classified ``metered`` (billing unverified). A harness entry whose model string
+is opaque (opencode) names the transport entry it runs on with ``endpoint:``
+and takes that entry's cost class; the reference is the user's assertion that
+the harness's own provider configuration really points there.
+
 Entry ids are the endpoint names: ``llm_kit.registry.models.resolve_endpoint``
 injects each entry as a named endpoint, so ``resolve_endpoint("<entry id>")``
 resolves it. The DEFAULT entry has no magic endpoint name -- it is reached
@@ -113,6 +124,10 @@ REGISTRY_RELATIVE_PATH = Path(".claude") / "config" / "model-endpoints.yaml"
 TRANSPORT_KIND = "transport"
 HARNESS_KIND = "harness"
 
+#: Harnesses whose cost class follows their authentication state (see
+#: ``llm_kit.registry.cost``); a declared ``endpoint`` does not apply to them.
+AUTH_CLASSIFIED_HARNESSES = ("claude", "codex")
+
 
 def legacy_registry_path() -> Path:
     """The legacy registry path: ``~/.claude/config/model-endpoints.yaml`` (read-only fallback)."""
@@ -163,6 +178,10 @@ class EndpointEntry:
 
     ``effort_style`` is the entry-level effort style; None with
     ``effort_style_declared`` True means the key was present but invalid.
+
+    ``billing_owner`` is the declared ``billing.owner`` (``self`` or None) of a
+    transport entry. ``endpoint`` is the id of the transport entry a harness
+    entry runs on (None: not declared); both feed ``llm_kit.registry.cost``.
     """
 
     id: str
@@ -184,6 +203,8 @@ class EndpointEntry:
     billing_mode: Optional[str] = None
     effort_style: Optional[str] = None
     effort_style_declared: bool = False
+    billing_owner: Optional[str] = None
+    endpoint: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -490,6 +511,12 @@ def effort_notes(entry: EndpointEntry, *, source: str) -> list[str]:
 #: ``usage.cost`` carries USD semantics. Omission declares neither.
 BILLING_MODES = ("unmetered", "provider-reported")
 
+#: Accepted ``billing.owner`` values. ``self`` is the user's statement that the
+#: endpoint runs on hardware they own. ``billing.mode`` cannot say this: it
+#: declares marginal cost, and an unmetered remote endpoint (a provider free
+#: tier) has none either. A URL, LAN address or model name proves nothing.
+BILLING_OWNERS = ("self",)
+
 
 def parse_frontdoor(
     raw: Mapping[str, object], *, source: str, entry_id: str, notes: list[str]
@@ -523,7 +550,7 @@ def parse_billing_mode(
         notes.append(f"{source}: entry '{entry_id}' has invalid 'billing'; ignored")
         return None
     for key in value:
-        if key != "mode":
+        if key not in ("mode", "owner"):
             notes.append(f"{source}: entry '{entry_id}' billing key '{key}' ignored")
     if "mode" not in value:
         notes.append(f"{source}: entry '{entry_id}' billing declares no 'mode'; ignored")
@@ -535,6 +562,62 @@ def parse_billing_mode(
         )
         return None
     return mode
+
+
+def parse_billing_owner(
+    raw: Mapping[str, object], *, source: str, entry_id: str, notes: list[str]
+) -> Optional[str]:
+    """Parse optional ``billing.owner``; invalid metadata is noted and ignored.
+
+    Ignoring is the safe direction: an entry without a valid ownership mark is
+    classified ``metered`` (billing unverified), never ``local``. Malformed
+    ``billing`` and unknown keys are reported by :func:`parse_billing_mode`.
+    """
+    billing = raw.get("billing")
+    if not isinstance(billing, dict) or "owner" not in billing:
+        return None
+    owner = billing["owner"]
+    if not isinstance(owner, str) or owner not in BILLING_OWNERS:
+        notes.append(
+            f"{source}: entry '{entry_id}' billing has invalid 'owner' ({owner!r}); "
+            f"expected one of {', '.join(BILLING_OWNERS)}; ignored"
+        )
+        return None
+    return owner
+
+
+def parse_harness_endpoint(
+    raw: Mapping[str, object],
+    *,
+    source: str,
+    entry_id: str,
+    harness: str,
+    notes: list[str],
+) -> Optional[str]:
+    """Parse a harness entry's optional ``endpoint`` (a transport entry id).
+
+    A present but non-string or empty value is invalid metadata and raises
+    :class:`EndpointMetadataError`, like ``tier`` and ``family``: ignoring it
+    would silently downgrade the entry's cost class. Whether the id names a
+    transport entry is decided at classification time, against the merged
+    entries. ``claude`` and ``codex`` harnesses are classified by their
+    authentication, so a declared ``endpoint`` is noted and ignored there.
+    """
+    if "endpoint" not in raw:
+        return None
+    value = raw["endpoint"]
+    if not isinstance(value, str) or not value.strip():
+        raise EndpointMetadataError(
+            f"{source}: entry '{entry_id}' has invalid 'endpoint' ({value!r}); "
+            "expected the id of a transport entry"
+        )
+    if harness.lower() in AUTH_CLASSIFIED_HARNESSES:
+        notes.append(
+            f"{source}: entry '{entry_id}' endpoint '{value.strip()}' ignored; the cost "
+            f"class of a {harness.lower()} harness follows its authentication"
+        )
+        return None
+    return value.strip()
 
 
 def _resolve_registry_path(env: Mapping[str, str]) -> "tuple[Path, bool]":
@@ -646,6 +729,13 @@ def load_endpoint_registry(
                     conserve_usage=_conserve_spec(
                         raw, source=f"model-endpoints registry '{path}'", entry_id=key
                     ),
+                    endpoint=parse_harness_endpoint(
+                        raw,
+                        source=f"model-endpoints registry '{path}'",
+                        entry_id=key,
+                        harness=str(raw.get("harness")),
+                        notes=notes,
+                    ),
                 )
             except EndpointMetadataError:
                 raise
@@ -703,12 +793,20 @@ def load_endpoint_registry(
                 ),
                 effort_style=effort_style,
                 effort_style_declared=effort_style_declared,
+                billing_owner=parse_billing_owner(
+                    raw, source=f"model-endpoints registry '{path}'", entry_id=key, notes=notes
+                ),
             )
         except EndpointMetadataError:
             raise
         except EndpointRegistryError as exc:
             notes.append(f"{exc}; entry skipped")
             continue
+        if "endpoint" in raw:
+            notes.append(
+                f"model-endpoints registry '{path}': entry '{key}' endpoint ignored; "
+                "only a harness entry runs on an endpoint"
+            )
         notes.extend(
             effort_notes(entries[key], source=f"model-endpoints registry '{path}'")
         )
@@ -796,6 +894,10 @@ __all__ = [
     "parse_routing",
     "parse_frontdoor",
     "parse_billing_mode",
+    "parse_billing_owner",
+    "parse_harness_endpoint",
+    "AUTH_CLASSIFIED_HARNESSES",
+    "BILLING_OWNERS",
     "parse_effort_style",
     "effort_delivery",
     "resolve_effort_style",

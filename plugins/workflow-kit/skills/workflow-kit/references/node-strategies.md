@@ -114,6 +114,8 @@ plugin-dev `references/model-declaration.md` specifies. `wkOpenRouter`'s `spec`:
 - omit `model` -- use the configured default declaration (llm-kit's
   `default_endpoint`), and its `default` model, or `defaultCheap` with
   `cheap: true`. This is the usual choice: pick the *role*, not the slug.
+  With no configured `default_endpoint` the node fails before any call;
+  declare one in llm-kit's config (below) or name a model with `model:`.
 - `model: 'qwen'` (an alias) or `model: 'qwen/qwen3-32b'` (a raw slug) -- not
   an entry id. It resolves to no entry, so the node exits 2 with the itemised
   status. Name the entry instead (`or-qwen`).

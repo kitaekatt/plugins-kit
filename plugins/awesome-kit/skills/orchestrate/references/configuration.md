@@ -115,6 +115,18 @@ for an in-session caller:
 - An entry whose subscription pool is spent (llm-kit `conserve_usage`) stays listed
   as out of quota until its reset time and is not usable until then. An entry whose harness
   CLI is not detected stays listed as unreachable.
+- Each usable entry line ends with its registry cost class (`cost: local`, `subscription` or
+  `metered`). The renderer applies llm-kit's consent scope `orchestrate`
+  (`llm-kit consent show --scope orchestrate`): an entry whose class that policy does not
+  allow is listed after the menu as `UNUSABLE`, with the library's reason and the exact
+  `llm-kit consent set` command, is never the default, and is not usable. A scope can only
+  restrict the global policy, so enabling a class the global policy has off needs the global
+  command the line names. Native Agent-tool (Claude) entries take their class from the
+  session environment (a billing-diverting variable such as `ANTHROPIC_API_KEY` makes them
+  `metered`, otherwise `subscription`) and are never probed; codex entries take the codex
+  CLI's authentication state. Without llm-kit, or when its describe() fails, the
+  render says the scope was not applied and shows no cost class. An unreadable consent
+  file fails closed: the render shows no routing rows and names the file to fix.
 - Entries with a pace reading (quota remaining divided by window remaining) are re-sorted,
   highest pace first; entries without one keep their declared places. The first usable entry
   is marked `[default]`, and an entry matching `--self` is marked `[author]`.

@@ -117,13 +117,14 @@ class LLMResponse:
     - ``attempts`` -- number of completion attempts made (1 on first-try
       success; 1 on a cache hit).
     - ``from_cache`` -- True when served from :class:`ResponseCache`.
-    - ``total_tokens`` -- an UNDIFFERENTIATED total, reported by a transport
-      that surfaces no input/output split (codex-cli). 0 everywhere else. It is
-      a separate field rather than a value folded into ``output_tokens``
-      because the cost estimator multiplies that field by a per-output-token
-      price -- a total placed there would compute a fabricated dollar figure.
-      For the same reason do NOT add it to ``input_tokens + output_tokens``;
-      it is an alternative to them, not a component.
+    - ``total_tokens`` -- the codex-cli transport's own blended total (uncached
+      input plus output). 0 everywhere else. It is a separate field rather
+      than a value folded into ``output_tokens`` because the cost estimator
+      multiplies that field by a per-output-token price -- a total placed there
+      would compute a fabricated dollar figure. The codex transport also
+      reports the input/output split when its event stream carries one, and
+      then this is a roll-up of those counts: do NOT add it to
+      ``input_tokens + output_tokens``; read it as an alternative to them.
     - ``likely_reasoning_exhausted`` -- True when ``text`` is empty (or
       whitespace-only) while ``output_tokens`` is nonzero. That shape is the
       signature of a reasoning model that spent its entire ``max_tokens``

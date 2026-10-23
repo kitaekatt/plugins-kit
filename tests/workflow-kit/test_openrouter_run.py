@@ -188,12 +188,52 @@ def test_a_transport_entry_runs(kit, tmp_path, capsys):
     assert capsys.readouterr().err == ""
 
 
-def test_no_model_uses_the_default_declaration_and_cheap_selects_within_it(kit, tmp_path):
+def test_no_model_uses_a_deliberate_default_and_cheap_selects_within_it(
+    kit, tmp_path, monkeypatch
+):
+    from llm_kit.registry import models
+
+    monkeypatch.setattr(
+        models, "default_declaration", lambda project_root=None: ["openrouter"]
+    )
     assert _run(tmp_path)[0] == 0
     assert _run(tmp_path, "--cheap")[0] == 0
     assert [(c["endpoint"], c["model"]) for c in kit["calls"]] == [
         ("openrouter", "openai/gpt-4o-mini"),
         ("openrouter", "qwen/qwen3-32b"),
+    ]
+
+
+def test_l3_no_model_without_configured_default_refuses_before_call(
+    kit, tmp_path, monkeypatch, capsys
+):
+    from llm_kit.registry import models
+
+    monkeypatch.setattr(models, "default_declaration", lambda project_root=None: [])
+    rc, out, payload = _run(tmp_path)
+
+    assert rc == 2
+    assert not out.exists()
+    assert payload["ok"] is False
+    assert kit["calls"] == []
+    err = capsys.readouterr().err
+    assert "--model" in err and "default_endpoint" in err
+
+
+def test_l3_configured_default_declaration_still_runs(kit, tmp_path, monkeypatch):
+    from llm_kit.registry import models
+
+    monkeypatch.setattr(
+        models, "default_declaration", lambda project_root=None: ["or-qwen"]
+    )
+
+    rc, out, payload = _run(tmp_path)
+
+    assert rc == 0
+    assert payload["entry"] == "or-qwen"
+    assert out.read_text(encoding="utf-8") == "reply from qwen/qwen3-32b"
+    assert [(call["endpoint"], call["model"]) for call in kit["calls"]] == [
+        ("or-qwen", "qwen/qwen3-32b")
     ]
 
 

@@ -36,6 +36,13 @@ Deliberate differences, each pinned by name:
 * ``swapper.ProcessNotFound`` / ``InspectionIndeterminate`` / ``SwapperError``
   (and the EXIT_* constants) are defined in the leaf ``adapters._swapper_errors``
   (no swapper <-> _swapper_process cycle) and re-exported by ``swapper``;
+* the final codex completion backend passes ``--json`` (usage events) and reads
+  ``input_tokens``, ``cache_hit_tokens``, ``output_tokens``, ``total_tokens`` and
+  ``reasoning_tokens`` from them; the legacy backend does neither. The recording
+  runner drops ``--json`` from the argv it records so the rest of the argv is
+  still compared on both sides, ``reasoning_tokens`` is a final-only
+  ``LLMResponse`` field, and ``tests/llm-kit/test_codex_usage_json.py`` pins the
+  final side (``--json`` present, counts parsed);
 * messages name llm-kit where the legacy text named llm-scripting-kit or one of
   its bare verbs: ``final_wording.RENAMES`` pins each by name and
   ``test_final_messages.py`` proves each against the live legacy and final
@@ -135,13 +142,25 @@ _MASKED_FIELDS = frozenset({"wall_ms", "started_at", "ended_at"})
 # test below pins the final side's values.
 # The final LLMResponse also carries ``reported_model`` and the ``estimated_cost_*`` pair (a
 # downstream-reported model id and a non-authoritative cost figure); the frozen legacy one has neither.
-_FINAL_ONLY_FIELDS = frozenset({"call_modes", "reported_model", "estimated_cost_usd", "estimated_cost_source"})
+_FINAL_ONLY_FIELDS = frozenset({
+    "call_modes", "reported_model", "estimated_cost_usd", "estimated_cost_source", "reasoning_tokens",
+})
+# Declared difference (cost-class metadata): the final EndpointEntry carries ``billing_owner`` and
+# ``endpoint``, consumed only by llm_kit.registry.cost; the frozen legacy one has neither. Scoped to
+# the class, because ``endpoint`` is an ordinary field name elsewhere.
+_FINAL_ONLY_CLASS_FIELDS = {"EndpointEntry": frozenset({"billing_owner", "endpoint"})}
+_FINAL_ONLY_CLASS_PARAMS = {
+    "EndpointEntry": (", billing_owner: 'Optional[str]' = None", ", endpoint: 'Optional[str]' = None"),
+}
 _CALL_MODES_PARAM = ", call_modes: 'Tuple[str, ...]' = ('completion',)"
+# The final LLMResponse also carries ``reasoning_tokens`` (the reasoning share of ``output_tokens``,
+# filled by the codex transport from its --json usage events); the frozen legacy one has no such field.
 # LLMResponse's final-only trailing parameters (see _FINAL_ONLY_FIELDS).
 _RESPONSE_EXTRA_PARAMS = (
     ", reported_model: 'Optional[str]' = None",
     ", estimated_cost_usd: 'Optional[float]' = None",
     ", estimated_cost_source: 'Optional[str]' = None",
+    ", reasoning_tokens: 'int' = 0",
 )
 
 
@@ -184,8 +203,9 @@ def norm(value):
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         value = claude_contract_to_final(value)  # llm-kit delivers a claude contract natively
         out = {"__type__": type(value).__name__}
+        skipped = _FINAL_ONLY_CLASS_FIELDS.get(type(value).__name__, frozenset())
         for f in dataclasses.fields(value):
-            if f.name in _FINAL_ONLY_FIELDS:
+            if f.name in _FINAL_ONLY_FIELDS or f.name in skipped:
                 continue
             item = getattr(value, f.name)
             out[f.name] = "<masked>" if f.name in _MASKED_FIELDS else norm(item)
@@ -385,8 +405,10 @@ _SIG_PREFIX = re.compile(r"llm_scripting_kit\.|llm_kit\.[a-z_]+\.")
 _FN_ADDR = re.compile(r"<function (\w+) at 0x[0-9a-fA-F]+>")
 
 
-def _sig(fn) -> str:
+def _sig(fn, owner: str = "") -> str:
     text = _without_final_only_params(_SIG_PREFIX.sub("X.", str(inspect.signature(fn))))
+    for param in _FINAL_ONLY_CLASS_PARAMS.get(owner, ()):
+        text = text.replace(param, "")
     # Deliberate: codex_backend names Budget through registry.conserve.
     text = text.replace("usage_budget.Budget", "conserve.Budget")
     return _FN_ADDR.sub(r"<function \1>", text)
@@ -401,6 +423,7 @@ def _simple(value) -> bool:
 def shape(value):
     """Comparable description of one module-level name."""
     if isinstance(value, type):
+        class_skipped = _FINAL_ONLY_CLASS_FIELDS.get(value.__name__, frozenset())
         out = {
             "kind": "class",
             "name": value.__name__,
@@ -419,17 +442,17 @@ def shape(value):
                     f.default if f.default is not dataclasses.MISSING and _simple(f.default) else "<d>",
                 )
                 for f in dataclasses.fields(value)
-                if f.name not in _FINAL_ONLY_FIELDS
+                if f.name not in _FINAL_ONLY_FIELDS and f.name not in class_skipped
             ]
         for key, item in vars(value).items():
             if key.startswith("__") and key.endswith("__") and key not in ("__init__", "__call__"):
                 continue
-            if dataclasses.is_dataclass(value) and key in _FINAL_ONLY_FIELDS:
+            if dataclasses.is_dataclass(value) and (key in _FINAL_ONLY_FIELDS or key in class_skipped):
                 continue
             raw = item.__func__ if isinstance(item, (staticmethod, classmethod)) else item
             if inspect.isfunction(raw):
                 with contextlib.suppress(ValueError, TypeError):
-                    out["methods"][key] = _sig(raw)
+                    out["methods"][key] = _sig(raw, value.__name__)
             elif isinstance(item, property):
                 out["methods"][key] = "<property>"
             elif _simple(item):
@@ -468,7 +491,11 @@ def assert_same_surface(legacy_mod, final_mod, *, only_legacy=(), only_final=())
 _SURFACE_CASES = [
     ("acap", (), ("MODE_COMPLETION", "MODE_WORKSPACE")),
     ("profile", (), ()),
-    ("harness", (), ("check_effort", "codex_command")),
+    # Legacy-only: the legacy modules reach Codex through ``bootstrap_lib.codex`` and carry the
+    # message and requirement constants for an interpreter whose katsoft-llm-kit is absent or old;
+    # the final modules import ``codex_command`` directly and have nothing to be absent.
+    ("harness", ("LLM_KIT_CODEX_MIN", "LLM_KIT_CODEX_REQUIREMENT", "_codex_unavailable", "codex_import_failure"),
+     ("check_effort", "codex_command")),
     ("runner", (), ()),
     # Final-only: the Claude effort check (check_effort over the harness-wide menu) and the
     # estimated-cost labels / reported-model reader that fill LLMResponse's final-only fields.
@@ -477,8 +504,10 @@ _SURFACE_CASES = [
                       "check_effort")),
     # The final backend delegates to llm_kit.adapters.codex_command directly, so
     # the legacy probe constant, probe function and its signature import are gone.
-    ("codex", ("IGNORE_USER_CONFIG_BOOTSTRAP", "_codex_argv_builder", "inspect", "usage_budget"),
-     ("CODEX_EFFORT_ORDER", "CODEX_HARNESS", "check_effort", "codex_command", "conserve", "usage_sources")),
+    ("codex", ("IGNORE_USER_CONFIG_BOOTSTRAP", "_codex_argv_builder", "codex_import_failure", "inspect",
+               "usage_budget"),
+     ("CODEX_EFFORT_ORDER", "CODEX_HARNESS", "check_effort", "codex_command", "conserve", "usage_sources",
+      "CodexUsage", "_usage_count", "parse_codex_usage_events")),
     ("opencode", (), ()),
     ("account", (), ()),
     ("client", (), ()),
@@ -1422,7 +1451,9 @@ class _CodexRunner:
         self.calls = []
 
     def __call__(self, cmd, request, cwd, **kwargs):
-        record = {"cmd": list(cmd), "request": request, "cwd": str(cwd), "kwargs": pre(dict(kwargs))}
+        # Declared difference: the final backend adds --json (see the module docstring).
+        record = {"cmd": [part for part in cmd if part != "--json"], "request": request, "cwd": str(cwd),
+                  "kwargs": pre(dict(kwargs))}
         if "--output-schema" in cmd:
             record["schema_file"] = Path(cmd[cmd.index("--output-schema") + 1]).read_text(encoding="ascii")
         if "-c" in cmd:

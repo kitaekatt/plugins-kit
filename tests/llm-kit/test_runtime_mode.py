@@ -577,13 +577,14 @@ def test_package_mode_fleet_uses_layered_registry(site, tmp_path):
     body = (
         "from llm_kit.registry import models\n"
         "config = models.load_model_config()\n"
-        "result = [config['default_endpoint'], 'fleet-chosen' in config['endpoints'],\n"
+        "result = [config.get('default_endpoint'), 'fleet-chosen' in config['endpoints'],\n"
         "          config == models.DEFAULT_MODEL_CONFIG]"
     )
     fleet = package(site, body, fleet=True, env={"HOME": str(home)})
     assert fleet["ok"] == ["fleet-chosen", True, False], fleet
     off = package(site, body, env={"HOME": str(home)})
-    assert off["ok"] == ["openrouter", False, True], off     # shipped defaults, layers ignored
+    # shipped defaults, layers ignored; the shipped baseline names no default_endpoint (no shipped default)
+    assert off["ok"] == [None, False, True], off
     assert off["modules"] == []
 
 

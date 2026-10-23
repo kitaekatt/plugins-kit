@@ -35,7 +35,7 @@
     {
       "name": "bootstrap",
       "description": "Installs each plugin's tools, Python venvs, and config automatically at session start.",
-      "version": "0.164.0",
+      "version": "0.165.0",
       "author": {
         "name": "Christina"
       },
@@ -97,7 +97,7 @@
     {
       "name": "awesome-kit",
       "description": "Provides plugin-ecosystem, orchestrate, debug-context, verbose-updates, and arewedone skills for plugin browsing, delegated work, answering why-did-you questions from context, progress communication, and auditing whether session work is complete.",
-      "version": "0.78.0",
+      "version": "0.79.0",
       "author": {
         "name": "Christina"
       },
@@ -176,7 +176,7 @@
     {
       "name": "workflow-kit",
       "description": "Incremental, native-preserving improvements on the native Workflow tool: a declarative .workflow.yaml compiler plus node strategies (deterministic script + OpenRouter model calls) that run as cheap, context-light nodes via a file-passing contract. Experimental.",
-      "version": "0.13.0",
+      "version": "0.14.0",
       "author": {
         "name": "Christina"
       },
@@ -215,7 +215,7 @@
     {
       "name": "task-kit",
       "description": "Provides the task skill (a file-backed task-folder system with a CLI for creating, listing, working, closing, archiving, and moving task folders and task_list references) and task-kit export, the task facts databench's tasks view reads; bare task-kit opens that view.",
-      "version": "0.19.1",
+      "version": "0.20.0",
       "author": {
         "name": "Christina"
       },
@@ -243,7 +243,7 @@
     {
       "name": "llm-kit",
       "description": "LLM access, durable agent jobs and batch content pipelines in one library. Consolidation of llm-scripting-kit, job-kit and content-pipeline-kit.",
-      "version": "0.9.0",
+      "version": "0.10.0",
       "author": {
         "name": "Christina"
       },

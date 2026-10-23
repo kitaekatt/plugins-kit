@@ -46,7 +46,7 @@ LEGACY_ROOTS = ("job_kit", "llm_scripting_kit", "content_pipeline", "bootstrap_g
 #: Keys the final library emits that the frozen legacy CLI does not: the adapter records carry
 #: ``call_modes`` and every completion response carries ``reported_model`` and the
 #: ``estimated_cost_*`` pair. Dropped from both sides before a parity comparison.
-FINAL_ONLY_KEYS = frozenset({"call_modes", "reported_model", "estimated_cost_usd", "estimated_cost_source"})
+FINAL_ONLY_KEYS = frozenset({"call_modes", "reported_model", "estimated_cost_usd", "estimated_cost_source", "reasoning_tokens"})
 
 #: Variables that steer credentials, the registry, routing or pacing. Every CLI
 #: test starts with all of them unset.

@@ -17,7 +17,7 @@ Record (``_schema_version`` "1"; every key is required and no other key is allow
     answer: {...}                # matches the question's answer schema
     inputs_fingerprint: <64 hex>
     as_of: {task_commit: <sha>, code_commit: null}
-    answerer: {kind: model, entry: qwen38-5090, tier: free, effort: medium,
+    answerer: {kind: model, entry: qwen38-5090, tier: local, effort: medium,
                attempts: [{entry: qwen38-5090, outcome: completed}]}
     generated_at: '2026-10-21T19:05:12-05:00'   # informational; never used to choose
 

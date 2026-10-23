@@ -481,6 +481,11 @@ def main(argv=None):
         try:
             if not names:
                 names = default_declaration(project_root=project_root)
+                if not names:
+                    raise ValueError(
+                        "No model is declared. Pass --model or configure "
+                        "default_endpoint in your llm-kit config."
+                    )
         except (DeclarationSupportError, ValueError) as exc:  # DeclarationError is a ValueError
             print(str(exc), file=sys.stderr)
             _write_status(args.status, {"ok": False, "error": type(exc).__name__})

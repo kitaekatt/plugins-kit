@@ -26,6 +26,7 @@ Usage:
 """
 
 import argparse
+import dataclasses
 from functools import partial
 import importlib
 import json
@@ -569,6 +570,11 @@ CLAUDE_HARNESS = "claude"
 # the install rather than by probes and only ABSENCE is diagnosed: the renderer
 # DEGRADES (dispatch.py REFUSES) when llm_kit is not importable. No legacy
 # library is consulted in llm-kit's place.
+# The scope orchestrate applies to llm-kit's optional consent layer
+# (`llm-kit consent show --scope orchestrate`). Orchestrate opts in: the menu it
+# renders is the policy it hands the session, so a cost class the layer does not
+# allow is shown unusable instead of offered.
+CONSENT_SCOPE = "orchestrate"
 LLM_KIT_ABSENT_REMEDY = (
     "llm-kit is the katsoft-llm-kit package in awesome-kit's venv; run the "
     "renderer with that venv's interpreter, or run `bootstrap run` to "
@@ -805,7 +811,9 @@ def load_declaration_api() -> Tuple[Optional[SimpleNamespace], Optional[str]]:
     reduced = (
         "routing rows list only the Claude models the harness routes by itself "
         "(fable, opus, sonnet, haiku), in declared order, without pace ordering "
-        "and without the choice and re-selection rule"
+        "and without the choice and re-selection rule; "
+        f"consent scope `{CONSENT_SCOPE}` was NOT applied, so no cost class is "
+        "shown or enforced"
     )
     try:
         importlib.import_module("llm_kit")
@@ -824,6 +832,17 @@ def load_declaration_api() -> Tuple[Optional[SimpleNamespace], Optional[str]]:
             resolve_error=_llm_kit_member("llm_kit.registry.models", "EndpointResolveError"),
             reachable=_llm_kit_member("llm_kit.dispatch.reachability", "STATUS_REACHABLE"),
             unreachable=_llm_kit_member("llm_kit.dispatch.reachability", "STATUS_UNREACHABLE"),
+            consent_policy=_llm_kit_member("llm_kit.registry.consent", "policy"),
+            consent_error=_llm_kit_member("llm_kit.registry.consent", "ConsentConfigError"),
+            probe_harness_auth=_llm_kit_member(
+                "llm_kit.adapters.harness_auth", "probe_harness_auth"
+            ),
+            harness_auth_type=_llm_kit_member("llm_kit.registry.cost", "HarnessAuth"),
+            billing_diverting_vars=_llm_kit_member(
+                "llm_kit.registry.cost", "BILLING_DIVERTING_VARS"
+            ),
+            subscription=_llm_kit_member("llm_kit.registry.cost", "SUBSCRIPTION"),
+            metered=_llm_kit_member("llm_kit.registry.cost", "METERED"),
         )
     except Exception as exc:  # noqa: BLE001 -- a broken llm_kit import degrades, disclosed
         return None, (
@@ -843,9 +862,55 @@ def _quota_reads_enabled() -> bool:
     return os.environ.get("ORCHESTRATE_QUOTA_ROUTING", "").strip() != "0"
 
 
+# Fields the renderer itself reads or may override from a record. Every other
+# attribute of a registry entry is carried through untouched (see
+# `_entry_for_describe`), because describe classifies the entry it is given and
+# the classification reads billing, front-door, routing and endpoint metadata
+# that this renderer never displays.
 _ENTRY_FIELDS = (
     "id", "base_url", "model", "kind", "harness", "effort", "tier", "family", "conserve_usage",
+    "routing", "frontdoor", "billing_mode", "billing_owner", "endpoint",
 )
+_ENTRY_DEFAULTS = {"frontdoor": False}
+
+
+def _entry_for_describe(raw_id: str, record: Any, *, quota: bool) -> Any:
+    """The entry ``describe`` classifies for one discovered record.
+
+    A record that carries its registry entry yields a copy of THAT entry (every
+    field, billing, front-door, routing and endpoint metadata included), with
+    only the stated record values and the quota switch applied. Rebuilding the
+    entry from a field whitelist would drop what the cost class is derived from
+    and misclassify the entry without saying so.
+    """
+    source = _record_value(record, "entry")
+    if source is None and not isinstance(record, Mapping):
+        source = record
+    stated = {
+        name: _record_value(record, name)
+        for name in _ENTRY_FIELDS
+        if _record_value(record, name) is not None
+    }
+    if not quota:
+        stated["conserve_usage"] = None
+    if source is not None and dataclasses.is_dataclass(source) and not isinstance(source, type):
+        known = {field.name for field in dataclasses.fields(source)}
+        overrides = {name: value for name, value in stated.items() if name in known}
+        if "id" in known and not (overrides.get("id") or getattr(source, "id", None)):
+            overrides["id"] = raw_id
+        return dataclasses.replace(source, **overrides)
+    values: Dict[str, Any] = {name: None for name in _ENTRY_FIELDS}
+    values.update(_ENTRY_DEFAULTS)
+    if source is not None:
+        values.update(vars(source))
+    if isinstance(record, Mapping):
+        values.update(
+            {key: value for key, value in record.items() if key != "entry" and value is not None}
+        )
+    values.update(stated)
+    values["id"] = str(values["id"] or raw_id)
+    values["kind"] = values["kind"] or "harness"
+    return SimpleNamespace(**values)
 
 
 def _declaration_entries(
@@ -855,30 +920,22 @@ def _declaration_entries(
 
     Injected rather than re-discovered per row, so a render reads the registry
     once. A core id the registry does not carry is added as the Claude
-    harness entry it always is (the harness defines it). With quota reads
-    off, ``conserve_usage`` is dropped, so ``describe`` makes no read at all.
+    harness entry it always is (the harness defines it); it is driven by the
+    Agent tool in this session, so its cost class follows this session's
+    Claude authentication. With quota reads off, ``conserve_usage`` is
+    dropped, so ``describe`` makes no read at all.
     """
     result: Dict[str, Any] = {}
     for raw_id, record in model_entries.items():
-        source = _record_value(record, "entry")
-        values = {}
-        for field in _ENTRY_FIELDS:
-            value = _record_value(record, field)
-            if value is None and source is not None:
-                value = getattr(source, field, None)
-            values[field] = value
-        values["id"] = str(values["id"] or raw_id)
-        values["kind"] = values["kind"] or "harness"
-        if not quota:
-            values["conserve_usage"] = None
-        result[str(raw_id)] = SimpleNamespace(**values)
+        result[str(raw_id)] = _entry_for_describe(str(raw_id), record, quota=quota)
     for core_id in core_ids:
         result.setdefault(
             core_id,
             SimpleNamespace(
                 id=core_id, base_url=None, model=core_id, kind="harness",
                 harness=CLAUDE_HARNESS, effort=None, tier=None, family=None,
-                conserve_usage=None,
+                conserve_usage=None, routing=None, frontdoor=False,
+                billing_mode=None, billing_owner=None, endpoint=None,
             ),
         )
     return result
@@ -970,21 +1027,126 @@ def _with_effort(line: str, effort: Optional[str]) -> str:
     return f"{line}   effort: {effort}" if effort else line
 
 
+def _with_cost(line: str, cost_class: Optional[str]) -> str:
+    """Append an entry's registry cost class to its rendered menu line."""
+    return f"{line}   cost: {cost_class}" if cost_class else line
+
+
+def session_environment() -> Mapping[str, str]:
+    """The environment of this session: the renderer is its child and shares it."""
+    return os.environ
+
+
+def session_claude_auth(api: SimpleNamespace) -> Any:
+    """Authentication of the native Agent-tool entries, from the session itself.
+
+    A Claude entry driven by the Agent tool runs INSIDE this Claude Code
+    session, so the session is its authentication context and there is nothing
+    to probe: a billing-diverting variable (the library's own list, such as
+    ANTHROPIC_API_KEY) diverts the session's billing, so the entry is
+    ``metered``; otherwise it runs on the session's own pool, ``subscription``.
+    No CLI is run, so a failing probe can never block a model the session is
+    already running on.
+    """
+    env = session_environment()
+    for name in api.billing_diverting_vars:
+        if env.get(name):
+            return api.harness_auth_type(api.metered, f"{name} is set in the session environment")
+    return api.harness_auth_type(
+        api.subscription,
+        "native Agent-tool entry runs inside this session; no billing-diverting variable is set",
+    )
+
+
+def probe_session_auth(api: SimpleNamespace, harnesses: Iterable[str], cwd: Path) -> Dict[str, Any]:
+    """Authentication state of the CLI harnesses a session drives, from llm-kit's probe.
+
+    Codex entries follow the codex CLI's own state. A probe that cannot tell
+    reports UNKNOWN, which classifies ``metered``: unverified billing is never
+    presumed free. Native Claude entries are not probed (:func:`session_claude_auth`).
+    """
+    return dict(api.probe_harness_auth(list(harnesses), cwd=cwd))
+
+
+def _ensure_harness_auth(
+    api: SimpleNamespace, ids: Iterable[str], context: Dict[str, Any]
+) -> None:
+    """Settle, once per render, the authentication of each claude/codex harness a row uses."""
+    needed = set()
+    for entry_id in ids:
+        entry = context["entries"].get(entry_id)
+        harness = str(getattr(entry, "harness", None) or "").lower()
+        if (
+            entry is not None
+            and getattr(entry, "kind", None) == "harness"
+            and harness in ("claude", "codex")
+            and harness not in context["harness_auth"]
+        ):
+            needed.add(harness)
+    if CLAUDE_HARNESS in needed:
+        context["harness_auth"][CLAUDE_HARNESS] = session_claude_auth(api)
+        needed.discard(CLAUDE_HARNESS)
+    if needed:
+        cwd = Path(context["project_root"]) if context["project_root"] else Path.cwd()
+        context["harness_auth"].update(probe_session_auth(api, sorted(needed), cwd))
+
+
+def _consent_line(policy: Any) -> str:
+    """One routing line stating the consent policy this menu was filtered by."""
+    allowed = [name for name in ("local", "subscription", "metered") if policy.allows(name)]
+    refused = [name for name in ("local", "subscription", "metered") if not policy.allows(name)]
+    text = (
+        f"Cost consent (llm-kit scope `{CONSENT_SCOPE}`): allowed "
+        f"{', '.join(allowed) or 'nothing'}"
+    )
+    if refused:
+        text += f"; not allowed {', '.join(refused)} (shown unusable below)"
+    return text + f". `llm-kit consent show --scope {CONSENT_SCOPE}` prints it."
+
+
+def _switched_off_model(
+    disposition: Any, entries: Mapping[str, Any], efforts: Mapping[str, Optional[str]]
+) -> Dict[str, Any]:
+    """A menu row for an entry the consent policy switched off: shown, never usable."""
+    entry = entries.get(disposition.id)
+    harness = getattr(entry, "harness", None)
+    line = (
+        f"  {disposition.id}  UNUSABLE ({disposition.cost_class} not allowed); "
+        f"do not delegate to it -- {disposition.detail}"
+    )
+    return {
+        "id": disposition.id,
+        "target": _target(disposition.id, harness),
+        "harness": harness,
+        "usable": False,
+        "default": False,
+        "switched_off": True,
+        "cost_class": disposition.cost_class,
+        "effort": efforts.get(disposition.id),
+        "line": _with_effort(line, efforts.get(disposition.id)),
+    }
+
+
 def _describe_row(
     api: SimpleNamespace,
     ids: List[str],
-    context: Mapping[str, Any],
+    context: Dict[str, Any],
     efforts: Optional[Mapping[str, Optional[str]]] = None,
 ) -> Dict[str, Any]:
     """One row's menu from ``describe``: rendered entries, header, rule, or floor.
 
-    ``describe`` receives ids only; each entry's declared effort is appended to
-    its rendered line by id, so pace ordering cannot detach it.
+    ``describe`` receives ids only; each entry's declared effort and registry
+    cost class are appended to its rendered line by id, so pace ordering cannot
+    detach them. The consent policy of scope ``orchestrate`` is applied by
+    ``describe``: an entry it switches off is listed after the menu as
+    unusable, with the reason and the exact command that would allow it, and
+    is never dropped.
     """
     efforts = efforts or {}
     _seed_reachability(
         api, ids, context["entries"], context["harness_status"], context["cache"]
     )
+    _ensure_harness_auth(api, ids, context)
     try:
         ranking = api.describe(
             ids,
@@ -994,9 +1156,15 @@ def _describe_row(
             backend_factory=context["factory"],
             reachability_cache=context["cache"],
             entries=context["entries"],
+            consent_policy=context["policy"],
+            discovery=True,
+            harness_auth=context["harness_auth"],
         )
     except api.no_usable as exc:  # the floor: the only surface naming hidden ids
-        return {"models": [], "header": None, "rule": "", "floor": str(exc)}
+        return {
+            "models": [], "header": None, "rule": "", "floor": str(exc),
+            "consent": _consent_line(context["policy"]),
+        }
     lines = ranking.render().split("\n")
     entries = list(ranking.rendered_entries)
     models = [
@@ -1007,11 +1175,30 @@ def _describe_row(
             "usable": bool(entry.usable),
             "default": bool(entry.default),
             "effort": efforts.get(entry.id),
-            "line": _with_effort(line, efforts.get(entry.id)),
+            "cost_class": entry.cost_class,
+            "line": _with_effort(
+                _with_cost(line, entry.cost_class), efforts.get(entry.id)
+            ),
         }
         for entry, line in zip(entries, lines[1 : 1 + len(entries)])
     ]
-    return {"models": models, "header": lines[0], "rule": ranking.rule, "floor": None}
+    models.extend(
+        _switched_off_model(disposition, context["entries"], efforts)
+        for disposition in ranking.switched_off
+    )
+    return {
+        "models": models,
+        "header": lines[0],
+        "rule": ranking.rule,
+        "floor": None,
+        "consent": _consent_line(context["policy"]),
+    }
+
+
+_CONSENT_NOT_APPLIED = (
+    f"Cost consent (llm-kit scope `{CONSENT_SCOPE}`) was NOT applied: llm-kit "
+    "could not classify these models, so their cost class is unknown here."
+)
 
 
 def _reduced_row(
@@ -1034,6 +1221,7 @@ def _reduced_row(
                 f"no usable routing target in [{', '.join(ids)}] for a session caller:\n"
                 f"{itemised}"
             ),
+            "consent": _CONSENT_NOT_APPLIED,
         }
     width = max(len(entry_id) for entry_id in kept)
     models = []
@@ -1058,6 +1246,7 @@ def _reduced_row(
         "header": "Declared Claude models, in declared order: choose one; default is marked.",
         "rule": "",
         "floor": None,
+        "consent": _CONSENT_NOT_APPLIED,
     }
 
 
@@ -1114,8 +1303,23 @@ def resolve_routing_models(
 
     context: Optional[Dict[str, Any]] = None
     if api is not None:
+        try:
+            policy = api.consent_policy(CONSENT_SCOPE)
+        except (api.consent_error, ValueError) as exc:
+            # Fail closed and loud: a menu rendered without the policy it was
+            # promised to apply could offer a class the user switched off.
+            note = (
+                f"routing rows not rendered: consent scope `{CONSENT_SCOPE}` could "
+                f"not be read ({type(exc).__name__}: {exc}); fix the consent file "
+                f"(`llm-kit consent show --scope {CONSENT_SCOPE}` names it) and render again"
+            )
+            if degraded is not None and note not in degraded:
+                degraded.append(note)
+            return [], [note]
         entries = _declaration_entries(model_entries, core_ids, quota=_quota_reads_enabled())
         context = {
+            "policy": policy,
+            "harness_auth": {},
             "entries": entries,
             "harness_status": harness_status,
             "cache": {},
@@ -1169,7 +1373,8 @@ def resolve_routing_models(
                 note = (
                     "llm_kit describe() failed "
                     f"({type(exc).__name__}: {exc}); routing rows list only the Claude "
-                    "models the harness routes by itself, in declared order"
+                    "models the harness routes by itself, in declared order, and "
+                    f"consent scope `{CONSENT_SCOPE}` was NOT applied"
                 )
                 if degraded is not None and note not in degraded:
                     degraded.append(note)
@@ -1347,6 +1552,9 @@ def render_routing(
     header = next((route.get("header") for route in routes if route.get("header")), None)
     if header:
         out.append(header)
+    consent = next((route.get("consent") for route in routes if route.get("consent")), None)
+    if consent:
+        out.append(consent)
     out.append("")
     rules: List[str] = []
     for index, route in enumerate(routes, 1):
@@ -2199,7 +2407,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         for route in routes:
             # Rendered entries only: a hidden id surfaces through the floor
             # alone, never here.
-            targets = ", ".join(model["target"] for model in route["models"])
+            targets = ", ".join(
+                model["target"] + (" [switched off]" if model.get("switched_off") else "")
+                for model in route["models"]
+            )
             if route.get("floor"):
                 targets = "no usable model (floor)"
             shape = "+".join(route["shape"]) or "default"

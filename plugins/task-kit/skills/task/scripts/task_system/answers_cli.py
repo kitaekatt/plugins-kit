@@ -19,8 +19,10 @@ Verbs (``--format json --protocol N`` on each)::
 ``--project DIR`` (absolute, existing, repeatable) restricts discovery to those project checkouts, wherever their
 ``dev/tasks`` links resolve; with ``--parent`` the two are intersected (``export.resolve_projects``).
 
-``--allow`` names the cost classes the caller allows (``free``, ``usage``, ``spend``); without it the classes
-are llm-kit's per-machine consent, read once, on the first pass that needs a model.
+``--allow`` names the cost classes the caller allows (``local``, ``subscription``, ``metered``) and is the
+caller's own policy: exactly those classes, no consent layer. Without it task-kit opts in to llm-kit's optional
+consent layer with scope ``task-kit``, read once, on the first pass that needs a model; a malformed consent
+file is a ``config_invalid`` error naming it.
 """
 
 from __future__ import annotations
@@ -296,6 +298,10 @@ def document(argv: list[str], *, version: str | None = None, **inject) -> tuple[
                 payload = _prune(args, inject)
     except export.ExportError as exc:
         return EXIT_CODES[exc.code], export_cli._error_document(protocol, resolved_version, exc.code, exc.message)  # noqa: SLF001
+    except answer_chain.ConsentConfigInvalid as exc:
+        return EXIT_CODES["config_invalid"], export_cli._error_document(  # noqa: SLF001
+            protocol, resolved_version, "config_invalid", str(exc)
+        )
     except datadir.DataDirError as exc:
         return EXIT_CODES["config_invalid"], export_cli._error_document(  # noqa: SLF001
             protocol, resolved_version, "config_invalid", str(exc)

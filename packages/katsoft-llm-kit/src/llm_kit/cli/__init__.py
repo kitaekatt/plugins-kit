@@ -20,7 +20,7 @@ Groups, and where each legacy command now lives:
 ``frontdoor``   llm-scripting-kit ``frontdoor`` (every argument is the front
                 door's own)
 ``local``       llm-scripting-kit ``swapper`` and ``acceptance``
-``consent``     per-machine consent to the usage and spend cost classes
+``consent``     the optional consent layer for the local, subscription and metered cost classes
 
 Each carried verb keeps its arguments, output and exit codes. The exit-code
 tables differ by group because the legacy commands differed (the scripting
@@ -50,7 +50,7 @@ GROUPS = {
     "pipeline": "Drive a leased pipeline run's execution ledger.",
     "frontdoor": "Run the OpenAI-compatible fill-first front door.",
     "local": "The local llama-swap model swapper and acceptance runs.",
-    "consent": "Show or change which cost classes callers that opt in may use.",
+    "consent": "Show or change the optional consent layer for cost classes.",
 }
 
 #: legacy command (llm-scripting-kit, job-kit, content-pipeline adapters) -> its

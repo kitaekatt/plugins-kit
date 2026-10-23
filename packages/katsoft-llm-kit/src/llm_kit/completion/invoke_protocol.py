@@ -24,10 +24,23 @@ of ``selection`` or ``model``):
                  and refused for ``completion``; must exist beneath the project root
 ``expect_files`` relative paths that must be regular files in ``working_dir`` after a
                  workspace call; otherwise the call is reported failed
+``watch_files`` non-empty list of relative paths; workspace receipts hash only this list
+                  and ``expect_files``. It does not detect other writes or deletions
+``images``       relative regular files attached to the initial prompt; Codex only
+``codex_config`` closed Codex configuration object with two allowlisted keys
 ``output_schema`` a JSON Schema the answer must satisfy (validated-result policy)
 ``effort``       explicit effort, or ``null`` to send none; absent means the selection's
 ``max_tokens``   output token cap, a positive integer
 ``timeout_s``    per-call wall-clock cap in seconds, a positive number
+``consent``      opt in to the optional consent layer (``llm-kit consent``): omitted or
+                 ``false`` = the layer is not used; ``true`` = the global policy;
+                 ``{"scope": "<non-empty name>"}`` = that scope's policy over the global
+                 one. Anything else is a ``protocol`` refusal. When present, a class the
+                 policy does not allow is refused (``consent``, naming the class, the
+                 scope and the exact ``llm-kit consent set`` command) before anything is
+                 spawned. There is no per-call allow list in protocol 2, so ``consent``
+                 cannot be combined with one; an ``allow`` key is an unknown key
+                 (``protocol`` refusal)
 
 Every refusal here is an :class:`InvokeRefusal`: it happens BEFORE anything is
 spawned, so retrying the same bytes cannot help, and the CLI reports it with the
@@ -89,10 +102,14 @@ _REQUEST_KEYS = (
     "mode",
     "working_dir",
     "expect_files",
+    "watch_files",
+    "images",
+    "codex_config",
     "output_schema",
     "effort",
     "max_tokens",
     "timeout_s",
+    "consent",
 )
 
 
@@ -117,11 +134,52 @@ class InvokeRequest:
     mode: str
     working_dir: Optional[str]
     expect_files: Tuple[str, ...]
+    watch_files: Optional[Tuple[str, ...]]
+    images: Tuple[str, ...]
+    codex_config: Mapping[str, str]
+    codex_config_given: bool
     output_contract: Optional[OutputContract]
     effort_given: bool
     effort: Optional[str]
     max_tokens: Optional[int]
     timeout_s: Optional[float]
+    consent: Optional["ConsentRequest"] = None
+
+
+@dataclass(frozen=True)
+class ConsentRequest:
+    """The caller opted in to the consent layer; ``scope`` None means the global policy."""
+
+    scope: Optional[str] = None
+
+
+def parse_consent_field(payload: Mapping[str, Any]) -> Optional[ConsentRequest]:
+    """The request's ``consent`` field: None (layer not used), or the opt-in; :class:`InvokeRefusal` (protocol) if malformed."""
+    if "consent" not in payload:
+        return None
+    value = payload["consent"]
+    if value is None or value is False:
+        return None
+    if value is True:
+        return ConsentRequest()
+    if isinstance(value, Mapping):
+        extra = sorted(str(k) for k in value if k != "scope")
+        if extra or "scope" not in value:
+            raise InvokeRefusal(
+                KIND_PROTOCOL,
+                "consent must be true, false or {\"scope\": \"<name>\"}; "
+                + (f"unknown key(s) {', '.join(extra)}" if extra else "the object has no \"scope\""),
+            )
+        scope = value["scope"]
+        if not isinstance(scope, str) or not scope.strip() or scope != scope.strip():
+            raise InvokeRefusal(
+                KIND_PROTOCOL, f"consent scope must be a non-empty string without surrounding whitespace, got {scope!r}"
+            )
+        return ConsentRequest(scope=scope)
+    raise InvokeRefusal(
+        KIND_PROTOCOL,
+        f"consent must be true, false or {{\"scope\": \"<name>\"}}, got {type(value).__name__}",
+    )
 
 
 def _text(mapping: Mapping[str, Any], key: str, *, required: bool = False) -> Optional[str]:
@@ -133,6 +191,49 @@ def _text(mapping: Mapping[str, Any], key: str, *, required: bool = False) -> Op
     if not isinstance(value, str):
         raise InvokeRefusal(KIND_PROTOCOL, f"{key} must be a string")
     return value
+
+
+_CODEX_CONFIG_VALUES = {
+    "shell_environment_policy.inherit": frozenset({"none", "core"}),
+    "approval_policy": frozenset({"never"}),
+}
+
+
+def parse_codex_config(value: Any, *, what: str = "codex_config") -> Dict[str, str]:
+    """Validate the closed Codex configuration allowlist; never accept raw -c pairs."""
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise InvokeRefusal(KIND_PROTOCOL, f"{what} must be an object")
+    unknown = sorted(str(key) for key in value if key not in _CODEX_CONFIG_VALUES)
+    if unknown:
+        raise InvokeRefusal(KIND_PROTOCOL, f"{what} has unknown key(s): " + ", ".join(unknown))
+    out: Dict[str, str] = {}
+    for key, item in value.items():
+        if not isinstance(item, str):
+            raise InvokeRefusal(KIND_PROTOCOL, f"{what}.{key} must be a string")
+        if item not in _CODEX_CONFIG_VALUES[key]:
+            raise InvokeRefusal(KIND_CONFIGURATION, f"{what}.{key} value {item!r} is prohibited")
+        out[key] = item
+    return out
+
+
+def _relative_list(value: Any, *, what: str, nonempty: bool) -> Optional[Tuple[str, ...]]:
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        raise InvokeRefusal(KIND_PROTOCOL, f"{what} must be a list of relative paths")
+    if nonempty and not value:
+        raise InvokeRefusal(KIND_PATH, f"{what} must not be empty")
+    out: List[str] = []
+    for item in value:
+        try:
+            out.append(confine_relative(item, what=f"{what} entry"))
+        except ValueError as exc:
+            raise InvokeRefusal(KIND_PATH, str(exc)) from None
+    if len(set(out)) != len(out):
+        raise InvokeRefusal(KIND_PATH, f"{what} lists a path twice")
+    return tuple(out)
 
 
 def parse_invoke_request(payload: Any) -> InvokeRequest:
@@ -166,6 +267,10 @@ def parse_invoke_request(payload: Any) -> InvokeRequest:
         )
     working_dir = _text(payload, "working_dir")
     expect_raw = payload.get("expect_files")
+    watch = _relative_list(payload.get("watch_files"), what="watch_files", nonempty=True)
+    images = _relative_list(payload.get("images"), what="images", nonempty=False) or ()
+    if mode != MODE_WORKSPACE and watch is not None:
+        raise InvokeRefusal(KIND_MODE, "watch_files applies to mode 'workspace' only")
     if mode == MODE_COMPLETION:
         if working_dir is not None:
             raise InvokeRefusal(KIND_PATH, "working_dir applies to mode 'workspace' only")
@@ -215,11 +320,16 @@ def parse_invoke_request(payload: Any) -> InvokeRequest:
         mode=mode,
         working_dir=working_dir,
         expect_files=tuple(expect),
+        watch_files=watch,
+        images=images,
+        codex_config=parse_codex_config(payload.get("codex_config")),
+        codex_config_given="codex_config" in payload,
         output_contract=contract,
         effort_given=effort_given,
         effort=effort,
         max_tokens=max_tokens,
         timeout_s=timeout_s,
+        consent=parse_consent_field(payload),
     )
 
 
@@ -236,12 +346,16 @@ def effort_block(requested: Optional[str], sent: Optional[str], source: str) -> 
 def cost_block(
     cost_class: Optional[str],
     *,
+    reason: str,
     usd: Optional[float],
     usd_source: Optional[str],
     estimated_usd: Optional[float],
     estimated_source: Optional[str],
 ) -> Dict[str, Any]:
-    """The cost class, the AUTHORITATIVE USD (null when unknown) and the separate estimate.
+    """The cost class and its reason, the AUTHORITATIVE USD (null when unknown) and the separate estimate.
+
+    The class and the reason are information, reported whether or not the caller
+    opted in to the consent layer.
 
     ``usd`` is a provider- or registry-reported amount; ``estimated_usd`` is a
     backend figure that is not authoritative pricing, with its own source label.
@@ -249,6 +363,7 @@ def cost_block(
     """
     return {
         "class": cost_class,
+        "reason": reason,
         "usd": usd,
         "source": usd_source,
         "estimated_usd": estimated_usd,
@@ -258,7 +373,7 @@ def cost_block(
 
 def usage_block(response: Any, wall_ms: int) -> Dict[str, Any]:
     """Token usage as the backend reported it; every count is null when no response exists."""
-    keys = ("input_tokens", "output_tokens", "cache_hit_tokens", "total_tokens")
+    keys = ("input_tokens", "output_tokens", "cache_hit_tokens", "reasoning_tokens", "total_tokens")
     block: Dict[str, Any] = {key: (getattr(response, key, None) if response is not None else None) for key in keys}
     block["wall_ms"] = int(getattr(response, "wall_ms", 0) or wall_ms) if response is not None else int(wall_ms)
     return block
@@ -274,9 +389,11 @@ def result_document(
     files: Optional[List[FileRecord]],
     usage: Mapping[str, Any],
     cost: Mapping[str, Any],
+    consent: Optional[Mapping[str, Any]] = None,
     error: Optional[Mapping[str, Any]] = None,
     halt: Optional[Mapping[str, Any]] = None,
     params: Optional[Mapping[str, Any]] = None,
+    manifest: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """One protocol 2 result.
 
@@ -297,8 +414,12 @@ def result_document(
         "usage": dict(usage),
         "cost": dict(cost),
     }
+    if consent is not None:
+        document["consent"] = dict(consent)
     if files is not None:
         document["files"] = [record.to_json() for record in files]
+    if manifest is not None:
+        document["manifest"] = dict(manifest)
     if params is not None:
         document["params"] = dict(params)
     if error is not None:
@@ -328,15 +449,32 @@ def describe_invoke_schema() -> Dict[str, Any]:
             "mode": f"one of {', '.join(MODES)}, optional (default {MODE_COMPLETION})",
             "working_dir": "string, required for workspace and refused for completion; must exist beneath project_root",
             "expect_files": "list of relative paths, workspace only; a missing or non-regular file fails the call",
+            "watch_files": "non-empty list of relative paths, workspace only; receipt hashes this list plus expect_files",
+            "images": "list of relative regular file paths; attached to Codex initial prompt only",
+            "codex_config": "optional closed object: shell_environment_policy.inherit=none|core; approval_policy=never",
             "output_schema": "JSON Schema object in the supported subset, optional",
             "effort": "string or null, optional; absent means the selection's effort, null sends none",
             "max_tokens": "integer >= 1, optional",
             "timeout_s": "number > 0, optional",
+            "consent": (
+                "optional; omitted or false = the optional consent layer is not used, true = the global "
+                "policy, {\"scope\": \"<non-empty name>\"} = that scope's policy; anything else is refused "
+                "(protocol). When present a class the policy does not allow is refused (consent) naming the "
+                "class, the scope and the `llm-kit consent set` command"
+            ),
         },
         "result": {
             "status": f"{STATUS_COMPLETED} or {STATUS_FAILED}",
             "files": "workspace only: [{path, size, sha256}] created or modified under working_dir",
-            "cost": "{class, usd, source, estimated_usd, estimated_source}; usd null means unknown, never zero",
+            "manifest": "workspace only: {scope: all|watch, watched_paths: [...] when scope is watch}; deletions are not reported",
+            "cost": (
+                "{class, reason, usd, source, estimated_usd, estimated_source}; the class and its reason are "
+                "always reported; usd null means unknown, never zero"
+            ),
+            "consent": (
+                "{opted_in, applied, scope}: whether the request sent the consent field, and whether a "
+                "consent policy was applied to the call"
+            ),
         },
         "exit_codes": {
             "0": "completed",
@@ -349,6 +487,7 @@ def describe_invoke_schema() -> Dict[str, Any]:
 
 __all__ = [
     "CODE_EXPECTED_FILES_MISSING",
+    "ConsentRequest",
     "CODE_WORKSPACE_SCAN_FAILED",
     "EFFORT_FROM_NONE",
     "EFFORT_FROM_REQUEST",
@@ -374,6 +513,7 @@ __all__ = [
     "cost_block",
     "describe_invoke_schema",
     "effort_block",
+    "parse_consent_field",
     "parse_invoke_request",
     "refusal_envelope",
     "result_document",

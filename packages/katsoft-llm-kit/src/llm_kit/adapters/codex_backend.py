@@ -4,7 +4,7 @@ The third backend behind the shared :class:`~.types.LLMBackend` protocol,
 alongside :class:`~.backends.OpenRouterBackend` and
 :class:`~.backends.ClaudeCliBackend`. Auth and billing come from the Codex
 CLI's own login, so a run is subscription-billed rather than metered per call
-and no usage envelope is produced.
+and no cost is produced.
 
 Three structural differences from the claude transport are the whole reason
 this is a separate module rather than another class in ``backends.py``:
@@ -16,6 +16,10 @@ this is a separate module rather than another class in ``backends.py``:
   builder, and reads it afterwards. A zero exit with a missing or empty file is
   the observable form of a silently-denied run, so it raises rather than
   returning "".
+* **Usage rides on stdout as JSON events.** Every run passes ``--json``, so
+  stdout is a JSONL event stream whose ``turn.completed`` event carries the
+  per-category token counts (see :func:`parse_codex_usage_events`). The answer
+  still comes from the ``-o`` file, never from the stream.
 * **There is no separate system-prompt channel.** ``system`` and ``user`` are
   composed into the one stdin prompt (see :func:`compose_prompt`).
 * **Every path must be absolute.** VERIFIED upstream: a relative ``-C``
@@ -132,6 +136,95 @@ CODEX_EXTRA_KEYS = (
     "network",
     "output_schema",
 )
+
+
+@dataclass(frozen=True)
+class CodexUsage:
+    """Token counts from the ``turn.completed`` events of a ``codex exec --json`` run.
+
+    Measured on codex-cli 0.164.0 (the event shape is in
+    ``tests/llm-kit/fixtures/codex_json``), and cross-checked against the
+    session rollout's own ``token_count`` record:
+
+    - ``input_tokens`` INCLUDES ``cached_input_tokens`` (the cached part is a
+      subset of the input), the same convention as the OpenAI-compatible
+      transport, which is what ``platform.py``'s cost arithmetic expects.
+    - ``output_tokens`` INCLUDES ``reasoning_output_tokens`` (the rollout's
+      ``total_tokens`` is input plus output with reasoning not added again).
+    """
+
+    input_tokens: int
+    cached_input_tokens: int
+    output_tokens: int
+    reasoning_output_tokens: int
+
+    @property
+    def blended_total_tokens(self) -> int:
+        """Codex's own "tokens used" figure: uncached input plus output.
+
+        Equal to the number the default (non-``--json``) path prints on stderr:
+        a measured pair, input 20428 / cached 11520 / output 5, printed
+        ``tokens used 8,913`` = (20428 - 11520) + 5.
+        """
+        return max(0, self.input_tokens - self.cached_input_tokens) + self.output_tokens
+
+
+def _usage_count(usage: Mapping, key: str, *, required: bool) -> int:
+    value = usage.get(key)
+    if value is None and not required:
+        return 0
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(
+            "codex turn.completed usage field %r is %r, expected a "
+            "non-negative integer" % (key, value)
+        )
+    return value
+
+
+def parse_codex_usage_events(stdout: str) -> Optional[CodexUsage]:
+    """Sum the usage of every ``turn.completed`` event in a ``--json`` stream.
+
+    Lines that are not JSON objects are skipped (a stream cut off mid-line, or
+    stray text); events of any other ``type`` are ignored. Returns None when no
+    ``turn.completed`` event carries a ``usage`` object -- no figure, which the
+    caller must not read as zero tokens.
+
+    ``input_tokens`` and ``output_tokens`` are required in a usage object and a
+    malformed value raises ValueError: a usage shape this module has not seen
+    must not be reported as a number it made up. ``cached_input_tokens`` and
+    ``reasoning_output_tokens`` default to 0 when absent or null, since a CLI
+    that predates a category legitimately lacks it.
+    """
+    if not stdout:
+        return None
+    found = False
+    input_tokens = cached = output_tokens = reasoning = 0
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, Mapping) or event.get("type") != "turn.completed":
+            continue
+        usage = event.get("usage")
+        if not isinstance(usage, Mapping):
+            continue
+        found = True
+        input_tokens += _usage_count(usage, "input_tokens", required=True)
+        output_tokens += _usage_count(usage, "output_tokens", required=True)
+        cached += _usage_count(usage, "cached_input_tokens", required=False)
+        reasoning += _usage_count(usage, "reasoning_output_tokens", required=False)
+    if not found:
+        return None
+    return CodexUsage(
+        input_tokens=input_tokens,
+        cached_input_tokens=cached,
+        output_tokens=output_tokens,
+        reasoning_output_tokens=reasoning,
+    )
 
 
 #: Matches codex's "tokens used" label, wherever it sits in a noisy line.
@@ -269,13 +362,16 @@ class CodexCliBackend:
       protocol compatibility and dropped, exactly as ClaudeCliBackend does --
       and reported in ``dropped_params``, not discarded in silence.
 
-    Usage/cost: codex emits no PER-DIRECTION usage envelope on the default
-    (non-``--json``) path, so ``input_tokens`` / ``output_tokens`` /
-    ``cache_hit_tokens`` are always 0 -- they are NOT estimated, since a
-    fabricated split is worse than an honest zero in an audit record. Codex
-    does print a running TOTAL on stderr ("tokens used" / a number), which
-    :func:`parse_codex_token_total` extracts into ``LLMResponse.total_tokens``
-    when present, 0 when the line is absent or unparseable.
+    Usage/cost: every run passes ``--json`` and the ``turn.completed`` events
+    are read by :func:`parse_codex_usage_events`. ``input_tokens`` is codex's
+    input count (cached part included), ``cache_hit_tokens`` its cached input,
+    ``output_tokens`` its output count (reasoning included),
+    ``reasoning_tokens`` the reasoning share of that output and
+    ``total_tokens`` codex's own blended figure (uncached input plus output,
+    the number "tokens used" shows). Nothing is estimated: when the stream carries no usage
+    event the counts stay 0, and ``total_tokens`` falls back to the stderr
+    "tokens used" figure (:func:`parse_codex_token_total`), which a ``--json``
+    run does not print, so 0 in practice.
     """
 
     default_timeout_s: float = 900.0
@@ -362,7 +458,9 @@ class CodexCliBackend:
                 catalog_path = self._write_text_only_catalog(
                     model, root, log_prefix=opts.log_prefix, timeout_s=timeout_s
                 )
-            extras = opts.extras
+            extras = dict(opts.extras or {})
+            codex_config = extras.pop("__llm_kit_codex_config", None)
+            image_paths = extras.pop("__llm_kit_image_paths", ())
             if plan is not None and plan.schema_json is not None:
                 # Native contract delivery: the canonical schema document goes
                 # to --output-schema through the same builder key the legacy
@@ -370,11 +468,18 @@ class CodexCliBackend:
                 # contract sent beside extras.output_schema, so nothing here
                 # overrides a caller's own schema file.
                 schema_path = self._write_schema_file(plan.schema_json)
-                extras = {**dict(opts.extras or {}), "output_schema": str(schema_path)}
+                extras = {**extras, "output_schema": str(schema_path)}
             argv = self._build_argv(
                 root=root, model=model, effort=opts.effort,
-                output_file=output_path, extras=extras, catalog_path=catalog_path,
+                output_file=output_path,
+                extras={
+                    **extras,
+                    **({"__llm_kit_codex_config": codex_config} if codex_config else {}),
+                    **({"__llm_kit_image_paths": image_paths} if image_paths else {}),
+                },
+                catalog_path=catalog_path,
             )
+            response_options = dataclasses.replace(opts, extras=extras)
             prompt = compose_prompt(system, user)
 
             started_at = utc_now_iso()
@@ -425,25 +530,35 @@ class CodexCliBackend:
                 except OSError:
                     pass
 
-        total_tokens = parse_codex_token_total(stderr)
+        usage = parse_codex_usage_events(stdout)
+        if usage is not None:
+            input_tokens = usage.input_tokens
+            output_tokens = usage.output_tokens
+            cache_hit_tokens = usage.cached_input_tokens
+            total_tokens = usage.blended_total_tokens
+            reasoning_tokens = usage.reasoning_output_tokens
+        else:
+            input_tokens = output_tokens = cache_hit_tokens = reasoning_tokens = 0
+            total_tokens = parse_codex_token_total(stderr) or 0
 
         response = LLMResponse(
             text=text,
             model=model,
-            input_tokens=0,
-            output_tokens=0,
-            cache_hit_tokens=0,
-            total_tokens=total_tokens or 0,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_hit_tokens=cache_hit_tokens,
+            total_tokens=total_tokens,
+            reasoning_tokens=reasoning_tokens,
             wall_ms=wall_ms,
             attempts=1,
             from_cache=False,
-            dropped_params=derive_dropped_params(self.capabilities, opts),
-            forwarded_params=derive_forwarded_params(self.capabilities, opts),
+            dropped_params=derive_dropped_params(self.capabilities, response_options),
+            forwarded_params=derive_forwarded_params(self.capabilities, response_options),
             execution_controls_applied=self._applied_controls(argv),
             # Under a contract, structured is set only by finalize_contract,
             # and only to a validated object; the legacy bare parse is for
             # the extras.output_schema path alone.
-            structured=None if plan is not None else self._parse_structured(text, opts.extras),
+            structured=None if plan is not None else self._parse_structured(text, response_options.extras),
             started_at=started_at,
             ended_at=utc_now_iso(),
         )
@@ -517,10 +632,10 @@ class CodexCliBackend:
         """
         prefix = self.argv_prefix
         if prefix is None:
-            prefix = codex_command.resolve_cli(codex_command.CODEX_EXECUTABLE)
+            prefix = codex_command.resolve_codex_cli()
             if prefix is None:
                 raise RuntimeError(
-                    f"`{codex_command.CODEX_EXECUTABLE}` is not on PATH, so text-only mode "
+                    f"`{codex_command.configured_codex_executable()}` is not on PATH, so text-only mode "
                     "cannot read the model catalog"
                 )
         stdout, stderr, returncode = self.runner(
@@ -667,12 +782,20 @@ class CodexCliBackend:
             "root": root,
             "output_file": output_file,
             "argv_prefix": self.argv_prefix,
+            # Usage events; the answer still comes from the -o file.
+            "json_events": True,
         }
         if model:
             kwargs["model"] = model
         if effort is not None:
             kwargs["effort"] = effort
         mapping = extras if isinstance(extras, dict) else dict(extras or {})
+        codex_config = mapping.get("__llm_kit_codex_config")
+        image_paths = mapping.get("__llm_kit_image_paths", ())
+        if codex_config:
+            kwargs["codex_config"] = dict(codex_config)
+        if image_paths:
+            kwargs["image_paths"] = image_paths
         for key in CODEX_EXTRA_KEYS:
             if key in mapping and mapping[key] is not None:
                 kwargs[key] = mapping[key]
@@ -725,6 +848,8 @@ __all__ = [
     "PROMPT_SEPARATOR",
     "CodexCliBackend",
     "CodexRunError",
+    "CodexUsage",
     "compose_prompt",
     "parse_codex_token_total",
+    "parse_codex_usage_events",
 ]

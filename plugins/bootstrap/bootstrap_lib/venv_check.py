@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -548,6 +549,18 @@ def _target_failure(venv_path: str, messages: Sequence[str]) -> Result:
     )
 
 
+def _is_stale_released_index_error(
+    stderr: bytes | str, targets: Sequence[Tuple[str, str, Optional[str]]]
+) -> Optional[str]:
+    """Name a pinned target uv says is absent while an older release is available."""
+    text = stderr.decode("utf-8", errors="replace") if isinstance(stderr, bytes) else stderr
+    for dist, _version, _installed in targets:
+        pattern = rf"only\s+{re.escape(dist)}(?:\[[^\]]+\])?[^\n]*\bis available"
+        if re.search(pattern, text, re.IGNORECASE):
+            return dist
+    return None
+
+
 def ensure_venv(
     project_dir: str,
     venv_path: str,
@@ -658,6 +671,20 @@ def ensure_venv(
         env["PATH"] = local_bin + os.pathsep + env.get("PATH", "")
     try:
         proc = subprocess.run(cmd, env=env, capture_output=True, timeout=120)
+        if proc.returncode != 0 and behind:
+            first_stderr = proc.stderr or b""
+            stale_dist = _is_stale_released_index_error(first_stderr, behind)
+            if stale_dist:
+                first_error = (
+                    first_stderr.decode("utf-8", errors="replace")
+                    if isinstance(first_stderr, bytes) else str(first_stderr)
+                ).strip()
+                entries.append(
+                    f"uv sync reported a stale released-package index for {stale_dist}; "
+                    f"retrying once after 2 seconds: {first_error}"
+                )
+                time.sleep(2)
+                proc = subprocess.run(cmd, env=env, capture_output=True, timeout=120)
     except (subprocess.SubprocessError, OSError) as exc:
         entries.append(f"uv sync error: {exc}")
         if behind:

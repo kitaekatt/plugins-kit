@@ -147,7 +147,7 @@ def _text(value: str) -> str:
 # a non-default value still reaches the comparison. ``test_allow_filter.py`` pins the
 # allow=None output byte for byte against literals captured before the filter existed.
 # Capabilities.call_modes; LLMResponse.reported_model and its estimated_cost_* pair.
-_FINAL_ONLY_FIELD_NAMES = frozenset({"call_modes", "reported_model", "estimated_cost_usd", "estimated_cost_source"})
+_FINAL_ONLY_FIELD_NAMES = frozenset({"call_modes", "reported_model", "estimated_cost_usd", "estimated_cost_source", "reasoning_tokens"})
 _FINAL_ONLY_DEFAULT_FIELDS = {("Disposition", "cost_class"): None, ("Ranking", "switched_off"): ()}
 
 

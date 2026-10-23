@@ -197,12 +197,18 @@
     {
       "path": "tests/llm-scripting-kit/test_completion_codex_backend.py",
       "disposition": "rewrite",
-      "reason": "Re-pointed at llm-kit's final module names: import statements.",
+      "reason": "Re-pointed at llm-kit's final module names: import statements; 1 declared difference(s) below.",
       "rewrite_classes": [
         "import"
       ],
       "collection_count": 44,
-      "baseline_failures": []
+      "baseline_failures": [],
+      "declared_differences": {
+        "llm-scripting-kit/test_completion_codex_backend.py::TestArgv::test_exact_default_argv": {
+          "mirror_status": "failed",
+          "reason": "llm-kit's codex completion backend always passes --json so it can read per-category token usage from the turn.completed event; the frozen legacy backend does not, so its argv has one more element. The final side is pinned in tests/llm-kit/test_codex_usage_json.py (--json present, answer still read from the -o file)."
+        }
+      }
     },
     {
       "path": "tests/llm-scripting-kit/test_completion_contract.py",
@@ -243,7 +249,7 @@
     {
       "path": "tests/llm-scripting-kit/test_completion_contract_conformance.py",
       "disposition": "rewrite",
-      "reason": "Re-pointed at llm-kit's final module names: import statements.",
+      "reason": "Re-pointed at llm-kit's final module names: import statements; 7 declared difference(s) below.",
       "rewrite_classes": [
         "import",
         "text-edit"
@@ -280,6 +286,10 @@
           "mirror_status": "skipped",
           "injected": false,
           "reason": "llm-kit's claude-cli delivers an output contract natively (--json-schema; llm-kit 0.3.2) and lists native-required, so the case ids and the native-required refusal differ from the frozen legacy record, which delivers by prompt. Mirror-only case (runs and passes)."
+        },
+        "llm-scripting-kit/test_completion_contract_conformance.py::test_conformance[codex-cli-no-contract-byte-identical]": {
+          "mirror_status": "failed",
+          "reason": "llm-kit's codex completion backend always passes --json so it can read per-category token usage from the turn.completed event; the frozen legacy backend does not, so its argv has one more element. The final side is pinned in tests/llm-kit/test_codex_usage_json.py (--json present, answer still read from the -o file)."
         }
       }
     },
@@ -597,6 +607,10 @@
         "llm-scripting-kit/test_model_resolve.py::TestShippedHarnessEntries::test_shipped_harness_entries_are_discoverable_by_kind": {
           "mirror_status": "skipped",
           "reason": "The legacy test pins the shipped sol and luna model ids gpt-5.6-sol and gpt-5.6-luna. llm-kit ships the current Codex catalogue ids gpt-6.1-sol and gpt-6-luna (measured 2026-10-23, llm_kit.registry.model_profiles); the shipped ids are pinned by tests/llm-kit/test_model_profiles.py::test_shipped_codex_defaults_name_measured_current_models."
+        },
+        "llm-scripting-kit/test_model_resolve.py::TestDefaultDeclaration::test_shipped_default_is_the_one_entry_openrouter_declaration": {
+          "mirror_status": "skipped",
+          "reason": "The legacy test pins the shipped default declaration to ['openrouter']. llm-kit ships no default model declaration (L3): default_declaration() on the shipped baseline is []. Pinned by tests/llm-kit/test_registry_parity.py::test_shipped_default_endpoint_is_a_declared_difference."
         }
       }
     },
@@ -791,7 +805,7 @@
           "mirror_status": "skipped",
           "reason": "The legacy test patches bootstrap_lib.codex.build_codex_exec_argv with a builder that lacks ignore_user_config and expects a diagnosed refusal. The final backend calls llm_kit.adapters.codex_command.build_codex_exec_argv, which always has the keyword, so it carries no version probe and the patched alias is never called."
         },
-        "llm-scripting-kit/test_text_only_codex.py::test_an_absent_bootstrap_codex_module_names_install_not_update": {
+        "llm-scripting-kit/test_text_only_codex.py::test_an_absent_bootstrap_codex_module_names_katsoft_llm_kit_not_a_bootstrap_install": {
           "mirror_status": "skipped",
           "reason": "The legacy test blocks bootstrap_lib.codex and expects a RuntimeError naming the bootstrap install. The final backend does not import bootstrap_lib.codex, so there is no such failure to name; an absent or old distribution is refused where it is imported (tests/bootstrap/test_codex_alias.py)."
         }

@@ -4,9 +4,10 @@ A workspace call hands an agent a directory and lets it write there. The model's
 text says nothing reliable about what it wrote, so the caller needs a receipt
 taken from the filesystem itself. This module takes it:
 
-* :func:`scan` walks the directory and records every regular file as
-  ``(size, sha256)`` keyed by its relative POSIX path. It is taken immediately
-  before the call and immediately after.
+* :func:`scan` walks the directory by default, or directly opens only a supplied
+  set of relative paths, and records regular files as ``(size, sha256)`` keyed
+  by their relative POSIX paths. Snapshots are taken immediately before and
+  after the call.
 * :func:`diff` returns the files that are new or whose content changed, in
   stable path order, as ``{"path", "size", "sha256"}`` records. A deleted file
   is not a created or modified file and is not listed.
@@ -14,12 +15,12 @@ taken from the filesystem itself. This module takes it:
   files after the call.
 
 Only regular files count. A symbolic link is neither followed nor listed (so the
-scan cannot be led outside the directory), and a directory contributes through
-the files beneath it. Both scans hash every file's bytes: a size-and-mtime
+scan cannot be led outside the directory), and a full scan counts a directory
+through the files beneath it. Both scans hash each selected file's bytes: a size-and-mtime
 shortcut would miss a same-size rewrite inside one timestamp tick, and a
-receipt that can miss a modification is not a receipt. The cost is one read of
-the directory's content per scan, which a caller who points a workspace at a
-large tree should expect.
+receipt that can miss a modification is not a receipt. A full scan reads every
+regular file and walks the directory tree. A watched scan reads only the named
+files and does not walk the tree.
 
 Nothing here infers what a file IS: a ``.png`` that is not a PNG is listed like
 any other file. Stdlib only.
@@ -28,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import stat
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Dict, Iterable, List, Mapping, Tuple
@@ -60,17 +62,90 @@ def _digest(path: str) -> Tuple[int, str]:
     return size, sha.hexdigest()
 
 
-def scan(root: Path) -> Dict[str, FileRecord]:
-    """Every regular file beneath ``root``, keyed by relative POSIX path.
+def scan(root: Path, paths: Iterable[str] | None = None) -> Dict[str, FileRecord]:
+    """Regular files beneath ``root``, keyed by relative POSIX path.
 
-    Raises ``OSError`` when ``root`` is not a directory or a file cannot be
-    read: a receipt that skipped an unreadable file would be silently
-    incomplete.
+    With ``paths`` omitted, walk the tree. With paths supplied, perform direct
+    no-follow lookups only; absent paths are omitted so they can be expected
+    after a generation call. Raises ``OSError`` when the root is not a
+    directory, a watched path is a symlink or non-file, or a file cannot be
+    read: a receipt that skipped an unreadable selected file would be incomplete.
     """
     base = os.fspath(root)
     if not os.path.isdir(base):
         raise NotADirectoryError(f"workspace directory does not exist: {base}")
     found: Dict[str, FileRecord] = {}
+    if paths is not None:
+        directory_flag = getattr(os, "O_DIRECTORY", 0)
+        no_follow_flag = getattr(os, "O_NOFOLLOW", 0)
+        for relative in sorted(set(paths)):
+            parts = PurePosixPath(relative).parts
+            if os.open not in os.supports_dir_fd:
+                target = Path(base)
+                missing = False
+                for index, part in enumerate(parts):
+                    target = target / part
+                    try:
+                        mode = target.lstat().st_mode
+                    except FileNotFoundError:
+                        missing = True
+                        break
+                    if stat.S_ISLNK(mode):
+                        raise OSError(f"watched path passes through a symbolic link: {relative}")
+                    if index < len(parts) - 1 and not stat.S_ISDIR(mode):
+                        raise OSError(f"watched path parent is not a directory: {relative}")
+                if missing:
+                    continue
+                if not stat.S_ISREG(mode):
+                    raise OSError(f"watched path is not a regular file: {relative}")
+                descriptor = os.open(target, os.O_RDONLY | no_follow_flag)
+                with os.fdopen(descriptor, "rb") as handle:
+                    sha = hashlib.sha256()
+                    size = 0
+                    while True:
+                        chunk = handle.read(_CHUNK)
+                        if not chunk:
+                            break
+                        size += len(chunk)
+                        sha.update(chunk)
+                found[relative] = FileRecord(relative, size, sha.hexdigest())
+                continue
+            root_fd = os.open(base, os.O_RDONLY | directory_flag | no_follow_flag)
+            parent_fd = root_fd
+            file_fd = -1
+            try:
+                for part in parts[:-1]:
+                    next_fd = os.open(
+                        part, os.O_RDONLY | directory_flag | no_follow_flag, dir_fd=parent_fd
+                    )
+                    if parent_fd != root_fd:
+                        os.close(parent_fd)
+                    parent_fd = next_fd
+                file_fd = os.open(parts[-1], os.O_RDONLY | no_follow_flag, dir_fd=parent_fd)
+                if not stat.S_ISREG(os.fstat(file_fd).st_mode):
+                    raise OSError(f"watched path is not a regular file: {relative}")
+                sha = hashlib.sha256()
+                size = 0
+                with os.fdopen(file_fd, "rb") as handle:
+                    file_fd = -1
+                    while True:
+                        chunk = handle.read(_CHUNK)
+                        if not chunk:
+                            break
+                        size += len(chunk)
+                        sha.update(chunk)
+                found[relative] = FileRecord(relative, size, sha.hexdigest())
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                raise OSError(f"cannot safely scan watched path {relative!r}: {exc}") from exc
+            finally:
+                if file_fd >= 0:
+                    os.close(file_fd)
+                if parent_fd != root_fd:
+                    os.close(parent_fd)
+                os.close(root_fd)
+        return found
     for current, dirs, files in os.walk(base, followlinks=False):
         dirs.sort()
         for name in sorted(files):

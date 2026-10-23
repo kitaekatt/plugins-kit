@@ -26,15 +26,84 @@ distribution is `"package"`: the contracts come from `katsoft-contracts`.
 marketplace's shared library, imports in the same environment. With it, the
 features that need it (the Codex adapter, claudx propagation, skill context,
 the code-review lane) work and the model registry reads the layered config.
-Without it, those features raise `UnsupportedInPackageMode`, Codex
-reachability uses a PATH check, and the model registry reads the shipped
-defaults; point `MODEL_ENDPOINTS_REGISTRY` at a registry file to change them.
+Without it, features that require the shared library raise
+`UnsupportedInPackageMode`, Codex reachability uses a PATH check, and the model
+registry reads the shipped defaults; point `MODEL_ENDPOINTS_REGISTRY` at a
+registry file to change them. The Codex adapter itself works in package mode
+and does not require Claude Code, bootstrap or plugins-kit.
 
 Do not install this distribution into an environment that also holds a
 path-linked copy of the `llm_kit` source tree.
+
+## Consent
+
+The library makes no model calls of its own: the code that uses it does, so the library gates
+nothing on a caller's behalf. Every model entry is classified `local`, `subscription` or
+`metered` (paid or unverified billing), and the class and the reason for it are always reported
+(`llm-kit models catalog`, `models describe`, and protocol 2 responses).
+
+The optional consent layer applies a policy you configure only when you
+opt in, and you may build your own policy instead. To opt in, pass `--consent [--consent-scope NAME]` to
+`llm-kit models describe`, send `"consent": true` or `"consent": {"scope": "NAME"}` in a
+protocol 2 request, or call `llm_kit.registry.consent.policy(scope=None)`. To apply your own
+filter instead, pass `--allow local,subscription` (not combinable with `--consent`).
+
+With the layer applied and no file, `local` and `subscription` are on and `metered` is off.
+One file, `$XDG_CONFIG_HOME/llm-kit/consent.json` (`~/.config/llm-kit/consent.json` by
+default; `LLM_KIT_CONSENT_FILE` overrides), holds the global policy and optional named scopes.
+A scope can only restrict the global policy; a class the scope omits inherits.
+
+```
+llm-kit consent show [--scope NAME] [--json]
+llm-kit consent set [--scope NAME] --local|--subscription|--metered on|off
+```
 
 ## Source
 
 The source lives in the plugins-kit repository (`packages/katsoft-llm-kit/src/llm_kit`).
 Releases are tagged `katsoft-llm-kit-v<version>` in the repository named by the
 `Source` project URL.
+
+## Protocol 2 workspace requests
+
+Protocol 2 accepts optional `images`, `codex_config` and `watch_files` fields.
+`images` is a list of relative paths to existing regular files without symlink
+components. Codex attaches them to the initial prompt with `-i`; adapters without
+image input refuse the request. In workspace mode paths are relative to
+`working_dir`; in completion mode they are relative to `project_root`.
+
+`codex_config` is a closed object. It accepts
+`"shell_environment_policy.inherit": "none"` or `"core"`, and
+`"approval_policy": "never"`. Each field is optional, and omitted fields emit
+no configuration override. Request values override the matching row default in
+`request_defaults.extras.codex_config`. Every Codex protocol 2 call requires the effective sandbox to be
+`read-only` or `workspace-write`. Other keys and values are refused; callers cannot pass raw `-c` text through the request.
+
+`watch_files` is an optional, non-empty list of normalized relative POSIX paths
+in workspace mode. The receipt hashes the union of this list and `expect_files`
+by direct file lookup. The result reports `manifest.scope: "watch"` and the
+paths it checked. This scope does not detect writes to unlisted files. Deletions
+are not reported in either `all` or `watch` scope. Omitting `watch_files` keeps
+the full-tree receipt and reports `manifest.scope: "all"`.
+
+Keep `.llm-kit/models.yaml` in the consumer's own worktree, set
+`project_root` to that worktree, and use `watch_files` for a focused receipt.
+For isolated work, prepare a separate project root with its own model file and
+endpoint configuration, then point the request at that root. For example:
+
+```json
+{
+  "protocol": 2,
+  "project_root": "scratch-run",
+  "file": ".llm-kit/models.yaml",
+  "model": "writer",
+  "prompt": "Create the requested files",
+  "mode": "workspace",
+  "working_dir": ".",
+  "watch_files": ["result.md"]
+}
+```
+
+`working_dir` must be the project root or an existing descendant directory,
+with no symlink components. The library does not add an external writable
+directory to Codex.

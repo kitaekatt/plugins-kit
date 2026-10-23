@@ -80,7 +80,7 @@ class Project:
     def adapter(self, run, **extra):
         """``answer_missing_orientations`` with this world's machine, config, catalog and data directory."""
         return partial(
-            summary_ops.answer_missing_orientations, allow=["free"], run=run, config=CONFIG, catalog=self.catalog,
+            summary_ops.answer_missing_orientations, allow=["local"], run=run, config=CONFIG, catalog=self.catalog,
             machine=ME, data_dir=self.data, now=lambda: NOW, **extra,
         )
 

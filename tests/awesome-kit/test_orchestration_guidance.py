@@ -904,7 +904,11 @@ def _opencode_command(rendered):
 
 class TestShippedOpencodeBackend:
     @pytest.fixture
-    def rendered(self, monkeypatch, layered):
+    def rendered(self, monkeypatch, layered, consent_file):
+        # An opencode entry that names no endpoint classifies metered, and the
+        # default consent policy switches metered off; this class tests routing
+        # mechanics, so it allows the class.
+        consent_file({"metered": True})
         _install_repo_harness_library(monkeypatch)
         layered(
             "shipped",
@@ -1520,7 +1524,10 @@ class TestRegistryOnlyHarnessIsNotRoutable:
         assert "no backends[] record" in routes[0]["floor"]
         assert not any("dawn" in note for note in notes)
 
-    def test_a_backends_record_makes_the_harness_routable(self, layered, monkeypatch):
+    def test_a_backends_record_makes_the_harness_routable(
+        self, layered, monkeypatch, consent_file
+    ):
+        consent_file({"metered": True})
         layered("shipped", cfg(
             routing=[{"shape": ["novel"], "models": ["dawn"]}],
             backends=[
@@ -1541,7 +1548,10 @@ class TestRegistryOnlyHarnessIsNotRoutable:
         )
         assert routes and routes[0]["models"][0]["target"] == "opencode/dawn"
 
-    def test_default_routable_ids_use_adapter_rendered_commands(self, layered, monkeypatch):
+    def test_default_routable_ids_use_adapter_rendered_commands(
+        self, layered, monkeypatch, consent_file
+    ):
+        consent_file({"metered": True})
         layered("shipped", cfg(
             routing=[{"shape": ["novel"], "models": ["dawn"]}],
             backends=[
@@ -2545,6 +2555,192 @@ class TestDeclarationRender:
         assert "moved back" not in source
 
 
+class TestOrchestrateConsentScope:
+    """Orchestrate applies llm-kit's consent scope `orchestrate` to its menu.
+
+    A class the policy does not allow is shown unusable, with the reason and the
+    library's own command, never dropped and never the default; the Claude core
+    entries the renderer synthesizes carry the class of this session's
+    authentication.
+    """
+
+    def test_a_disallowed_entry_is_shown_unusable_with_reason_and_command(
+        self, declared, harness_auth
+    ):
+        harness_auth("codex", "metered")  # codex on API-key billing: class metered
+        text = declared([{"shape": ["novel"], "models": ["sol", "fable"]}])
+        line = _entry_line(text, 1, "sol")
+        assert "UNUSABLE" in line
+        assert "metered not allowed" in line
+        assert "codex auth is metered" in line  # the library's reason, verbatim
+        assert "`llm-kit consent set --metered on`" in line  # and its exact command
+        assert "[default]" not in line
+        assert "[default]" in _entry_line(text, 1, "fable")
+        assert "cost: subscription" in _entry_line(text, 1, "fable")
+
+    def test_a_scope_restriction_names_the_scoped_command(self, declared, consent_file):
+        consent_file({"scopes": {"orchestrate": {"subscription": False}}})
+        text = declared([
+            {"shape": ["novel"], "models": ["fable", "sol"]},
+            {"shape": [], "models": ["sonnet"]},
+        ])
+        # Every entry is subscription, so row 1 reaches the floor, which
+        # itemises each with the scoped command.
+        row = "\n".join(_row_lines(text, 1))
+        assert "no usable routing target" in row
+        for entry_id in ("fable", "sol"):
+            assert f"{entry_id}: switched-off" in row
+        assert row.count("`llm-kit consent set --scope orchestrate --subscription on`") == 2
+
+    def test_a_disallowed_entry_is_never_a_usable_model(self, declared, harness_auth):
+        harness_auth("codex", "metered")
+        announce = {
+            "title": "Announce",
+            "form": "delegating <what> to <target>",
+            "examples": [
+                {"id": "ex-sol", "requires_model": "sol",
+                 "text": "delegating x to codex/sol (novel)"},
+            ],
+        }
+        text = declared(
+            [{"shape": ["novel"], "models": ["sol", "fable"]}], announce=announce
+        )
+        assert "delegating x to codex/sol" not in text
+
+    def test_the_floor_names_the_command_when_every_entry_is_disallowed(
+        self, declared, harness_auth
+    ):
+        harness_auth("codex", "metered")
+        text = declared([
+            {"shape": ["novel"], "models": ["sol", "luna"]},
+            {"shape": [], "models": ["sonnet"]},
+        ])
+        row = "\n".join(_row_lines(text, 1))
+        assert "no usable routing target" in row
+        assert "sol: switched-off" in row
+        assert "`llm-kit consent set --metered on`" in row
+        assert _menu_ids(text, 2) == ["sonnet"]
+
+    def test_the_routing_section_states_the_policy_in_force(self, declared):
+        block = _routing_block(declared([{"shape": ["novel"], "models": ["fable"]}]))
+        assert "Cost consent (llm-kit scope `orchestrate`)" in block
+        assert "allowed local, subscription" in block
+        assert "not allowed metered" in block
+
+    def test_synthesized_claude_entries_carry_subscription(self, declared):
+        # fable/opus/sonnet/haiku are not in the stubbed registry: the renderer
+        # synthesizes them as Claude harness entries driven by the Agent tool.
+        text = declared([{"shape": ["novel"], "models": ["fable", "opus", "sonnet", "haiku"]}])
+        for entry_id in ("fable", "opus", "sonnet", "haiku"):
+            assert "cost: subscription" in _entry_line(text, 1, entry_id), entry_id
+
+    def test_a_failing_claude_probe_never_blocks_native_entries(
+        self, declared, monkeypatch
+    ):
+        """Native Agent-tool entries run inside this session: no CLI probe, so a
+        probe that cannot answer cannot turn them off."""
+        probed = []
+
+        def failing_probe(_api, harnesses, _cwd):
+            probed.extend(harnesses)
+            return {
+                name: SimpleNamespace(state="unknown", reason="probe could not run")
+                for name in harnesses
+            }
+
+        monkeypatch.setattr(og, "probe_session_auth", failing_probe)
+        text = declared([{"shape": ["novel"], "models": ["fable", "sol"]}])
+        line = _entry_line(text, 1, "fable")
+        assert "UNUSABLE" not in line and "cost: subscription" in line
+        assert "[default]" in line
+        assert "claude" not in probed  # never probed; codex still is
+        assert "UNUSABLE" in _entry_line(text, 1, "sol")  # codex keeps the library probe
+
+    def test_a_billing_diverting_key_classifies_the_agent_tool_entries_metered(
+        self, declared, session_env
+    ):
+        session_env["ANTHROPIC_API_KEY"] = "sk-test-not-a-secret"
+        text = declared([{"shape": ["novel"], "models": ["fable", "sonnet"]}])
+        row = "\n".join(_row_lines(text, 1))
+        assert "no usable routing target" in row
+        assert "fable: switched-off (metered not allowed" in row
+        assert "ANTHROPIC_API_KEY is set in the session environment" in row
+        assert "sk-test-not-a-secret" not in text
+
+    def test_every_billing_diverting_variable_of_the_library_counts(
+        self, declared, session_env
+    ):
+        """The list is the library's own, not a copy: any variable it names flips the class."""
+        import llm_kit.registry.cost as cost
+
+        for name in cost.BILLING_DIVERTING_VARS:
+            session_env.clear()
+            session_env[name] = "x"
+            text = declared([{"shape": ["novel"], "models": ["fable"]}])
+            assert f"fable: switched-off (metered not allowed" in text, name
+            assert f"{name} is set" in text, name
+
+    def test_registry_classification_fields_survive_the_renderer(
+        self, layered, monkeypatch
+    ):
+        """The class is derived from billing, owner and endpoint metadata the
+        renderer never displays; rebuilding the entry from a field whitelist
+        would turn this local endpoint's harness into a metered one."""
+        _install_repo_harness_library(monkeypatch)
+        from llm_kit.registry.model_endpoints import EndpointEntry
+
+        transport = EndpointEntry(
+            id="lab-box", base_url="http://127.0.0.1:1/v1", model="m", kind="transport",
+            billing_mode="unmetered", billing_owner="self",
+        )
+        harness = EndpointEntry(
+            id="dawn", base_url=None, model="some/model", kind="harness",
+            harness="opencode", endpoint="lab-box",
+        )
+        entries = {
+            "lab-box": {"id": "lab-box", "kind": "transport", "model": "m", "entry": transport},
+            "dawn": {
+                "id": "dawn", "kind": "harness", "harness": "opencode",
+                "model": "some/model", "entry": harness,
+            },
+        }
+        layered("shipped", cfg(
+            routing=[{"shape": ["novel"], "models": ["dawn"]}],
+            backends=[
+                {"id": "agent", "detect": {"always": True}},
+                {"id": "opencode", "detect": {"always": True},
+                 "dispatch": "opencode run --brief <file>"},
+            ],
+        ))
+        config, _ = og.resolve_config(layered.project_root)
+        api, _ = og.load_declaration_api()
+        routes, _ = og.resolve_routing_models(
+            config, entries, {"opencode": (True, "stubbed")}, api=api
+        )
+        (model,) = routes[0]["models"]
+        assert model["usable"] and model["cost_class"] == "local"
+        assert "cost: local" in model["line"]
+
+    def test_an_unreadable_consent_file_fails_loudly_not_open(
+        self, declared, consent_file
+    ):
+        consent_file.path.parent.mkdir(parents=True, exist_ok=True)
+        consent_file.path.write_text("{not json", encoding="utf-8")
+        text = declared([{"shape": ["novel"], "models": ["fable"]}])
+        degraded = text.split("**Degraded render.**", 1)[1]
+        assert "consent scope `orchestrate` could not be read" in degraded
+        assert "## 2. Routing" not in text  # no menu rendered without the policy
+
+    def test_explain_marks_a_switched_off_target(
+        self, declared, layered, harness_auth, capsys
+    ):
+        harness_auth("codex", "metered")
+        declared([{"shape": ["novel"], "models": ["sol", "fable"]}])
+        assert og.main(["--explain", "--project-root", str(layered.project_root)]) == 0
+        out = capsys.readouterr().out
+        assert "routing  row       1: novel -> fable, codex/sol [switched off]" in out
+
+
 class TestDeclarationRenderDegrades:
     def test_without_the_library_rows_list_claude_models_only(self, layered, monkeypatch):
         monkeypatch.setitem(sys.modules, "llm_kit", None)
@@ -2565,6 +2761,9 @@ class TestDeclarationRenderDegrades:
         assert "llm_kit" in degraded
         assert "katsoft-llm-kit" in degraded
         assert not _has_word(degraded, "sol")
+        # Consent is disclosed as not applied, on the menu and in the note.
+        assert "consent scope `orchestrate` was NOT applied" in degraded
+        assert "Cost consent (llm-kit scope `orchestrate`) was NOT applied" in _routing_block(text)
 
     def test_a_broken_library_is_diagnosed_apart_from_absence(self, layered, monkeypatch):
         # The katsoft-llm-kit pin guarantees the declaration API, so no version

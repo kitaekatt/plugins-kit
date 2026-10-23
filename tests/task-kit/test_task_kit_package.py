@@ -150,6 +150,6 @@ def test_llm_kit_comes_from_the_declared_package_not_a_shared_lib_link():
     assert "llm_kit" not in BOOTSTRAP["shared_lib_imports"]
     assert {"skills_kit_lib", "bootstrap_lib"} <= set(BOOTSTRAP["shared_lib_imports"])
     dependencies = PYPROJECT["project"]["dependencies"]
-    assert "katsoft-llm-kit[config,sdk,local]>=1.1,<2" in dependencies
+    assert "katsoft-llm-kit[config,sdk,local]>=1.4,<2" in dependencies
     assert "katsoft-contracts>=1.0,<2" in dependencies
     assert BOOTSTRAP["requires_bootstrap"] == "0.160.0"

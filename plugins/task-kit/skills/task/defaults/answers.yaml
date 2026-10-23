@@ -1,9 +1,9 @@
 _schema_version: "1"
 # Shipped defaults of the task answers chain. A fleet file (~/.claude/config/task-kit.yaml, `answers:`
 # section) replaces `models` and `effort` as a whole. Cost-class consent is not configured here: it is
-# llm-kit's per-machine consent, or the caller's --allow.
+# llm-kit's optional consent layer (scope `task-kit`), or the caller's --allow.
 answers:
-  # Preference order. Free entries are tried before paid ones whatever order is listed here; the list
+  # Preference order. `local` entries are tried before paid ones whatever order is listed here; the list
   # names one Claude-harness and one Codex-harness entry so an answer survives either pool running out.
   models: [luna, haiku]
   effort: medium

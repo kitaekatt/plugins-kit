@@ -306,13 +306,14 @@ _SKIP_CLASS_ATTRS = {
 # frozen legacy record has none. Shapes, signatures and JSON leave it out here,
 # and tests/llm-kit/test_call_modes.py pins the final side.
 # LLMResponse also gains ``reported_model`` and the ``estimated_cost_*`` pair in the final library.
-_FINAL_ONLY_FIELDS = frozenset({"call_modes", "reported_model", "estimated_cost_usd", "estimated_cost_source"})
+_FINAL_ONLY_FIELDS = frozenset({"call_modes", "reported_model", "estimated_cost_usd", "estimated_cost_source", "reasoning_tokens"})
 _CALL_MODES_PARAM = ", call_modes: 'Tuple[str, ...]' = ('completion',)"
 # LLMResponse's final-only trailing parameters (see _FINAL_ONLY_FIELDS).
 _RESPONSE_EXTRA_PARAMS = (
     ", reported_model: 'Optional[str]' = None",
     ", estimated_cost_usd: 'Optional[float]' = None",
     ", estimated_cost_source: 'Optional[str]' = None",
+    ", reasoning_tokens: 'int' = 0",
 )
 
 

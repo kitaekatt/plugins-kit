@@ -554,6 +554,34 @@
         "content-pipeline-kit/test_llm_backends.py::test_opencode_backend_delegates_lazily_without_running_opencode": {
           "mirror_status": "skipped",
           "reason": "Asserts the exact keyword set the wrapper hands the delegate constructor. The wrapper now describes the delegate as an immutable BackendSpec for the injected factory; the constructor options (including an omitted runner staying omitted) are asserted in test_pipeline_runtime_parity.py and test_dispatch_parity.py."
+        },
+        "content-pipeline-kit/test_llm_backends.py::test_default_route_is_not_reselected_by_a_contract": {
+          "mirror_status": "skipped",
+          "reason": "llm-kit ships no default model declaration (L3), so with nothing declared and no configured default_endpoint route() and routed_model() raises ConfigurationError before any backend runs; the frozen legacy code fell back to the OpenRouter entry. The final behavior is pinned by tests/llm-kit/test_pipeline_no_implicit_metered.py and tests/llm-kit/test_pipeline_runtime_parity.py::test_no_declaration_is_refused_not_defaulted."
+        },
+        "content-pipeline-kit/test_llm_backends.py::test_route_and_routed_model_emit_no_warning_with_nothing_set": {
+          "mirror_status": "skipped",
+          "reason": "llm-kit ships no default model declaration (L3), so with nothing declared and no configured default_endpoint route() and routed_model() raises ConfigurationError before any backend runs; the frozen legacy code fell back to the OpenRouter entry. The final behavior is pinned by tests/llm-kit/test_pipeline_no_implicit_metered.py and tests/llm-kit/test_pipeline_runtime_parity.py::test_no_declaration_is_refused_not_defaulted."
+        },
+        "content-pipeline-kit/test_llm_backends.py::test_route_builds_no_delegate": {
+          "mirror_status": "skipped",
+          "reason": "llm-kit ships no default model declaration (L3), so with nothing declared and no configured default_endpoint route() and routed_model() raises ConfigurationError before any backend runs; the frozen legacy code fell back to the OpenRouter entry. The final behavior is pinned by tests/llm-kit/test_pipeline_no_implicit_metered.py and tests/llm-kit/test_pipeline_runtime_parity.py::test_no_declaration_is_refused_not_defaulted."
+        },
+        "content-pipeline-kit/test_llm_backends.py::test_routed_model_no_substitution_for_openrouter": {
+          "mirror_status": "skipped",
+          "reason": "llm-kit ships no default model declaration (L3), so with nothing declared and no configured default_endpoint route() and routed_model() raises ConfigurationError before any backend runs; the frozen legacy code fell back to the OpenRouter entry. The final behavior is pinned by tests/llm-kit/test_pipeline_no_implicit_metered.py and tests/llm-kit/test_pipeline_runtime_parity.py::test_no_declaration_is_refused_not_defaulted."
+        },
+        "content-pipeline-kit/test_llm_backends.py::test_routed_model_passes_the_requested_id_through_without_a_declaration": {
+          "mirror_status": "skipped",
+          "reason": "llm-kit ships no default model declaration (L3), so with nothing declared and no configured default_endpoint route() and routed_model() raises ConfigurationError before any backend runs; the frozen legacy code fell back to the OpenRouter entry. The final behavior is pinned by tests/llm-kit/test_pipeline_no_implicit_metered.py and tests/llm-kit/test_pipeline_runtime_parity.py::test_no_declaration_is_refused_not_defaulted."
+        },
+        "content-pipeline-kit/test_llm_backends.py::test_routing_default_is_openrouter": {
+          "mirror_status": "skipped",
+          "reason": "llm-kit ships no default model declaration (L3), so with nothing declared and no configured default_endpoint route() and routed_model() raises ConfigurationError before any backend runs; the frozen legacy code fell back to the OpenRouter entry. The final behavior is pinned by tests/llm-kit/test_pipeline_no_implicit_metered.py and tests/llm-kit/test_pipeline_runtime_parity.py::test_no_declaration_is_refused_not_defaulted."
+        },
+        "content-pipeline-kit/test_llm_backends.py::test_route_takes_the_mock_openrouter_and_contract_seams": {
+          "mirror_status": "skipped",
+          "reason": "The legacy test pins route()'s parameter list; the final route() and routed_model() also take project_root, which locates the configured default_endpoint (L3, no shipped default). Behavior is pinned by tests/llm-kit/test_pipeline_no_implicit_metered.py."
         }
       }
     },
@@ -597,6 +625,14 @@
         "content-pipeline-kit/test_llm_model_endpoint.py::test_effort_seam_is_absent_without_the_shared_lib": {
           "mirror_status": "skipped",
           "reason": "shared-lib skew probe removed: neutral types are internal to llm-kit (I7)"
+        },
+        "content-pipeline-kit/test_llm_model_endpoint.py::test_other_backends_are_unaffected": {
+          "mirror_status": "skipped",
+          "reason": "With no declaration, llm-kit's routed_model() raises ConfigurationError before it reaches the model-endpoint branch (L3, no shipped default), so the legacy fallback to the registry default entry's model is unreachable. Pinned by tests/llm-kit/test_pipeline_runtime_parity.py::test_model_endpoint_routed_model_needs_a_declaration."
+        },
+        "content-pipeline-kit/test_llm_model_endpoint.py::test_routed_model_falls_back_truthfully": {
+          "mirror_status": "skipped",
+          "reason": "With no declaration, llm-kit's routed_model() raises ConfigurationError before it reaches the model-endpoint branch (L3, no shipped default), so the legacy fallback to the registry default entry's model is unreachable. Pinned by tests/llm-kit/test_pipeline_runtime_parity.py::test_model_endpoint_routed_model_needs_a_declaration."
         }
       }
     },
@@ -978,10 +1014,21 @@
       "disposition": "rewrite",
       "reason": "Re-pointed at llm-kit's final module names: import statements.",
       "rewrite_classes": [
+        "declared-skip",
         "import"
       ],
       "collection_count": 29,
-      "baseline_failures": []
+      "baseline_failures": [],
+      "declared_differences": {
+        "content-pipeline-kit/test_review_fix_d_routing.py::test_a_blank_removed_env_counts_as_unset": {
+          "mirror_status": "skipped",
+          "reason": "llm-kit ships no default model declaration (L3), so with nothing declared and no configured default_endpoint route() raises ConfigurationError before any backend runs; the frozen legacy code fell back to the OpenRouter entry. The final behavior is pinned by tests/llm-kit/test_pipeline_no_implicit_metered.py and tests/llm-kit/test_pipeline_runtime_parity.py::test_blank_removed_env_is_ignored_then_refused (a blank removed setting is still ignored, then refused)."
+        },
+        "content-pipeline-kit/test_review_fix_d_routing.py::test_nothing_set_is_unchanged": {
+          "mirror_status": "skipped",
+          "reason": "llm-kit ships no default model declaration (L3), so with nothing declared and no configured default_endpoint route() raises ConfigurationError before any backend runs; the frozen legacy code fell back to the OpenRouter entry. The final behavior is pinned by tests/llm-kit/test_pipeline_no_implicit_metered.py and tests/llm-kit/test_pipeline_runtime_parity.py::test_blank_removed_env_is_ignored_then_refused (a blank removed setting is still ignored, then refused)."
+        }
+      }
     },
     {
       "path": "tests/content-pipeline-kit/test_review_fix_h_bg_failure_code.py",

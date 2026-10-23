@@ -68,9 +68,12 @@ intersected. `task-kit answers protocols --format json` prints `{"protocols": [1
 `project` is among the options before using it.
 
 `/task review` runs the same engine for the orientation question. The models are the config key `answers.models`
-(`~/.claude/config/task-kit.yaml`, section `answers:`; shipped default `[luna, haiku]`, `effort: medium`); free entries
-run first. A paid cost class (`usage`, `spend`) runs only when llm-kit's per-machine consent allows it or the caller
-passes `--allow`. Model answering uses the `katsoft-llm-kit` package that task-kit's environment declares, and refuses
+(`~/.claude/config/task-kit.yaml`, section `answers:`; shipped default `[luna, haiku]`, `effort: medium`); `local`
+entries run first. A `subscription` or `metered` entry runs only when llm-kit's optional consent layer allows it for
+scope `task-kit` (`llm-kit consent set [--scope task-kit] --subscription|--metered on|off`; the global policy is a
+ceiling and a disabled `local` class stays disabled) or the caller passes `--allow` with the classes (`local`,
+`subscription`, `metered`), which replaces the layer. A malformed consent file stops answering with an error naming
+the file. Model answering uses the `katsoft-llm-kit` package that task-kit's environment declares, and refuses
 when `llm_kit` is not importable (the environment has not been provisioned; run `bootstrap run`); every other verb works
 without it. The command contract is in
 [skills/task/references/task-export-protocol.md](skills/task/references/task-export-protocol.md).

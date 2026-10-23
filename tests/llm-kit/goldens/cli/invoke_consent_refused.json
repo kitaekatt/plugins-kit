@@ -1,6 +1,7 @@
 {
   "exit": 4,
   "request": {
+    "consent": true,
     "project_root": "<T>/proj",
     "prompt": "do it",
     "protocol": 2,
@@ -10,7 +11,7 @@
     "json": {
       "error": {
         "kind": "consent",
-        "message": "'openrouter' is a spend entry (no registry entry: billing undeclared) and the machine's consent does not allow spend calls (<T>/home/.config/llm-kit/consent.json); run `llm-kit consent set --spend on` to allow them; nothing was dispatched"
+        "message": "'openrouter' is a metered entry (no registry entry: billing undeclared) and the consent layer (the global policy) does not allow metered calls: no consent file states it, so the built-in default of off applies (<T>/home/.config/llm-kit/consent.json); run `llm-kit consent set --metered on` to allow them; nothing was dispatched"
       },
       "protocol": 2
     }

@@ -132,6 +132,13 @@ RENAMES: tuple[Rename, ...] = (
         "model: the model catalogue reports it",
     ),
     Rename(
+        "removed-routing-env refusal states that no default model is shipped",
+        _CPK + "llm/backends.py",
+        "without it the run would silently use the default OpenRouter entry.",
+        _KIT + "pipeline/runtime/backends.py",
+        "without it no model is selected unless default_endpoint is configured.",
+    ),
+    Rename(
         "make_openai_client names the llm-kit CLI environment",
         _LSK + "client.py", "Use the bootstrap-provisioned llm-scripting-kit CLI environment",
         _KIT + "adapters/client.py", "Use the bootstrap-provisioned llm-kit CLI environment",

@@ -148,19 +148,24 @@ class LLMResponse:
     - ``input_tokens`` / ``output_tokens`` -- usage reported by the provider.
     - ``cache_hit_tokens`` -- prompt-cache hit tokens the provider surfaced
       (0 when unsupported).
-    - ``total_tokens`` -- a TOTAL-ONLY usage figure a provider surfaces with no
-      input/output split (the codex-cli transport; 0 for every other backend).
-      Deliberately a SEPARATE field rather than folded into ``output_tokens``:
-      the input/output fields feed per-directional cost formulas elsewhere
-      (e.g. content-pipeline-kit's cost estimator multiplies ``output_tokens``
-      by an output-token price), and stuffing an undifferentiated total into
-      ``output_tokens`` would silently misprice a call. A consumer that sums
-      ``input_tokens + output_tokens`` across backends is unaffected -- this
-      field simply stays 0 there -- but summing it in blindly alongside those
-      two would double-count on any backend that also reports a split, so a
-      caller that wants "however many tokens this call used, however the
-      backend reports it" must read whichever of ``total_tokens`` or
-      ``input_tokens + output_tokens`` is nonzero, not both.
+    - ``total_tokens`` -- the codex-cli transport's own blended total (uncached
+      input plus output, the figure codex prints as "tokens used"); 0 for every
+      other backend. It is a SEPARATE field rather than folded into
+      ``output_tokens``: the input/output fields feed per-directional cost
+      formulas elsewhere (e.g. content-pipeline-kit's cost estimator multiplies
+      ``output_tokens`` by an output-token price), and stuffing a total into
+      ``output_tokens`` would silently misprice a call. The codex transport
+      reports the input/output split TOO when its event stream carries it, and
+      then this field is a roll-up of those counts, not an extra amount: it is
+      NOT ``input_tokens + output_tokens`` (it leaves out cached input), and it
+      must never be added to them. A caller that wants "however many tokens
+      this call used, however the backend reports it" reads ``total_tokens``
+      where it is nonzero and ``input_tokens + output_tokens`` otherwise, never
+      the sum of all three.
+    - ``reasoning_tokens`` -- the share of ``output_tokens`` the model spent on
+      reasoning, for a backend that reports it (the codex-cli transport), else
+      0. A SUBSET of ``output_tokens``, never an addition to it: summing
+      ``output_tokens + reasoning_tokens`` double-counts.
     - ``wall_ms`` -- wall-clock duration of the live call in milliseconds. On a
       cache hit this is the ORIGINAL live call's duration.
     - ``attempts`` -- number of completion attempts made (1 on first-try
@@ -273,6 +278,7 @@ class LLMResponse:
     reported_model: Optional[str] = None
     estimated_cost_usd: Optional[float] = None
     estimated_cost_source: Optional[str] = None
+    reasoning_tokens: int = 0
 
 
 @dataclass(frozen=True)

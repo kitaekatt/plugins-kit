@@ -63,7 +63,7 @@ from llm_kit.dispatch.reachability import (
 from llm_kit.dispatch.seats import discover_seats
 from llm_kit.registry import catalog as model_catalog
 from llm_kit.registry import project_models
-from llm_kit.registry.consent import load_consent
+from llm_kit.registry import consent as consent_store
 from llm_kit.registry.effort import remap_effort
 from llm_kit.registry.models import (
     EndpointResolveError,
@@ -109,10 +109,25 @@ def _add_describe_args(parser: argparse.ArgumentParser) -> None:
         default=None,
         help=(
             "Cost classes this caller may use, comma-separated or repeated: "
-            "free, usage, spend (e.g. `--allow free,usage`). An entry of a class "
-            "not listed is shown as switched off, never dispatched. Omit the "
-            "flag for no cost filtering."
+            "local, subscription, metered (e.g. `--allow local,subscription`). An "
+            "entry of a class not listed is shown as switched off, never "
+            "dispatched. The caller owns this filter; it does not read the consent "
+            "layer. Omit the flag for no cost filtering. Not combinable with --consent."
         ),
+    )
+    parser.add_argument(
+        "--consent",
+        action="store_true",
+        help=(
+            "Opt in to the optional consent layer: switch off entries whose cost "
+            "class the layer (`llm-kit consent show`) does not allow. A malformed "
+            "consent file is a configuration error. Not combinable with --allow."
+        ),
+    )
+    parser.add_argument(
+        "--consent-scope",
+        metavar="NAME",
+        help="With --consent, apply the named scope's restrictions over the global policy.",
     )
     parser.add_argument("--json", action="store_true", help="Emit the ranking as JSON.")
     _add_project_arg(parser)
@@ -306,11 +321,29 @@ def _cmd_describe(ids: list[str], args: argparse.Namespace) -> int:
     because that is what will drive them; a session caller resolves them
     against the merged registry, because the agent drives the harness itself.
     Hidden entries are absent from the output; they surface only in the floor.
-    ``--allow`` switches off entries whose cost class is not listed; those are
-    SHOWN (a ``Switched off:`` line, a ``switched_off`` JSON key) and itemised
-    by the floor. An unknown class is a usage error (exit 2).
+    Every rendered entry carries its cost class and the reason (``cost`` in the
+    JSON), and the output carries one structured note that the consent layer is
+    optional (a ``consent`` JSON key). ``--allow`` is the caller's own filter and
+    ``--consent [--consent-scope X]`` the opt-in consent layer; either switches off
+    entries whose cost class is not allowed, and those are SHOWN (a ``Switched
+    off:`` line, a ``switched_off`` JSON key) and itemised by the floor. An unknown
+    class, or both flags together, is a usage error (exit 2); a malformed consent
+    file is a configuration error (exit 2).
     """
     requirements = _load_requirements(args.requirements)
+    if args.allow is not None and args.consent:
+        print(
+            "llm-kit models describe: --allow and --consent are alternatives: --allow is your own "
+            "filter, --consent applies the optional consent layer; pass one.",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    if args.consent_scope is not None and not args.consent:
+        print("llm-kit models describe: --consent-scope needs --consent.", file=sys.stderr)
+        return EXIT_USAGE
+    policy_kwargs: dict[str, Any] = {}
+    if args.consent:
+        policy_kwargs["consent_policy"] = consent_store.policy(args.consent_scope)
     ranking = describe(
         ids,
         project_root=args.project_root,
@@ -320,6 +353,8 @@ def _cmd_describe(ids: list[str], args: argparse.Namespace) -> int:
         backend_factory=_backend_factory if args.caller == "process" else None,
         exclude=_split_ids(args.exclude),
         dispatchable=tuple(args.dispatchable),
+        discovery=True,
+        **policy_kwargs,
         **({"allow": _split_ids(args.allow)} if args.allow is not None else {}),
     )
     if args.json:
@@ -369,12 +404,18 @@ def _entry_json(entry: Any) -> dict[str, Any]:
     result = {"kind": entry.kind, "model": entry.model, "name": entry.name}
     if entry.kind == "harness":
         result.update({"harness": entry.harness, "effort": entry.effort})
+        endpoint = getattr(entry, "endpoint", None)
+        if endpoint is not None:
+            result["endpoint"] = endpoint
     else:
         result.update({"base_url": entry.base_url, "key_env": entry.key_env})
         result["frontdoor"] = bool(getattr(entry, "frontdoor", False))
         billing_mode = getattr(entry, "billing_mode", None)
         if billing_mode is not None:
             result["billing"] = {"mode": billing_mode}
+            billing_owner = getattr(entry, "billing_owner", None)
+            if billing_owner is not None:
+                result["billing"]["owner"] = billing_owner
         # The declared default and whether a direct call can deliver it; the
         # openrouter family record keeps `effort` dropped for an endpoint
         # nothing is known about, so this is the per-endpoint half.
@@ -550,7 +591,6 @@ def _cmd_catalog(args: argparse.Namespace) -> int:
             project,
             project_root=args.project_root,
             modes_by_adapter=modes,
-            consent=load_consent(),
             harness_auth=harness_auth,
             local=resolved.local,
         )

@@ -17,9 +17,37 @@
   "stdout": {
     "json": {
       "caller": "process",
+      "consent": {
+        "commands": {
+          "set": "llm-kit consent set [--scope <name>] --local|--subscription|--metered on|off",
+          "show": "llm-kit consent show [--scope <name>] [--json]"
+        },
+        "in_use": false,
+        "opt_in": {
+          "api": "llm_kit.registry.consent.policy(scope=None)",
+          "describe_flags": [
+            "--consent",
+            "--consent-scope <name>"
+          ],
+          "protocol_2_request": {
+            "consent": true,
+            "scoped": {
+              "consent": {
+                "scope": "<name>"
+              }
+            }
+          }
+        },
+        "optional": true,
+        "scope": null
+      },
       "default": "cdx",
       "rendered_entries": [
         {
+          "cost": {
+            "class": "subscription",
+            "reason": "codex on subscription auth: fixture subscription"
+          },
           "declared_index": 1,
           "default": true,
           "drive": "codex-cli",

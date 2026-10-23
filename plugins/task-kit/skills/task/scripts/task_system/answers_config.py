@@ -12,7 +12,7 @@ Keys (both optional in the fleet file):
 - ``effort`` (string): the one effort every entry is asked for.
 
 There is no switch for the chain or for paid usage here. Which cost classes may run is the caller's decision
-(``answer_chain.resolve_allow``): llm-kit's consent by hand, or the host's ``--allow``. An unknown key (a
+(``answer_chain.resolve_allow``): llm-kit's consent layer (scope ``task-kit``) by hand, or the host's ``--allow``. An unknown key (a
 retired ``service`` or ``spend`` switch included) or a wrong type is an error naming the file, never a silent
 default. Other top-level keys of the fleet file belong to other task-kit sections and are not read here.
 """

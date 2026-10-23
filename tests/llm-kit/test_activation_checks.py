@@ -177,7 +177,11 @@ def test_persisted_event_identities_are_not_registrations() -> None:
 
 LEGACY = {name: REPO / "plugins" / name for name in OLD_PLUGINS}
 REGISTRATION_DIRS = ("skills", "agents", "workflows", "hooks")
-LLM_KIT_NAMES = re.compile(r"llm[-_]kit")
+# The llm-kit PLUGIN as a whole token: "llm-kit", "plugins-kit:llm-kit", "plugins/llm-kit". Not the
+# PyPI package "katsoft-llm-kit" nor the module "llm_kit": a legacy plugin legitimately installs
+# the package (its bootstrap.json and pyproject name it), and the rollback this guard protects
+# is the plugin registration. A legacy Python tree importing the library is the separate AST scan.
+LLM_KIT_NAMES = re.compile(r"(?<![\w-])llm-kit(?![\w-])")
 
 
 def _python_imports_llm_kit(path: Path) -> List[str]:
@@ -295,3 +299,32 @@ def test_a_frozen_pointer_in_readme_or_description_is_not_a_dependency(tmp_path:
         encoding="utf-8",
     )
     assert legacy_dependencies_on_llm_kit(plugin) == []
+
+
+@pytest.mark.parametrize("name", OLD_PLUGINS)
+def test_the_real_legacy_manifests_name_the_package_not_the_plugin(name: str, tmp_path: Path) -> None:
+    """The shipped bootstrap.json of each legacy plugin names katsoft-llm-kit (the package it
+    installs), which is not a reference to the llm-kit plugin; a plugin reference added to that
+    same real text is seen."""
+    real = LEGACY[name] / "bootstrap.json"
+    if not real.is_file():
+        pytest.skip(f"{name} is deleted; nothing to read")
+    text = real.read_text(encoding="utf-8")
+    assert "katsoft-llm-kit" in text, "the premise of this test: the real manifest names the package"
+    plugin = _scratch_plugin(tmp_path)
+    (plugin / "bootstrap.json").write_text(text, encoding="utf-8")
+    assert legacy_dependencies_on_llm_kit(plugin) == []
+    for reference in ("plugins-kit:llm-kit", "llm-kit", "plugins/llm-kit/bin"):
+        (plugin / "bootstrap.json").write_text(text + "\n" + reference, encoding="utf-8")
+        assert legacy_dependencies_on_llm_kit(plugin) == ["bootstrap.json names llm-kit"], reference
+
+
+def test_the_package_name_in_skill_text_or_dependencies_is_not_the_plugin(tmp_path: Path) -> None:
+    plugin = _scratch_plugin(tmp_path)
+    (plugin / "skills" / "s" / "SKILL.md").write_text("Needs katsoft-llm-kit>=1.3.\n", encoding="utf-8")
+    (plugin / ".claude-plugin" / "plugin.json").write_text(
+        json.dumps({"dependencies": ["bootstrap", "katsoft-llm-kit"]}), encoding="utf-8"
+    )
+    assert legacy_dependencies_on_llm_kit(plugin) == []
+    (plugin / "skills" / "s" / "SKILL.md").write_text("Run plugins-kit:llm-kit jobs.\n", encoding="utf-8")
+    assert legacy_dependencies_on_llm_kit(plugin)

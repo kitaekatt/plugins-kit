@@ -54,10 +54,12 @@ def test_awesome_kit_pins_the_released_packages() -> None:
     pyproject = _MANIFEST.parent / "pyproject.toml"
     dependencies = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["dependencies"]
 
-    # 1.3: llm_kit.adapters.codex_command, imported by dispatch.py, first ships there.
+    # 1.4: the optional consent layer the orchestrate renderer applies (scope
+    # `orchestrate`) first ships there; llm_kit.adapters.codex_command, imported
+    # by dispatch.py, shipped in 1.3.
     # config: the registry loader's pyyaml. No sdk extra: no awesome-kit path
     # makes a model call, so it needs no openai SDK.
-    assert "katsoft-llm-kit[config]>=1.3,<2" in dependencies
+    assert "katsoft-llm-kit[config]>=1.4,<2" in dependencies
     assert "katsoft-contracts>=1.0,<2" in dependencies
     assert any(dep.startswith("pyyaml") for dep in dependencies)
     assert not any(dep.startswith("openai") for dep in dependencies)

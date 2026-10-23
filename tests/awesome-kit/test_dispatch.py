@@ -214,7 +214,7 @@ def test_print_only_emits_exact_codex_argv_without_launch(tmp_path, monkeypatch,
 def test_print_only_adds_windows_sandbox_config(tmp_path, monkeypatch):
     monkeypatch.setattr(dispatch.codex_lib, "resolve_cli", lambda name: ("codex",))
     monkeypatch.setattr(
-        dispatch.codex_lib, "os", SimpleNamespace(name="nt", path=os.path)
+        dispatch.codex_lib, "os", SimpleNamespace(name="nt", path=os.path, environ=os.environ)
     )
     argv_line = shlex.join(
         dispatch._argv(
@@ -236,7 +236,7 @@ def test_print_only_omits_windows_sandbox_config_on_posix(tmp_path, monkeypatch,
     # Rebind the module's os, not os.name itself: pathlib reads the real
     # os.name and cannot build a Path once it says "posix" on Windows.
     monkeypatch.setattr(
-        dispatch.codex_lib, "os", SimpleNamespace(name="posix", path=os.path)
+        dispatch.codex_lib, "os", SimpleNamespace(name="posix", path=os.path, environ=os.environ)
     )
     assert dispatch.main(_run_args(tmp_path, brief, cache, "--print-only")) == 0
     argv_line = capsys.readouterr().out.splitlines()[1]

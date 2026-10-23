@@ -40,8 +40,15 @@ def _legacy_env_in_this_home(home, monkeypatch):  # noqa: F811
         monkeypatch.setattr(module, "USER_ENV_FILE", legacy)
 
 
-def _consent_doc(usage: bool, spend: bool) -> str:
-    return json.dumps({"schema": 1, "usage": usage, "spend": spend, "updated_at": "2026-10-23T00:00:00+00:00"})
+def _consent_doc(subscription: bool, metered: bool) -> str:
+    return json.dumps({
+        "schema": 2, "local": True, "subscription": subscription, "metered": metered,
+        "scopes": {}, "updated_at": "2026-10-23T00:00:00+00:00",
+    })
+
+
+def _states(loaded: "consent.Policy") -> tuple:
+    return (loaded.classes["subscription"].allowed, loaded.classes["metered"].allowed)
 
 
 # --- locations --------------------------------------------------------------------------
@@ -72,29 +79,29 @@ def test_paths_are_resolved_per_call_not_at_import(home, monkeypatch, tmp_path):
 
 
 def test_consent_is_written_to_the_neutral_file_and_never_to_claude(home, capsys):
-    out = run(cli.main, ["consent", "set", "--usage", "on"], capsys)
+    out = run(cli.main, ["consent", "set", "--metered", "on"], capsys)
     assert out.code == 0
-    assert json.loads((home / NEUTRAL / "consent.json").read_text())["usage"] is True
+    assert json.loads((home / NEUTRAL / "consent.json").read_text())["metered"] is True
     assert not (home / ".claude").exists()
 
 
 def test_the_override_names_the_one_consent_file(home, monkeypatch, tmp_path, capsys):
     target = tmp_path / "elsewhere" / "c.json"
     monkeypatch.setenv("LLM_KIT_CONSENT_FILE", str(target))
-    assert run(cli.main, ["consent", "set", "--spend", "on"], capsys).code == 0
-    assert json.loads(target.read_text())["spend"] is True
+    assert run(cli.main, ["consent", "set", "--metered", "on"], capsys).code == 0
+    assert json.loads(target.read_text())["metered"] is True
     assert not (home / NEUTRAL).exists() and not (home / ".claude").exists()
     shown = json.loads(run(cli.main, ["consent", "show", "--json"], capsys).out)
-    assert shown["path"] == shown["write_path"] == str(target) and shown["spend"] is True
+    assert shown["path"] == shown["write_path"] == str(target) and shown["classes"]["metered"]["allowed"] is True
     # the override wins even over a neutral file that exists
     write(home / NEUTRAL / "consent.json", _consent_doc(True, False))
-    assert consent.load_consent().spend is True and consent.load_consent().path == target
+    assert consent.policy().classes["metered"].allowed is True and consent.policy().path == target
 
 
 def test_a_legacy_consent_file_is_read_when_the_neutral_one_is_absent(home, capsys):
     write(home / LEGACY_CONSENT, _consent_doc(True, False))
-    loaded = consent.load_consent()
-    assert (loaded.usage, loaded.spend, loaded.source) == (True, False, "file")
+    loaded = consent.policy()
+    assert (_states(loaded), loaded.source) == ((True, False), "file")
     assert loaded.path == home / LEGACY_CONSENT
     shown = json.loads(run(cli.main, ["consent", "show", "--json"], capsys).out)
     assert shown["path"] == str(home / LEGACY_CONSENT)
@@ -105,24 +112,24 @@ def test_a_legacy_consent_file_is_read_when_the_neutral_one_is_absent(home, caps
 def test_the_neutral_consent_file_wins_over_the_legacy_one(home):
     write(home / LEGACY_CONSENT, _consent_doc(True, True))
     write(home / NEUTRAL / "consent.json", _consent_doc(False, False))
-    loaded = consent.load_consent()
-    assert (loaded.usage, loaded.spend) == (False, False)
+    loaded = consent.policy()
+    assert _states(loaded) == (False, False)
     assert loaded.path == home / NEUTRAL / "consent.json"
 
 
 def test_an_unreadable_neutral_file_is_reported_and_never_replaced_by_the_legacy_one(home):
     write(home / LEGACY_CONSENT, _consent_doc(True, True))
     write(home / NEUTRAL / "consent.json", "{not json")
-    loaded = consent.load_consent()
-    assert loaded.source == "unreadable" and loaded.allowed == frozenset({"free"})
+    with pytest.raises(consent.ConsentConfigError, match="not valid JSON"):
+        consent.policy()
 
 
 def test_the_first_set_on_a_legacy_machine_carries_its_values_to_the_neutral_file(home, capsys):
-    legacy = write(home / LEGACY_CONSENT, _consent_doc(True, False))
+    legacy = write(home / LEGACY_CONSENT, _consent_doc(False, False))  # subscription off differs from the default
     before = legacy.read_text()
-    assert run(cli.main, ["consent", "set", "--spend", "on"], capsys).code == 0
+    assert run(cli.main, ["consent", "set", "--metered", "on"], capsys).code == 0
     stored = json.loads((home / NEUTRAL / "consent.json").read_text())
-    assert (stored["usage"], stored["spend"]) == (True, True)  # usage came from the legacy file
+    assert (stored["subscription"], stored["metered"]) == (False, True)  # subscription off came from the legacy file
     assert legacy.read_text() == before  # the legacy file is left alone
 
 
@@ -211,7 +218,7 @@ def test_set_key_writes_the_neutral_file_seeded_from_the_legacy_one(home, capsys
 def test_nothing_under_claude_is_created_by_the_user_state_commands(home, tmp_path, capsys):
     for argv in (
         ["consent", "show"],
-        ["consent", "set", "--usage", "on", "--spend", "on"],
+        ["consent", "set", "--subscription", "on", "--metered", "on"],
         ["account", "set-key", "--key", "k", "--no-validate"],
         ["account", "which"],
     ):

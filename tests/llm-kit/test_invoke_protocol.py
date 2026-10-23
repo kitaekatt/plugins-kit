@@ -161,8 +161,9 @@ def world(home, tmp_path, monkeypatch):  # noqa: F811
     return w
 
 
-def allow(*, usage: bool = True, spend: bool = True) -> None:
-    consent_mod.save_consent(usage=usage, spend=spend)
+def allow(*, subscription: bool = True, metered: bool = True) -> None:
+    """Write the machine's consent file (the global policy a request without the consent field is held to)."""
+    consent_mod.update_config({"subscription": subscription, "metered": metered})
 
 
 def call(world: World, capsys, **request: Any):
@@ -193,9 +194,11 @@ def test_openrouter_completion_result_shape(world, capsys):
     assert doc["usage"]["cache_hit_tokens"] == 4 and isinstance(doc["usage"]["wall_ms"], int)
     # an unmarked endpoint's native usage.cost is an ESTIMATE; the authoritative amount is unknown, not zero
     assert doc["cost"] == {
-        "class": "spend", "usd": None, "source": None,
+        "class": "metered", "reason": "no registry entry: billing undeclared",
+        "usd": None, "source": None,
         "estimated_usd": 0.0007, "estimated_source": "openrouter.usage.cost",
     }
+    assert doc["consent"] == {"opted_in": False, "applied": False, "scope": None}
     assert "files" not in doc
     assert doc["params"]["forwarded"] == ["extras.provider"]  # the row's request default reached the request, unvalidated
     assert world.http[0]["extra_body"] == {"provider": {"sort": "latency"}, "reasoning_effort": "max"}
@@ -255,7 +258,8 @@ def test_claude_completion_result_and_estimated_cost(world, capsys):
     assert resolved["effort"] == {"requested": None, "sent": None, "source": "none"}
     # the CLI's total_cost_usd is not pricing: it is only ever an estimate with a named source
     assert doc["cost"] == {
-        "class": "usage", "usd": None, "source": None,
+        "class": "subscription", "reason": "claude on subscription auth: fake subscription",
+        "usd": None, "source": None,
         "estimated_usd": 0.0123, "estimated_source": "claude-cli.total_cost_usd",
     }
     argv = world.claude[0]
@@ -282,10 +286,111 @@ def test_codex_completion_arms_text_only_and_reports_no_served_model(world, caps
     assert resolved["reported_model"] is None and resolved["model_verified"] is False  # codex states none
     assert resolved["effort"] == {"requested": "high", "sent": "high", "source": "selection"}
     assert doc["usage"]["total_tokens"] == 1234
-    assert doc["cost"]["class"] == "usage" and doc["cost"]["usd"] is None
+    assert doc["cost"]["class"] == "subscription" and doc["cost"]["usd"] is None
     assert world.codex[0][-2:] == ["debug", "models"]  # text-only mode read the catalogue first
     exec_argv = world.codex[1]
     assert "model_reasoning_effort=high" in exec_argv and "read-only" in exec_argv
+
+
+def test_absent_codex_config_keeps_the_existing_workspace_argv(world, capsys):
+    allow()
+    (world.root / "work").mkdir()
+    code, _doc, err = call(world, capsys, model="luna", mode="workspace", working_dir="work")
+    argv = world.codex[-1]
+    assert argv == [
+        "codex", "exec", "-s", "workspace-write", "-c",
+        "sandbox_workspace_write.network_access=true", "-m", "gpt-6-luna", "-C",
+        str((world.root / "work").resolve()), "-o", argv[argv.index("-o") + 1],
+        "--json", "--skip-git-repo-check", "--color", "never", "-",
+    ]
+    assert code == 0, err
+
+
+@pytest.mark.parametrize("inherit", ["none", "core"])
+def test_codex_config_emits_only_requested_allowlisted_overrides(world, capsys, inherit):
+    allow()
+    (world.root / "work").mkdir()
+    document = {**_DOC, "catalog": [dict(row) for row in _DOC["catalog"]]}
+    luna = next(row for row in document["catalog"] if row["id"] == "luna")
+    opposite = "core" if inherit == "none" else "none"
+    luna["request_defaults"] = {"extras": {"codex_config": {"shell_environment_policy.inherit": opposite}}}
+    pm.write_project_models(document, project_root=str(world.root))
+    code, _doc, err = call(
+        world, capsys, model="luna", mode="workspace", working_dir="work",
+        codex_config={"shell_environment_policy.inherit": inherit, "approval_policy": "never"},
+    )
+    assert code == 0, err
+    argv = world.codex[-1]
+    assert argv[argv.index("-c") + 1] == "sandbox_workspace_write.network_access=true"
+    assert f'shell_environment_policy.inherit="{inherit}"' in argv
+    assert 'approval_policy="never"' in argv
+    assert f'shell_environment_policy.inherit="{opposite}"' not in argv
+
+
+@pytest.mark.parametrize(("key", "value"), [
+    ("shell_environment_policy.inherit", "all"),
+    ("shell_environment_policy.inherit", "on-request"),
+    ("shell_environment_policy.inherit", "danger-full-access"),
+    ("shell_environment_policy.inherit", "never\nmodel=bad"),
+    ("approval_policy", "on-request"),
+    ("approval_policy", "on-failure"),
+    ("approval_policy", "untrusted"),
+])
+def test_protocol2_refuses_prohibited_codex_config_before_dispatch(world, capsys, key, value):
+    (world.root / "work").mkdir()
+    code, _doc, err = call(
+        world, capsys, model="luna", mode="workspace", working_dir="work",
+        codex_config={key: value},
+    )
+    assert code == 4 and err["error"]["kind"] == "configuration"
+    assert world.runner_calls == 0
+
+
+def test_protocol2_refuses_images_on_non_image_adapter_before_dispatch(world, capsys):
+    (world.root / "picture.png").write_bytes(b"png")
+    code, _doc, err = call(world, capsys, model="deepseek", images=["picture.png"])
+    assert code == 4 and err["error"]["kind"] == "mode"
+    assert world.runner_calls == 0
+
+
+def test_codex_inherit_is_refused_in_text_only_mode(world, capsys):
+    code, _doc, err = call(
+        world, capsys, model="luna",
+        codex_config={"shell_environment_policy.inherit": "core"},
+    )
+    assert code == 4 and err["error"]["kind"] == "configuration"
+    assert world.runner_calls == 0
+
+
+def test_codex_config_refuses_an_unsafe_effective_row_sandbox(world, capsys):
+    document = {**_DOC, "catalog": [dict(row) for row in _DOC["catalog"]]}
+    luna = next(row for row in document["catalog"] if row["id"] == "luna")
+    luna["request_defaults"] = {"extras": {"sandbox": "danger-full-access"}}
+    pm.write_project_models(document, project_root=str(world.root))
+    code, _doc, err = call(
+        world, capsys, model="luna", mode="workspace", working_dir="work",
+        codex_config={"approval_policy": "never"},
+    )
+    assert code == 4 and err["error"]["kind"] == "configuration"
+    assert world.runner_calls == 0
+
+
+def test_codex_image_is_attached_and_watch_scope_is_reported(world, capsys):
+    allow()
+    work = world.root / "work"
+    work.mkdir()
+    (work / "input.png").write_bytes(b"png")
+    (work / "unlisted.txt").write_text("keep", encoding="utf-8")
+    world.codex_writes = {"result.txt": "done"}
+    code, doc, err = call(
+        world, capsys, model="luna", mode="workspace", working_dir="work",
+        images=["input.png"], watch_files=["result.txt"],
+    )
+    assert code == 0, err
+    argv = world.codex[-1]
+    assert argv[argv.index("-i") + 1] == str(work / "input.png")
+    assert doc["manifest"] == {"scope": "watch", "watched_paths": ["result.txt"]}
+    assert [item["path"] for item in doc["files"]] == ["result.txt"]
 
 
 def test_codex_structured_output_under_a_schema(world, capsys):
@@ -307,7 +412,7 @@ def test_a_schema_the_adapter_cannot_deliver_is_refused_before_the_runner(world,
 
 def test_the_response_carries_the_reported_model_and_estimate_fields():
     names = [f.name for f in dataclasses.fields(LLMResponse)]
-    assert names[-5:] == ["output_contract", "skill_context", "reported_model", "estimated_cost_usd", "estimated_cost_source"]
+    assert names[-6:] == ["output_contract", "skill_context", "reported_model", "estimated_cost_usd", "estimated_cost_source", "reasoning_tokens"]
     blank = LLMResponse(text="t", model="m")
     assert (blank.reported_model, blank.estimated_cost_usd, blank.estimated_cost_source) == (None, None, None)
 
@@ -448,49 +553,56 @@ def test_expect_files_must_be_relative_and_beneath_the_directory(world, capsys, 
 # --- consent --------------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("selection,needs", [("art", "spend"), ("chat", "usage"), ("draft.generate.primary", "usage")])
-def test_consent_is_enforced_before_any_runner_call(world, capsys, selection, needs):
-    """Red on revert: remove the consent check in dispatch/invoke.py and the fake transports are called."""
+@pytest.mark.parametrize(
+    "selection,cost_class", [("art", "metered"), ("chat", "subscription"), ("draft.generate.primary", "subscription")]
+)
+def test_a_request_without_the_consent_field_is_not_refused_for_its_cost_class(world, capsys, selection, cost_class):
+    """No consent file and no `consent` field: the optional layer does not apply, so the call dispatches.
+
+    Red on revert: restore a refusal for requests that did not opt in and the runner is never called.
+    """
     code, doc, err = call(world, capsys, selection=selection)
-    assert code == 4 and doc is None
-    assert err["error"]["kind"] == "consent"
-    assert f"--{needs} on" in err["error"]["message"] and "nothing was dispatched" in err["error"]["message"]
-    assert world.runner_calls == 0  # no http request, no claude or codex process
+    assert code == 0, (doc, err)
+    assert doc["cost"]["class"] == cost_class
+    assert doc["consent"]["opted_in"] is False and doc["consent"]["applied"] is False
+    assert world.runner_calls >= 1  # a harness entry also runs an auth probe through the spied runner
 
 
 def test_consent_is_per_cost_class(world, capsys):
-    allow(usage=True, spend=False)
-    assert call(world, capsys, selection="chat")[0] == 0
-    assert call(world, capsys, selection="art")[0] == 4
-    allow(usage=False, spend=True)
-    assert call(world, capsys, selection="art")[0] == 0
-    assert call(world, capsys, selection="chat")[0] == 4
+    allow(subscription=True, metered=False)
+    assert call(world, capsys, selection="chat", consent=True)[0] == 0
+    assert call(world, capsys, selection="art", consent=True)[0] == 4
+    allow(subscription=False, metered=True)
+    assert call(world, capsys, selection="art", consent=True)[0] == 0
+    assert call(world, capsys, selection="chat", consent=True)[0] == 4
 
 
-def test_a_harness_on_metered_auth_is_a_spend_entry(world, capsys, monkeypatch):
-    allow(usage=True, spend=False)
+def test_a_harness_on_metered_auth_is_a_metered_entry(world, capsys, monkeypatch):
+    allow(subscription=True, metered=False)
     monkeypatch.setattr(
         harness_auth, "probe_harness_auth",
         lambda harnesses, env=None, *, cwd: {h.lower(): cost.HarnessAuth(cost.METERED, "ANTHROPIC_API_KEY is set") for h in harnesses},
     )
-    code, _doc, err = call(world, capsys, selection="chat")
-    assert code == 4 and err["error"]["kind"] == "consent" and "spend" in err["error"]["message"]
+    code, _doc, err = call(world, capsys, selection="chat", consent=True)
+    assert code == 4 and err["error"]["kind"] == "consent" and "metered" in err["error"]["message"]
     assert world.runner_calls == 0
 
 
 def test_the_consent_override_file_is_honoured(world, capsys, monkeypatch, tmp_path):
     chosen = tmp_path / "my-consent.json"
     monkeypatch.setenv("LLM_KIT_CONSENT_FILE", str(chosen))
-    assert call(world, capsys, selection="art")[0] == 4
-    consent_mod.save_consent(usage=False, spend=True)
-    assert chosen.is_file() and call(world, capsys, selection="art")[0] == 0
+    assert call(world, capsys, selection="art", consent=True)[0] == 4
+    consent_mod.update_config({"subscription": False, "metered": True})
+    assert chosen.is_file() and call(world, capsys, selection="art", consent=True)[0] == 0
 
 
 def test_a_legacy_consent_file_still_allows_the_call(world, home, capsys):  # noqa: F811
     legacy = home / ".claude/plugins/data/plugins-kit/llm-kit/consent.json"
-    write(legacy, json.dumps({"schema": 1, "usage": True, "spend": False, "updated_at": "x"}))
-    assert call(world, capsys, selection="chat")[0] == 0
-    assert call(world, capsys, selection="art")[0] == 4  # the legacy file allows usage only
+    write(legacy, json.dumps({
+        "schema": 2, "local": True, "subscription": True, "metered": False, "scopes": {}, "updated_at": "x",
+    }))
+    assert call(world, capsys, selection="chat", consent=True)[0] == 0
+    assert call(world, capsys, selection="art", consent=True)[0] == 4  # the legacy file allows subscription only
     assert not (home / ".config").exists()  # reading it created no neutral file
 
 
@@ -564,7 +676,7 @@ def test_a_classified_halt_exits_3_with_the_halt_object(world, capsys):
     assert doc["status"] == "failed" and doc["error"]["code"] == "rate_limit"
     assert doc["halt"] == {"kind": "rate_limit"}
     assert doc["output"] is None and doc["usage"]["input_tokens"] is None  # nothing was reported, nothing is invented
-    assert doc["cost"]["usd"] is None and doc["cost"]["class"] == "usage"
+    assert doc["cost"]["usd"] is None and doc["cost"]["class"] == "subscription"
 
 
 def test_an_ordinary_failure_exits_1(world, capsys):
@@ -600,7 +712,7 @@ def test_a_session_of_calls_under_an_empty_home_creates_and_opens_nothing_under_
     """
     _Audit.opened.clear()
     _Audit.armed = True
-    assert run(cli.main, ["consent", "set", "--usage", "on", "--spend", "on"], capsys).code == 0
+    assert run(cli.main, ["consent", "set", "--subscription", "on", "--metered", "on"], capsys).code == 0
     (world.root / "work").mkdir()
     for request in (
         {"selection": "art"}, {"selection": "chat"}, {"selection": "draft.generate.primary"},
@@ -630,7 +742,7 @@ def test_the_real_cli_in_a_subprocess_with_an_empty_home_touches_no_claude_path(
         "seen = []\n"
         "sys.addaudithook(lambda e, a: seen.append(os.fsdecode(a[0])) if e == 'open' and isinstance(a[0], (str, bytes, os.PathLike)) else None)\n"
         "import llm_kit.cli as cli\n"
-        "codes = [cli.main(a) for a in (['consent', 'set', '--usage', 'on'], ['consent', 'show', '--json'],\n"
+        "codes = [cli.main(a) for a in (['consent', 'set', '--subscription', 'on'], ['consent', 'show', '--json'],\n"
         "         ['account', 'set-key', '--key', 'k', '--no-validate'], ['account', 'which'])]\n"
         "print('CODES', codes)\n"
         "print('CLAUDE', [p for p in seen if '/.claude' in p])\n",
@@ -682,7 +794,7 @@ def test_golden_expected_file_missing(world, capsys, tmp_path):
 
 
 def test_golden_consent_refusal(world, capsys, tmp_path):
-    got = _golden(world, "invoke_consent_refused", capsys, tmp_path, selection="art")
+    got = _golden(world, "invoke_consent_refused", capsys, tmp_path, selection="art", consent=True)
     assert got["exit"] == 4
 
 

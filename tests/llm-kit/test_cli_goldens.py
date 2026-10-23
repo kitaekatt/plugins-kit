@@ -131,6 +131,15 @@ def reachable(monkeypatch):
         decl, "check_many",
         lambda entries, **_: {n: reach.Reachability("reachable", "models-endpoint", "ok") for n in entries},
     )
+    # describe always reports each entry's cost class, which asks harness authentication: fixed, never a real CLI
+    auth = importlib.import_module("llm_kit.adapters.harness_auth")
+    cost = importlib.import_module("llm_kit.registry.cost")
+    monkeypatch.setattr(
+        auth, "probe_harness_auth",
+        lambda harnesses, env=None, *, cwd: {
+            h.lower(): cost.HarnessAuth(cost.SUBSCRIPTION, "fixture subscription") for h in harnesses
+        },
+    )
 
 
 def _backend(monkeypatch, backend: FakeBackend) -> None:

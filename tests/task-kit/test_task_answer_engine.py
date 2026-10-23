@@ -130,7 +130,7 @@ class World:
         names = stubs if stubs is not None else sorted(p.name for p in (self.top / "proj").iterdir() if p.is_dir())
         return [TaskTarget(self.folder(stub), status) for stub in names]
 
-    def pass_(self, run, *, allow=("free",), config=CONFIG, machine=ME, **kwargs):
+    def pass_(self, run, *, allow=("local",), config=CONFIG, machine=ME, **kwargs):
         kwargs.setdefault("budget", Budget(parallel=1))
         return answer_engine.run_pass(
             self.top, machine, config, targets=kwargs.pop("targets", self.targets()), catalog=self.catalog,
@@ -186,7 +186,7 @@ def new_answer(folder: Path, catalog, *, fingerprint: str | None = None) -> NewA
         question_version=question.version, answer=ORIENTATION,
         inputs_fingerprint=fingerprint or answer_store.question_fingerprint(folder, read_task_block(folder), question),
         as_of=AsOf(task_commit="a" * 40, code_commit=None),
-        answerer=Answerer(kind="model", entry="qwen", name=None, tier="free", effort="medium",
+        answerer=Answerer(kind="model", entry="qwen", name=None, tier="local", effort="medium",
                           attempts=(("qwen", "completed"),)),
         generated_at="2026-10-22T09:00:00-05:00",
     )
@@ -261,7 +261,7 @@ def test_a_pass_answers_commits_and_publishes_this_machines_files(world, llm):
         assert session_publish.answer_record_machine(record) == ME.fingerprint
     assert git(world.top, "status", "--porcelain").stdout == ""
     assert report.unpublished == 0
-    assert run.allows == [{"free"}] * 3  # a free-only caller dispatches in one phase
+    assert run.allows == [{"local"}] * 3  # a local-only caller dispatches in one phase
     # the next pass finds everything current and calls no model
     again = world.pass_(NeverRun())
     assert (again.outcome, again.pending, again.answered) == ("completed", 0, ())

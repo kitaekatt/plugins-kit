@@ -112,7 +112,9 @@ Answers (`tasks[].answers`):
   machine-local.
 - `answerer` is `{kind: "model" | "script", entry?, name?, tier?, effort?,
   attempts: [{entry, outcome}]}`: a model answer names its endpoint entry, cost
-  tier and effort; a script answer names the script. `as_of` is
+  class and effort; a script answer names the script. `tier` is the cost class (`local`,
+  `subscription`, `metered`); it holds the value written, and the legacy values `free`, `usage` and `spend`
+  are not translated. `as_of` is
   `{task_commit?, code_commit?}`, the commits whose content the answer
   describes. `fingerprint` is the inputs fingerprint a model answer stored,
   null for a script answer.
@@ -165,10 +167,13 @@ task-kit answers prune   --format json --protocol N [--parent DIR]... [--project
   without the verb answers exit 2: a `usage` error document ("invalid choice") from 0.17.0, an empty stdout from a
   task-kit that predates `answers`. `export protocols` cannot tell these apart, because it answers on every
   task-kit since 0.15.
-- `--allow CLASSES` is a comma-separated set of llm-kit cost classes (`free`, `usage`, `spend`) the pass may
-  use; `free` is always allowed. Without it, the classes are llm-kit's per-machine consent, read once, the first
-  time a pass has a model to ask. Free entries are always tried before the others. Do not pass `--allow` with a
-  paid class unless the user said so.
+- `--allow CLASSES` is a comma-separated set of llm-kit cost classes (`local`, `subscription`, `metered`; the
+  retired `free`, `usage` and `spend` are refused with a `usage` error naming the new class) the pass may use.
+  It is the caller's own policy: exactly those classes, nothing added, and llm-kit's consent layer is not read.
+  Without it, task-kit opts in to the consent layer with scope `task-kit` (the global policy AND the scope),
+  read once, the first time a pass has a model to ask; a disabled `local` class stays disabled, and a malformed
+  consent file is a `config_invalid` error naming it. `local` entries are always tried before the others. Do not
+  pass `--allow` with a paid class unless the user said so.
 - `--batch N` (default 4, at least 1) is the number of TASKS one pass answers per repository, most recently
   modified first (the newest commit touching the task folder outside `answers/`); each kept task has every
   pending question answered.

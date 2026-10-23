@@ -3,11 +3,15 @@
 ``ask`` answers one question on one task from its input bundle through llm-kit's declaration seam and returns
 the validated answer with its provenance.
 
-**Phases are cost-class ``allow`` sets.** Phase 1 allows ``{"free"}``. Phase 2 allows the caller's classes and
-runs only when they hold more than ``free``. Free-before-paid therefore holds whatever order the declaration
-lists, and an entry whose class is not allowed is never dispatched (llm-kit reports it switched off).
-``resolve_allow`` decides the caller's classes: an explicit set (the host's ``--allow``) wins; otherwise
-llm-kit's per-machine consent (``llm_kit.registry.consent.load_consent``). ``free`` is always allowed.
+**Phases are cost-class ``allow`` sets.** Classes are llm-kit's ``local``, ``subscription`` and ``metered``.
+Phase 1 allows ``{"local"}`` and runs only when the caller allows ``local``. The next phase allows the caller's
+classes and runs only when they hold more than ``local``. Local-before-paid therefore holds whatever order the
+declaration lists, and an entry whose class is not allowed is never dispatched (llm-kit reports it switched
+off). Nothing is added to the caller's classes: a disabled ``local`` class is respected, phase 1 included.
+``resolve_allow`` decides the caller's classes. An explicit set (the host's ``--allow``) is caller-owned policy:
+it is exactly what the caller names and llm-kit's consent layer is not read. Otherwise task-kit opts in to the
+optional consent layer with scope ``task-kit`` (``llm_kit.registry.consent.policy``): the global policy AND
+the scope. A malformed consent file raises ``ConsentConfigInvalid`` naming the file.
 
 **Re-selection is persistent.** Within a phase llm-kit moves on by itself after a classified halt or a launch
 failure. Whatever else ends a run (a task error, or an answer this module rejects), every entry the run
@@ -43,8 +47,10 @@ from . import questions
 from .answers_config import AnswersConfig
 from .answers_types import Answerer, InputBundle, Question, RunFn
 
-FREE = "free"
-COST_CLASSES = ("free", "usage", "spend")
+LOCAL = "local"
+COST_CLASSES = ("local", "subscription", "metered")
+RENAMED_CLASSES = {"free": "local", "usage": "subscription", "spend": "metered"}
+CONSENT_SCOPE = "task-kit"
 PROVISION_COMMAND = "bootstrap run"
 CALL_TIMEOUT_S = 180.0
 CLIENT_ID = "task-kit:answers"
@@ -68,6 +74,10 @@ class ModelAnsweringUnavailable(RuntimeError):
 
 class LlmKitAbsent(ModelAnsweringUnavailable):
     state = "absent"
+
+
+class ConsentConfigInvalid(RuntimeError):
+    """llm-kit's consent file cannot be read or is malformed. The message names the file and what is wrong."""
 
 
 class AnswerRejected(ValueError):
@@ -102,12 +112,17 @@ class Asked:
 
 @dataclass(frozen=True)
 class Allowed:
-    """The cost classes a caller allows. ``source`` is ``explicit`` or ``consent``; ``note`` is llm-kit's consent
-    note (empty unless consent was absent or unreadable), which the caller prints."""
+    """The cost classes a caller allows. ``source`` is ``explicit`` or ``consent``.
+
+    ``note`` is printed by the caller: for ``consent`` it names the exact ``llm-kit consent set`` command when a
+    class is off only because no consent file states it (empty otherwise). ``remedy`` names that command for
+    every class the consent layer switched off; ``ask`` adds it to the failure of an answer that found no entry.
+    """
 
     classes: frozenset[str]
     source: str
     note: str = ""
+    remedy: str = ""
 
 
 # --- llm-kit (declared package, imported lazily) ---------------------------------------------------------
@@ -120,7 +135,9 @@ class LlmKitApi:
     BackendOptions: Any
     NoUsableRoutingTarget: type
     RUN_COMPLETED: str
-    load_consent: Callable[..., Any]
+    policy: Callable[..., Any]
+    ConsentConfigError: type
+    FROM_DEFAULT: str
     classify: Callable[..., Any]
     discover_model_entries: Callable[..., Any]
     probe_harness_auth: Callable[..., Any]
@@ -144,7 +161,7 @@ def probe_llm_kit() -> LlmKitApi:
     from llm_kit.dispatch.declaration import (  # noqa: PLC0415
         RUN_COMPLETED, NoUsableRoutingTarget, RunRequest, run,
     )
-    from llm_kit.registry.consent import load_consent  # noqa: PLC0415
+    from llm_kit.registry.consent import FROM_DEFAULT, ConsentConfigError, policy  # noqa: PLC0415
     from llm_kit.registry.cost import classify  # noqa: PLC0415
     from llm_kit.registry.model_endpoints import HARNESS_KIND  # noqa: PLC0415
     from llm_kit.registry.models import discover_model_entries  # noqa: PLC0415
@@ -155,7 +172,9 @@ def probe_llm_kit() -> LlmKitApi:
         BackendOptions=BackendOptions,
         NoUsableRoutingTarget=NoUsableRoutingTarget,
         RUN_COMPLETED=RUN_COMPLETED,
-        load_consent=load_consent,
+        policy=policy,
+        ConsentConfigError=ConsentConfigError,
+        FROM_DEFAULT=FROM_DEFAULT,
         classify=classify,
         discover_model_entries=discover_model_entries,
         probe_harness_auth=probe_harness_auth,
@@ -164,21 +183,43 @@ def probe_llm_kit() -> LlmKitApi:
 
 
 def parse_allow(text: str) -> tuple[str, ...]:
-    """``free,usage`` -> ``("free", "usage")`` (the value of a host's ``--allow``); unknown classes are an error."""
+    """``local,metered`` -> ``("local", "metered")`` (the value of a host's ``--allow``); unknown classes are an error."""
     names = tuple(part.strip() for part in text.split(",") if part.strip())
     _check_classes(names)
     return names
 
 
 def _check_classes(names: Iterable[str]) -> None:
+    renamed = sorted({str(name) for name in names if name in RENAMED_CLASSES})
+    if renamed:
+        pairs = ", ".join(f"{old!r} is now {RENAMED_CLASSES[old]!r}" for old in renamed)
+        raise ValueError(f"cost class renamed: {pairs}; valid classes: {', '.join(COST_CLASSES)}")
     unknown = sorted({str(name) for name in names if name not in COST_CLASSES})
     if unknown:
         raise ValueError(f"unknown cost class {unknown}; valid classes: {', '.join(COST_CLASSES)}")
 
 
+def _consent_allowed(api: LlmKitApi) -> Allowed:
+    """The classes of llm-kit's consent layer for scope ``task-kit`` (global AND scope), with the hint to change them."""
+    try:
+        policy = api.policy(CONSENT_SCOPE)
+    except api.ConsentConfigError as exc:
+        raise ConsentConfigInvalid(f"{exc}; task-kit reads scope {CONSENT_SCOPE!r} of it") from exc
+    off = [name for name in COST_CLASSES if not policy.classes[name].allowed]
+    remedy = "; ".join(f"{name}: {policy.remedy(name)}" for name in off)
+    undecided = [name for name in off if policy.classes[name].provenance == api.FROM_DEFAULT]
+    note = ""
+    if undecided:
+        note = (
+            f"consent layer (scope {CONSENT_SCOPE!r}) does not allow "
+            + "; ".join(f"{name} ({policy.remedy(name)})" for name in undecided)
+        )
+    return Allowed(classes=frozenset(policy.allowed), source="consent", note=note, remedy=remedy)
+
+
 def resolve_allow(allow: "Allowed | Iterable[str] | None" = None, *, api: LlmKitApi | None = None) -> Allowed:
-    """The caller's allowed cost classes. An explicit set wins and consent is not read; ``None`` reads llm-kit's
-    consent. ``free`` is always allowed."""
+    """The caller's allowed cost classes. An explicit set is caller-owned policy: exactly those classes, and the
+    consent layer is not read. ``None`` opts in to llm-kit's consent layer with scope ``task-kit``."""
     if isinstance(allow, Allowed):
         return allow
     if allow is not None:
@@ -186,9 +227,8 @@ def resolve_allow(allow: "Allowed | Iterable[str] | None" = None, *, api: LlmKit
             raise ValueError(f"allow must be an iterable of cost classes, not the string {allow!r}")
         names = tuple(allow)
         _check_classes(names)
-        return Allowed(classes=frozenset(names) | {FREE}, source="explicit")
-    consent = (api or probe_llm_kit()).load_consent()
-    return Allowed(classes=frozenset(consent.allowed) | {FREE}, source="consent", note=consent.note)
+        return Allowed(classes=frozenset(names), source="explicit")
+    return _consent_allowed(api or probe_llm_kit())
 
 
 # --- answer validation -----------------------------------------------------------
@@ -302,12 +342,13 @@ def ask(
 ) -> Asked:
     """Answer ``question`` from ``bundle`` through the declaration seam.
 
-    ``allow``: the caller's cost classes (see ``resolve_allow``); ``None`` reads llm-kit's consent on every call, so a
-    pass resolves once, prints ``Allowed.note`` and passes the ``Allowed`` in.
+    ``allow``: the caller's cost classes (see ``resolve_allow``); ``None`` reads llm-kit's consent layer on every call,
+    so a pass resolves once, prints ``Allowed.note`` and passes the ``Allowed`` in.
     ``deadline``: absolute ``time.monotonic()`` seconds, or None. ``run``: replaces ``declaration.run``
     (called as ``run(names, request, project_root=, requirements=, exclude=, max_attempts=,
     reachability_cache=, allow=)``). ``classify``: replaces the entry-id -> cost-class lookup used for the
-    answerer tier of a phase 2 answer. Raises ``LlmKitAbsent`` (REFUSE), ``NoAnswer``.
+    answerer tier of an answer from a phase that allows more than ``local``. Raises ``LlmKitAbsent`` (REFUSE),
+    ``ConsentConfigInvalid`` (no ``allow`` and a malformed consent file), ``NoAnswer``.
     """
     if not question.prompt:
         raise ValueError(f"question {question.id} has no prompt, so no model can answer it")
@@ -318,14 +359,16 @@ def ask(
     call = run if run is not None else api.run
     cache = reachability_cache if reachability_cache is not None else {}
     requirements = {"guarantees": list(GUARANTEES), "params": ["effort"]}
-    phases = [frozenset({FREE})]
-    if allowed.classes - {FREE}:
+    phases: list[frozenset[str]] = []
+    if LOCAL in allowed.classes:
+        phases.append(frozenset({LOCAL}))
+    if allowed.classes - {LOCAL}:
         phases.append(frozenset(allowed.classes))
     excluded: set[str] = set()
     attempts: list[tuple[str, str]] = []
     tier_of = classify
 
-    for phase, phase_allow in enumerate(phases, start=1):
+    for phase_allow in phases:
         while True:
             remaining = None if deadline is None else deadline - clock()
             if remaining is not None and remaining <= 0:
@@ -359,8 +402,8 @@ def ask(
                     attempts.extend(outcomes)
                     continue
                 attempts.extend(outcomes)
-                if phase == 1:
-                    tier = FREE
+                if phase_allow == {LOCAL}:
+                    tier = LOCAL
                 else:
                     if tier_of is None:
                         tier_of = _default_classifier(api, project_root)
@@ -374,4 +417,7 @@ def ask(
                 )
             attempts.extend(outcomes)
     reason = "all-attempts-failed" if attempts else "no-usable-entry"
-    raise NoAnswer(reason, tuple(attempts), f"allowed classes: {', '.join(sorted(allowed.classes))}")
+    detail = f"allowed classes: {', '.join(sorted(allowed.classes)) or 'none'}"
+    if allowed.remedy:
+        detail += f" (consent layer, scope {CONSENT_SCOPE!r}; {allowed.remedy})"
+    raise NoAnswer(reason, tuple(attempts), detail)

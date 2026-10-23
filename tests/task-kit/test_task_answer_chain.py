@@ -36,6 +36,14 @@ def llm(monkeypatch):
     return SimpleNamespace(declaration=declaration, consent=consent)
 
 
+@pytest.fixture
+def consent_file(llm, monkeypatch, tmp_path):
+    """An empty consent location (no file yet) that llm-kit reads and writes for this test."""
+    path = tmp_path / "consent.json"
+    monkeypatch.setenv("LLM_KIT_CONSENT_FILE", str(path))
+    return path
+
+
 ORIENTATION_SCHEMA = {
     "type": "object", "required": ["headline", "next"], "additionalProperties": False,
     "properties": {"headline": {"type": "string", "maxLength": 100}, "next": {"type": "string", "maxLength": 60}},
@@ -62,7 +70,7 @@ BUNDLE = InputBundle(
 )
 GOOD = json.dumps({"headline": "A headline", "next": "Do the next thing"})
 CONFIG = AnswersConfig(models=("qwen", "luna", "haiku"), effort="medium", sources=())
-CLASSES = {"qwen": "free", "qwen2": "free", "luna": "usage", "haiku": "usage", "sp": "spend"}
+CLASSES = {"qwen": "local", "qwen2": "local", "luna": "subscription", "haiku": "subscription", "sp": "metered"}
 
 
 class FakeRun:
@@ -119,7 +127,7 @@ def classifier(entry_id: str) -> str:
     return CLASSES[entry_id]
 
 
-ALL = ("free", "usage", "spend")
+ALL = ("local", "subscription", "metered")
 
 
 class TestReselection:
@@ -130,7 +138,7 @@ class TestReselection:
         asked = ask(make_question(), BUNDLE, config, allow=ALL, run=run, classify=classifier)
         assert run.dispatched == ["qwen", "qwen2", "luna"]
         assert run.calls[1]["exclude"] == {"qwen", "qwen2"}
-        assert asked.answerer.entry == "luna" and asked.answerer.tier == "usage"
+        assert asked.answerer.entry == "luna" and asked.answerer.tier == "subscription"
         assert asked.answerer.attempts == (
             ("qwen", "halted:quota"), ("qwen2", "failed"), ("luna", "completed"),
         )
@@ -139,8 +147,8 @@ class TestReselection:
         run = FakeRun(llm, {"qwen": [("error", "bad")], "luna": [("ok", GOOD)]})
         config = AnswersConfig(models=("qwen", "luna"), effort="medium", sources=())
         ask(make_question(), BUNDLE, config, allow=ALL, run=run, classify=classifier)
-        assert run.calls[0]["allow"] == {"free"}
-        assert run.calls[1]["allow"] == {"free"} and run.calls[1]["exclude"] == {"qwen"}
+        assert run.calls[0]["allow"] == {"local"}
+        assert run.calls[1]["allow"] == {"local"} and run.calls[1]["exclude"] == {"qwen"}
         assert run.calls[2]["allow"] == set(ALL) and run.calls[2]["exclude"] == {"qwen"}
 
     def test_every_entry_failing_is_reported_with_its_attempts(self, llm):
@@ -160,89 +168,134 @@ class TestReselection:
 
 
 class TestPhases:
-    def test_a_free_entry_is_dispatched_before_a_paid_one_listed_earlier(self, llm):
+    def test_a_local_entry_is_dispatched_before_a_paid_one_listed_earlier(self, llm):
         run = FakeRun(llm, {"qwen": [("ok", GOOD)], "luna": [("ok", GOOD)]})
         config = AnswersConfig(models=("luna", "qwen"), effort="medium", sources=())
         asked = ask(make_question(), BUNDLE, config, allow=ALL, run=run, classify=classifier)
         assert run.dispatched == ["qwen"]
-        assert asked.answerer.entry == "qwen" and asked.answerer.tier == "free"
-        assert run.calls[0]["allow"] == {"free"}
+        assert asked.answerer.entry == "qwen" and asked.answerer.tier == "local"
+        assert run.calls[0]["allow"] == {"local"}
 
-    def test_the_paid_phase_runs_only_when_the_free_phase_gave_no_answer(self, llm):
+    def test_the_paid_phase_runs_only_when_the_local_phase_gave_no_answer(self, llm):
         run = FakeRun(llm, {"qwen": [("halt", "unreachable")], "luna": [("ok", GOOD)]})
         config = AnswersConfig(models=("luna", "qwen"), effort="medium", sources=())
         asked = ask(make_question(), BUNDLE, config, allow=ALL, run=run, classify=classifier)
         assert run.dispatched == ["qwen", "luna"]
-        assert asked.answerer.tier == "usage"
+        assert asked.answerer.tier == "subscription"
 
-    def test_free_only_runs_one_phase_and_never_dispatches_a_paid_entry(self, llm):
+    def test_local_only_runs_one_phase_and_never_dispatches_a_paid_entry(self, llm):
         run = FakeRun(llm, {"qwen": [("error", "x")], "luna": [("ok", GOOD)]})
         config = AnswersConfig(models=("qwen", "luna"), effort="medium", sources=())
         with pytest.raises(NoAnswer):
-            ask(make_question(), BUNDLE, config, allow=["free"], run=run, classify=classifier)
+            ask(make_question(), BUNDLE, config, allow=["local"], run=run, classify=classifier)
         assert run.dispatched == ["qwen"]
-        assert {frozenset(call["allow"]) for call in run.calls} == {frozenset({"free"})}
+        assert {frozenset(call["allow"]) for call in run.calls} == {frozenset({"local"})}
 
     def test_nothing_usable_under_the_allowed_classes_is_a_waiting_state(self, llm):
         run = FakeRun(llm, {"luna": [("ok", GOOD)]})
         config = AnswersConfig(models=("luna",), effort="medium", sources=())
         with pytest.raises(NoAnswer) as caught:
-            ask(make_question(), BUNDLE, config, allow=["free"], run=run)
+            ask(make_question(), BUNDLE, config, allow=["local"], run=run)
         assert caught.value.reason == "no-usable-entry" and caught.value.attempts == ()
         assert run.dispatched == []
 
-    def test_consent_without_spend_never_dispatches_a_spend_entry(self, llm, monkeypatch, tmp_path):
-        path = tmp_path / "consent.json"
-        llm.consent.save_consent(usage=True, spend=False, path=path)
-        monkeypatch.setattr(llm.consent, "default_consent_path", lambda: path)
+    def test_consent_scope_without_metered_never_dispatches_a_metered_entry(self, llm, consent_file):
+        llm.consent.update_config({"metered": False, "subscription": True}, scope="task-kit", path=consent_file)
         run = FakeRun(llm, {"sp": [("ok", GOOD)], "luna": [("ok", GOOD)]})
         config = AnswersConfig(models=("sp", "luna"), effort="medium", sources=())
         asked = ask(make_question(), BUNDLE, config, run=run, classify=classifier)
         assert run.dispatched == ["luna"] and asked.answerer.entry == "luna"
-        spend_only = AnswersConfig(models=("sp",), effort="medium", sources=())
-        with pytest.raises(NoAnswer):
-            ask(make_question(), BUNDLE, spend_only, run=run, classify=classifier)
+        metered_only = AnswersConfig(models=("sp",), effort="medium", sources=())
+        with pytest.raises(NoAnswer) as caught:
+            ask(make_question(), BUNDLE, metered_only, run=run, classify=classifier)
         assert run.dispatched == ["luna"]
+        # the failure names the exact command that lifts the block
+        assert "llm-kit consent set --scope task-kit --metered on" in caught.value.detail
 
-    def test_an_absent_consent_file_means_free_only(self, llm, monkeypatch, tmp_path):
-        monkeypatch.setattr(llm.consent, "default_consent_path", lambda: tmp_path / "missing.json")
+    def test_no_consent_file_is_the_default_policy_with_a_hint(self, llm, consent_file):
+        assert not consent_file.exists()
         allowed = resolve_allow(None)
-        assert allowed.classes == {"free"} and allowed.source == "consent" and "no consent file" in allowed.note
+        assert allowed.classes == {"local", "subscription"} and allowed.source == "consent"
+        assert "llm-kit consent set --metered on" in allowed.note
+        assert not consent_file.exists()  # reading creates nothing
 
-    def test_an_explicit_allow_overrides_consent(self, llm, monkeypatch, tmp_path):
-        path = tmp_path / "consent.json"
-        llm.consent.save_consent(usage=False, spend=True, path=path)
-        monkeypatch.setattr(llm.consent, "default_consent_path", lambda: path)
-        # consent allows spend; the host's explicit set does not
+    def test_the_scope_restricts_the_global_policy(self, llm, consent_file):
+        llm.consent.update_config({"metered": True}, path=consent_file)
+        assert resolve_allow(None).classes == {"local", "subscription", "metered"}
+        llm.consent.update_config({"metered": False}, scope="task-kit", path=consent_file)
+        assert resolve_allow(None).classes == {"local", "subscription"}
+        # a scope `on` never widens a global `off`
+        llm.consent.update_config({"metered": False}, path=consent_file)
+        llm.consent.update_config({"metered": True}, scope="task-kit", path=consent_file)
+        assert resolve_allow(None).classes == {"local", "subscription"}
+
+    def test_a_disabled_local_class_is_respected_in_every_phase(self, llm, consent_file):
+        llm.consent.update_config({"local": False}, scope="task-kit", path=consent_file)
+        allowed = resolve_allow(None)
+        assert allowed.classes == {"subscription"}
+        run = FakeRun(llm, {"qwen": [("ok", GOOD)], "luna": [("ok", GOOD)]})
+        config = AnswersConfig(models=("qwen", "luna"), effort="medium", sources=())
+        asked = ask(make_question(), BUNDLE, config, run=run, classify=classifier)
+        assert run.dispatched == ["luna"] and asked.answerer.tier == "subscription"
+        assert [call["allow"] for call in run.calls] == [{"subscription"}]  # no local-only phase 1
+        local_only = AnswersConfig(models=("qwen",), effort="medium", sources=())
+        with pytest.raises(NoAnswer) as caught:
+            ask(make_question(), BUNDLE, local_only, run=run, classify=classifier)
+        assert caught.value.reason == "no-usable-entry" and run.dispatched == ["luna"]
+        assert "llm-kit consent set --scope task-kit --local on" in caught.value.detail
+
+    def test_a_malformed_consent_file_fails_loudly_naming_the_file(self, llm, consent_file):
+        consent_file.write_text("{not json", encoding="utf-8")
+        with pytest.raises(answer_chain.ConsentConfigInvalid) as caught:
+            resolve_allow(None)
+        assert str(consent_file) in str(caught.value)
+        run = FakeRun(llm, {"luna": [("ok", GOOD)]})
+        with pytest.raises(answer_chain.ConsentConfigInvalid):
+            ask(make_question(), BUNDLE, CONFIG, run=run)
+        assert run.dispatched == []
+
+    def test_an_explicit_allow_overrides_consent(self, llm, consent_file):
+        llm.consent.update_config({"subscription": False, "metered": True}, path=consent_file)
+        # the layer allows metered; the host's explicit set does not
         run = FakeRun(llm, {"sp": [("ok", GOOD)]})
         config = AnswersConfig(models=("sp",), effort="medium", sources=())
         with pytest.raises(NoAnswer):
-            ask(make_question(), BUNDLE, config, allow=["free", "usage"], run=run)
+            ask(make_question(), BUNDLE, config, allow=["local", "subscription"], run=run)
         assert run.dispatched == []
-        # consent allows nothing beyond free; the host's explicit set allows usage
-        llm.consent.save_consent(usage=False, spend=False, path=path)
+        # the layer allows nothing beyond local; the host's explicit set allows subscription
+        llm.consent.update_config({"subscription": False, "metered": False}, path=consent_file)
         run = FakeRun(llm, {"luna": [("ok", GOOD)]})
         config = AnswersConfig(models=("luna",), effort="medium", sources=())
-        asked = ask(make_question(), BUNDLE, config, allow=["usage"], run=run, classify=classifier)
+        asked = ask(make_question(), BUNDLE, config, allow=["subscription"], run=run, classify=classifier)
         assert asked.answerer.entry == "luna"
 
-    def test_an_explicit_allow_does_not_read_consent(self, llm, monkeypatch):
-        def boom():
-            raise AssertionError("consent was read")
+    def test_an_explicit_allow_does_not_read_consent(self, llm, consent_file):
+        consent_file.write_text("{not json", encoding="utf-8")  # reading it would raise
+        assert resolve_allow(["subscription"]).classes == {"subscription"}
 
-        monkeypatch.setattr(llm.consent, "load_consent", boom)
-        assert resolve_allow(["usage"]).classes == {"free", "usage"}
+    def test_an_explicit_allow_is_exactly_the_named_classes(self, llm):
+        assert resolve_allow([]).classes == set()
+        assert resolve_allow(["metered"]).classes == {"metered"}
+        run = FakeRun(llm, {"qwen": [("ok", GOOD)]})
+        config = AnswersConfig(models=("qwen",), effort="medium", sources=())
+        with pytest.raises(NoAnswer) as caught:
+            ask(make_question(), BUNDLE, config, allow=["subscription"], run=run)
+        assert caught.value.reason == "no-usable-entry" and run.dispatched == []
 
-    def test_free_is_always_allowed_and_unknown_classes_fail_loudly(self, llm):
-        assert resolve_allow([]).classes == {"free"}
+    def test_unknown_and_retired_classes_fail_loudly(self, llm):
         with pytest.raises(ValueError, match="unknown cost class"):
             resolve_allow(["bogus"])
         with pytest.raises(ValueError, match="not the string"):
-            resolve_allow("usage")
-        assert parse_allow("usage, spend") == ("usage", "spend")
+            resolve_allow("subscription")
+        assert parse_allow("subscription, metered") == ("subscription", "metered")
         with pytest.raises(ValueError):
-            parse_allow("usage,gold")
-        given = Allowed(frozenset({"free"}), "explicit")
+            parse_allow("subscription,gold")
+        for old, new in (("free", "local"), ("usage", "subscription"), ("spend", "metered")):
+            with pytest.raises(ValueError, match=f"{old!r} is now {new!r}"):
+                parse_allow(old)
+            with pytest.raises(ValueError, match=f"{old!r} is now {new!r}"):
+                resolve_allow([old])
+        given = Allowed(frozenset({"local"}), "explicit")
         assert resolve_allow(given) is given
 
     def test_the_default_classifier_names_the_class_of_a_paid_answer(self, llm, monkeypatch):
@@ -256,10 +309,10 @@ class TestPhases:
 
         def classify(e, *, entries, harness_auth):
             seen.update(entry=e, auth=dict(harness_auth))
-            return SimpleNamespace(cost_class="usage")
+            return SimpleNamespace(cost_class="subscription")
 
         object.__setattr__(fake, "classify", classify)
-        assert answer_chain._default_classifier(fake, None)("luna") == "usage"
+        assert answer_chain._default_classifier(fake, None)("luna") == "subscription"
         assert probed == [["codex"]] and seen["entry"] is entry and seen["auth"] == {"codex": "auth"}
 
 
@@ -289,21 +342,21 @@ class TestRequest:
                 (llm.declaration.Attempt("qwen", 1, None, outcome="completed"),),
             )
 
-        ask(make_question(prompt="SYSTEM"), BUNDLE, CONFIG, allow=["free"], run=run)
+        ask(make_question(prompt="SYSTEM"), BUNDLE, CONFIG, allow=["local"], run=run)
         assert seen[0].system == "SYSTEM" and seen[0].prompt == BUNDLE.prompt_text()
         assert seen[0].options.client_id == "task-kit:answers" and seen[0].options.timeout_s == 180.0
 
     def test_a_deadline_bounds_the_call_and_stops_the_chain(self, llm):
         run = FakeRun(llm, {"qwen": [("ok", GOOD)]})
-        ask(make_question(), BUNDLE, CONFIG, allow=["free"], run=run, deadline=130.0, clock=lambda: 100.0)
+        ask(make_question(), BUNDLE, CONFIG, allow=["local"], run=run, deadline=130.0, clock=lambda: 100.0)
         assert run.calls[0]["options"].timeout_s == 30.0
         with pytest.raises(NoAnswer) as caught:
-            ask(make_question(), BUNDLE, CONFIG, allow=["free"], run=run, deadline=100.0, clock=lambda: 100.0)
+            ask(make_question(), BUNDLE, CONFIG, allow=["local"], run=run, deadline=100.0, clock=lambda: 100.0)
         assert caught.value.reason == "deadline" and len(run.calls) == 1
 
     def test_a_script_only_question_cannot_be_asked(self, llm):
         with pytest.raises(ValueError, match="no prompt"):
-            ask(make_question(prompt=None), BUNDLE, CONFIG, allow=["free"], run=FakeRun(llm, {}))
+            ask(make_question(prompt=None), BUNDLE, CONFIG, allow=["local"], run=FakeRun(llm, {}))
 
 
 class TestValidation:
@@ -326,7 +379,7 @@ class TestValidation:
         only = AnswersConfig(models=("qwen",), effort="medium", sources=())
         run = FakeRun(llm, {"qwen": [("ok", invented)]})
         with pytest.raises(NoAnswer) as caught:
-            ask(question, BUNDLE, only, allow=["free"], run=run)
+            ask(question, BUNDLE, only, allow=["local"], run=run)
         assert caught.value.reason == "all-attempts-failed"
 
     def test_grounding_ignores_line_breaks_and_an_absent_optional_field(self):
@@ -392,7 +445,9 @@ def _fake_llm_kit_files(*, harness_auth_source: str = "def probe_harness_auth(na
         f"{package}/completion/__init__.py": "",
         f"{package}/completion/types.py": "class BackendOptions: pass\n",
         f"{package}/registry/__init__.py": "",
-        f"{package}/registry/consent.py": "def load_consent(): return None\n",
+        f"{package}/registry/consent.py": (
+            "class ConsentConfigError(ValueError): pass\nFROM_DEFAULT = 'default'\ndef policy(scope=None): return None\n"
+        ),
         f"{package}/registry/cost.py": "def classify(*a, **k): return None\n",
         f"{package}/registry/models.py": "def discover_model_entries(*a, **k): return {}\n",
         f"{package}/registry/model_endpoints.py": "HARNESS_KIND = 'harness'\n",
@@ -411,7 +466,7 @@ class TestLlmKitProbe:
     def test_absent_library(self, monkeypatch):
         monkeypatch.setitem(sys.modules, "llm_kit", None)
         with pytest.raises(LlmKitAbsent) as caught:
-            ask(make_question(), BUNDLE, CONFIG, allow=["free"], run=lambda *a, **k: None)
+            ask(make_question(), BUNDLE, CONFIG, allow=["local"], run=lambda *a, **k: None)
         assert "not importable" in str(caught.value)
         assert "bootstrap run" in str(caught.value)
         assert "claude plugin" not in str(caught.value)

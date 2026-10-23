@@ -30,6 +30,10 @@ Deliberate differences, each pinned by its own named test:
 * a ``None`` timeout or retry option is omitted from the concrete constructor,
   so the adapter default applies; legacy forwarded the ``None``
   (``test_none_timeout_and_retry_mean_adapter_default``);
+* with no declaration and no configured ``default_endpoint``, ``route`` and ``routed_model``
+  raise ``ConfigurationError`` before any backend runs; the legacy pair fell back to the
+  OpenRouter entry (no shipped default, L3; ``test_no_declaration_is_refused_not_defaulted``,
+  ``test_blank_removed_env_is_ignored_then_refused``, ``test_model_endpoint_routed_model_needs_a_declaration``);
 * the "shared lib absent / too old" translations of the contract seam, the
   declaration probe and the effort seam are gone: the neutral types are in
   ``llm_kit.completion`` and cannot be absent from the same package.
@@ -146,7 +150,8 @@ _TS_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:\+00:00|Z)
 
 
 def _text(value: str) -> str:
-    return _TS_RE.sub("<ts>", _ID_RE.sub("<id>", value))
+    # named deliberate wording differences (final_wording.RENAMES); idempotent
+    return to_final(_TS_RE.sub("<ts>", _ID_RE.sub("<id>", value)))
 
 
 class _Out(tuple):
@@ -308,6 +313,30 @@ def par(sides, tmp_path, capsys):
         if seen[1] != seen[0]:
             pytest.fail("final differs from legacy at " + first_diff(list(seen[0]), list(seen[1])))
         return seen[0][0]
+
+    return run
+
+
+@pytest.fixture
+def split(sides, tmp_path, capsys):
+    """``split(scenario)``: run on both sides and return ``(legacy, final)`` unequal-allowed.
+
+    For a declared difference only: the test asserts each side's own outcome."""
+
+    counter = [0]
+
+    def run(scenario):
+        seen = []
+        counter[0] += 1
+        work = tmp_path / f"_split_{counter[0]}"
+        for side in sides:
+            _rmtree(work)
+            work.mkdir()
+            capsys.readouterr()
+            with contextlib.ExitStack() as stack:
+                seen.append(outcome(scenario, Ctx(side, work, stack)))
+            capsys.readouterr()
+        return seen[0], seen[1]
 
     return run
 
@@ -1805,16 +1834,33 @@ def test_route_default_and_mock_wins(par, monkeypatch):
         mock_backend = b.MockBackend(responses=["x"])
         sentinel = b.OpenRouterBackend(endpoint="mine")
         return (
-            b.route(),
             b.route(openrouter=sentinel) is sentinel,
             b.route(mock=mock_backend) is mock_backend,
             b.route(mock=mock_backend, openrouter=sentinel) is mock_backend,
             b.declared_model_names(),
-            b.routed_model("slug/model"),
-            b.routed_model("slug/model", backend_name="openrouter"),
         )
 
     expect_ok(par(sc))
+
+
+def test_no_declaration_is_refused_not_defaulted(split):
+    """Declared difference (no shipped default, L3): the legacy pair fell back to OpenRouter."""
+
+    def sc(ctx):
+        b = ctx.side.backends
+        b.reset_declared_entry_cache()
+        return [
+            outcome(b.route),
+            outcome(b.routed_model, "slug/model"),
+            outcome(b.routed_model, "slug/model", backend_name="openrouter"),
+        ]
+
+    legacy, final = split(sc)
+    route, routed, routed_named = expect_ok(legacy)[1]
+    assert expect_ok(route)["name"] == "openrouter"
+    assert expect_ok(routed) == "slug/model" and expect_ok(routed_named) == "slug/model"
+    for res in expect_ok(final)[1]:
+        expect_raise(res, "ConfigurationError", "No model is declared")
 
 
 def test_route_mock_wins_before_the_declaration_is_read(par, monkeypatch):
@@ -1839,7 +1885,6 @@ def test_route_mock_wins_before_the_declaration_is_read(par, monkeypatch):
     [
         {"CONTENT_PIPELINE_LLM_BACKEND": "claude"},
         {"CONTENT_PIPELINE_LLM_MODEL": "x", "CONTENT_PIPELINE_LLM_ENDPOINT": "y"},
-        {"CONTENT_PIPELINE_LLM_BACKEND": "   "},
     ],
 )
 def test_route_refuses_removed_env_names(par, monkeypatch, env):
@@ -1851,11 +1896,25 @@ def test_route_refuses_removed_env_names(par, monkeypatch, env):
         return [outcome(b.route), outcome(b.routed_model, "m")]
 
     first, second = expect_ok(par(sc))[1]
-    if any(v.strip() for v in env.values()):
-        for res in (first, second):
-            expect_raise(res, "ConfigurationError", "no longer select a backend or model")
-    else:
-        assert first[0] == "ok" and second[0] == "ok"
+    for res in (first, second):
+        expect_raise(res, "ConfigurationError", "no longer select a backend or model")
+
+
+def test_blank_removed_env_is_ignored_then_refused(split, monkeypatch):
+    """A blank removed setting is not refused as stale; the declaration floor then applies.
+
+    Declared difference (no shipped default, L3): legacy returned the OpenRouter default."""
+    monkeypatch.setenv("CONTENT_PIPELINE_LLM_BACKEND", "   ")
+
+    def sc(ctx):
+        b = ctx.side.backends
+        return [outcome(b.route), outcome(b.routed_model, "m")]
+
+    legacy, final = split(sc)
+    first, second = expect_ok(legacy)[1]
+    assert first[0] == "ok" and second[0] == "ok"
+    for res in expect_ok(final)[1]:
+        expect_raise(res, "ConfigurationError", "No model is declared")
 
 
 def test_route_declaration_selection(par, monkeypatch):
@@ -1974,30 +2033,20 @@ def test_resolve_declaration_and_backend_for_entry(par):
     expect_ok(par(sc))
 
 
-def test_routed_model_for_a_model_endpoint_backend(par):
+def test_model_endpoint_routed_model_needs_a_declaration(split):
+    """Declared difference (no shipped default, L3): the legacy fallback to the registry default
+    entry for a ``model-endpoint`` backend is unreachable in the final, which refuses first."""
+
     def sc(ctx):
         side = ctx.side
         b = side.backends
         _patch_registry(ctx)
-        seen = []
+        ctx.patch(side.models, "resolve_model", lambda model, endpoint=None: "registry-model")
+        return outcome(b.routed_model, "slug", backend_name="model-endpoint")
 
-        def resolve_model(model, endpoint=None):
-            seen.append((model, endpoint))
-            return "registry-model"
-
-        ctx.patch(side.models, "resolve_model", resolve_model)
-        ok = b.routed_model("slug", backend_name="model-endpoint")
-
-        def explode(model, endpoint=None):
-            raise RuntimeError("no default")
-
-        ctx.patch(side.models, "resolve_model", explode)
-        fallback = b.routed_model("slug", backend_name="model-endpoint")
-        _patch_registry(ctx, refuse=True)
-        refused = outcome(b.routed_model, "slug", backend_name="model-endpoint")
-        return ok, seen, fallback, refused
-
-    expect_ok(par(sc))
+    legacy, final = split(sc)
+    assert expect_ok(expect_ok(legacy)) == "registry-model"
+    expect_raise(expect_ok(final), "ConfigurationError", "No model is declared")
 
 
 # --------------------------------------------------------------------------

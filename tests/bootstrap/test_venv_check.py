@@ -3,6 +3,7 @@
 import os
 import stat
 import subprocess
+import time
 from unittest.mock import patch
 
 import pytest
@@ -963,6 +964,41 @@ class TestEnsureVenvReleasedTargets:
 
         assert result.passed and ran and ran[0][-2:] == ["-P", f"{_LLM}==1.3.0"]
         assert installed_version(venv_path, _LLM) == "1.3.0"
+
+    def test_stale_simple_index_resolution_is_retried_once(self, tmp_path, monkeypatch):
+        project, ledger, venv_path, _ran = self._wire(
+            tmp_path, monkeypatch, versions=("1.1.0", "1.2.0"))
+        _install(venv_path, _LLM, "1.1.0")
+        ran = []
+        failures = [
+            b"No solution found: only katsoft-llm-kit[config]<=1.1.0 is available",
+            b"",
+        ]
+
+        class _Proc:
+            def __init__(self, returncode, stderr):
+                self.returncode = returncode
+                self.stderr = stderr
+
+        def _run(cmd, **kw):
+            ran.append(cmd)
+            stderr = failures.pop(0)
+            if not stderr:
+                _install(venv_path, _LLM, "1.2.0")
+            return _Proc(1 if stderr else 0, stderr)
+
+        monkeypatch.setattr("bootstrap_lib.venv_check.subprocess.run", _run)
+        delays = []
+        monkeypatch.setattr(time, "sleep", delays.append)
+
+        result, entries = ensure_venv(str(project), venv_path, released_ledger=ledger)
+
+        assert result.passed, result.message
+        assert len(ran) == 2
+        assert ran[0] == ran[1]
+        assert delays == [2]
+        assert installed_version(venv_path, _LLM) == "1.2.0"
+        assert any("stale released-package index" in entry for entry in entries)
 
     def test_major_release_is_not_adopted(self, tmp_path, monkeypatch):
         project, ledger, venv_path, ran = self._wire(

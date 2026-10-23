@@ -37,6 +37,7 @@
         "output_contract": null,
         "output_tokens": 0,
         "reasoning": "",
+        "reasoning_tokens": 0,
         "reported_cost_source": null,
         "reported_cost_usd": null,
         "reported_model": null,

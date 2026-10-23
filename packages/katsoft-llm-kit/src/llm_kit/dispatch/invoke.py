@@ -8,20 +8,27 @@ every step before the call can refuse; a refusal is an
 spawned:
 
 1. read and validate the project model file, confined to the project root;
-2. resolve the selection or row to its endpoint and exact wire model;
+2. resolve the selection or row to its endpoint and exact wire model; a
+   ``selection`` is read through the personal layer (``<stem>.local.yaml``
+   beside the tracked file), which wins per key over the tracked default, and
+   a refusal that comes from that file names it;
 3. hold the effort to the row's narrowed, exact-model menu (an explicit request
    effort overrides the selection's and is revalidated) and refuse an effort the
    endpoint cannot put on the wire;
 4. build the backend and refuse a mode its adapter does not honor
    (:func:`~llm_kit.completion.capabilities.require_call_mode`);
 5. confine ``working_dir`` and refuse a contract the adapter cannot deliver;
-6. classify the cost of the entry and refuse it unless the per-machine consent
-   allows its class -- BEFORE any scan, argv or runner call;
-7. for ``workspace``, scan the directory; run the call; scan again.
+6. classify the cost of the entry (always, and always reported with its reason)
+   and, when the request opted in to the optional consent layer (``consent``),
+   refuse it unless that policy allows its class -- BEFORE any scan, argv or
+   runner call;
+7. for ``workspace``, take the selected filesystem snapshot; run the call; take it again.
 
 The cost class comes from :func:`llm_kit.registry.cost.classify`, the rule the
-``allow`` filter of ``declaration.describe`` applies, and the allowed set from
-:func:`llm_kit.registry.consent.load_consent`. This path does not go through
+``allow`` filter of ``declaration.describe`` applies, and the policy from
+:func:`llm_kit.registry.consent.policy`. The consent layer is optional: a request
+without the ``consent`` field does not opt in and is
+never refused for its cost class. This path does not go through
 ``describe``: that ranks a declaration and probes reachability, and a project
 selection names exactly one entry, so a probe would only add a network or
 process call that the real call answers anyway.
@@ -32,6 +39,7 @@ itself runs, and nothing here reads or creates a path under ``~/.claude``.
 from __future__ import annotations
 
 import os
+import stat
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -65,6 +73,7 @@ from llm_kit.completion.invoke_protocol import (
     STATUS_FAILED,
     InvokeRefusal,
     InvokeRequest,
+    parse_codex_config,
     cost_block,
     effort_block,
     result_document,
@@ -74,7 +83,7 @@ from llm_kit.completion.requirements import arm_call
 from llm_kit.completion.types import BackendOptions, LLMResponse
 from llm_kit.completion.workspace_manifest import FileRecord, check_expected, diff, scan
 from llm_kit.registry import project_models
-from llm_kit.registry.consent import Consent, load_consent
+from llm_kit.registry import consent as consent_store
 from llm_kit.registry.cost import COST_CLASSES, HarnessAuth, classify
 from llm_kit.registry.model_endpoints import EndpointRegistryError
 from llm_kit.registry.models import (
@@ -89,9 +98,10 @@ OUTCOME_COMPLETED = "completed"
 OUTCOME_FAILED = "failed"
 OUTCOME_HALTED = "halted"
 
-_COST_FLAG = {"usage": "--usage on", "spend": "--spend on"}
-
 HarnessProbe = Callable[[str, Path], Optional[HarnessAuth]]
+
+#: ``(scope) -> Policy``: how the consent layer's policy is read; injectable for tests.
+PolicyLoader = Callable[[Optional[str]], consent_store.Policy]
 
 
 @dataclass(frozen=True)
@@ -129,6 +139,64 @@ def _confine_directory(root: Path, name: str) -> Path:
     return lexical
 
 
+def _confine_regular_file(root: Path, name: str) -> Path:
+    """Resolve an existing regular file beneath root without following symlinks."""
+    relative = Path(name)
+    parts = relative.parts
+    cursor = root.joinpath(*parts)
+    directory_flag = getattr(os, "O_DIRECTORY", 0)
+    no_follow_flag = getattr(os, "O_NOFOLLOW", 0)
+    if os.open not in os.supports_dir_fd:
+        checked = root
+        for index, part in enumerate(parts):
+            checked = checked / part
+            try:
+                mode = checked.lstat().st_mode
+            except OSError as exc:
+                raise InvokeRefusal(KIND_PATH, f"image {name!r} is not an existing regular file: {exc}") from None
+            if stat.S_ISLNK(mode):
+                raise InvokeRefusal(KIND_PATH, f"image {name!r} passes through a symbolic link")
+            if index < len(parts) - 1 and not stat.S_ISDIR(mode):
+                raise InvokeRefusal(KIND_PATH, f"image {name!r} has a non-directory parent")
+        if not stat.S_ISREG(mode):
+            raise InvokeRefusal(KIND_PATH, f"image {name!r} is not a regular file")
+        try:
+            descriptor = os.open(checked, os.O_RDONLY | no_follow_flag)
+            try:
+                if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                    raise InvokeRefusal(KIND_PATH, f"image {name!r} is not a regular file")
+            finally:
+                os.close(descriptor)
+        except InvokeRefusal:
+            raise
+        except OSError as exc:
+            raise InvokeRefusal(KIND_PATH, f"image {name!r} cannot be opened safely: {exc}") from None
+        return checked
+    root_fd = os.open(root, os.O_RDONLY | directory_flag | no_follow_flag)
+    parent_fd = root_fd
+    descriptor = -1
+    try:
+        for part in parts[:-1]:
+            next_fd = os.open(part, os.O_RDONLY | directory_flag | no_follow_flag, dir_fd=parent_fd)
+            if parent_fd != root_fd:
+                os.close(parent_fd)
+            parent_fd = next_fd
+        descriptor = os.open(parts[-1], os.O_RDONLY | no_follow_flag, dir_fd=parent_fd)
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise InvokeRefusal(KIND_PATH, f"image {name!r} is not a regular file")
+    except InvokeRefusal:
+        raise
+    except OSError as exc:
+        raise InvokeRefusal(KIND_PATH, f"image {name!r} cannot be opened safely: {exc}") from None
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if parent_fd != root_fd:
+            os.close(parent_fd)
+        os.close(root_fd)
+    return cursor
+
+
 def _model_verified(requested: str, reported: Optional[str]) -> bool:
     """True only when the downstream's own statement names the requested model.
 
@@ -147,13 +215,14 @@ def invoke(
     *,
     default_project_root: Optional[str],
     backend_factory: Callable[..., Any],
-    consent: Optional[Consent] = None,
+    policy_loader: Optional[PolicyLoader] = None,
     harness_probe: Optional[HarnessProbe] = None,
 ) -> InvokeOutcome:
     """Run one protocol 2 call; see the module docstring for the order and the refusals.
 
     ``backend_factory`` is :func:`llm_kit.dispatch.factory.create_backend` (or a
-    call-time lookup of it); ``consent`` defaults to the machine's consent;
+    call-time lookup of it); ``policy_loader`` reads the consent layer's policy
+    for a scope and defaults to :func:`llm_kit.registry.consent.policy`;
     ``harness_probe`` answers ``(harness, cwd) -> HarnessAuth`` and defaults to
     :func:`llm_kit.adapters.harness_auth.probe_harness_auth`.
     """
@@ -173,11 +242,19 @@ def invoke(
     # 2. selection / row ------------------------------------------------------
     selected_effort: Optional[str] = None
     if request.selection is not None:
-        chosen = document["selections"].get(request.selection)
+        try:
+            local = project_models.read_local_overrides(stored, project_root=root_arg, file=request.file)
+        except project_models.ProjectModelsError as exc:
+            # an invalid layer is a selection problem (its message names the local file); a path problem is a file problem
+            kind = KIND_SELECTION if exc.code == project_models.CODE_INVALID else KIND_PROJECT_FILE
+            raise InvokeRefusal(kind, f"{exc.code}: {exc}") from None
+        resolved_selections = project_models.resolve_models(stored, local).selections
+        chosen = (resolved_selections.get(request.selection) or {}).get("effective")
         if chosen is None:
-            known = ", ".join(sorted(document["selections"])) or "<none>"
+            known = ", ".join(resolved_selections) or "<none>"
             raise InvokeRefusal(
-                KIND_SELECTION, f"selection {request.selection!r} is not in {stored.path} (known: {known})"
+                KIND_SELECTION,
+                f"selection {request.selection!r} is in neither {stored.path} nor {local.path} (known: {known})",
             )
         row_id = chosen["model"]
         selected_effort = chosen.get("effort")
@@ -203,10 +280,18 @@ def invoke(
         menu = tuple(project_models.library_effort_menu(info, row["model"]))
         allowed = tuple(row["efforts"]) if "efforts" in row else menu
         if requested_effort not in allowed:
+            no_dial = not allowed and (
+                "efforts" in row or project_models.exact_effort_menu(info.route, row["model"]) == ()
+            )
+            none_text = (
+                "none -- this model has no effort dial; send null"
+                if no_dial
+                else "none -- the library has no measured effort menu for this model; send null"
+            )
             raise InvokeRefusal(
                 KIND_EFFORT,
                 f"effort {requested_effort!r} is not accepted for {row_id!r} (accepted: "
-                f"{', '.join(allowed) or 'none -- the library has no measured effort menu for this model; send null'}); "
+                f"{', '.join(allowed) or none_text}); "
                 "nothing was dispatched",
             )
 
@@ -216,6 +301,30 @@ def invoke(
     except (EndpointResolveError, ModelResolveError, EndpointRegistryError) as exc:
         raise InvokeRefusal(KIND_CONFIGURATION, str(exc)) from None
     backend = selection.backend
+    row_extras = dict((row.get("request_defaults") or {}).get("extras") or {})
+    row_codex_config = parse_codex_config(row_extras.get("codex_config"), what="request_defaults.extras.codex_config")
+    effective_codex_config = {**row_codex_config, **dict(request.codex_config)}
+    backend_name = getattr(backend, "name", None)
+    row_codex_config_given = "codex_config" in row_extras and row_extras["codex_config"] is not None
+    if (request.codex_config_given or row_codex_config_given) and backend_name != "codex-cli":
+        raise InvokeRefusal(KIND_CONFIGURATION, "codex_config is supported only by the Codex adapter")
+    if request.images and backend_name != "codex-cli":
+        raise InvokeRefusal(KIND_MODE, f"{backend_name or 'this adapter'} does not support image input")
+    if backend_name == "codex-cli":
+        effective_sandbox = row_extras.get("sandbox", "workspace-write")
+        if not isinstance(effective_sandbox, str) or effective_sandbox not in ("read-only", "workspace-write"):
+            raise InvokeRefusal(
+                KIND_CONFIGURATION,
+                f"effective Codex sandbox {effective_sandbox!r} must be read-only or workspace-write",
+            )
+        if (
+            request.mode != MODE_WORKSPACE
+            and "shell_environment_policy.inherit" in effective_codex_config
+        ):
+            raise InvokeRefusal(
+                KIND_CONFIGURATION,
+                "shell_environment_policy.inherit cannot be used in Codex text-only mode",
+            )
     record = getattr(selection, "capabilities", None) or getattr(backend, "capabilities", None)
     if record is not None:
         try:
@@ -226,9 +335,12 @@ def invoke(
         raise InvokeRefusal(KIND_MODE, f"{getattr(backend, 'name', 'this backend')} advertises no call modes; nothing was dispatched")
 
     # 5. options, working directory, contract, effort delivery -----------------
+    adapter_extras = {key: value for key, value in row_extras.items() if key != "codex_config"}
+    if effective_codex_config:
+        adapter_extras["__llm_kit_codex_config"] = effective_codex_config
     options = BackendOptions(
         effort=requested_effort,
-        extras=dict((row.get("request_defaults") or {}).get("extras") or {}),
+        extras=adapter_extras,
         output_contract=request.output_contract,
         log_prefix=f"[{selection.endpoint}]",
     )
@@ -240,6 +352,10 @@ def invoke(
     if request.mode == MODE_WORKSPACE:
         workdir = _confine_directory(root, request.working_dir or "")
         options = replace(options, cwd=workdir)
+    image_root = workdir or root
+    image_paths = tuple(str(_confine_regular_file(image_root, name)) for name in request.images)
+    if image_paths:
+        options = replace(options, extras={**dict(options.extras), "__llm_kit_image_paths": image_paths})
     if request.output_contract is not None and record is not None:
         try:
             prepare_contract(record, options)
@@ -270,14 +386,15 @@ def invoke(
     cost_class = verdict.cost_class
     if cost_class not in COST_CLASSES:  # classify's contract; a new class must be handled, not allowed
         raise InvokeRefusal(KIND_CONSENT, f"unrecognised cost class {cost_class!r}")
-    loaded = consent if consent is not None else load_consent()
-    if cost_class not in loaded.allowed:
-        raise InvokeRefusal(
-            KIND_CONSENT,
-            f"{row['endpoint']!r} is a {cost_class} entry ({verdict.reason}) and the machine's consent "
-            f"does not allow {cost_class} calls ({loaded.path}); run `llm-kit consent set "
-            f"{_COST_FLAG.get(cost_class, '--' + cost_class + ' on')}` to allow them; nothing was dispatched",
-        )
+    load_policy = policy_loader or consent_store.policy
+    opted_in = request.consent is not None
+    consent_report: Dict[str, Any] = {
+        "opted_in": opted_in,
+        "applied": opted_in,
+        "scope": request.consent.scope if request.consent is not None else None,
+    }
+    if request.consent is not None:
+        _refuse_unless_allowed(load_policy, request.consent.scope, cost_class, verdict.reason, row["endpoint"])
 
     # arm the controls a plain completion relies on (no file writes, no shell, no subagents)
     if request.mode != MODE_WORKSPACE and record is not None:
@@ -288,12 +405,20 @@ def invoke(
         except ValueError as exc:
             raise InvokeRefusal(KIND_MODE, str(exc)) from None
         backend, options = armed.backend, armed.options
+    if getattr(backend, "text_only", False) and "shell_environment_policy.inherit" in effective_codex_config:
+        raise InvokeRefusal(
+            KIND_CONFIGURATION,
+            "shell_environment_policy.inherit cannot be used in Codex text-only mode",
+        )
 
     # 7. the call, with receipts ----------------------------------------------
     before: Optional[Mapping[str, FileRecord]] = None
+    watched_paths: Optional[Tuple[str, ...]] = None
     if workdir is not None:
+        if request.watch_files is not None:
+            watched_paths = tuple(sorted(set(request.watch_files) | set(request.expect_files)))
         try:
-            before = scan(workdir)
+            before = scan(workdir, watched_paths)
         except OSError as exc:
             raise InvokeRefusal(KIND_PATH, f"cannot scan working_dir before the call: {exc}") from None
 
@@ -319,7 +444,7 @@ def invoke(
     files: Optional[list] = None
     if workdir is not None and before is not None:
         try:
-            files = diff(before, scan(workdir))
+            files = diff(before, scan(workdir, watched_paths))
         except OSError as exc:
             if failure is None:
                 failure = {"code": CODE_WORKSPACE_SCAN_FAILED, "message": f"cannot scan working_dir after the call: {exc}"}
@@ -343,6 +468,7 @@ def invoke(
     }
     cost = cost_block(
         cost_class,
+        reason=verdict.reason,
         usd=getattr(response, "reported_cost_usd", None),
         usd_source=getattr(response, "reported_cost_source", None),
         estimated_usd=getattr(response, "estimated_cost_usd", None),
@@ -370,12 +496,41 @@ def invoke(
             files=files,
             usage=usage_block(response, wall_ms),
             cost=cost,
+            consent=consent_report,
             error=failure,
             halt=halt_info,
             params=params,
+            manifest=(
+                {"scope": "watch", "watched_paths": list(watched_paths)}
+                if watched_paths is not None
+                else ({"scope": "all"} if workdir is not None else None)
+            ),
         ),
         outcome,
     )
+
+
+def _refuse_unless_allowed(
+    load_policy: PolicyLoader, scope: Optional[str], cost_class: str, reason: str, endpoint: str
+) -> None:
+    """Enforce the consent layer the request opted in to.
+
+    Raises a ``consent`` refusal naming the class, the scope and the exact
+    ``llm-kit consent set`` command, or a ``configuration`` refusal when the
+    consent file cannot be read or is malformed; returns when the class is allowed.
+    """
+    try:
+        policy = load_policy(scope)
+    except (consent_store.ConsentConfigError, OSError, ValueError) as exc:
+        raise InvokeRefusal(
+            KIND_CONFIGURATION, f"the request opted in to the consent layer, and it is misconfigured: {exc}"
+        ) from None
+    if not policy.allows(cost_class):
+        raise InvokeRefusal(
+            KIND_CONSENT,
+            f"{endpoint!r} is a {cost_class} entry ({reason}) and {policy.refusal(cost_class)}; "
+            "nothing was dispatched",
+        )
 
 
 def _error_from_response(response: LLMResponse, fallback: str) -> Dict[str, Any]:

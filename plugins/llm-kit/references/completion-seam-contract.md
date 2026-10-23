@@ -384,9 +384,13 @@ names a `selection` key or a catalogue row `model` of the project model file
 The row carries the endpoint, the exact wire model and the narrowed effort menu. Its
 keys are `project_root`, `file`, `selection` or `model` (exactly one), `prompt`,
 `system`, `mode`, `working_dir`, `expect_files`, `output_schema`, `effort` (absent
-means the selection's; `null` sends none), `max_tokens` and `timeout_s`; an unknown
-key is refused. `mode` is `completion` (default) or `workspace`; there is no image or
-build mode, and a caller that writes files names the files in `expect_files`. A
+means the selection's; `null` sends none), `max_tokens`, `timeout_s` and `consent`; an
+unknown key is refused. `consent` opts in to the optional consent layer: omitted or `false`
+means the layer is not used, `true` applies the global policy, and `{"scope": "<name>"}`
+applies that scope's restrictions over the global policy. The name must be a non-empty
+string without surrounding whitespace, and any other value is a `protocol` refusal. Protocol 2
+has no per-call allow list, so an `allow` key is an unknown key. `mode` is `completion`
+(default) or `workspace`; there is no image or build mode, and a caller that writes files names the files in `expect_files`. A
 `workspace` call needs a `working_dir` beneath the project root, which the library
 scans before and after the call; a call whose `expect_files` are not all regular files
 afterwards is reported failed, not completed. Only an adapter that lists `workspace` in
@@ -395,16 +399,23 @@ afterwards is reported failed, not completed. Only an adapter that lists `worksp
 The call refuses, before anything is spawned, in this order: the project file, the
 selection, the effort (held to the exact-model menu), the mode, the working directory,
 the output contract, the effort's wire delivery (what the endpoint can put on the wire),
-and consent (the
-entry's cost class must be allowed by the per-machine consent file). A refusal exits 4
+and consent (only when
+the request opted in with `consent`: the entry's cost class must be allowed by the effective
+consent policy, and a refusal names the class, the scope and the `llm-kit consent set` command;
+an unreadable or malformed consent file is a `configuration` refusal in that case only). A request that
+sends no `consent` field does not opt in and is never refused for its cost class; only an opted-in
+request is checked. A refusal exits 4
 with `{"protocol": 2, "error": {"kind", "message"}}` on stderr; `kind` is one of
 `protocol`, `project-file`, `selection`, `effort`, `mode`, `path`, `contract`,
 `consent` and `configuration`. A call that ran exits 0 when completed, 1 when failed
 and 3 when it ended in a classified halt, with the result document on stdout: `status`,
 `mode`, the `selection`, a `resolved` block that separates `requested_model` from
 `reported_model` and sets `model_verified` only when the two agree, the `effort` block
-(`requested`, `sent`, `source`), `output`, `usage`, `cost` (class, authoritative USD and
-a separate estimate; null means unknown) and, for `workspace`, the `files` written.
+(`requested`, `sent`, `source`), `output`, `usage`, `cost` (`class`, `reason`, authoritative USD and
+a separate estimate; null means unknown; the class and its reason are reported whether or not
+the request opted in to consent), `consent` (`{opted_in, applied, scope}`: whether the request
+sent the field, whether a consent policy was applied to the call, and the scope named) and,
+for `workspace`, the `files` written.
 
 **A protocol error is not an endpoint error, and the exit codes say so.**
 `EXIT_PROTOCOL` (4) means the request could not be understood and no call was

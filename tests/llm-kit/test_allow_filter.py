@@ -171,6 +171,7 @@ def T(entry_id, unmetered=False):
     return EndpointEntry(
         id=entry_id, base_url=f"http://{entry_id}.invalid/v1", model=f"{entry_id}-model",
         billing_mode="unmetered" if unmetered else None,
+        billing_owner="self" if unmetered else None,
     )
 
 
@@ -234,8 +235,8 @@ def spy(monkeypatch):
 
 def _pin_three(spy):
     spy.verdicts.update({
-        "free1": ("free", "stub-free"), "use1": ("usage", "stub-usage"),
-        "sp1": ("spend", "stub-spend"),
+        "free1": ("local", "stub-free"), "use1": ("subscription", "stub-usage"),
+        "sp1": ("metered", "stub-spend"),
     })
     return {"free1": T("free1"), "use1": H("use1", "claude"), "sp1": H("sp1", "codex")}
 
@@ -247,19 +248,19 @@ def _pin_three(spy):
 
 def test_switched_off_shown(spy):
     entries = _pin_three(spy)
-    ranking = describe(["use1", "free1", "sp1"], entries, allow=["free"])
+    ranking = describe(["use1", "free1", "sp1"], entries, allow=["local"])
 
     lines = ranking.render().split("\n")
     assert lines[1].startswith("  free1")
-    assert lines[2] == "Switched off: use1 (usage), sp1 (spend)"
+    assert lines[2] == "Switched off: use1 (subscription), sp1 (metered)"
     assert "\n".join(lines[3:]) == ranking.rule
     assert [e.id for e in ranking.rendered_entries] == ["free1"]
     off = ranking.to_json()["switched_off"]
     assert off == [
         {"id": "use1", "declared_index": 0, "disposition": "switched-off",
-         "detail": "usage not allowed: stub-usage", "resets_at": None, "cost_class": "usage"},
+         "detail": "subscription not allowed: stub-usage", "resets_at": None, "cost_class": "subscription"},
         {"id": "sp1", "declared_index": 2, "disposition": "switched-off",
-         "detail": "spend not allowed: stub-spend", "resets_at": None, "cost_class": "spend"},
+         "detail": "metered not allowed: stub-spend", "resets_at": None, "cost_class": "metered"},
     ]
     assert [x.id for x in ranking.switched_off] == ["use1", "sp1"]
     assert ranking.switched_off == tuple(
@@ -269,7 +270,7 @@ def test_switched_off_shown(spy):
 
 def test_every_class_allowed_switches_nothing_off(spy):
     entries = _pin_three(spy)
-    ranking = describe(["use1", "free1", "sp1"], entries, allow=["free", "usage", "spend"])
+    ranking = describe(["use1", "free1", "sp1"], entries, allow=["local", "subscription", "metered"])
     assert ranking.switched_off == ()
     assert "Switched off" not in ranking.render()
     assert "switched_off" not in ranking.to_json()
@@ -283,14 +284,14 @@ def test_switched_off_with_the_real_classifier_and_injected_auth(spy):
     auth = {"claude": HarnessAuth(SUBSCRIPTION, "claude.ai"), "codex": HarnessAuth(METERED, "api key")}
     names = ["qwen", "opus", "sol", "paid"]
 
-    free_only = describe(names, entries, allow=["free"], harness_auth=auth)
+    free_only = describe(names, entries, allow=["local"], harness_auth=auth)
     assert [(x.id, x.cost_class) for x in free_only.switched_off] == [
-        ("opus", "usage"), ("sol", "spend"), ("paid", "spend"),
+        ("opus", "subscription"), ("sol", "metered"), ("paid", "metered"),
     ]
     assert all(x.detail.startswith(f"{x.cost_class} not allowed: ") for x in free_only.switched_off)
     assert [e.id for e in free_only.rendered_entries] == ["qwen"]
 
-    with_usage = describe(names, entries, allow=["free", "usage"], harness_auth=auth)
+    with_usage = describe(names, entries, allow=["local", "subscription"], harness_auth=auth)
     assert [x.id for x in with_usage.switched_off] == ["sol", "paid"]
     assert [e.id for e in with_usage.rendered_entries] == ["qwen", "opus"]
     assert spy.probes == []  # supplied authentication is never re-probed
@@ -299,19 +300,19 @@ def test_switched_off_with_the_real_classifier_and_injected_auth(spy):
 def test_floor_itemises_switched_off(spy):
     entries = _pin_three(spy)
     with pytest.raises(d.NoUsableRoutingTarget) as caught:
-        describe(["use1", "sp1", "ghost", "free1"], entries, allow=["free"], exclude=["free1"])
+        describe(["use1", "sp1", "ghost", "free1"], entries, allow=["local"], exclude=["free1"])
     exc = caught.value
     assert exc.switched_off_ids == ("use1", "sp1")
     assert str(exc) == (
         "no usable routing target in [use1, sp1, ghost, free1] for a process caller:\n"
-        "  use1: switched-off (usage not allowed: stub-usage)\n"
-        "  sp1: switched-off (spend not allowed: stub-spend)\n"
+        "  use1: switched-off (subscription not allowed: stub-usage)\n"
+        "  sp1: switched-off (metered not allowed: stub-spend)\n"
         "  ghost: unresolved (no registry entry)\n"
         "  free1: excluded (ruled out by the caller)"
     )
     by_id = {x["id"]: x for x in exc.to_json()["dispositions"]}
-    assert by_id["use1"]["cost_class"] == "usage"
-    assert by_id["sp1"]["cost_class"] == "spend"
+    assert by_id["use1"]["cost_class"] == "subscription"
+    assert by_id["sp1"]["cost_class"] == "metered"
     assert "cost_class" not in by_id["ghost"] and "cost_class" not in by_id["free1"]
 
 
@@ -355,7 +356,7 @@ def test_allow_none_ignores_supplied_harness_auth(spy):
 
 
 def test_all_classes_allowed_matches_the_baseline_bytes(spy):
-    ranking = describe(BASELINE, _baseline_entries(), allow=("free", "usage", "spend"))
+    ranking = describe(BASELINE, _baseline_entries(), allow=("local", "subscription", "metered"))
     assert ranking.render() == PRE_RENDER
     assert ranking.to_json() == PRE_TO_JSON
 
@@ -382,7 +383,7 @@ def test_check_follows_the_unroutable_and_hidden_checks(spy):
     entries = {"qwen": T("qwen"), "opus": H("opus"), "sol": H("sol", "codex")}
     ranking = describe(
         ["qwen", "opus", "sol", "ghost", "gone"], entries, caller="session",
-        allow=["usage"], exclude=["gone"], harness_auth={"claude": HarnessAuth(SUBSCRIPTION, "s"),
+        allow=["subscription"], exclude=["gone"], harness_auth={"claude": HarnessAuth(SUBSCRIPTION, "s"),
                                                        "codex": HarnessAuth(METERED, "m")},
     )
     assert spy.classified == ["opus", "sol"]  # qwen unroutable, ghost unresolved, gone excluded
@@ -395,10 +396,10 @@ def test_check_precedes_the_requirements_match(spy, monkeypatch):
     from llm_kit.completion import requirements as requirements_module
 
     monkeypatch.setattr(requirements_module, "match_capabilities", lambda record, req: False)
-    spy.verdicts.update({"off": ("spend", "stub-spend"), "on": ("free", "stub-free")})
+    spy.verdicts.update({"off": ("metered", "stub-spend"), "on": ("local", "stub-free")})
     entries = {"off": T("off"), "on": T("on")}
     with pytest.raises(d.NoUsableRoutingTarget) as caught:
-        describe(["off", "on"], entries, allow=["free"], requirements=["effort"])
+        describe(["off", "on"], entries, allow=["local"], requirements=["effort"])
     by_id = {x.id: x for x in caught.value.dispositions}
     assert by_id["off"].disposition == d.DISPOSITION_SWITCHED_OFF  # not requirements-mismatch
     assert by_id["on"].disposition == d.DISPOSITION_REQUIREMENTS_MISMATCH
@@ -410,7 +411,7 @@ def test_check_precedes_the_requirements_match(spy, monkeypatch):
 
 
 def test_switched_off_not_probed(spy, monkeypatch):
-    spy.verdicts.update({"on": ("free", "stub-free"), "off": ("spend", "stub-spend")})
+    spy.verdicts.update({"on": ("local", "stub-free"), "off": ("metered", "stub-spend")})
     probed = []
 
     def check_many(to_probe, *, timeout, project_root):
@@ -419,7 +420,7 @@ def test_switched_off_not_probed(spy, monkeypatch):
 
     monkeypatch.setattr(d, "check_many", check_many)
     ranking = d.describe(
-        ["off", "on"], caller="process", entries={"off": T("off"), "on": T("on")}, allow=["free"]
+        ["off", "on"], caller="process", entries={"off": T("off"), "on": T("on")}, allow=["local"]
     )
     assert probed == [["on"]]
     assert [x.id for x in ranking.switched_off] == ["off"]
@@ -438,7 +439,7 @@ def test_auth_probe_is_lazy_once_per_harness_and_only_claude_codex(spy, tmp_path
     real = tmp_path / "real"
     real.mkdir()
     (tmp_path / "link").symlink_to(real)
-    describe(["qwen", "o1", "o2", "sol", "oc"], entries, allow=["free", "usage"],
+    describe(["qwen", "o1", "o2", "sol", "oc"], entries, allow=["local", "subscription"],
              project_root=tmp_path / "link")
     cwd = real.resolve()  # the probe directory is the RESOLVED project root
     assert spy.probes == [(["claude"], cwd), (["codex"], cwd)]  # opencode never probed
@@ -446,30 +447,30 @@ def test_auth_probe_is_lazy_once_per_harness_and_only_claude_codex(spy, tmp_path
 
 def test_no_probe_without_a_claude_or_codex_entry_met(spy):
     entries = {"qwen": T("qwen", unmetered=True), "oc": H("oc", "opencode"), "o1": H("o1", "claude")}
-    describe(["qwen", "oc"], entries, allow=["free"])
+    describe(["qwen", "oc"], entries, allow=["local"])
     assert spy.probes == []
     # An excluded harness entry is not classified, so not probed either.
     with pytest.raises(d.NoUsableRoutingTarget):
-        describe(["o1"], entries, allow=["free"], exclude=["o1"])
+        describe(["o1"], entries, allow=["local"], exclude=["o1"])
     assert spy.probes == []
 
 
 def test_describe_probe_cwd_defaults_to_the_process_directory(spy, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    describe(["o1"], {"o1": H("o1", "claude")}, allow=["usage"])
+    describe(["o1"], {"o1": H("o1", "claude")}, allow=["subscription"])
     assert spy.probes == [(["claude"], tmp_path.resolve())]
 
 
-def test_unknown_probe_result_is_spend(spy):
+def test_unknown_probe_result_is_metered(spy):
     spy.auth["claude"] = HarnessAuth("unknown", "claude auth status failed")
-    ranking = describe(["o1", "q"], {"o1": H("o1"), "q": T("q", unmetered=True)}, allow=["free", "usage"])
+    ranking = describe(["o1", "q"], {"o1": H("o1"), "q": T("q", unmetered=True)}, allow=["local", "subscription"])
     assert [x.id for x in ranking.switched_off] == ["o1"]
-    assert ranking.switched_off[0].cost_class == "spend"
+    assert ranking.switched_off[0].cost_class == "metered"
 
 
 def test_unknown_allow_class_is_a_value_error(spy):
     with pytest.raises(ValueError):
-        describe(["q"], {"q": T("q")}, allow=["free", "bogus"])
+        describe(["q"], {"q": T("q")}, allow=["local", "bogus"])
     with pytest.raises(ValueError):
         d.run(["q"], d.RunRequest(system="s", prompt="p"), entries={"q": T("q")}, allow=["bogus"])
 
@@ -527,10 +528,10 @@ def test_run_generator_allow_survives_retry(spy):
     result = d.run(
         ["a", "b", "c"], d.RunRequest(system="s", prompt="p"), entries=entries,
         backend_factory=_factory(backends), reachability_cache=reach(entries), max_attempts=2,
-        allow=(cls for cls in ["free"]),  # one-shot: a second normalization would see nothing
+        allow=(cls for cls in ["local"]),  # one-shot: a second normalization would see nothing
     )
     assert result.status == d.RUN_COMPLETED
-    assert result.entry == "c"  # b is spend: switched off on the retry as well
+    assert result.entry == "c"  # b is metered: switched off on the retry as well
     assert [backends[n].calls for n in "abc"] == [1, 0, 1]
 
 
@@ -540,7 +541,7 @@ def test_run_floors_all_switched_off(spy):
     with pytest.raises(d.NoUsableRoutingTarget) as caught:
         d.run(
             ["a", "b"], d.RunRequest(system="s", prompt="p"), entries=entries,
-            backend_factory=_factory(backends), reachability_cache=reach(entries), allow=["free"],
+            backend_factory=_factory(backends), reachability_cache=reach(entries), allow=["local"],
         )
     assert caught.value.switched_off_ids == ("a", "b")
     assert [backends[n].calls for n in "ab"] == [0, 0]
@@ -556,7 +557,7 @@ def test_run_probes_auth_once_for_the_whole_run(spy, tmp_path):
     result = d.run(
         ["o1", "o2", "o3"], d.RunRequest(system="s", prompt="p"), entries=entries,
         project_root=str(tmp_path), backend_factory=_factory(backends, HARNESS_KIND),
-        reachability_cache=reach(entries), max_attempts=3, allow=["usage"],
+        reachability_cache=reach(entries), max_attempts=3, allow=["subscription"],
     )
     assert result.entry == "o3"
     assert spy.probes == [(["claude"], tmp_path.resolve())]
@@ -576,7 +577,7 @@ def test_run_probe_cwd_is_the_workspace_then_project_root(spy, tmp_path):
         d.run(
             ["o1"], request, entries=entries, project_root=root,
             backend_factory=_factory(backends, HARNESS_KIND), reachability_cache=reach(entries),
-            allow=["usage"],
+            allow=["subscription"],
         )
         assert spy.probes == [(["claude"], expected.resolve())]
 
@@ -609,9 +610,9 @@ def _cli(monkeypatch, capsys, *argv):
 
 
 def test_cli_allow_is_split_and_passed(monkeypatch, capsys):
-    code, seen, _out = _cli(monkeypatch, capsys, "--allow", "free,usage", "--allow", "spend")
+    code, seen, _out = _cli(monkeypatch, capsys, "--allow", "local,subscription", "--allow", "metered")
     assert code == 0
-    assert seen[0]["allow"] == ["free", "usage", "spend"]
+    assert seen[0]["allow"] == ["local", "subscription", "metered"]
 
 
 def test_cli_without_allow_passes_no_keyword(monkeypatch, capsys):
@@ -621,6 +622,6 @@ def test_cli_without_allow_passes_no_keyword(monkeypatch, capsys):
 
 
 def test_cli_unknown_allow_class_is_a_usage_error(monkeypatch, capsys):
-    code, _seen, out = _cli(monkeypatch, capsys, "--allow", "free,bogus")
+    code, _seen, out = _cli(monkeypatch, capsys, "--allow", "local,bogus")
     assert code == 2
     assert "bogus" in out.err

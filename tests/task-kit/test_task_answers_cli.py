@@ -74,7 +74,7 @@ def only_repository(doc: dict) -> dict:
 
 def test_refresh_writes_one_document_and_answers_the_pending_tasks(world, parent, llm):
     run = FakeRun(llm)
-    code, doc, text, stderr = refresh(world, parent, "--allow", "free", run=run)
+    code, doc, text, stderr = refresh(world, parent, "--allow", "local", run=run)
     assert code == 0 and stderr == ""
     assert text.endswith("\n") and text.count("\n") == 1  # exactly one document and a newline
     assert (doc["protocol"], doc["kind"]) == (1, "answers-pass") and doc["task_kit_version"]
@@ -87,7 +87,7 @@ def test_refresh_writes_one_document_and_answers_the_pending_tasks(world, parent
 
 
 def test_the_batch_flag_limits_the_tasks_of_the_pass(world, parent, llm):
-    code, doc, _text, _err = refresh(world, parent, "--allow", "free", "--batch", "1", run=FakeRun(llm))
+    code, doc, _text, _err = refresh(world, parent, "--allow", "local", "--batch", "1", run=FakeRun(llm))
     assert code == 0
     repository = only_repository(doc)
     assert repository["kept"] == ["proj/c"] and repository["pending"] == 3
@@ -97,14 +97,14 @@ def test_the_batch_flag_limits_the_tasks_of_the_pass(world, parent, llm):
 def test_a_stop_file_ends_the_pass_before_it_starts(world, parent):
     stop = world.tmp_path / "stop"
     stop.write_text("", encoding="utf-8")
-    code, doc, _text, _err = refresh(world, parent, "--allow", "free", "--stop-file", str(stop), run=NeverRun())
+    code, doc, _text, _err = refresh(world, parent, "--allow", "local", "--stop-file", str(stop), run=NeverRun())
     assert code == 0 and doc["payload"]["stopped"] == "stop"
     assert only_repository(doc)["outcome"] == "stopped"
     assert not (world.folder("c") / "answers").exists()
 
 
 def test_a_zero_deadline_ends_the_pass_before_it_starts(world, parent):
-    code, doc, _text, _err = refresh(world, parent, "--allow", "free", "--deadline-s", "0", run=NeverRun())
+    code, doc, _text, _err = refresh(world, parent, "--allow", "local", "--deadline-s", "0", run=NeverRun())
     assert code == 0 and doc["payload"]["stopped"] == "deadline"
     assert only_repository(doc)["stopped_before"] == "prepare"
 
@@ -113,7 +113,7 @@ def test_a_deadline_that_passes_during_answering_leaves_the_rest_unattempted(wor
     clock = {"now": 0.0}
     run = FakeRun(llm, on_call=lambda _request: clock.update(now=1000.0))
     code, doc, _text, _err = refresh(
-        world, parent, "--allow", "free", "--deadline-s", "100", run=run, clock=lambda: clock["now"]
+        world, parent, "--allow", "local", "--deadline-s", "100", run=run, clock=lambda: clock["now"]
     )
     repository = only_repository(doc)
     assert code == 0 and doc["payload"]["stopped"] == "deadline" and run.calls == 1
@@ -121,29 +121,80 @@ def test_a_deadline_that_passes_during_answering_leaves_the_rest_unattempted(wor
     assert {item["task"] for item in repository["unattempted"]} == {"proj/a", "proj/b"}
 
 
-def test_allow_names_the_classes_and_wins_over_consent(world, parent, llm, monkeypatch, tmp_path):
+@pytest.fixture
+def consent_file(llm, monkeypatch, tmp_path):
+    """An empty consent location (no file yet) that llm-kit reads and writes for this test."""
+    path = tmp_path / "consent.json"
+    monkeypatch.setenv("LLM_KIT_CONSENT_FILE", str(path))
+    return path
+
+
+def test_allow_names_the_classes_and_wins_over_consent(world, parent, llm, consent_file):
     from llm_kit.registry import consent  # noqa: PLC0415
 
-    path = tmp_path / "consent.json"
-    consent.save_consent(usage=False, spend=True, path=path)
-    monkeypatch.setattr(consent, "default_consent_path", lambda: path)
-    _code, doc, _text, _err = refresh(world, parent, "--allow", "free,usage", "--batch", "1", run=FakeRun(llm))
-    assert doc["payload"]["allow"] == {"classes": ["free", "usage"], "source": "explicit", "note": ""}
-    # without --allow the classes are llm-kit's consent: spend, not usage, plus free
+    consent.update_config({"subscription": False, "metered": True}, path=consent_file)
+    run = FakeRun(llm)
+    _code, doc, _text, _err = refresh(world, parent, "--allow", "local,subscription", "--batch", "1", run=run)
+    assert doc["payload"]["allow"] == {"classes": ["local", "subscription"], "source": "explicit", "note": ""}
+    # without --allow the classes are llm-kit's consent layer, scope task-kit: metered, not subscription, plus local
     _code, doc, _text, _err = refresh(world, parent, "--batch", "1", run=FakeRun(llm))
     assert doc["payload"]["allow"]["source"] == "consent"
-    assert doc["payload"]["allow"]["classes"] == ["free", "spend"]
+    assert doc["payload"]["allow"]["classes"] == ["local", "metered"]
+
+
+def test_the_task_kit_scope_restricts_the_global_policy(world, parent, llm, consent_file):
+    from llm_kit.registry import consent  # noqa: PLC0415
+
+    consent.update_config({"metered": True}, path=consent_file)
+    consent.update_config({"metered": False}, scope="task-kit", path=consent_file)
+    _code, doc, _text, _err = refresh(world, parent, "--batch", "1", run=FakeRun(llm))
+    assert doc["payload"]["allow"]["classes"] == ["local", "subscription"]
+
+
+def test_a_disabled_local_class_is_not_added_back(world, parent, llm, consent_file):
+    from llm_kit.registry import consent  # noqa: PLC0415
+
+    consent.update_config({"local": False}, scope="task-kit", path=consent_file)
+    run = FakeRun(llm)
+    _code, doc, _text, _err = refresh(world, parent, "--batch", "1", run=run)
+    assert doc["payload"]["allow"]["classes"] == ["subscription"]
+    assert run.allows and all(allowed == {"subscription"} for allowed in run.allows)
+
+
+def test_a_missing_consent_file_prints_the_exact_command_for_the_default_off_class(world, parent, llm, consent_file):
+    _code, doc, _text, err = refresh(world, parent, "--batch", "1", run=FakeRun(llm))
+    assert doc["payload"]["allow"]["classes"] == ["local", "subscription"]
+    assert "llm-kit consent set --metered on" in doc["payload"]["allow"]["note"]
+    assert "llm-kit consent set --metered on" in err
+    assert not consent_file.exists()
+
+
+def test_a_malformed_consent_file_is_a_config_error_naming_the_file(world, parent, llm, consent_file):
+    consent_file.write_text("{not json", encoding="utf-8")
+    code, doc, _text, err = refresh(world, parent, "--batch", "1", run=FakeRun(llm))
+    assert code == 1 and doc["error"]["code"] == "config_invalid"
+    assert str(consent_file) in doc["error"]["message"] and str(consent_file) in err
+    # an explicit --allow is the caller's own policy and never reads the file
+    code, doc, _text, _err = refresh(world, parent, "--allow", "local", "--batch", "1", run=FakeRun(llm))
+    assert code == 0 and doc["payload"]["allow"]["source"] == "explicit"
+
+
+@pytest.mark.parametrize("old, new", [("free", "local"), ("usage", "subscription"), ("spend", "metered")])
+def test_a_retired_class_name_is_a_usage_error_naming_the_new_one(world, parent, old, new):
+    code, doc, _text, _err = refresh(world, parent, "--allow", f"local,{old}", run=NeverRun())
+    assert code == 2 and doc["error"]["code"] == "usage"
+    assert f"{old!r} is now {new!r}" in doc["error"]["message"]
 
 
 def test_a_pass_with_nothing_to_answer_resolves_no_consent(world, parent, llm):
-    refresh(world, parent, "--allow", "free", run=FakeRun(llm))
+    refresh(world, parent, "--allow", "local", run=FakeRun(llm))
     code, doc, _text, stderr = refresh(world, parent, run=NeverRun())  # no llm-kit needed, nothing pending
     assert code == 0 and doc["payload"]["allow"] is None and stderr == ""
     assert only_repository(doc)["pending"] == 0
 
 
 def test_without_llm_kit_the_document_reports_the_refusal_and_stderr_names_the_remedy(world, parent):
-    code, doc, _text, stderr = refresh(world, parent, "--allow", "free", run=NeverRun())
+    code, doc, _text, stderr = refresh(world, parent, "--allow", "local", run=NeverRun())
     repository = only_repository(doc)
     assert code == 0 and repository["outcome"] == "refused" and repository["refusal"]["state"] == "absent"
     assert "bootstrap run" in repository["refusal"]["message"]
@@ -155,7 +206,7 @@ def test_a_task_outside_git_is_an_error_entry_not_a_failure(world, parent):
     loose = world.tmp_path / "parent" / "loose" / "dev" / "tasks" / "x"
     loose.mkdir(parents=True)
     (loose / "task.yaml").write_text("task:\n  _schema_version: '1'\n  type: hand-off\n  title: x\n  status: active\n")
-    code, doc, _text, _err = refresh(world, parent, "--allow", "free", run=NeverRun())
+    code, doc, _text, _err = refresh(world, parent, "--allow", "local", run=NeverRun())
     assert code == 0
     assert [e["code"] for e in doc["payload"]["errors"]] == ["answers"]
     assert "not inside a git work tree" in doc["payload"]["errors"][0]["message"]
@@ -165,7 +216,7 @@ def test_a_task_outside_git_is_an_error_entry_not_a_failure(world, parent):
 
 
 def test_status_reports_coverage_and_pending_without_writing(world, parent, llm):
-    refresh(world, parent, "--allow", "free", "--batch", "1", run=FakeRun(llm))  # c answered
+    refresh(world, parent, "--allow", "local", "--batch", "1", run=FakeRun(llm))  # c answered
     folder = world.folder("b")  # an answer written but never committed
     answer_store.write_answer(folder, "orientation", ME, new_answer(folder, world.catalog))
     before = world.snapshot()
@@ -206,7 +257,7 @@ def test_status_names_a_missing_llm_kit_and_its_remedy(world, parent):
 
 
 def test_prune_reports_the_files_it_removed(world, parent, llm):
-    refresh(world, parent, "--allow", "free", run=FakeRun(llm))
+    refresh(world, parent, "--allow", "local", run=FakeRun(llm))
     retired = world.folder("c") / "answers" / "retired_q"
     retired.mkdir()
     own = world.folder("c") / "answers" / "orientation" / "studio.yaml"
@@ -237,7 +288,7 @@ def test_an_unsupported_protocol_is_refused_with_the_exports_error_shape(world, 
     [
         (["status", "--format", "json"], "requires --protocol"),
         (["status", "--format", "json", "--protocol", "1", "--batch", "2"], "takes no --batch"),
-        (["prune", "--format", "json", "--protocol", "1", "--allow", "free"], "takes no --allow"),
+        (["prune", "--format", "json", "--protocol", "1", "--allow", "local"], "takes no --allow"),
         (["refresh", "--format", "json", "--protocol", "1", "--batch", "0"], "--batch must be at least 1"),
         (["refresh", "--format", "json", "--protocol", "1", "--deadline-s", "-1"], "must not be negative"),
         (["refresh", "--format", "json", "--protocol", "1", "--allow", "gold"], "unknown cost class"),
@@ -376,7 +427,7 @@ def answered(doc: dict) -> set[str]:
 
 def test_a_project_scopes_refresh_to_its_task_folders(world, fleet, llm):
     run = FakeRun(llm)
-    code, doc, _text, _err = scoped(world, fleet, "refresh", "--allow", "free", *projects(fleet, "beta"), run=run)
+    code, doc, _text, _err = scoped(world, fleet, "refresh", "--allow", "local", *projects(fleet, "beta"), run=run)
     assert code == 0 and doc["kind"] == "answers-pass"
     assert answered(doc) == {"beta/b1"} and run.calls == 1
     files = remote_files(world.remote)
@@ -389,7 +440,7 @@ def test_a_project_scopes_refresh_to_its_task_folders(world, fleet, llm):
 
 def test_a_folder_shared_with_an_unselected_checkout_is_still_answered(world, fleet, llm):
     # discovery prefers ``x`` (the shorter name) for alpha's folders, but ``x`` is not selected
-    code, doc, _text, _err = scoped(world, fleet, "refresh", "--allow", "free", *projects(fleet, "alpha"), run=FakeRun(llm))
+    code, doc, _text, _err = scoped(world, fleet, "refresh", "--allow", "local", *projects(fleet, "alpha"), run=FakeRun(llm))
     assert code == 0 and answered(doc) == {"alpha/a1"}
     assert doc["payload"]["errors"] == []
     # and the unselected checkout alone reaches the same folder once
@@ -399,7 +450,7 @@ def test_a_folder_shared_with_an_unselected_checkout_is_still_answered(world, fl
 
 def test_two_projects_sharing_a_tasks_repository_make_one_report(world, fleet, llm):
     code, doc, _text, _err = scoped(
-        world, fleet, "refresh", "--allow", "free", *projects(fleet, "alpha", "beta"), run=FakeRun(llm)
+        world, fleet, "refresh", "--allow", "local", *projects(fleet, "alpha", "beta"), run=FakeRun(llm)
     )
     assert code == 0
     repository = only_repository(doc)  # exactly one report, for the repository that holds both folders
@@ -409,7 +460,7 @@ def test_two_projects_sharing_a_tasks_repository_make_one_report(world, fleet, l
 
 def test_projects_in_different_task_repositories_make_one_report_each(world, fleet, llm):
     code, doc, _text, _err = scoped(
-        world, fleet, "refresh", "--allow", "free", *projects(fleet, "alpha", "delta"), run=FakeRun(llm)
+        world, fleet, "refresh", "--allow", "local", *projects(fleet, "alpha", "delta"), run=FakeRun(llm)
     )
     assert code == 0
     assert [r["repo"] for r in doc["payload"]["repositories"]] == sorted(
@@ -426,7 +477,7 @@ def test_status_is_scoped_by_project(world, fleet):
 
 
 def test_prune_is_scoped_by_project(world, fleet, llm):
-    scoped(world, fleet, "refresh", "--allow", "free", run=FakeRun(llm))  # every project answered
+    scoped(world, fleet, "refresh", "--allow", "local", run=FakeRun(llm))  # every project answered
     for stub_dir in ("alpha/a1", "beta/b1"):
         own = world.top / stub_dir / "answers" / "orientation" / "studio.yaml"
         retired = world.top / stub_dir / "answers" / "retired_q"
@@ -445,7 +496,7 @@ def test_a_project_named_twice_counts_once(world, fleet, llm):
     link = world.tmp_path / "alpha-link"
     os.symlink(fleet.root / "alpha", link, target_is_directory=True)
     _code, doc, _text, _err = scoped(
-        world, fleet, "refresh", "--allow", "free", *projects(fleet, "alpha", "alpha"), "--project", str(link), run=run
+        world, fleet, "refresh", "--allow", "local", *projects(fleet, "alpha", "alpha"), "--project", str(link), run=run
     )
     assert answered(doc) == {"alpha/a1"} and run.calls == 1
 
@@ -472,7 +523,7 @@ def test_project_and_parent_are_intersected(world, fleet, llm):
 def test_a_project_without_task_folders_selects_nothing(world, fleet, llm):
     bare = world.tmp_path / "bare"
     bare.mkdir()
-    code, doc, _text, _err = scoped(world, fleet, "refresh", "--allow", "free", "--project", str(bare), run=NeverRun())
+    code, doc, _text, _err = scoped(world, fleet, "refresh", "--allow", "local", "--project", str(bare), run=NeverRun())
     assert code == 0 and doc["payload"]["repositories"] == [] and doc["payload"]["errors"] == []
 
 
@@ -515,7 +566,7 @@ def test_every_listed_option_is_a_flag_the_verbs_accept(world, parent):
     # the list is what a client probes before passing a flag, so it must name only flags that parse
     _code, doc, _text, _err = call(world, parent, "protocols", "--format", "json")
     for option in doc["payload"]["options"]:
-        value = {"batch": "1", "deadline-s": "1", "allow": "free"}.get(option, str(parent))
+        value = {"batch": "1", "deadline-s": "1", "allow": "local"}.get(option, str(parent))
         code, answer, _text, _err = call(
             world, parent, "refresh", "--format", "json", "--protocol", "2", f"--{option}", value
         )

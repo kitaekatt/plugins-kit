@@ -4,7 +4,7 @@
 ``answer_missing_orientations`` makes that answer through ``answer_engine.run_pass`` (the engine ``task.py
 answers refresh`` and ``task-kit answers refresh`` run): it commits and publishes only this machine's answer
 files under the repository lock, and it writes neither task.yaml nor log.md. The cost classes a model may use
-are the engine's: llm-kit's per-machine consent (``llm_kit.registry.consent``) unless the caller names them.
+are the engine's: llm-kit's optional consent layer with scope ``task-kit`` (``llm_kit.registry.consent``) unless the caller names them.
 
 ``orientation_supersedes_summary`` serves ``update --summary``: whether a usable orientation answer already
 takes the place of ``task.summary`` in listings.
@@ -87,7 +87,7 @@ def answer_missing_orientations(
     """Answer the orientation question of every listed task whose answer is missing, stale or invalid.
 
     One engine pass per task repository covers every such task of it (no batch cut). ``allow`` is the cost
-    classes (None: llm-kit's consent, read only when a model must answer). ``run``, ``config``, ``catalog``,
+    classes (None: llm-kit's consent layer, scope ``task-kit``, read only when a model must answer). ``run``, ``config``, ``catalog``,
     ``machine``, ``data_dir``, ``now`` and ``publish`` replace the defaults (tests). A listing with nothing to
     answer touches neither git nor llm-kit.
     """

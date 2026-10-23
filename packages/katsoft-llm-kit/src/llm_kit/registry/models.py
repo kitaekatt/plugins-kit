@@ -68,6 +68,8 @@ from .model_endpoints import (
     effort_delivery,
     harness_entry_message,
     parse_billing_mode,
+    parse_billing_owner,
+    parse_harness_endpoint,
     parse_classification_fields,
     parse_effort_style,
     parse_frontdoor,
@@ -85,7 +87,6 @@ DEFAULT_ENDPOINT_NAME = "openrouter"
 # ``defaultCheap`` so it inherits the top-level registry below -- that is what
 # preserves back-compat for existing top-level-only config.yaml files.
 DEFAULT_MODEL_CONFIG = {
-    "default_endpoint": "openrouter",
     "endpoints": {
         "openrouter": {
             "base_url": "https://openrouter.ai/api/v1",
@@ -356,9 +357,8 @@ def default_declaration(
 ) -> list:
     """The default model declaration: ``default_endpoint`` read as a declaration.
 
-    Shipped, this is ``["openrouter"]``: one transport entry whose own
-    ``default`` / ``defaultCheap`` selectors pick the model, so a caller that
-    names no model keeps the meaning ``default_endpoint`` always had. It may
+    The shipped baseline has no default declaration. A user or project may
+    deliberately set ``default_endpoint`` to one or more registry ids. It may
     be written as a list of registry ids. Structural validation is
     ``bootstrap_lib.model_declaration.parse`` (a ``DeclarationError`` for an
     empty or duplicated list); whether an id resolves is decided at dispatch.
@@ -367,7 +367,10 @@ def default_declaration(
     from .declaration_syntax import _model_declaration  # noqa: PLC0415
 
     cfg = config if config is not None else load_model_config(project_root=project_root)
-    return _model_declaration().parse(_default_endpoint_value(cfg))
+    value = cfg.get("default_endpoint")
+    if value is None or value == "":
+        return []
+    return _model_declaration().parse(value)
 
 
 def is_model_alias(
@@ -562,6 +565,13 @@ def _config_model_entry(
             tier=tier,
             family=family,
             conserve_usage=_config_conserve(ep_name, ep),
+            endpoint=parse_harness_endpoint(
+                ep,
+                source="layered model config",
+                entry_id=ep_name,
+                harness=_config_required_str(ep_name, ep, kind=kind, key="harness"),
+                notes=notes if notes is not None else [],
+            ),
         )
 
     if "model" not in ep:
@@ -586,6 +596,12 @@ def _config_model_entry(
         conserve_usage=_config_conserve(ep_name, ep),
         frontdoor=_config_frontdoor(ep_name, ep, notes),
         billing_mode=_config_billing_mode(ep_name, ep, notes),
+        billing_owner=parse_billing_owner(
+            ep,
+            source="layered model config",
+            entry_id=ep_name,
+            notes=notes if notes is not None else [],
+        ),
         effort_style=effort_style,
         effort_style_declared=effort_style_declared,
     )

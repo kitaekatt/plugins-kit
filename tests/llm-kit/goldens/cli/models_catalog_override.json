@@ -10,9 +10,28 @@
   "stdout": {
     "json": {
       "consent": {
-        "source": "absent",
-        "spend": false,
-        "usage": false
+        "commands": {
+          "set": "llm-kit consent set [--scope <name>] --local|--subscription|--metered on|off",
+          "show": "llm-kit consent show [--scope <name>] [--json]"
+        },
+        "in_use": false,
+        "opt_in": {
+          "api": "llm_kit.registry.consent.policy(scope=None)",
+          "describe_flags": [
+            "--consent",
+            "--consent-scope <name>"
+          ],
+          "protocol_2_request": {
+            "consent": true,
+            "scoped": {
+              "consent": {
+                "scope": "<name>"
+              }
+            }
+          }
+        },
+        "optional": true,
+        "scope": null
       },
       "local": {
         "path": ".llm-kit/models.local.yaml",
@@ -23,7 +42,6 @@
         {
           "adapter": "codex-cli",
           "cost": {
-            "allowed": null,
             "class": null,
             "reason": "codex cost class depends on its authentication, which was not probed"
           },
@@ -52,7 +70,6 @@
         {
           "adapter": "claude-cli",
           "cost": {
-            "allowed": null,
             "class": null,
             "reason": "claude cost class depends on its authentication, which was not probed"
           },
@@ -78,9 +95,8 @@
         {
           "adapter": "openrouter",
           "cost": {
-            "allowed": false,
-            "class": "spend",
-            "reason": "billing not declared unmetered"
+            "class": "metered",
+            "reason": "billing not declared unmetered (billing unverified)"
           },
           "effort_delivery": {
             "deliverable": true,
@@ -111,7 +127,6 @@
         {
           "adapter": "codex-cli",
           "cost": {
-            "allowed": null,
             "class": null,
             "reason": "codex cost class depends on its authentication, which was not probed"
           },
@@ -141,7 +156,6 @@
         {
           "adapter": "claude-cli",
           "cost": {
-            "allowed": null,
             "class": null,
             "reason": "claude cost class depends on its authentication, which was not probed"
           },
@@ -169,7 +183,6 @@
         {
           "adapter": "codex-cli",
           "cost": {
-            "allowed": null,
             "class": null,
             "reason": "codex cost class depends on its authentication, which was not probed"
           },
@@ -196,7 +209,6 @@
         {
           "adapter": "claude-cli",
           "cost": {
-            "allowed": null,
             "class": null,
             "reason": "claude cost class depends on its authentication, which was not probed"
           },
@@ -224,7 +236,6 @@
         {
           "adapter": "codex-cli",
           "cost": {
-            "allowed": null,
             "class": null,
             "reason": "codex cost class depends on its authentication, which was not probed"
           },
@@ -252,9 +263,7 @@
           ]
         }
       ],
-      "notes": [
-        "consent: no consent file (<T>/home/.config/llm-kit/consent.json); only free models are allowed; run `llm-kit consent set --usage on` to allow usage-billed models"
-      ],
+      "notes": [],
       "path": ".llm-kit/models.yaml",
       "resolved_selections": {
         "art": {

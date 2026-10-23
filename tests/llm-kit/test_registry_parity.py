@@ -69,15 +69,44 @@ def F():
 # --------------------------------------------------------------------------
 
 
+#: Dataclass fields the final package added after the legacy plugin froze (declared
+#: difference, like final_wording): cost-class metadata, consumed only by llm_kit.registry.cost.
+FINAL_ONLY_FIELDS = {"EndpointEntry": frozenset({"billing_owner", "endpoint"})}
+
+
+def _compared_fields(cls):
+    skip = FINAL_ONLY_FIELDS.get(cls.__name__, frozenset())
+    return [f for f in dataclasses.fields(cls) if f.name not in skip]
+
+
+def shipped_default_endpoint_to_final(value):
+    """``value`` (a config dict) without the legacy shipped ``default_endpoint: openrouter``.
+
+    Declared difference: the final package ships no default model declaration (consent-design
+    item 8), so its baseline config has no ``default_endpoint`` key where the legacy one named
+    ``openrouter``. Recognised by that exact value next to an ``endpoints`` map, and idempotent,
+    so a harness may pass both sides through it. A config's ``default_endpoint`` is also moved
+    last: the legacy baseline held the key first, so a layer's value kept that position, and key
+    order carries no meaning.
+    """
+    if not (isinstance(value, dict) and "endpoints" in value and "default_endpoint" in value):
+        return value
+    kept = {k: v for k, v in value.items() if k != "default_endpoint"}
+    if value["default_endpoint"] != "openrouter":
+        kept["default_endpoint"] = value["default_endpoint"]
+    return kept
+
+
 def norm(value):
     """Reduce a value to comparable plain data, keeping class names."""
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         return {
             "__type__": type(value).__name__,
-            **{f.name: norm(getattr(value, f.name)) for f in dataclasses.fields(value)},
+            **{f.name: norm(getattr(value, f.name)) for f in _compared_fields(type(value))},
         }
     if isinstance(value, dict):
         value = openrouter_style_to_legacy(value)  # declared difference (final_wording)
+        value = shipped_default_endpoint_to_final(value)  # declared difference (no shipped default)
         out = {"__dict__": [(norm(k), norm(v)) for k, v in value.items()]}
         if type(value) is not dict:
             out["__type__"] = type(value).__name__
@@ -145,10 +174,10 @@ def assert_surface(legacy_mod, final_mod, names):
                 assert dataclasses.is_dataclass(new), name
                 assert [
                     (f.name, str(f.type), repr(f.default), f.default_factory is dataclasses.MISSING)
-                    for f in dataclasses.fields(old)
+                    for f in _compared_fields(old)
                 ] == [
                     (f.name, str(f.type), repr(f.default), f.default_factory is dataclasses.MISSING)
-                    for f in dataclasses.fields(new)
+                    for f in _compared_fields(new)
                 ], name
                 assert old.__dataclass_params__.frozen == new.__dataclass_params__.frozen
         elif callable(old):
@@ -956,8 +985,30 @@ def test_default_endpoint_helpers(L, F, capsys):
     for cfg in configs:
         assert F.models.default_endpoint_name(cfg) == L.models.default_endpoint_name(cfg)
         assert norm(F.models._default_endpoint_value(cfg)) == norm(L.models._default_endpoint_value(cfg))
+        if cfg.get("default_endpoint") in (None, "", []):
+            # declared difference: no shipped default declaration (see the test below). The
+            # legacy reader fell back to openrouter for each of these; the final one reads
+            # "nothing declared" as [] and an explicit empty list as an error.
+            assert L.models.default_declaration(config=cfg) == ["openrouter"]
+            if cfg.get("default_endpoint") == []:
+                with pytest.raises(Exception, match="empty list"):
+                    F.models.default_declaration(config=cfg)
+            else:
+                assert F.models.default_declaration(config=cfg) == []
+            continue
         left, _ = pair(capsys, L.models.default_declaration, F.models.default_declaration, config=cfg)
-    assert left[0] in {"ok", "raise"}
+        assert left[0] in {"ok", "raise"}
+
+
+def test_shipped_default_endpoint_is_a_declared_difference(L, F):
+    """The final package ships no default declaration; the legacy baseline named openrouter."""
+    assert L.models.DEFAULT_MODEL_CONFIG["default_endpoint"] == "openrouter"
+    assert "default_endpoint" not in F.models.DEFAULT_MODEL_CONFIG
+    assert F.models.default_declaration(config=dict(F.models.DEFAULT_MODEL_CONFIG)) == []
+    # recognised only as the exact shipped value next to an endpoints map
+    assert shipped_default_endpoint_to_final({"default_endpoint": "openrouter"}) == {"default_endpoint": "openrouter"}
+    kept = shipped_default_endpoint_to_final({"default_endpoint": "kf", "endpoints": {}})
+    assert kept == {"endpoints": {}, "default_endpoint": "kf"} and list(kept) == ["endpoints", "default_endpoint"]
 
 
 def test_default_declaration_loads_config_and_honors_patched_probe(L, F, home, tmp_path, capsys, monkeypatch):

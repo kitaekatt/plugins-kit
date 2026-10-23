@@ -498,9 +498,10 @@ class TestProtocolAndHalt:
 
 
 class TestQuotaHaltClassification:
-    """HALT_QUOTA: codex runs without ``--json``, so no ``task_complete``
-    payload reaches the caller on exhaustion -- the evidence lives only in
-    the session rollout, not in any exception channel. On a non-zero exit
+    """HALT_QUOTA: no ``task_complete`` payload reaches the caller on
+    exhaustion (the legacy backend runs without ``--json``; the llm-kit backend
+    reads only ``turn.completed`` usage from its event stream) -- the evidence
+    lives only in the session rollout, not in any exception channel. On a non-zero exit
     the backend re-reads the rollout tail (usage_budget.read_codex_pool,
     the default seven_day/primary spec) and, when it reads OUT_OF_QUOTA,
     marks the raised CodexRunError with an authoritative ``halt_kind`` that

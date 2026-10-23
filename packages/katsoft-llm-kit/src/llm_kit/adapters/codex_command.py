@@ -36,6 +36,14 @@ from typing import Iterable, Optional, Sequence, Tuple, Union
 
 CODEX_EXECUTABLE = "codex"
 
+#: Names the Codex CLI to run instead of ``codex`` on PATH: a bare command name
+#: (looked up on PATH) or an ABSOLUTE path to an executable file. Read by
+#: :func:`detect_codex`, :func:`build_codex_exec_argv` and the completion
+#: backend alike, so a verdict and a dispatch always name the same binary. Set
+#: it when more than one Codex build is installed and the one on PATH is not the
+#: one to use (for example the CLI bundled inside a desktop app).
+CODEX_EXECUTABLE_ENV = "LLM_KIT_CODEX_EXECUTABLE"
+
 #: Probe values for `-c` keys whose type is not a plain enum-ish string.
 _VERSION_RE = re.compile(
     r"^(?:codex(?:-cli)?\s+)?v?(\d+)\.(\d+)\.(\d+)",
@@ -64,12 +72,16 @@ class CodexDetection:
 # Detection spawns a subprocess; every orchestration render used to pay for a
 # fresh one. Cached for the process lifetime.
 _CACHE: Optional[CodexDetection] = None
+# The LLM_KIT_CODEX_EXECUTABLE value the cached result was made for, so a
+# changed variable is detected afresh rather than answered from a stale probe.
+_CACHE_KEY: Optional[str] = None
 
 
 def reset_detection_cache() -> None:
     """Drop the cached detection result (tests; a re-check after an install)."""
-    global _CACHE
+    global _CACHE, _CACHE_KEY
     _CACHE = None
+    _CACHE_KEY = None
 
 
 def resolve_cli(name: str) -> Optional[Tuple[str, ...]]:
@@ -86,6 +98,62 @@ def resolve_cli(name: str) -> Optional[Tuple[str, ...]]:
     if os.name == "nt" and resolved.lower().endswith((".cmd", ".bat")):
         return ("cmd", "/c", resolved)
     return (resolved,)
+
+
+class CodexExecutableError(RuntimeError):
+    """``LLM_KIT_CODEX_EXECUTABLE`` is set to something that cannot be run.
+
+    Raised instead of falling back to ``codex`` on PATH: a user who named a
+    specific build must never be served a different one in silence.
+    """
+
+
+def configured_codex_executable() -> str:
+    """The Codex executable to resolve: the variable's value, else ``codex``.
+
+    Raises :class:`CodexExecutableError` when ``LLM_KIT_CODEX_EXECUTABLE`` is
+    set but empty, or holds a relative path (a name with a directory part that
+    is not absolute): the launcher runs with the working directory set to the
+    task root, so a relative path would resolve against a different directory
+    than the one the user typed it in. A bare command name stays valid.
+    """
+    raw = os.environ.get(CODEX_EXECUTABLE_ENV)
+    if raw is None:
+        return CODEX_EXECUTABLE
+    value = raw.strip()
+    if not value:
+        raise CodexExecutableError(
+            "%s is set but empty; unset it to use `%s` from PATH, or set it to "
+            "a command name or an absolute path to the Codex executable"
+            % (CODEX_EXECUTABLE_ENV, CODEX_EXECUTABLE)
+        )
+    has_dir = os.sep in value or (os.altsep is not None and os.altsep in value)
+    if has_dir and not os.path.isabs(value):
+        raise CodexExecutableError(
+            "%s=%r is a relative path; use an absolute path or a bare command "
+            "name (the Codex launcher runs from a different working directory)"
+            % (CODEX_EXECUTABLE_ENV, value)
+        )
+    return value
+
+
+def resolve_codex_cli() -> Optional[Tuple[str, ...]]:
+    """Resolve the configured Codex launcher to an argv prefix.
+
+    With ``LLM_KIT_CODEX_EXECUTABLE`` unset this is ``resolve_cli("codex")``:
+    None when ``codex`` is not on PATH. With it set, an unresolvable value
+    raises :class:`CodexExecutableError` naming the variable rather than
+    returning None, so a misconfiguration cannot read as "Codex is not
+    installed".
+    """
+    name = configured_codex_executable()
+    prefix = resolve_cli(name)
+    if prefix is None and CODEX_EXECUTABLE_ENV in os.environ:
+        raise CodexExecutableError(
+            "%s=%r is not an executable file and not a command on PATH"
+            % (CODEX_EXECUTABLE_ENV, name)
+        )
+    return prefix
 
 
 def parse_codex_version(text: str) -> Optional[Tuple[int, int, int]]:
@@ -115,27 +183,37 @@ def parse_codex_version(text: str) -> Optional[Tuple[int, int, int]]:
 def detect_codex(*, timeout: float = 10.0) -> CodexDetection:
     """Is a usable Codex CLI present? Cached for the process lifetime.
 
+    Probes the executable named by ``LLM_KIT_CODEX_EXECUTABLE`` when it is set,
+    else ``codex`` on PATH.
+
     Fails CLOSED on everything -- not on PATH, OSError, any SubprocessError
     (TimeoutExpired included), a nonzero exit. An undetectable backend that
     reports itself available is worse than one that disappears: callers render
-    mechanics for, or dispatch to, a tool that is not there.
+    mechanics for, or dispatch to, a tool that is not there. The one exception
+    is a misconfigured ``LLM_KIT_CODEX_EXECUTABLE`` (empty, relative, or
+    naming nothing runnable): that raises :class:`CodexExecutableError` naming
+    the variable, because reporting it as "Codex is absent" would hide the
+    cause. A raise is not cached.
     """
-    global _CACHE
-    if _CACHE is not None:
+    global _CACHE, _CACHE_KEY
+    key = os.environ.get(CODEX_EXECUTABLE_ENV)
+    if _CACHE is not None and _CACHE_KEY == key:
         return _CACHE
-    _CACHE = _detect_codex_uncached(timeout=timeout)
+    result = _detect_codex_uncached(timeout=timeout)
+    _CACHE, _CACHE_KEY = result, key
     return _CACHE
 
 
 def _detect_codex_uncached(*, timeout: float) -> CodexDetection:
-    prefix = resolve_cli(CODEX_EXECUTABLE)
+    name = configured_codex_executable()
+    prefix = resolve_codex_cli()
     if prefix is None:
         return CodexDetection(
             available=False,
-            reason="`%s` not found on PATH" % CODEX_EXECUTABLE,
+            reason="`%s` not found on PATH" % name,
         )
     argv = [*prefix, "--version"]
-    shown = "%s --version" % CODEX_EXECUTABLE
+    shown = "%s --version" % name
     try:
         proc = subprocess.run(
             argv,
@@ -256,6 +334,8 @@ def build_codex_exec_argv(
     extra_config: Iterable[str] = (),
     argv_prefix: Optional[Sequence[str]] = None,
     ignore_user_config: bool = False,
+    codex_config: Optional[dict[str, str]] = None,
+    image_paths: Sequence[PathLike] = (),
 ) -> list:
     """Build the ONE sanctioned ``codex exec`` invocation.
 
@@ -265,8 +345,10 @@ def build_codex_exec_argv(
         <prefix> exec [--ignore-user-config] -s <sandbox>
             -c windows.sandbox="unelevated"                 # Windows only
             -c sandbox_workspace_write.network_access=true  # when network
+            [-c shell_environment_policy.inherit="none|core"]
+            [-c approval_policy="never"]                 # protocol 2 allowlist
             [-m MODEL] [-c model_reasoning_effort=EFFORT] [-c EXTRA]...
-            -C <root> [--add-dir D]... [-o FILE] [--output-schema F] [--json]
+            -C <root> [--add-dir D]... [-o FILE] [--output-schema F] [-i IMAGE]... [--json]
             --skip-git-repo-check --color never -
 
     ``root``, every ``add_dirs`` entry, ``scratch_dir``, ``output_file`` and
@@ -289,20 +371,25 @@ def build_codex_exec_argv(
     ``$CODEX_HOME/config.toml`` (so no user MCP server, plugin or provider
     entry), while auth still comes from ``CODEX_HOME``.
 
-    ``argv_prefix=None`` resolves the launcher via ``resolve_cli`` and raises
-    RuntimeError when Codex is not on PATH.
+    ``argv_prefix=None`` resolves the launcher via :func:`resolve_codex_cli`
+    (``LLM_KIT_CODEX_EXECUTABLE`` when set, else ``codex`` on PATH) and raises
+    RuntimeError when Codex is not on PATH; a misconfigured variable raises
+    :class:`CodexExecutableError` (a RuntimeError) naming it. An explicit
+    ``argv_prefix`` is used as given and the variable is not consulted.
     """
     if argv_prefix is None:
-        resolved = resolve_cli(CODEX_EXECUTABLE)
+        resolved = resolve_codex_cli()
         if resolved is None:
             raise RuntimeError(
                 "`%s` is not on PATH, so no Codex command can be built "
-                "(install the Codex CLI or pass argv_prefix=)" % CODEX_EXECUTABLE
+                "(install the Codex CLI, set %s, or pass argv_prefix=)"
+                % (configured_codex_executable(), CODEX_EXECUTABLE_ENV)
             )
         argv_prefix = resolved
 
     root_str = _absolute(root, "root")
     dirs = [_absolute(d, "add_dirs[%d]" % i) for i, d in enumerate(add_dirs)]
+    images = [_absolute(d, "image_paths[%d]" % i) for i, d in enumerate(image_paths)]
     if scratch_dir is not None:
         dirs.append(_absolute(scratch_dir, "scratch_dir"))
 
@@ -315,6 +402,19 @@ def build_codex_exec_argv(
         argv += ["-c", 'windows.sandbox="unelevated"']
     if network:
         argv += ["-c", "sandbox_workspace_write.network_access=true"]
+    config_values = {
+        "shell_environment_policy.inherit": {"none", "core"},
+        "approval_policy": {"never"},
+    }
+    for key, value in (codex_config or {}).items():
+        if (
+            not isinstance(key, str)
+            or key not in config_values
+            or not isinstance(value, str)
+            or value not in config_values[key]
+        ):
+            raise ValueError(f"unsupported Codex config value for {key!r}; nothing was dispatched")
+        argv += ["-c", f'{key}="{value}"']
     if model:
         argv += ["-m", str(model)]
     if effort:
@@ -328,6 +428,8 @@ def build_codex_exec_argv(
         argv += ["-o", _absolute(output_file, "output_file")]
     if output_schema is not None:
         argv += ["--output-schema", _absolute(output_schema, "output_schema")]
+    for path in images:
+        argv += ["-i", path]
     if json_events:
         argv.append("--json")
     argv += ["--skip-git-repo-check", "--color", "never", "-"]

@@ -28,8 +28,8 @@ name shows its summary card.
 By default, answer the orientation question for every eligible local active,
 blocked, deferred, or closed task whose answer is missing, stale, or invalid
 before rendering. The answers engine runs one pass per repository and asks the
-configured answer chain through llm-kit. It tries free entries first and uses
-a paid class only when per-machine consent allows it. Each answer is one file
+configured answer chain through llm-kit. It tries `local` entries first and uses
+a `subscription` or `metered` class only when llm-kit's consent layer allows it for scope `task-kit`. Each answer is one file
 under the task's `answers/`; review commits and publishes only this machine's
 answer files and writes neither task.yaml nor log.md.
 

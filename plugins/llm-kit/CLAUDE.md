@@ -152,7 +152,7 @@ like a leftover is a deliberate compatibility choice
   `$MODEL_ENDPOINTS_REGISTRY` when set (an explicit path; a missing file is an error),
   else `$XDG_CONFIG_HOME/llm-kit/model-endpoints.yaml`, else, only when the neutral
   file does not exist, the read-only legacy `~/.claude/config/model-endpoints.yaml`.
-  Consent is `$LLM_KIT_CONSENT_FILE` when set, else
+  The optional consent layer's file is `$LLM_KIT_CONSENT_FILE` when set, else
   `$XDG_CONFIG_HOME/llm-kit/consent.json`, else the read-only legacy
   `~/.claude/plugins/data/plugins-kit/llm-kit/consent.json`; `consent set` writes the
   override or the neutral file, carrying the legacy values across on the first write.
@@ -302,8 +302,9 @@ hosts, ports or `/v1/models`. An invalid value is noted, treated as false, and
 the entry (even the default) is kept. `billing.mode` (`unmetered` or
 `provider-reported`) is separate and entry-local: `unmetered` is an explicit USD
 zero, `provider-reported` declares native `usage.cost` is USD, omission declares
-neither. `key_env` stays independent of both. Both keys surface in the
-`models endpoints` JSON (`frontdoor`, and `billing` when set) and in
+neither; `billing.owner: self` (optional) adds the ownership claim that `local`
+needs. `key_env` stays independent of all of them. The keys surface in the `models endpoints` JSON (`frontdoor`,
+and `billing` with `owner` when set; a harness entry's `endpoint`) and in
 `llm_kit.registry.models.resolve_endpoint()` (`frontdoor`, `billing_mode`).
 
 **A usage pool is DECLARED or defaulted, never derived from the model.** An entry
@@ -1137,15 +1138,26 @@ background lane refuses under an open dispatch, and the workflow lane has no req
 
 ## Cost classes and consent
 
-Every declared entry has a cost class, and a caller that opts in with `allow=` switches
-off the classes it may not use. Classes are `free`, `usage` and `spend`; classification
-(`llm_kit.registry.cost.classify`) fails closed, so an entry that cannot be shown to be
-`free` or `usage` is `spend`.
+Principle (user ruling 2026-10-23; `docs/reference/llm-kit-architecture.md`, "Caller consent"):
+consent governs caller-selected execution policy. The library makes no LLM calls of its own, the
+user of the library makes them, and writing code that invokes models needs no consent. Design record:
+`docs/planning/shared-lib-packaging/consent-design.md`.
 
-- **`free`**: a transport whose `billing.mode` is `unmetered`, and a front-door entry
-  whose every tier (the transports with the same `routing.group`) is unmetered. The front
-  door's own `billing` does not count, and a front door with no tiers is `spend`.
-- **`usage`**: a `claude` or `codex` harness running on a subscription session pool. Its
+**Classification is information, always reported.** Every declared entry has a cost class
+(`llm_kit.registry.cost.classify`): `local`, `subscription` or `metered`, with no aliases. A
+catalog row carries `cost` as `{class, reason}`, and a protocol 2 response carries `cost.reason`.
+Classification fails closed, so an entry that cannot be shown to be `local` or `subscription` is
+`metered`; the name says billing is paid or unverified, never that a charge occurred.
+
+- **`local`**: a transport whose registry entry declares `billing: {mode: unmetered, owner: self}`,
+  and a front-door entry whose every tier (the transports with the same `routing.group`) does.
+  `billing.mode: unmetered` states marginal cost, not ownership (a provider free tier is unmetered
+  too), so an unmetered entry without `owner: self` is `metered` (billing unverified). The front
+  door's own `billing` does not count, and a front door with no tiers is `metered`. A harness
+  entry other than claude and codex that declares `endpoint: <transport entry id>` takes that
+  entry's class (a front door counts every tier); an `endpoint` that is missing or not a transport
+  is `metered`, and its reason names it. Without an `endpoint` an opencode entry is `metered`.
+- **`subscription`**: a `claude` or `codex` harness running on a subscription session pool. Its
   authentication is probed, never assumed (`llm_kit.adapters.harness_auth`):
   - `claude`: any billing-diverting variable set and non-empty (`ANTHROPIC_API_KEY`,
     `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_CUSTOM_HEADERS`,
@@ -1158,69 +1170,63 @@ off the classes it may not use. Classes are `free`, `usage` and `spend`; classif
     subscription. Another provider (from any configuration layer, including managed ones) or
     another auth mode is metered. No file-reading fallback exists.
   - A probe that cannot run, times out, exits non-zero or returns an unrecognized report is
-    unknown, and unknown is `spend`. A harness other than `claude` and `codex` is always
-    `spend`. A probe reason names fields and variables, never a secret value.
-- **`spend`**: everything else, including a metered transport, an entry with no registry
+    unknown, and unknown is `metered`. A harness other than `claude` and `codex` is always
+    `metered`. A probe reason names fields and variables, never a secret value.
+- **`metered`**: everything else, including a metered transport, an entry with no registry
   entry, and an unknown kind.
 
-**Per-machine consent.** The file is `$LLM_KIT_CONSENT_FILE` when set, else
+**The consent layer is optional and off by default.** `llm_kit.registry.consent` is a policy a
+caller may apply; nothing consults it unless the caller opts in, and a caller may build its own
+layer instead. The file is `$LLM_KIT_CONSENT_FILE` when set, else
 `$XDG_CONFIG_HOME/llm-kit/consent.json`, else the legacy
 `~/.claude/plugins/data/plugins-kit/llm-kit/consent.json` when the neutral file does not
 exist (resolved on each call; "Persisted state keeps its historical names"), with
-`{"schema": 1, "usage": bool, "spend": bool, "updated_at": ...}`. `free` is always allowed.
-`llm-kit consent show [--json]` prints `usage`, `spend`, `source` (`file`, `absent` or
-`unreadable`), `path` (the file read), `write_path` (where `consent set` writes) and
-`note`. `llm-kit consent set [--usage on|off] [--spend on|off]`
-changes only the flags given and exits 2 when given neither; it states that operations that
-opt in send their inputs unredacted to the providers of those models.
-`llm_kit.registry.consent.load_consent()` returns `Consent` with `usage`, `spend`, `source`,
-`path`, `note` and `allowed` (the frozenset of allowed classes). An absent, unreadable or
-malformed file (anything but real booleans and schema 1) means free-only, with `note`
-saying why. `save_consent` writes atomically and propagates errors.
+`{"schema": 2, "local": bool, "subscription": bool, "metered": bool, "scopes": {name: {class: bool}},
+"updated_at": ...}`. The global classes are a ceiling and a scope may only restrict:
+`effective = global AND scope.get(class, true)`, so an absent scope key inherits, and a scope `on`
+that the global policy blocks is reported as blocked with the global command that lifts it. A
+global change preserves every scope entry. With no file the policy is `local` on, `subscription`
+on, `metered` off, with provenance `default`, and nothing is created; a file that is unreadable or
+malformed raises `ConsentConfigError` when a caller opts in, and is never read otherwise.
 
-**Opt-in is per caller, and the default is no filtering.** `describe(..., allow=...)` and
-`run(..., allow=...)` take an iterable of class names (an unknown name raises `ValueError`).
-Pass the consent's classes to opt in:
+- API: `llm_kit.registry.consent.policy(scope=None)` returns the effective `Policy` (`allowed`,
+  `allows(cls)`, `refusal(cls)`, `remedy(cls)`, `to_json()`); `load_config`, `save_config` and
+  `update_config` read and write the file atomically and propagate errors.
+- CLI: `llm-kit consent show [--scope NAME] [--json]` prints the effective policy and the source
+  of each value, and `llm-kit consent set [--scope NAME] --local|--subscription|--metered on|off`
+  changes the one class given; `set` states that operations that opt in send their inputs
+  unredacted to the providers of those models.
+- Opt-in: `llm-kit models describe <ids> --consent [--consent-scope NAME]`, the protocol 2 request
+  field `"consent"` (`false` or omitted: not opted in; `true`: global policy; `{"scope": NAME}`:
+  scoped policy; a malformed object is refused), or the API call above. A misconfigured file is a
+  `configuration` refusal only when the request opted in.
+- Caller-owned filter: `describe(..., allow=...)`, `run(..., allow=...)` and
+  `models describe --allow <classes>` take class names (an unknown name raises `ValueError`) and
+  replace the layer. `--allow` and `--consent` are alternatives. Protocol 2 has no allow field, so
+  an `allow` key in a protocol 2 request is refused as an unknown key.
+- Discovery: `models catalog` and `models describe` carry a top-level structured `consent` note
+  (the layer is optional, how to opt in, the commands), and `consent show` prints the policy.
 
-```python
-consent = load_consent()
-if consent.note:
-    print(consent.note)        # the caller prints it; the library never does
-result = run(names, request, allow=consent.allowed)
-```
+With `allow` given, or the layer applied, an entry whose class is not allowed gets the disposition
+`switched-off`, with its `cost_class` and the detail `<class> not allowed: <reason>`. Switched-off
+entries are SHOWN, not hidden: `Ranking.switched_off` lists them, `render()` adds a
+`Switched off: <id> (<class>)` line and `to_json()` a `switched_off` key (both only when there are
+any), and the floor (`NoUsableRoutingTarget.switched_off_ids`) itemises them. They are never
+dispatched to, and the check precedes the requirements match and every probe, so a switched-off
+entry is never probed for reachability. Harness authentication is probed lazily, once per harness,
+only for `claude` and `codex` entries, unless `describe` is given `harness_auth`. Without `allow`
+and without the layer, nothing is filtered. A caller that opts in prints the policy's note itself;
+the library never does.
 
-Without `allow` (`None`), nothing is classified or probed and the output is byte-identical to
-a call without the argument. With it:
+Protocol 2 of `completion complete` (`references/completion-seam-contract.md`) classifies the one
+entry a project selection names (probing harness authentication in the request workspace), reports
+`cost` with its `reason`, and reports `consent` as `{opted_in, applied, scope}`. When the request
+opted in and the effective policy does not allow the class, it refuses with `error.kind` `consent`
+before any workspace scan, argv or runner call, so a refused call spawns nothing; the message names
+the scope and the `consent set` command that would allow the class.
 
-- An entry whose class is not allowed gets the disposition `switched-off`, with its
-  `cost_class` and the detail `<class> not allowed: <reason>`. Switched-off entries are SHOWN,
-  not hidden: `Ranking.switched_off` lists them, `render()` adds a `Switched off: <id> (<class>)`
-  line and `to_json()` a `switched_off` key (both only when there are any), and the floor
-  (`NoUsableRoutingTarget.switched_off_ids`) itemises them. They are never dispatched to.
-- The check follows the unroutable checks and precedes the requirements match and every
-  probe, so a switched-off entry is never probed for reachability.
-- Harness authentication is probed lazily, once per harness, only for `claude` and `codex`
-  entries (in `Path(project_root or cwd)` for `describe`, in the request workspace for
-  `run`), unless `describe` is given `harness_auth` (a mapping of harness name to `HarnessAuth`).
-- `run` normalizes `allow` once, so a generator survives re-selection, and probes once per call.
-  A declaration whose every entry is switched off raises `NoUsableRoutingTarget` before any
-  backend call.
-- A caller that opts in MUST print `Consent.note` itself; the floor does not carry it. A
-  consumer that must also run against an older llm-kit checks that `run` accepts `allow`
-  (`inspect.signature`) and that `llm_kit.registry.consent` imports, and reports "absent" and
-  "too old" differently.
-
-`llm-kit models describe <ids> --allow free,usage` applies the same filter from the command
-line (comma-separated or repeated; an unknown class exits 2) and shows the switched-off
-entries.
-
-Protocol 2 of `completion complete` (`references/completion-seam-contract.md`) enforces
-consent without going through `describe`: a project selection names exactly one entry, so
-the call classifies that entry's cost class (probing harness authentication in the request
-workspace) and refuses it with `error.kind` `consent` when `load_consent()` does not allow
-the class. The refusal is raised before any workspace scan, argv or runner call, so a
-refused call spawns nothing. The refusal message names the `consent set` flag that would
-allow the class.
+A protocol 2 request that sends no `consent` field does not opt in: it is never refused for its cost
+class and never reads the consent file. Only an opted-in request is checked.
 
 ## `llm_kit.cli`, launchers and bootstrap
 

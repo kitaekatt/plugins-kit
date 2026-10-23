@@ -25,6 +25,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
@@ -70,7 +71,26 @@ def _clean_env(extra: Optional[Mapping[str, str]] = None) -> dict:
 
 def run_pytest(target: str, junit: Path, *, mirror: bool, extra_args: Iterable[str] = (),
                timeout: int = 3600) -> subprocess.CompletedProcess:
+    """Run one pytest process over ``target``.
+
+    The mirror run gets an empty HOME and USERPROFILE: llm-kit ships no default model
+    declaration, so a host's own machine-local ``config.yaml`` naming a ``default_endpoint``
+    would otherwise change which re-pointed tests pass. The legacy run keeps the real HOME
+    (its baseline still names openrouter, so the host cannot change it).
+    """
+    if not mirror:
+        return _run_pytest(target, junit, mirror=mirror, extra_args=extra_args, timeout=timeout)
+    with tempfile.TemporaryDirectory(prefix="llm-kit-mirror-home-") as home:
+        return _run_pytest(target, junit, mirror=mirror, extra_args=extra_args,
+                           timeout=timeout, home=home)
+
+
+def _run_pytest(target: str, junit: Path, *, mirror: bool, extra_args: Iterable[str],
+                timeout: int, home: Optional[str] = None) -> subprocess.CompletedProcess:
     env_extra = {}
+    if home is not None:
+        env_extra["HOME"] = home
+        env_extra["USERPROFILE"] = home
     if mirror:
         existing = os.environ.get("PYTHONPATH", "")
         env_extra["PYTHONPATH"] = os.pathsep.join(
