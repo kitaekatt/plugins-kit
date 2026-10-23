@@ -524,7 +524,7 @@ MD_DOMAIN_GOTCHAS = """
 # prepare_review detects a machine-emitted file on any of three INDEPENDENT
 # axes -- a CONTENT banner in its leading lines, a DECLARED PATH a plugin
 # writes (a project's durable plugin-data directory, a manifest write target),
-# or a CONFIGURED PATH glob in a user or project review_exclusions.yaml -- and
+# or a CONFIGURED PATH glob in a user, project or local review_exclusions file -- and
 # excludes it from the diff chunks entirely, surfacing it under
 # `bundle.machine_emitted_files` with the axis that matched. No axis subsumes
 # another: a generator may emit no banner at all, and then only its location, or
@@ -542,7 +542,7 @@ GENERATED_REPORT = """\
               its path (`identifier`), its `size_bytes`, and WHY it was excluded -- `machine_emitted_axis`
               (`content` = a generated-artifact banner matched; `declared_path` = it lives under a
               path a plugin declares that it writes; `configured_path` = its path matches a glob in a
-              user or project `review_exclusions.yaml`) together with the `machine_emitted_signature`
+              user, project or local review_exclusions file) together with the `machine_emitted_signature`
               naming the exact banner, path rule, or config layer and glob.
               Then state once that these files were NOT reviewed because they are machine-emitted,
               and that review of machine-emitted output belongs on the GENERATOR -- reviewed as ordinary
@@ -555,7 +555,7 @@ GENERATED_REPORT = """\
 # Appended to both gotcha blocks (plain text -- no f-string braces).
 GENERATED_GOTCHAS = """
         - A machine-emitted file is NEVER a pass. `bundle.machine_emitted_files` means "not reviewed", exactly like a `NOT-AUDITED` verdict or the `## Mechanical checks (audit skipped)` section: render it as its own honest line, never inside the clean count, never as DIFF-CLEAN, and never as satisfying a submit gate.
-        - Detection is a UNION of three axes, decided by prepare_review, and the skill never re-judges it -- `content` (a generated-artifact banner), `declared_path` (the file lives under a path a plugin declares that it writes, such as a project's durable plugin-data directory) OR `configured_path` (its path matches a glob in `~/.claude/config/review_exclusions.yaml` or `<project root>/.claude/review_exclusions.yaml`; see references/configuration.md). Any one is sufficient. The second catches a generator that emits no banner at all; the third catches an asset the project's own tooling regenerates with neither a banner nor a plugin declaration.
+        - Detection is a UNION of three axes, decided by prepare_review, and the skill never re-judges it -- `content` (a generated-artifact banner), `declared_path` (the file lives under a path a plugin declares that it writes, such as a project's durable plugin-data directory) OR `configured_path` (its path matches a glob in `~/.claude/config/review_exclusions.yaml`, `<project root>/.claude/review_exclusions.yaml` or its per-developer `review_exclusions.local.yaml`; see references/configuration.md). Any one is sufficient. The second catches a generator that emits no banner at all; the third catches an asset the project's own tooling regenerates with neither a banner nor a plugin declaration.
         - Size is NEVER a criterion on any axis. A large hand-written file is chunked and fully reviewed as always; a small machine-emitted file is still excluded. The argument is authorship, not cost.
         - Either axis OUTRANKS a claim, so a claimed `.md` that is machine-emitted arrives in `bundle.machine_emitted_files` and NOT in `bundle.claimed_files` -- the two lists are disjoint. Do not send it to a detect lane and do not treat its absence from `claimed_files` as a bug in the claim globs. A claim promises a specialist reviewer only for AUTHORED files: a subject-lens auditor can act on a finding in generated Markdown no more than the generic lanes can, because the fix belongs in the generator and an edit to the artifact is reverted by its drift guard.
         - Do not review a machine-emitted artifact by reading it. If its content looks wrong, the finding belongs on the generator, or on the decision to check the artifact in -- say that, and name the generator when this change contains one.
@@ -2371,12 +2371,16 @@ with instructions not to repeat it. These results do not select or suppress lane
 ## Excluding files from review
 
 A separate file lists paths `@SKILL_NAME@` must not review, such as assets a project's
-own tooling regenerates. Two optional layers, read in this order:
+own tooling regenerates. Three optional layers, read in this order:
 
 | Layer | Path |
 |---|---|
 | user | `~/.claude/config/review_exclusions.yaml` |
 | project | `<project_root>/.claude/review_exclusions.yaml` |
+| local | `<project_root>/.claude/review_exclusions.local.yaml` |
+
+The local layer is one developer's override of the shared project file. Keep it out of
+version control, as with `settings.local.json`.
 
 ```yaml
 exclude:
@@ -2387,7 +2391,8 @@ exclude:
 
 Each entry is a glob over the workspace-relative path. A `**/` prefix matches at any
 depth, including the root. An entry that starts with `!` re-admits matching paths and
-beats every positive glob in either layer. The layers concatenate. `exclude` is the only
+beats every positive glob in any layer, so a local `!` entry re-admits a path the
+project excluded. The layers concatenate. `exclude` is the only
 key. A malformed layer stops the review with an error.
 
 A matched file is reported in `bundle.machine_emitted_files` with

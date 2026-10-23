@@ -6,10 +6,14 @@ can know about an asset a project's own tooling regenerates with no banner and
 no plugin declaration -- an index page, a rendered report, a pipeline record. The
 project knows, so it says so here.
 
-Layers, lowest to highest precedence, both optional:
+Layers, lowest to highest precedence, all optional:
 
     ~/.claude/config/review_exclusions.yaml
     <project_root>/.claude/review_exclusions.yaml
+    <project_root>/.claude/review_exclusions.local.yaml
+
+The local layer is one developer's override of the shared project file, kept
+out of version control like ``settings.local.json``.
 
 Format::
 
@@ -21,7 +25,8 @@ Format::
 Each entry is a glob over the repo-relative path, with ``_globs`` semantics: a
 ``**/`` prefix matches at any depth, and a ``!`` entry is an exclusion from the
 exclusion that beats every positive glob. Layers concatenate, so a project
-``!`` entry can re-admit a path a user glob excluded.
+``!`` entry can re-admit a path a user glob excluded, and a local ``!`` entry
+can re-admit a path the project excluded.
 
 Unlike the declared-path axis, a malformed layer RAISES. This file is written by
 hand, and a review that silently ignores the user's exclusions is a review the
@@ -36,6 +41,7 @@ from typing import Any, NoReturn, Optional
 from bootstrap_lib.code_review._globs import _matches_one_glob
 
 CONFIG_NAME = "review_exclusions.yaml"
+LOCAL_CONFIG_NAME = "review_exclusions.local.yaml"
 _FIELDS = {"exclude"}
 
 
@@ -59,12 +65,17 @@ def project_config_path(project_root: str | Path) -> Path:
     return Path(project_root).expanduser() / ".claude" / CONFIG_NAME
 
 
+def local_config_path(project_root: str | Path) -> Path:
+    return Path(project_root).expanduser() / ".claude" / LOCAL_CONFIG_NAME
+
+
 def layer_paths(
     project_root: str | Path, *, home: str | Path | None = None
 ) -> list[tuple[str, Path]]:
     return [
         ("user", user_config_path(home)),
         ("project", project_config_path(project_root)),
+        ("local", local_config_path(project_root)),
     ]
 
 
@@ -102,7 +113,7 @@ def resolve_exclusions(
         globs = _load(path)
         if globs is None:
             continue
-        label = f"{layer} {CONFIG_NAME}"
+        label = f"{layer} {path.name}"
         out.extend((label, glob) for glob in globs)
     return out
 

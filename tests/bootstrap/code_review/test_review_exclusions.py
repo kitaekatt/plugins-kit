@@ -48,6 +48,26 @@ class TestResolve:
             ("project review_exclusions.yaml", "!a/keep/**"),
         ]
 
+    def test_local_layer_comes_last(self, tmp_path, home):
+        ws = tmp_path / "ws"
+        _write(ws / ".claude" / "review_exclusions.yaml", "exclude: ['gen/**']\n")
+        _write(ws / ".claude" / "review_exclusions.local.yaml", "exclude: ['mine/**', '!gen/keep/**']\n")
+        rules = resolve_exclusions(ws)
+        assert rules == [
+            ("project review_exclusions.yaml", "gen/**"),
+            ("local review_exclusions.local.yaml", "mine/**"),
+            ("local review_exclusions.local.yaml", "!gen/keep/**"),
+        ]
+        assert match_exclusion("gen/keep/a.h", rules) is None
+        assert match_exclusion("gen/a.h", rules) == "project review_exclusions.yaml: gen/**"
+        assert match_exclusion("mine/a.h", rules) == "local review_exclusions.local.yaml: mine/**"
+
+    def test_malformed_local_layer_raises(self, tmp_path, home):
+        ws = tmp_path / "ws"
+        _write(ws / ".claude" / "review_exclusions.local.yaml", "exclude: 'a/**'\n")
+        with pytest.raises(ReviewExclusionsError, match="review_exclusions.local.yaml"):
+            resolve_exclusions(ws)
+
     def test_empty_file_is_no_rules(self, tmp_path, home):
         ws = tmp_path / "ws"
         _write(ws / ".claude" / "review_exclusions.yaml", "")

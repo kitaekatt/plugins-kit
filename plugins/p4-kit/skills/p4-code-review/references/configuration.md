@@ -41,12 +41,16 @@ with instructions not to repeat it. These results do not select or suppress lane
 ## Excluding files from review
 
 A separate file lists paths `p4-code-review` must not review, such as assets a project's
-own tooling regenerates. Two optional layers, read in this order:
+own tooling regenerates. Three optional layers, read in this order:
 
 | Layer | Path |
 |---|---|
 | user | `~/.claude/config/review_exclusions.yaml` |
 | project | `<project_root>/.claude/review_exclusions.yaml` |
+| local | `<project_root>/.claude/review_exclusions.local.yaml` |
+
+The local layer is one developer's override of the shared project file. Keep it out of
+version control, as with `settings.local.json`.
 
 ```yaml
 exclude:
@@ -57,7 +61,8 @@ exclude:
 
 Each entry is a glob over the workspace-relative path. A `**/` prefix matches at any
 depth, including the root. An entry that starts with `!` re-admits matching paths and
-beats every positive glob in either layer. The layers concatenate. `exclude` is the only
+beats every positive glob in any layer, so a local `!` entry re-admits a path the
+project excluded. The layers concatenate. `exclude` is the only
 key. A malformed layer stops the review with an error.
 
 A matched file is reported in `bundle.machine_emitted_files` with
