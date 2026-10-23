@@ -19,6 +19,12 @@ Two deployments exist and they must never be mixed in one environment:
 cannot be established. Nothing here reads the network or the clock, and nothing
 is repaired: an ambiguous environment raises and says what to separate.
 
+``fleet()`` answers a different question: whether ``bootstrap_lib`` imports in
+this environment (a plugin venv linked to the marketplace's shared libraries).
+It is independent of ``mode()``: the package deployment may run with or without
+the fleet. Features that need ``bootstrap_lib`` call ``require_fleet``; whether
+the linked ``bootstrap_lib`` is new enough stays with each feature's own probe.
+
 Standard library only; imports no other ``llm_kit`` module besides the marker.
 """
 from __future__ import annotations
@@ -40,7 +46,7 @@ DIST = "katsoft-llm-kit"
 CONTRACTS_DIST = "katsoft-contracts"
 CONTRACTS_PACKAGE = "katsoft_contracts"
 #: The only contracts the library routes; everything else from ``bootstrap_lib``
-#: is a legacy-only feature (``require_legacy``).
+#: is a fleet feature (``require_fleet``).
 ROUTED_CONTRACTS = ("execution_event", "interrupt_contract", "model_declaration")
 
 LEGACY = "legacy"
@@ -67,17 +73,20 @@ class ContractsMissing(ImportError):
 
 
 class UnsupportedInPackageMode(RuntimeError):
-    """A feature that needs the marketplace's ``bootstrap_lib`` was used in package mode."""
+    """A fleet feature was used in package mode where ``bootstrap_lib`` does not import."""
 
     def __init__(self, feature: str) -> None:
         self.feature = feature
         super().__init__(
-            f"{feature} needs the plugin marketplace's bootstrap_lib, which the "
-            f"{DIST} package does not provide; use the llm-kit plugin for it"
+            f"{feature} needs the plugin marketplace's bootstrap_lib, which is not "
+            f"importable in this environment and which the {DIST} package does not "
+            "provide; use the llm-kit plugin, or install the package in a plugin "
+            "venv that bootstrap links to bootstrap_lib"
         )
 
 
 _MODE: Optional[str] = None
+_FLEET: Optional[bool] = None
 
 
 def _normalize(name: str) -> str:
@@ -246,7 +255,33 @@ def load(name: str, error: Optional[type] = None) -> Any:
         raise error(str(missing)) from exc
 
 
-def require_legacy(feature: str) -> None:
-    """Refuse ``feature`` in package mode, before any ``bootstrap_lib`` import."""
-    if mode() == PACKAGE:
+def fleet() -> bool:
+    """Whether ``bootstrap_lib`` imports in this environment; decided once per process.
+
+    Only a ``ModuleNotFoundError`` for ``bootstrap_lib`` itself means absent.
+    Any other import failure (a broken or half-synced ``bootstrap_lib``)
+    propagates unchanged: a broken fleet install must not read as no fleet.
+    Whether the linked ``bootstrap_lib`` is new enough for a feature is that
+    feature's own probe, never this gate.
+    """
+    global _FLEET
+    if _FLEET is None:
+        try:
+            importlib.import_module("bootstrap_lib")
+        except ModuleNotFoundError as exc:
+            if exc.name != "bootstrap_lib":
+                raise
+            _FLEET = False
+        else:
+            _FLEET = True
+    return _FLEET
+
+
+def require_fleet(feature: str) -> None:
+    """Refuse ``feature`` in package mode when ``bootstrap_lib`` does not import.
+
+    Legacy mode links ``bootstrap_lib`` by construction, so nothing is checked
+    there and each caller keeps its own diagnostics.
+    """
+    if mode() == PACKAGE and not fleet():
         raise UnsupportedInPackageMode(feature)

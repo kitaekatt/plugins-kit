@@ -237,6 +237,16 @@ writes, marketplace clone refreshes, `claude plugin install/update`,
 delivery path. A green run means "my plugin works", never "my plugin ships
 correctly".
 
+`claudx` loads plugin CODE from the working copy but installs a package registered in
+`packages/registry.toml` into plugin venvs from PyPI, so working-tree edits to its
+library source are not loaded. The launcher compares each registered package's build
+inputs (`Entry.inputs()` in `scripts/_packages.py`, tracked edits and untracked files)
+against the commit of its newest `packages/released.json` entry, and prints a stderr
+note, "plugin venvs use <dist> <version> from PyPI; working-tree changes to it are not
+loaded", for each one that differs. It is a warning only; the session does not build a
+local wheel. Guard: `tests/repo-scripts/test_claude_plugin_test_env.py`
+(`TestDriftedPackages`).
+
 ## A MOVING victim is a leak, not a flake
 
 A distinct failure shape from host-dependence: the suite fails, and the test

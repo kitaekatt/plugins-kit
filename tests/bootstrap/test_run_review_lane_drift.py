@@ -58,13 +58,15 @@ class TestWrapperCopiesMatch:
         # p4-kit also launch skill scripts through the guarded BOOTSTRAP_PYTHON
         # form, which raises their floor to the interpreter contract's
         # MIN_VERSION (0.120.0), and to 0.133.0, the release whose bundle supplies
-        # the AGENTS.md ancestor chain those skills read. llm-kit's describe/run call
+        # the AGENTS.md ancestor chain those skills read, and to 0.159.0, the
+        # release that adds the review_exclusions.yaml axis their skills document.
+        # llm-kit's describe/run call
         # bootstrap_lib.model_declaration (parse, CORE_IDS), first shipped in
         # bootstrap 0.129.0, and its manifest requires the release that first
         # recognizes llm_kit as a first-party shared library (0.157.0).
         expected = {
-            "git-kit": "0.144.0",
-            "p4-kit": "0.144.0",
+            "git-kit": "0.159.0",
+            "p4-kit": "0.159.0",
             "llm-kit": "0.157.0",
         }
         minimum = {"git-kit": "0.113.0", "p4-kit": "0.113.0",

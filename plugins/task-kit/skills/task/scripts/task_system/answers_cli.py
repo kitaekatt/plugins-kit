@@ -6,12 +6,18 @@ handles writes exactly one JSON document and a newline to stdout, and stderr car
 
 Verbs (``--format json --protocol N`` on each)::
 
-    task-kit answers refresh [--parent DIR]... [--allow CLASSES] [--batch N] [--stop-file PATH] [--deadline-s N]
+    task-kit answers refresh [--parent DIR]... [--project DIR]... [--allow CLASSES] [--batch N] [--stop-file PATH]
+                             [--deadline-s N]
         kind "answers-pass": one engine pass per task repository (``answer_engine.run_pass``)
-    task-kit answers status [--parent DIR]...
+    task-kit answers status [--parent DIR]... [--project DIR]...
         kind "answers-status": coverage and pending work; writes nothing, takes no lock
-    task-kit answers prune [--parent DIR]...
+    task-kit answers prune [--parent DIR]... [--project DIR]...
         kind "answers-prune": delete this machine's answer files of questions the catalog no longer holds
+    task-kit answers protocols --format json
+        kind "answers-protocols": the protocols and options this task-kit's answers verbs serve; no discovery
+
+``--project DIR`` (absolute, existing, repeatable) restricts discovery to those project checkouts, wherever their
+``dev/tasks`` links resolve; with ``--parent`` the two are intersected (``export.resolve_projects``).
 
 ``--allow`` names the cost classes the caller allows (``free``, ``usage``, ``spend``); without it the classes
 are llm-kit's per-machine consent, read once, on the first pass that needs a model.
@@ -35,15 +41,18 @@ from . import (
 from .answers_types import Catalog
 from .validate import validate_ref
 
-VERBS = {"refresh": "answers-pass", "status": "answers-status", "prune": "answers-prune"}
+VERBS = {
+    "refresh": "answers-pass", "status": "answers-status", "prune": "answers-prune", "protocols": "answers-protocols",
+}
 EXIT_CODES = {**export_cli.EXIT_CODES, "config_invalid": 1}
 CLASSIFY_WORKERS = 8
 _PER_VERB = {
-    "refresh": ("parent", "allow", "batch", "stop_file", "deadline_s"),
-    "status": ("parent",),
-    "prune": ("parent",),
+    "refresh": ("parent", "project", "allow", "batch", "stop_file", "deadline_s"),
+    "status": ("parent", "project"),
+    "prune": ("parent", "project"),
+    "protocols": (),
 }
-_OPTIONS = ("parent", "allow", "batch", "stop_file", "deadline_s")
+_OPTIONS = ("parent", "project", "allow", "batch", "stop_file", "deadline_s")
 
 
 def _parser() -> export_cli._Parser:
@@ -52,6 +61,7 @@ def _parser() -> export_cli._Parser:
     parser.add_argument("--format", required=True, choices=("json",))
     parser.add_argument("--protocol", type=int)
     parser.add_argument("--parent", action="append", default=[], type=Path)
+    parser.add_argument("--project", action="append", default=[], type=Path)
     parser.add_argument("--allow")
     parser.add_argument("--batch", type=int)
     parser.add_argument("--stop-file", dest="stop_file", type=Path)
@@ -60,7 +70,10 @@ def _parser() -> export_cli._Parser:
 
 
 def _check_flags(args: argparse.Namespace) -> None:
-    if args.protocol is None:
+    if args.verb == "protocols":
+        if args.protocol is not None:
+            raise export.ExportError("usage", "answers protocols takes no --protocol")
+    elif args.protocol is None:
         raise export.ExportError("usage", f"answers {args.verb} requires --protocol")
     allowed = _PER_VERB[args.verb]
     for name in _OPTIONS:
@@ -70,6 +83,7 @@ def _check_flags(args: argparse.Namespace) -> None:
         raise export.ExportError("usage", "--batch must be at least 1")
     if args.deadline_s is not None and args.deadline_s < 0:
         raise export.ExportError("usage", "--deadline-s must not be negative")
+    export.resolve_projects(tuple(args.project))  # a bad --project is a usage error before anything is loaded
 
 
 # -- the world ----------------------------------------------------------------------------------
@@ -104,10 +118,21 @@ def _machine(inject: dict):
 
 
 def _repositories(
-    parents: tuple[Path, ...] | None, inject: dict, errors: list[dict]
+    args: argparse.Namespace, inject: dict, errors: list[dict]
 ) -> dict[Path, list[answer_engine.TaskTarget]]:
-    """The task folders export discovery finds, grouped by the repository that holds them."""
-    owners, _bases = export._owners(export.resolve_parents(parents, inject.get("config_path")), errors)  # noqa: SLF001
+    """The task folders export discovery finds, grouped by the repository that holds them.
+
+    ``--project`` replaces the discovery under the parents with the named checkouts (intersected with the
+    ``--parent`` set when both are given); without it the parents are ``--parent`` or task-kit's configuration.
+    """
+    parents = tuple(args.parent) or None
+    config_path = inject.get("config_path")
+    if args.project:
+        scope = export.resolve_parents(parents, config_path) if parents else None
+        selection = export.resolve_projects(tuple(args.project), scope, errors)
+        owners, _bases = export._owners((), errors, selection)  # noqa: SLF001
+    else:
+        owners, _bases = export._owners(export.resolve_parents(parents, config_path), errors)  # noqa: SLF001
 
     def classify(owner) -> str:
         return validate_ref(owner.path, owner.project.root).classification
@@ -143,7 +168,6 @@ def _allow_payload(lazy: answer_engine.LazyAllow) -> dict | None:
 
 
 def _refresh(args: argparse.Namespace, inject: dict) -> dict:
-    parents = tuple(args.parent) or None
     allow_names = None
     if args.allow is not None:
         try:
@@ -152,7 +176,7 @@ def _refresh(args: argparse.Namespace, inject: dict) -> dict:
             raise export.ExportError("usage", str(exc)) from exc
     catalog, config, machine = _catalog(inject), _config(inject), _machine(inject)
     errors: list[dict] = []
-    repositories = _repositories(parents, inject, errors)
+    repositories = _repositories(args, inject, errors)
     clock: Callable[[], float] = inject.get("clock", time.monotonic)
     deadline = None if args.deadline_s is None else clock() + args.deadline_s
     budget = answer_engine.Budget(
@@ -188,7 +212,7 @@ def _model_answering() -> dict:
 def _status(args: argparse.Namespace, inject: dict) -> dict:
     catalog, machine = _catalog(inject), _machine(inject)
     errors: list[dict] = []
-    repositories = _repositories(tuple(args.parent) or None, inject, errors)
+    repositories = _repositories(args, inject, errors)
     reports = [
         answer_engine.status(
             top, machine, targets=targets, catalog=catalog,
@@ -218,7 +242,7 @@ def _status(args: argparse.Namespace, inject: dict) -> dict:
 def _prune(args: argparse.Namespace, inject: dict) -> dict:
     catalog, machine = _catalog(inject), _machine(inject)
     errors: list[dict] = []
-    repositories = _repositories(tuple(args.parent) or None, inject, errors)
+    repositories = _repositories(args, inject, errors)
     reports = [
         answer_engine.prune(
             top, machine, catalog, targets=targets, data_dir=inject.get("data_dir"),
@@ -227,6 +251,11 @@ def _prune(args: argparse.Namespace, inject: dict) -> dict:
         for top, targets in repositories.items()
     ]
     return {"repositories": reports, "errors": errors}
+
+
+def _protocols() -> dict:
+    """What a client probes: ``options`` lists the flags the answers verbs accept (an old task-kit lacks this verb)."""
+    return {"protocols": list(export.PROTOCOLS), "options": [name.replace("_", "-") for name in _OPTIONS]}
 
 
 def document(argv: list[str], *, version: str | None = None, **inject) -> tuple[int, dict]:
@@ -248,20 +277,23 @@ def document(argv: list[str], *, version: str | None = None, **inject) -> tuple[
         args = _parser().parse_args(argv)
         kind = VERBS[args.verb]
         _check_flags(args)
-        if args.protocol not in export.PROTOCOLS:
+        if args.verb != "protocols" and args.protocol not in export.PROTOCOLS:
             raise export.ExportError(
                 "protocol_unsupported",
                 f"protocol {args.protocol} is not supported; this task-kit ({resolved_version}) serves "
                 f"protocols {list(export.PROTOCOLS)}",
             )
-        protocol = args.protocol
-        if args.verb == "status":
-            with export_cli._no_optional_locks():  # noqa: SLF001
-                payload = _status(args, inject)
-        elif args.verb == "refresh":
-            payload = _refresh(args, inject)
+        if args.verb == "protocols":
+            payload = _protocols()
         else:
-            payload = _prune(args, inject)
+            protocol = args.protocol
+            if args.verb == "status":
+                with export_cli._no_optional_locks():  # noqa: SLF001
+                    payload = _status(args, inject)
+            elif args.verb == "refresh":
+                payload = _refresh(args, inject)
+            else:
+                payload = _prune(args, inject)
     except export.ExportError as exc:
         return EXIT_CODES[exc.code], export_cli._error_document(protocol, resolved_version, exc.code, exc.message)  # noqa: SLF001
     except datadir.DataDirError as exc:

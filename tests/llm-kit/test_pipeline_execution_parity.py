@@ -2151,10 +2151,10 @@ def _strip(path: Path) -> tuple[str, list[str]]:
             return None
 
         def visit_Expr(self, node: ast.Expr) -> Any:
-            # `require_legacy(...)` is the one deliberate package-mode refusal
+            # `require_fleet(...)` is the one deliberate package-mode refusal
             # (llm_kit._runtime); it changes nothing in legacy mode.
             call = node.value
-            if isinstance(call, ast.Call) and getattr(call.func, "id", None) == "require_legacy":
+            if isinstance(call, ast.Call) and getattr(call.func, "id", None) == "require_fleet":
                 return None
             return self.generic_visit(node)
 

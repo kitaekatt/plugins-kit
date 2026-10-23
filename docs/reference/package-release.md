@@ -146,15 +146,22 @@ script is `llm-kit`; the import package is `llm_kit`.
 Package mode (`llm_kit._runtime.mode() == "package"`, set by the hook-written
 `llm_kit/_deployment.py`):
 
-- Features that need the marketplace's `bootstrap_lib` raise
-  `UnsupportedInPackageMode`: the Codex backend and adapter, claudx
-  propagation, skill context and the code-review lane. Codex reachability
-  uses the PATH + `--version` check.
-- The model registry reads the shipped defaults, and
-  `MODEL_ENDPOINTS_REGISTRY` overrides the registry file. Behaviour when no
-  registry is configured is the shipped defaults, overridable by
-  `MODEL_ENDPOINTS_REGISTRY` (user ruling 2026-10-22); the single policy point
-  is `registry.models.package_mode_model_config`.
+- Fleet availability is a separate question from package mode:
+  `llm_kit._runtime.fleet()` is True when `bootstrap_lib` imports in the
+  environment (cached per process), as in a plugin venv bootstrap links to the
+  marketplace's shared libraries. Features that need `bootstrap_lib` (the Codex
+  backend and adapter, claudx propagation, skill context, the code-review
+  lane) call `require_fleet`, which raises `UnsupportedInPackageMode` only when
+  `fleet()` is False. Whether the linked `bootstrap_lib` is new enough stays
+  with each feature's own probe, not with the gate.
+- Without the fleet, Codex reachability uses the PATH + `--version` check and
+  the model registry reads the shipped defaults, and
+  `MODEL_ENDPOINTS_REGISTRY` overrides the registry file (user ruling
+  2026-10-22); the single policy point is
+  `registry.models.package_mode_model_config`. With the fleet, Codex
+  reachability uses `bootstrap_lib.codex.detect_codex` and the model registry
+  reads the layered config (fleet, machine and project layers). The wheel's
+  off-fleet closure is unchanged: `tests/packaging` blocks `bootstrap_lib`.
 - Do not install the package into an environment that also holds the plugin's
   linked `llm_kit` (the bootstrap shared-lib `.pth`). `mode()` raises
   `RuntimeIdentityError` there and removes nothing; use separate

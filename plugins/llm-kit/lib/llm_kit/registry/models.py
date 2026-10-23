@@ -242,9 +242,10 @@ def fleet_config_path() -> Path:
 
 
 def package_mode_model_config(base: dict) -> dict:
-    """The model config in package mode: the shipped defaults, unchanged.
+    """The model config in package mode without the fleet: the shipped defaults.
 
-    The installed package has no layered config.yaml files to read. The
+    Without ``bootstrap_lib`` the installed package cannot read the layered
+    config.yaml files; with it (``_runtime.fleet()``) the layered path runs. The
     endpoint registry file is still resolved by
     :mod:`llm_kit.registry.model_endpoints`, and ``MODEL_ENDPOINTS_REGISTRY``
     overrides its path. This is the one place package mode decides what the
@@ -270,7 +271,7 @@ def load_model_config(*, project_root: Optional[str] = None) -> dict:
     into a traceback with no way to recover.
     """
     base = copy.deepcopy(DEFAULT_MODEL_CONFIG)
-    if _runtime.mode() == "package":
+    if _runtime.mode() == "package" and not _runtime.fleet():
         return package_mode_model_config(base)
     try:
         from bootstrap_lib.config_resolve import (

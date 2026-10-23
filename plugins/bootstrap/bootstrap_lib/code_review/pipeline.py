@@ -41,6 +41,11 @@ from bootstrap_lib.code_review.machine_emitted_paths import (
     declared_generated_rules,
     match_declared_path,
 )
+from bootstrap_lib.code_review.review_exclusions import (
+    match_exclusion,
+    relative_identifier,
+    resolve_exclusions,
+)
 from bootstrap_lib.code_review.mechanical import (
     REGISTRY,
     build_snapshot,
@@ -304,7 +309,7 @@ def assemble_bundle(
     changed file was detected as machine-emitted. With neither present the dict
     is byte-identical to the pre-claim contract.
 
-    Machine-emitted-file detection is a UNION of two independent axes, and never
+    Machine-emitted-file detection is a UNION of three independent axes, and never
     size-alone -- a large hand-written file is still chunked and fully reviewed:
 
       1. CONTENT -- a machine-emitted-artifact banner in the file's leading
@@ -315,6 +320,11 @@ def assemble_bundle(
          (bootstrap_lib.code_review.machine_emitted_paths). This axis is what
          catches a generator that emits NO banner: nothing in such a file's
          bytes says a tool wrote it, but its location does, by construction.
+      3. CONFIGURED PATH -- the file's workspace-relative path matches a glob
+         in the user or project `review_exclusions.yaml`
+         (bootstrap_lib.code_review.review_exclusions). This axis is what
+         catches an asset the project's own tooling regenerates with neither a
+         banner nor a plugin declaration. A malformed layer raises.
 
     A machine-emitted file contributes NO chunks and no reviewer lanes, because
     the review target is its GENERATOR, which is reviewed separately as ordinary
@@ -330,8 +340,9 @@ def assemble_bundle(
     output no more than the generic lanes can.
 
     Each machine_emitted_files entry is the input dict verbatim (identifier
-    retained), plus "machine_emitted_axis" ("content" or "declared_path"),
-    "machine_emitted_signature" (the matched signature or path-rule label) and
+    retained), plus "machine_emitted_axis" ("content", "declared_path" or
+    "configured_path"), "machine_emitted_signature" (the matched signature,
+    path-rule label, or "<layer> review_exclusions.yaml: <glob>") and
     "size_bytes" (the on-disk size, falling back to the diff section's byte
     length when the file has no readable local path). Each entry ALSO carries
     the pre-rename "generated_axis" / "generated_signature" spellings with
@@ -417,11 +428,12 @@ def assemble_bundle(
     id_to_text = {s["identifier"]: s["text"] for s in sections}
 
     # Machine-emitted artifacts: excluded from chunking, surfaced separately.
-    # Detection is a UNION of two independent axes -- a content signature, OR a
-    # path a plugin declares that it writes. Neither subsumes the other: a
-    # generator may emit no banner at all (nothing in such a file's bytes says a
-    # tool wrote it), while a hand-written file never lands under a declared
-    # plugin-data path.
+    # Detection is a UNION of three independent axes -- a content signature, a
+    # path a plugin declares that it writes, OR a glob the user or project
+    # configures in review_exclusions.yaml. None subsumes another: a generator
+    # may emit no banner at all (nothing in such a file's bytes says a tool
+    # wrote it), a hand-written file never lands under a declared plugin-data
+    # path, and only the project knows which of its own assets it regenerates.
     #
     # Detection runs over EVERY changed file, claimed ones included, and a match
     # OUTRANKS the claim. The two filters answer different questions and the
@@ -443,6 +455,9 @@ def assemble_bundle(
     machine_emitted_sigs: dict[str, tuple[str, str]] = {}
     if not review_machine_emitted:
         path_rules = declared_generated_rules(workspace_root)
+        exclusion_rules = (
+            resolve_exclusions(workspace_root) if workspace_root is not None else []
+        )
         for f in files:
             ident = f["identifier"]
             label = detect_machine_emitted(id_to_text.get(ident, ""), f.get("local"))
@@ -452,6 +467,13 @@ def assemble_bundle(
             label = match_declared_path(f.get("local"), path_rules)
             if label:
                 machine_emitted_sigs[ident] = ("declared_path", label)
+                continue
+            label = match_exclusion(
+                relative_identifier(ident, f.get("local"), workspace_root),
+                exclusion_rules,
+            )
+            if label:
+                machine_emitted_sigs[ident] = ("configured_path", label)
 
     # A file can be matched by both filters; machine-emitted wins, so drop those
     # identifiers from the claimed set. Doing it here rather than at each use

@@ -4,8 +4,10 @@ Spec: docs/planning/shared-lib-packaging/implementation-spec.md, section C.
 
 Legacy mode is exercised in the source tree. Package mode is exercised in fresh
 isolated interpreters against the UNPACKED WHEEL (a wheel's dist-info makes the
-unzipped directory a real site directory), with `bootstrap_lib` import-blocked
-so any stray import fails loudly. Variants of the wheel (a missing marker, a
+unzipped directory a real site directory). By default `bootstrap_lib` is ABSENT
+(`_runtime.fleet()` is False): the one allowed touch is the fleet probe, which
+sees ModuleNotFoundError, and any dotted import fails loudly. `fleet=True` puts
+the marketplace's `bootstrap_lib` on the path instead. Variants of the wheel (a missing marker, a
 duplicate distribution, an editable record) are built by editing a copy.
 """
 from __future__ import annotations
@@ -23,11 +25,26 @@ import dist_support as ds
 
 BLOCK = ("bootstrap_lib",)
 CONTRACTS = ds.CONTRACTS_SRC
+FLEET_LIB = ds.REPO / "plugins" / "bootstrap"      # the directory that holds bootstrap_lib
+
+#: Makes `bootstrap_lib` absent the way an environment without the fleet is:
+#: the top-level import raises ModuleNotFoundError (so `fleet()` can answer
+#: False), and any other bootstrap_lib name still fails loudly.
+ABSENT_PRELUDE = (
+    "class _Absent:\n"
+    "    def find_spec(self, name, path=None, target=None):\n"
+    "        if name == 'bootstrap_lib':\n"
+    "            raise ModuleNotFoundError(\"No module named 'bootstrap_lib'\", name='bootstrap_lib')\n"
+    "        return None\n"
+    "sys.meta_path.insert(0, _Absent())\n"
+)
 
 
-def package(site, body, *, extra_paths=(), contracts=True, env=None, cwd=None):
+def package(site, body, *, extra_paths=(), contracts=True, env=None, cwd=None, fleet=False):
     paths = [site, *extra_paths] + ([CONTRACTS] if contracts else [])
-    return ds.run(body, paths, blocked=BLOCK, env=env, cwd=cwd)
+    if fleet:
+        return ds.run(body, [*paths, FLEET_LIB], env=env, cwd=cwd)
+    return ds.run(ABSENT_PRELUDE + body, paths, blocked=BLOCK, env=env, cwd=cwd)
 
 
 @pytest.fixture()
@@ -355,16 +372,70 @@ UNSUPPORTED_CALLS = {
 
 
 @pytest.mark.parametrize("label", sorted(UNSUPPORTED_CALLS))
-def test_unsupported_features_in_package_mode(site, label):
+def test_package_mode_without_bootstrap_lib_refuses(site, label):
     out = package(site, UNSUPPORTED_CALLS[label], env={"CLAUDE_PLUGIN_TEST": "1"})
     assert out["error"] == "UnsupportedInPackageMode", out
     assert "bootstrap_lib" in out["message"] and ds.DIST in out["message"]
     assert out["modules"] == []              # refused BEFORE any bootstrap_lib import
 
 
-def test_require_legacy_is_silent_in_legacy_mode():
+def test_fleet_is_false_when_the_bootstrap_lib_import_is_blocked(site):
+    out = package(site, (
+        "from llm_kit import _runtime\n"
+        "result = [_runtime.mode(), _runtime.fleet(), _runtime.fleet()]"
+    ))
+    assert out["ok"] == ["package", False, False] and out["modules"] == []
+
+
+def test_fleet_is_true_when_bootstrap_lib_imports(site):
+    out = package(site, (
+        "from llm_kit import _runtime\n"
+        "result = [_runtime.mode(), _runtime.fleet()]"
+    ), fleet=True)
+    assert out["ok"] == ["package", True]
+
+
+def test_fleet_does_not_swallow_a_broken_bootstrap_lib(site, tmp_path):
+    """Only an absent bootstrap_lib reads as no fleet; a broken one propagates."""
+    broken = tmp_path / "broken"
+    (broken / "bootstrap_lib").mkdir(parents=True)
+    (broken / "bootstrap_lib" / "__init__.py").write_text("import not_a_real_module_xyz\n", encoding="utf-8")
+    out = ds.run(
+        "from llm_kit import _runtime\nresult = _runtime.fleet()",
+        [site, CONTRACTS, broken])
+    assert out["error"] == "ModuleNotFoundError" and "not_a_real_module_xyz" in out["message"]
+
+
+def test_require_fleet_is_silent_in_legacy_mode():
     from llm_kit import _runtime
-    assert _runtime.require_legacy("anything") is None
+    assert _runtime.require_fleet("anything") is None
+
+
+def test_package_mode_fleet_allows_review_lane(site):
+    """With bootstrap_lib importable, the gate that used to refuse in package mode passes."""
+    out = package(site, (
+        "from llm_kit import _runtime\n"
+        "import llm_kit.dispatch.review_lane as lane\n"
+        "_runtime.require_fleet('anything')\n"
+        "result = [_runtime.mode(), lane.__name__]"
+    ), fleet=True, env={"CLAUDE_PLUGIN_TEST": "1"})
+    assert out["ok"] == ["package", "llm_kit.dispatch.review_lane"], out
+
+
+def test_package_mode_fleet_uses_codex_detection_for_reachability(site, tmp_path):
+    """The fleet reaches bootstrap_lib.codex.detect_codex; the off-fleet verdict is the PATH check."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "codex"
+    stub.write_text('#!/bin/sh\necho "codex-cli 9.9.9"\n', encoding="utf-8")
+    stub.chmod(stub.stat().st_mode | stat.S_IXUSR)
+    out = package(site, (
+        "import sys\n"
+        "from llm_kit.dispatch import reachability\n"
+        "r = reachability._check_codex(timeout=10.0)\n"
+        "result = [r.status, 'bootstrap_lib.codex' in sys.modules]"
+    ), fleet=True, env={"PATH": f"{bin_dir}{os.pathsep}/usr/bin{os.pathsep}/bin"})
+    assert out["ok"] == ["reachable", True], out
 
 
 def test_reachability_codex_path_check_in_package_mode(site, tmp_path):
@@ -415,6 +486,26 @@ def test_package_mode_model_list_uses_shipped_defaults(site, tmp_path):
     assert unset["ok"][2] == []                         # no registry file: the shipped baseline alone
     overridden = package(site, body, env={"HOME": str(home), "MODEL_ENDPOINTS_REGISTRY": str(registry)})
     assert overridden["ok"] == [True, "", ["only"]]
+
+
+def test_package_mode_fleet_uses_layered_registry(site, tmp_path):
+    """With bootstrap_lib importable, package mode reads the fleet config layer."""
+    home = tmp_path / "home"
+    (home / ".claude" / "config").mkdir(parents=True)
+    (home / ".claude" / "config" / "llm-scripting-kit.yaml").write_text(
+        "default_endpoint: fleet-chosen\nendpoints:\n  fleet-chosen:\n    model: m\n",
+        encoding="utf-8")
+    body = (
+        "from llm_kit.registry import models\n"
+        "config = models.load_model_config()\n"
+        "result = [config['default_endpoint'], 'fleet-chosen' in config['endpoints'],\n"
+        "          config == models.DEFAULT_MODEL_CONFIG]"
+    )
+    fleet = package(site, body, fleet=True, env={"HOME": str(home)})
+    assert fleet["ok"] == ["fleet-chosen", True, False], fleet
+    off = package(site, body, env={"HOME": str(home)})
+    assert off["ok"] == ["openrouter", False, True], off     # shipped defaults, layers ignored
+    assert off["modules"] == []
 
 
 # --- C5: the re-exec ---------------------------------------------------------
@@ -470,8 +561,8 @@ def test_cli_goldens_pass_in_simulated_package_mode(tmp_path):
     """The U5 goldens must read the same in package mode.
 
     The marker is forced in-process (`_MODE`) and katsoft_contracts is put on
-    sys.path; bootstrap_lib stays blockable only for the routed sites, since the
-    golden harness itself fakes backends. The real layout is covered by the
+    sys.path; bootstrap_lib is made absent (the fleet probe sees it missing and
+    any deeper import fails loudly), since the golden harness itself fakes backends. The real layout is covered by the
     unpacked-wheel tests above.
     """
     import subprocess
@@ -484,6 +575,8 @@ def test_cli_goldens_pass_in_simulated_package_mode(tmp_path):
         "_runtime._MODE = 'package'\n"
         "class _Block:\n"
         "    def find_spec(self, name, path=None, target=None):\n"
+        "        if name == 'bootstrap_lib':\n"
+        "            raise ModuleNotFoundError(\"No module named 'bootstrap_lib'\", name=name)\n"
         "        if name.split('.')[0] == 'bootstrap_lib':\n"
         "            raise AssertionError('bootstrap_lib imported in package mode: ' + name)\n"
         "sys.meta_path.insert(0, _Block())\n", encoding="utf-8")

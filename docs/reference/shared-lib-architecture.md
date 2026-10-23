@@ -7,7 +7,8 @@ Each was reviewed against the code at `dev` HEAD on 2026-09-20 and is recorded
 here so it survives outside the session transcript that found it. Four are
 open at HEAD; Finding 2 was fixed in bootstrap 0.123.0 on 2026-09-20 and
 Finding 5 in bootstrap 0.140.0 on 2026-10-01, and both are kept here for the
-record. Being named in this document fixes nothing -- read each finding's own
+record. Finding 3 is partly fixed in bootstrap 0.159.0 (links are revoked;
+published trees and owner uninstall are not). Being named in this document fixes nothing -- read each finding's own
 status line.
 
 Each finding's claim is a verbatim copy of a task plan's record, apart from the
@@ -170,7 +171,24 @@ hits the cache path unchanged) so the rollback tests cannot pass vacuously.
 
 ## Finding 3: uninstall revokes nothing
 
-**Confirmed.**
+**Confirmed. Links are fixed in bootstrap 0.159.0; published trees stay open.**
+
+Status at 0.159.0. Bootstrap revokes the `.pth` links it wrote when the
+declaration that justified them is gone: a plugin venv or `project_venv`
+link whose name its owner no longer declares in `shared_lib_imports`
+(removed before that venv's check), and a standalone-interpreter link whose
+recorded owner (`_shared_libs/<name>/.owner`, written by the owner's sync) is
+installed and no longer publishes the library. Only a `.pth` whose content
+equals bootstrap's own `pth_line` output for its file name is ever removed,
+and each removal is a logged action entry (`shared_lib.py`:
+`revoke_undeclared_links`, `parse_pth_entry_dir`; `engine.py`:
+`_phase_revoke_shared_lib_links`, `_revoke_standalone_links`). Tests:
+`TestRevocation`, `TestPthOwnership`, `TestStandaloneRevocation` in
+`tests/bootstrap/test_shared_lib.py`. NOT fixed: uninstalling or disabling
+the owner still removes nothing (an owner that is not installed keeps its
+standalone link, by design), and no published tree under `_shared_libs/` is
+ever deleted. The claim below is the original record of the defect and still
+describes those two remaining gaps.
 
 `shared_lib.py` has no function that deletes a published package tree, a
 `.src.sha256` hash file, or a `.pth` link. The only `shutil.rmtree` calls in

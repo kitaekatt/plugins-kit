@@ -242,9 +242,9 @@ capability_skill:
     - id: answers
       keywords: [task answers, answers refresh, answers status, answers prune, orientation, coverage, question catalog]
       user_objective: "Compute, inspect or prune the answers of the question catalog (orientation, decisions, activity, task commits) for the tasks of configured projects."
-      operation: task.py answers refresh|status|prune --format json --protocol N [--parent DIR ...] [--allow CLASSES] [--batch N] [--stop-file PATH] [--deadline-s N]
+      operation: task.py answers refresh|status|prune --format json --protocol N [--parent DIR ...] [--project DIR ...] [--allow CLASSES] [--batch N] [--stop-file PATH] [--deadline-s N]; task.py answers protocols --format json
       gotchas:
-        - "Contract: the same command as `task-kit answers`; it writes exactly one JSON document to stdout, diagnostics to stderr, and requires --format json and --protocol N. The payloads, flags and exit codes (0 ok, 1 internal/discovery_failed/config_invalid, 2 usage, 4 protocol_unsupported) are in references/task-export-protocol.md, section Answers commands."
+        - "Contract: the same command as `task-kit answers`; it writes exactly one JSON document to stdout, diagnostics to stderr, and requires --format json and --protocol N (answers protocols takes only --format json). The payloads, flags and exit codes (0 ok, 1 internal/discovery_failed/config_invalid, 2 usage, 4 protocol_unsupported) are in references/task-export-protocol.md, section Answers commands."
         - "status writes nothing and takes no lock. refresh answers the pending questions of the most recently modified tasks (--batch, default 4 tasks per repository), commits only this machine's answer files and publishes them. prune deletes this machine's answer files of questions the catalog no longer holds."
         - "Spend: refresh asks free entries first. A usage or spend class entry runs only when --allow names the class or, without --allow, llm-kit's per-machine consent allows it. Do not pass --allow with a paid class unless the user said so."
         - "Model answering REFUSES when llm-kit is absent or too old: the repository report carries a refusal naming the install or update command. Relay it as printed; do not install llm-kit unasked."

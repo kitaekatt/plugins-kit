@@ -1224,3 +1224,349 @@ class TestResolveProjectSharedRoot:
     def test_entry_dir_without_package_is_not_a_match(self, tmp_path):
         os.makedirs(tmp_path / "mkt-a" / "_shared_libs" / "mylib")  # no <name>/<name>/
         assert shared_lib.resolve_project_shared_root(str(tmp_path), "mylib").status == "absent"
+
+
+# --- targeted revocation + owner records ---------------------------------
+
+def _fake_site(venv_dir):
+    """Create the site-packages layout `shared_lib.venv_site_packages` resolves."""
+    if sys.platform == "win32":
+        site = os.path.join(str(venv_dir), "Lib", "site-packages")
+    else:
+        site = os.path.join(str(venv_dir), "lib", "python3.12", "site-packages")
+    os.makedirs(site)
+    return site
+
+
+def _write_bootstrap_pth(site, name, entry_dir="/data/mkt/_shared_libs/x"):
+    path = os.path.join(site, f"{name}.pth")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(shared_lib.pth_line(name, entry_dir) + "\n")
+    return path
+
+
+class TestRevocation:
+    """A link is removed when its declaration is -- and only a link bootstrap wrote.
+
+    Each test names the production change that turns it red. Revoking by file
+    name alone (without the exact-format check) turns the foreign-file tests red;
+    deleting `_phase_revoke_shared_lib_links` turns the engine tests red.
+    """
+
+    def _plugin(self, tmp_path, manifest):
+        data_dir = tmp_path / "data" / "mkt" / "myplugin"
+        site = _fake_site(data_dir / ".venv")
+        plugin_root = tmp_path / "plugin"
+        plugin_root.mkdir()
+        return data_dir, plugin_root, site
+
+    def _run(self, data_dir, plugin_root, manifest):
+        actions, oks = [], []
+        failures = _process_manifest(
+            manifest, "macos", str(data_dir), str(plugin_root),
+            actions, oks, plugin_name="myplugin", quiet_entries=[],
+            shared_lib_links=_SharedLibLinkLog(),
+        )
+        return actions, oks, failures
+
+    def test_undeclared_bootstrap_pth_is_removed_and_logged(self, tmp_path):
+        data_dir, plugin_root, site = self._plugin(tmp_path, {})
+        pth = _write_bootstrap_pth(site, "llm_scripting_kit")
+
+        actions, _oks, failures = self._run(data_dir, plugin_root, {"tools": []})
+
+        assert failures == []
+        assert not os.path.exists(pth)
+        assert any("shared-lib llm_scripting_kit" in a and "revoked" in a and pth in a
+                   for a in actions), actions
+
+    def test_declared_pth_is_kept(self, tmp_path):
+        data_dir, plugin_root, site = self._plugin(tmp_path, {})
+        kept = _write_bootstrap_pth(site, "keepme")
+        gone = _write_bootstrap_pth(site, "dropme")
+
+        actions, _oks, _f = self._run(
+            data_dir, plugin_root, {"shared_lib_imports": ["keepme"]})
+
+        assert os.path.exists(kept)
+        assert not os.path.exists(gone)
+        assert not any("keepme" in a for a in actions), actions
+
+    def test_foreign_pth_files_are_never_touched(self, tmp_path):
+        data_dir, plugin_root, site = self._plugin(tmp_path, {})
+        foreign = {
+            "distutils-precedence.pth": "import os; var = 'SETUPTOOLS'\n",
+            "editable.pth": "/some/editable/path\n",
+            "empty.pth": "",
+        }
+        # Looks like a bootstrap link but is not byte-for-byte what bootstrap
+        # writes (a user edit), and a bootstrap link filed under another name.
+        edited = shared_lib.pth_line("edited", "/e") + "  # tweaked\n"
+        foreign["edited.pth"] = edited
+        foreign["renamed.pth"] = shared_lib.pth_line("other", "/e") + "\n"
+        for fname, content in foreign.items():
+            with open(os.path.join(site, fname), "w", encoding="utf-8") as f:
+                f.write(content)
+
+        actions, _oks, failures = self._run(data_dir, plugin_root, {"tools": []})
+
+        assert failures == []
+        assert actions == []
+        for fname, content in foreign.items():
+            with open(os.path.join(site, fname), encoding="utf-8") as f:
+                assert f.read() == content, fname
+
+    def test_revocation_runs_before_the_venv_check(self, tmp_path, monkeypatch):
+        """Deleting the revoke phase, or running it after `_phase_venv`, turns
+        this red: the spy sees the link still present when the venv check runs."""
+        import bootstrap_lib.engine as engine
+
+        data_dir, plugin_root, site = self._plugin(tmp_path, {})
+        pth = _write_bootstrap_pth(site, "stale")
+        seen = []
+
+        def _spy(*_a, **_k):
+            seen.append(os.path.exists(pth))
+            return None
+
+        monkeypatch.setattr(engine, "_process_venv_def", _spy)
+        self._run(data_dir, plugin_root, {"venv": {"check_imports": []}})
+
+        assert seen == [False]
+
+    def test_malformed_declaration_revokes_nothing(self, tmp_path):
+        data_dir, plugin_root, site = self._plugin(tmp_path, {})
+        pth = _write_bootstrap_pth(site, "stale")
+
+        actions, oks, failures = self._run(
+            data_dir, plugin_root, {"shared_lib_imports": "keepme"})
+
+        assert os.path.exists(pth)
+        assert failures == []
+        assert any("revocation skipped" in o for o in oks), oks
+
+    def test_removal_failure_is_a_failure_not_silence(self, tmp_path, monkeypatch):
+        data_dir, plugin_root, site = self._plugin(tmp_path, {})
+        _write_bootstrap_pth(site, "stale")
+
+        def _boom(path):
+            raise PermissionError("denied")
+
+        monkeypatch.setattr(shared_lib.os, "remove", _boom)
+        actions, _oks, failures = self._run(data_dir, plugin_root, {"tools": []})
+
+        assert [f["type"] for f in failures] == ["shared_lib"]
+        assert any("FAILED" in a and "denied" in a for a in actions), actions
+
+    def test_published_tree_survives_revocation(self, tmp_path):
+        data_dir, plugin_root, site = self._plugin(tmp_path, {})
+        tree = tmp_path / "data" / "mkt" / "_shared_libs" / "stale" / "stale"
+        tree.mkdir(parents=True)
+        (tree / "__init__.py").write_text("", encoding="utf-8")
+        _write_bootstrap_pth(site, "stale", str(tmp_path / "data" / "mkt" / "_shared_libs" / "stale"))
+
+        self._run(data_dir, plugin_root, {"tools": []})
+
+        assert (tree / "__init__.py").exists()
+
+    def test_project_venv_link_revoked_before_its_venv_check(self, tmp_path, monkeypatch):
+        import bootstrap_lib.engine as engine
+
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / "pyproject.toml").write_text("[project]\nname='p'\n", encoding="utf-8")
+        site = _fake_site(project / ".venv")
+        gone = _write_bootstrap_pth(site, "dropme")
+        kept = _write_bootstrap_pth(site, "keepme")
+        seen = []
+        monkeypatch.setattr(
+            engine, "_process_venv_def",
+            lambda *a, **k: seen.append((os.path.exists(gone), os.path.exists(kept))))
+
+        actions, _oks, failures = engine._process_project_venv(
+            {"shared_lib_imports": ["keepme"]}, str(project))
+
+        assert seen == [(False, True)]
+        assert failures == []
+        assert any(a.startswith("project_venv: shared-lib dropme: revoked") for a in actions)
+
+    def test_project_venv_with_malformed_imports_revokes_nothing(self, tmp_path, monkeypatch):
+        import bootstrap_lib.engine as engine
+
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / "pyproject.toml").write_text("[project]\nname='p'\n", encoding="utf-8")
+        site = _fake_site(project / ".venv")
+        pth = _write_bootstrap_pth(site, "dropme")
+        monkeypatch.setattr(engine, "_process_venv_def", lambda *a, **k: None)
+
+        engine._process_project_venv({"shared_lib_imports": [42]}, str(project))
+
+        assert os.path.exists(pth)
+
+
+class TestPthOwnership:
+    def test_parse_roundtrip_and_near_misses(self):
+        line = shared_lib.pth_line("mylib", "/some/where")
+        assert shared_lib.parse_pth_entry_dir("mylib", line + "\n") == "/some/where"
+        # Entry dirs that need escaping survive the round trip.
+        odd = "C:\\data\\it's"
+        assert shared_lib.parse_pth_entry_dir("mylib", shared_lib.pth_line("mylib", odd)) == odd
+        # Wrong name, trailing edit, truncation, executable garbage: not ours.
+        assert shared_lib.parse_pth_entry_dir("other", line) is None
+        assert shared_lib.parse_pth_entry_dir("mylib", line + " # x") is None
+        assert shared_lib.parse_pth_entry_dir("mylib", line[:-5]) is None
+        assert shared_lib.parse_pth_entry_dir("mylib", "import os; os.system('x')") is None
+
+    def test_sync_records_owner_and_backfills_on_cached(self, tmp_path):
+        plugin_root = tmp_path / "plugin"
+        _make_pkg(str(plugin_root / "lib"), "mylib")
+        shared_root = str(tmp_path / "_shared_libs")
+
+        # Published before records existed: no owner arguments.
+        shared_lib.sync_shared_lib("mylib", "lib", str(plugin_root), shared_root)
+        entry = os.path.join(shared_root, "mylib")
+        assert shared_lib.read_owner_record(entry) is None
+
+        r = shared_lib.sync_shared_lib(
+            "mylib", "lib", str(plugin_root), shared_root,
+            owner_marketplace="mkt", owner_plugin="owner")
+        assert r.status == "cached"
+        assert shared_lib.read_owner_record(entry) == {"marketplace": "mkt", "plugin": "owner"}
+
+    def test_phase_records_the_owner_of_a_published_lib(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(shared_lib, "find_standalone_python", lambda: None)
+        data_dir = tmp_path / "data" / "mkt" / "owner"
+        data_dir.mkdir(parents=True)
+        plugin_root = tmp_path / "plugin"
+        _make_pkg(str(plugin_root / "lib"), "mylib")
+
+        _process_manifest(
+            {"shared_libs": [{"name": "mylib", "src": "lib"}]}, "macos",
+            str(data_dir), str(plugin_root), [], [], plugin_name="owner",
+            quiet_entries=[], shared_lib_links=_SharedLibLinkLog())
+
+        entry = str(tmp_path / "data" / "mkt" / "_shared_libs" / "mylib")
+        assert shared_lib.read_owner_record(entry) == {"marketplace": "mkt", "plugin": "owner"}
+
+    def test_unreadable_owner_records_mean_unknown(self, tmp_path):
+        entry = tmp_path / "e"
+        entry.mkdir()
+        for content in ("not json", "[]", '{"plugin": "", "marketplace": "m"}', '{"plugin": "p"}'):
+            (entry / ".owner").write_text(content, encoding="utf-8")
+            assert shared_lib.read_owner_record(str(entry)) is None, content
+
+
+class TestStandaloneRevocation:
+    """The standalone `<name>.pth` is revoked only on an owner record, an
+    installed owner, and an owner manifest that no longer publishes the lib."""
+
+    def _setup(self, tmp_path, monkeypatch, *, record=True, owner_manifest=None,
+               owner_installed=True, link_present=True):
+        import bootstrap_lib.engine as engine
+        from bootstrap_lib.plugin_resolve import PluginInfo
+
+        monkeypatch.delenv("CLAUDE_BOOTSTRAP_DATA_ROOT", raising=False)
+        base = tmp_path / "standalone"
+        if sys.platform == "win32":
+            python = base / "python.exe"
+        else:
+            python = base / "bin" / "python3"
+        python.parent.mkdir(parents=True)
+        python.write_text("", encoding="utf-8")
+        site = _fake_site(base)
+        monkeypatch.setattr(shared_lib, "find_standalone_python", lambda: str(python))
+
+        data_dir = tmp_path / "data" / "mkt" / "bootstrap"
+        data_dir.mkdir(parents=True)
+        entry = tmp_path / "data" / "mkt" / "_shared_libs" / "mylib"
+        (entry / "mylib").mkdir(parents=True)
+        if record:
+            (entry / ".owner").write_text(
+                json.dumps({"marketplace": "mkt", "plugin": "owner"}), encoding="utf-8")
+        pth = _write_bootstrap_pth(site, "mylib", str(entry)) if link_present else None
+
+        plugins = []
+        if owner_installed:
+            install = tmp_path / "plugins" / "owner"
+            install.mkdir(parents=True)
+            (install / "bootstrap.json").write_text(
+                json.dumps(owner_manifest if owner_manifest is not None else {"tools": []}),
+                encoding="utf-8")
+            plugins.append(PluginInfo(name="owner", install_path=str(install),
+                                      version="1.0", marketplace="mkt"))
+        run = lambda: engine._revoke_standalone_links(plugins, str(data_dir), "1.0.0")  # noqa: E731
+        return run, pth, entry
+
+    def test_revoked_when_owner_recorded_installed_and_no_longer_publishes(
+            self, tmp_path, monkeypatch):
+        run, pth, entry = self._setup(tmp_path, monkeypatch)
+
+        actions, _oks, failures = run()
+
+        assert failures == []
+        assert not os.path.exists(pth)
+        assert any("shared-lib mylib" in a and "revoked" in a and "owner owner" in a
+                   for a in actions), actions
+        assert (entry / "mylib").is_dir()  # the published tree stays
+
+    def test_kept_while_the_owner_still_publishes(self, tmp_path, monkeypatch):
+        run, pth, _entry = self._setup(
+            tmp_path, monkeypatch,
+            owner_manifest={"shared_libs": [{"name": "mylib", "src": "lib"}]})
+
+        actions, _oks, failures = run()
+
+        assert (actions, failures) == ([], [])
+        assert os.path.exists(pth)
+
+    def test_kept_without_an_owner_record(self, tmp_path, monkeypatch):
+        run, pth, _entry = self._setup(tmp_path, monkeypatch, record=False)
+
+        actions, oks, _failures = run()
+
+        assert actions == []
+        assert os.path.exists(pth)
+        assert any("no owner record" in o for o in oks), oks
+
+    def test_kept_when_the_owner_is_not_installed(self, tmp_path, monkeypatch):
+        run, pth, _entry = self._setup(tmp_path, monkeypatch, owner_installed=False)
+
+        actions, oks, _failures = run()
+
+        assert actions == []
+        assert os.path.exists(pth)
+        assert any("not installed" in o for o in oks), oks
+
+    def test_kept_when_the_owner_manifest_is_gated_by_requires_bootstrap(
+            self, tmp_path, monkeypatch):
+        run, pth, _entry = self._setup(
+            tmp_path, monkeypatch, owner_manifest={"requires_bootstrap": ">=99.0"})
+
+        actions, _oks, _failures = run()
+
+        assert actions == []
+        assert os.path.exists(pth)
+
+    def test_foreign_standalone_pth_is_untouched(self, tmp_path, monkeypatch):
+        run, _pth, _entry = self._setup(tmp_path, monkeypatch, link_present=False)
+        site = shared_lib.standalone_site_packages()
+        foreign = os.path.join(site, "mylib.pth")
+        with open(foreign, "w", encoding="utf-8") as f:
+            f.write("/hand/written/path\n")
+
+        actions, _oks, _failures = run()
+
+        assert actions == []
+        with open(foreign, encoding="utf-8") as f:
+            assert f.read() == "/hand/written/path\n"
+
+    def test_redirected_data_root_never_revokes_machine_wide_links(
+            self, tmp_path, monkeypatch):
+        run, pth, _entry = self._setup(tmp_path, monkeypatch)
+        monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(tmp_path / "redirected"))
+
+        actions, _oks, _failures = run()
+
+        assert actions == []
+        assert os.path.exists(pth)

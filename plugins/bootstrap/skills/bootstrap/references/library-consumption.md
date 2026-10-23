@@ -38,6 +38,37 @@ for as long as that generation is retained (7 days after it is superseded; see
 mode 3b, "Update"); the next process gets the new one. A mode-3b shim gets the same
 property only if it reads the pointer too (see mode 3b, "Update").
 
+## A link is removed when its declaration is
+
+Bootstrap revokes the `.pth` links it wrote once nothing declares them any
+more, so dropping a library from `shared_lib_imports` (or a plugin from
+publishing it) takes the link away instead of leaving a stale one behind:
+
+- **Plugin venv (mode 1) and `project_venv` (mode 3a).** Every pass, before
+  that venv's own check, removes each `<name>.pth` in the venv's site-packages
+  whose name the venv's owner no longer declares in `shared_lib_imports`.
+  A manifest that drops the key entirely revokes all of its links.
+- **Standalone Python (mode 2).** The owner's sync writes
+  `_shared_libs/<name>/.owner` (its marketplace and plugin). The standalone
+  `<name>.pth` is removed only when that record names a plugin that is
+  installed, passes the `requires_bootstrap` gate and no longer lists `<name>`
+  in its `shared_libs`. No record, an owner that is gone or an owner manifest
+  that cannot be read keeps the link. A pass redirected by
+  `CLAUDE_BOOTSTRAP_DATA_ROOT` never touches the machine-wide interpreter.
+- **Only bootstrap's own files.** A `.pth` is claimed only when its whole
+  content equals what bootstrap writes for the file's own name. A hand-written,
+  edited or third-party `.pth` is never read as a candidate and never removed.
+- **Visible and bounded.** Each removal is an action entry in the owner's
+  `bootstrap.log`. A removal that fails is a `shared_lib` failure. The
+  published tree under `_shared_libs/<name>/` is never deleted, so a
+  mode-3b reader that reads it directly keeps working.
+
+An older engine does no revocation. A pass whose engine is older than the
+release that introduced it leaves undeclared links in place until a newer
+engine runs; a plugin that needs the revocation (for example one that
+switches a library to a PyPI package) sets `requires_bootstrap` to that
+release.
+
 ## Mode 1 -- Plugin consumer (`shared_lib_imports`)
 
 The canonical, fully-supported case. A plugin declares
@@ -130,7 +161,8 @@ A failed link rolls back to the prior `.pth` (or removes the new one), so the
 next pass attempts it again. `skipped` means nothing was added on this
 pass. A link written on an earlier pass stays in place, because a skip does not
 remove an existing `.pth`: a library that later becomes unpublished keeps
-resolving from its last link. When no link exists, the project's own `import` fails as an
+resolving from its last link. Removing the library from `shared_lib_imports`
+is what revokes the link (see "A link is removed when its declaration is"). When no link exists, the project's own `import` fails as an
 ordinary `ModuleNotFoundError`.
 
 **A shared library outranks a same-named package in the venv.** The `.pth` line
@@ -304,10 +336,11 @@ metadata, where pip reads it. Name only the extras your code paths need.
 **Do not combine the PyPI install with a `shared_lib_imports` link for the same
 library in one venv.** The bootstrap `.pth` prepends the shared copy to
 `sys.path` (see mode 3a), so it shadows the installed wheel and the project runs
-the fleet copy while its pin says otherwise. Bootstrap does not remove a
-`.pth` once written, so dropping the library from `shared_lib_imports` later
-does not undo the shadow. Use a fresh venv, or delete the stale `<name>.pth`
-from the venv's site-packages.
+the fleet copy while its pin says otherwise. Dropping the library from
+`shared_lib_imports` makes bootstrap revoke the `.pth` it wrote on its next
+pass (see "A link is removed when its declaration is"), which ends the shadow
+in a venv bootstrap manages. In a venv bootstrap does not manage, delete the
+stale `<name>.pth` from the venv's site-packages yourself.
 
 ### 4b -- every other shared library: not supported
 

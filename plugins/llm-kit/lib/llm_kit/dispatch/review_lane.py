@@ -22,9 +22,9 @@ from typing import Any, Mapping, Optional, Sequence
 
 from llm_kit import _runtime
 
-# Legacy only: the lane prompts and bundle readers live in bootstrap_lib. Refuse
-# in package mode before the first bootstrap_lib import below.
-_runtime.require_legacy("the code-review lane")
+# Fleet only: the lane prompts and bundle readers live in bootstrap_lib. Refuse
+# in package mode without bootstrap_lib before the first import below.
+_runtime.require_fleet("the code-review lane")
 
 from bootstrap_lib.code_review.lane_prompts import (  # noqa: E402
     ENDPOINT_ELIGIBLE_LANES,

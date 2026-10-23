@@ -521,13 +521,14 @@ MD_DOMAIN_GOTCHAS = """
 # ===========================================================================
 # MACHINE-EMITTED ARTIFACTS (shared by BOTH skills).
 # ---------------------------------------------------------------------------
-# prepare_review detects a machine-emitted file on either of two INDEPENDENT
-# axes -- a CONTENT banner in its leading lines, or a DECLARED PATH a plugin
-# writes (a project's durable plugin-data directory, a manifest write target) --
-# and excludes it from the diff chunks entirely, surfacing it under
-# `bundle.machine_emitted_files` with the axis that matched. Neither axis subsumes the
-# other: a generator may emit no banner at all, and then only its location says a
-# tool wrote it. Size is never a criterion. Reviewing generator OUTPUT is waste:
+# prepare_review detects a machine-emitted file on any of three INDEPENDENT
+# axes -- a CONTENT banner in its leading lines, a DECLARED PATH a plugin
+# writes (a project's durable plugin-data directory, a manifest write target),
+# or a CONFIGURED PATH glob in a user or project review_exclusions.yaml -- and
+# excludes it from the diff chunks entirely, surfacing it under
+# `bundle.machine_emitted_files` with the axis that matched. No axis subsumes
+# another: a generator may emit no banner at all, and then only its location, or
+# the project's own configuration, says a tool wrote it. Size is never a criterion. Reviewing generator OUTPUT is waste:
 # nobody wrote a line of it, and the only meaningful review target is the
 # GENERATOR, which is reviewed separately as ordinary source. The skill's job is
 # to say so honestly -- an excluded file is NOT a pass.
@@ -540,8 +541,9 @@ GENERATED_REPORT = """\
               issues, the md-domain findings, and the mechanical-checks section. One line per entry:
               its path (`identifier`), its `size_bytes`, and WHY it was excluded -- `machine_emitted_axis`
               (`content` = a generated-artifact banner matched; `declared_path` = it lives under a
-              path a plugin declares that it writes) together with the `machine_emitted_signature` naming
-              the exact banner or path rule.
+              path a plugin declares that it writes; `configured_path` = its path matches a glob in a
+              user or project `review_exclusions.yaml`) together with the `machine_emitted_signature`
+              naming the exact banner, path rule, or config layer and glob.
               Then state once that these files were NOT reviewed because they are machine-emitted,
               and that review of machine-emitted output belongs on the GENERATOR -- reviewed as ordinary
               source when this change contains it, and otherwise not covered by this review. NEVER
@@ -553,8 +555,8 @@ GENERATED_REPORT = """\
 # Appended to both gotcha blocks (plain text -- no f-string braces).
 GENERATED_GOTCHAS = """
         - A machine-emitted file is NEVER a pass. `bundle.machine_emitted_files` means "not reviewed", exactly like a `NOT-AUDITED` verdict or the `## Mechanical checks (audit skipped)` section: render it as its own honest line, never inside the clean count, never as DIFF-CLEAN, and never as satisfying a submit gate.
-        - Detection is a UNION of two axes, decided by prepare_review, and the skill never re-judges it -- `content` (a generated-artifact banner) OR `declared_path` (the file lives under a path a plugin declares that it writes, such as a project's durable plugin-data directory). Either one is sufficient, and the second is what catches a generator that emits no banner at all -- nothing in such a file's bytes says a tool wrote it, but its location does, by construction.
-        - Size is NEVER a criterion on either axis. A large hand-written file is chunked and fully reviewed as always; a small machine-emitted file is still excluded. The argument is authorship, not cost.
+        - Detection is a UNION of three axes, decided by prepare_review, and the skill never re-judges it -- `content` (a generated-artifact banner), `declared_path` (the file lives under a path a plugin declares that it writes, such as a project's durable plugin-data directory) OR `configured_path` (its path matches a glob in `~/.claude/config/review_exclusions.yaml` or `<project root>/.claude/review_exclusions.yaml`; see references/configuration.md). Any one is sufficient. The second catches a generator that emits no banner at all; the third catches an asset the project's own tooling regenerates with neither a banner nor a plugin declaration.
+        - Size is NEVER a criterion on any axis. A large hand-written file is chunked and fully reviewed as always; a small machine-emitted file is still excluded. The argument is authorship, not cost.
         - Either axis OUTRANKS a claim, so a claimed `.md` that is machine-emitted arrives in `bundle.machine_emitted_files` and NOT in `bundle.claimed_files` -- the two lists are disjoint. Do not send it to a detect lane and do not treat its absence from `claimed_files` as a bug in the claim globs. A claim promises a specialist reviewer only for AUTHORED files: a subject-lens auditor can act on a finding in generated Markdown no more than the generic lanes can, because the fix belongs in the generator and an edit to the artifact is reverted by its drift guard.
         - Do not review a machine-emitted artifact by reading it. If its content looks wrong, the finding belongs on the generator, or on the decision to check the artifact in -- say that, and name the generator when this change contains one.
         - The `--review-machine-emitted` flag is the override and it is the AUTHOR's call, never an inference. Pass it only when the user or the author explicitly asks for the machine-emitted files to be reviewed."""
@@ -1215,7 +1217,7 @@ __LAUNCH_EMIT__
           tool: __PREPARE_LAUNCHER__
           input: "<range or argument from step 1>  (append `--claim '**/*.md'` when md-domain is available, per the claim probe)"
           expected: |
-            JSON with vcs, range, head_sha, branch, description, project_root, bundle_dir, diff_chunks, changed_files, unique_claude_mds, untracked_or_unstaged, merge_conflicts, submit_gates, change_id, ledger_baseline, ledger_hits, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-emitted -- machine_emitted_files (each entry carries identifier, local, size_bytes, and the axis that matched -- machine_emitted_axis `content` or `declared_path` plus the naming machine_emitted_signature; such files are excluded from diff_chunks and changed_files, and `--review-machine-emitted` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff.
+            JSON with vcs, range, head_sha, branch, description, project_root, bundle_dir, diff_chunks, changed_files, unique_claude_mds, untracked_or_unstaged, merge_conflicts, submit_gates, change_id, ledger_baseline, ledger_hits, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-emitted -- machine_emitted_files (each entry carries identifier, local, size_bytes, and the axis that matched -- machine_emitted_axis `content`, `declared_path` or `configured_path` plus the naming machine_emitted_signature; such files are excluded from diff_chunks and changed_files, and `--review-machine-emitted` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff.
           on_failure: Surface the stderr message to the user and stop. No retry.""".replace(
     "__CLAIM_PROBE__", CLAIM_PROBE
 ).replace(
@@ -1261,7 +1263,7 @@ __LAUNCH_EMIT__
           tool: __PREPARE_LAUNCHER__
           input: "<CL>  (append `--claim '**/*.md'` when md-domain is available, per the claim probe)"
           expected: |
-            JSON with cl, description, project_root, bundle_dir, diff_chunks, changed_files, unique_claude_mds, unreconciled, default_open, stale_open, shelf_drift, unresolved, hygiene_incomplete, submit_gates, auto_shelved, shelf_fingerprint, change_id, ledger_baseline, ledger_hits, -- only when the CL belongs to a different client -- foreign_change, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-emitted -- machine_emitted_files (each entry carries identifier, local, size_bytes, and the axis that matched -- machine_emitted_axis `content` or `declared_path` plus the naming machine_emitted_signature; such files are excluded from diff_chunks and changed_files, and `--review-machine-emitted` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff. `auto_shelved=true` means prepare_review created the shelf and step 10 must clean it up.
+            JSON with cl, description, project_root, bundle_dir, diff_chunks, changed_files, unique_claude_mds, unreconciled, default_open, stale_open, shelf_drift, unresolved, hygiene_incomplete, submit_gates, auto_shelved, shelf_fingerprint, change_id, ledger_baseline, ledger_hits, -- only when the CL belongs to a different client -- foreign_change, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-emitted -- machine_emitted_files (each entry carries identifier, local, size_bytes, and the axis that matched -- machine_emitted_axis `content`, `declared_path` or `configured_path` plus the naming machine_emitted_signature; such files are excluded from diff_chunks and changed_files, and `--review-machine-emitted` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff. `auto_shelved=true` means prepare_review created the shelf and step 10 must clean it up.
           on_failure: |
             If prepare reports that the CL belongs to a foreign client, re-run once without `--claim` and use that bundle. State that md-domain subject-lens review is unavailable because claim pre-images depend on the author's client workspace.
             For any other failure, surface the stderr message to the user and stop. No retry.
@@ -1363,7 +1365,7 @@ GIT_CHECKLIST = f"""\
         - Every multi-entry reviewer declaration routed through `llm-kit models describe` (stdout printed verbatim, choice announced as a `route:` line) or, without describe, through its core entries; a FAILED lane re-selected per the printed `Re-select:` line, each entry at most once; every `route:` line carried into the `## Lane routes` section; a lane with no usable entry left still reports a `## Lane failures` entry with coverage missing
         - md-domain subject-lens pass launched for the NON-TRIVIAL bundle.claimed_files when skills-kit md-domain is available (or claimed files folded back into the generic review on version-skew fallback); skipped silently when md-domain is absent
         - Trivial claimed files (prepare's `trivial` flag) reported via the `## Mechanical checks (audit skipped)` section, never as an audit or DIFF-CLEAN; nothing written to the ledger for them; whole review skipped when every claimed file is trivial and there are no generic diff chunks
-        - Machine-emitted artifacts (bundle.machine_emitted_files) reported via the `## Machine-emitted artifacts (not reviewed)` section, naming each file's exclusion axis (content banner or declared plugin-write path) and the rule that matched, never as an audit or DIFF-CLEAN; review of machine-emitted output belongs on the generator
+        - Machine-emitted artifacts (bundle.machine_emitted_files) reported via the `## Machine-emitted artifacts (not reviewed)` section, naming each file's exclusion axis (content banner, declared plugin-write path, or configured review_exclusions.yaml glob) and the rule that matched, never as an audit or DIFF-CLEAN; review of machine-emitted output belongs on the generator
         - Previously-declined findings collapsed via the ledger (bundle.ledger_hits); SERIOUS md-domain findings never collapsed
         - Markdown rendered to chat (Submit checklist section prepended when gates applied; Unresolved merge conflicts section prepended when bundle.merge_conflicts is non-empty; separate `## md-domain (subject-lens) findings` section when the md-domain pass ran)
         - Newly declined findings recorded to the ledger via `prepare_review.py --ledger-record` (skipped when nothing was declined)"""
@@ -1384,7 +1386,7 @@ P4_CHECKLIST = f"""\
         - Every multi-entry reviewer declaration routed through `llm-kit models describe` (stdout printed verbatim, choice announced as a `route:` line) or, without describe, through its core entries; a FAILED lane re-selected per the printed `Re-select:` line, each entry at most once; every `route:` line carried into the `## Lane routes` section; a lane with no usable entry left still reports a `## Lane failures` entry with coverage missing
         - md-domain subject-lens pass launched for the NON-TRIVIAL bundle.claimed_files when skills-kit md-domain is available (or claimed files folded back into the generic review on version-skew fallback); skipped silently when md-domain is absent
         - Trivial claimed files (prepare's `trivial` flag) reported via the `## Mechanical checks (audit skipped)` section, never as an audit or DIFF-CLEAN; nothing written to the ledger for them; whole review skipped when every claimed file is trivial and there are no generic diff chunks
-        - Machine-emitted artifacts (bundle.machine_emitted_files) reported via the `## Machine-emitted artifacts (not reviewed)` section, naming each file's exclusion axis (content banner or declared plugin-write path) and the rule that matched, never as an audit or DIFF-CLEAN; review of machine-emitted output belongs on the generator
+        - Machine-emitted artifacts (bundle.machine_emitted_files) reported via the `## Machine-emitted artifacts (not reviewed)` section, naming each file's exclusion axis (content banner, declared plugin-write path, or configured review_exclusions.yaml glob) and the rule that matched, never as an audit or DIFF-CLEAN; review of machine-emitted output belongs on the generator
         - Previously-declined findings collapsed via the ledger (bundle.ledger_hits); SERIOUS md-domain findings never collapsed
         - Markdown rendered to chat (Submit checklist section prepended when gates applied; CL-not-submittable section prepended when bundle.unresolved or bundle.stale_open is non-empty; separate `## md-domain (subject-lens) findings` section when the md-domain pass ran)
         - Auto-shelf cleanup invoked when bundle.auto_shelved is true (`prepare_review.py --cleanup <bundle_dir>`)
@@ -2365,6 +2367,32 @@ not to all syntax errors in the file.
 An unlocatable diagnostic leaves coverage unavailable. Other shipped checks retain
 their added-line scope. Both reviewer dispatch paths receive the covered question
 with instructions not to repeat it. These results do not select or suppress lanes.
+
+## Excluding files from review
+
+A separate file lists paths `@SKILL_NAME@` must not review, such as assets a project's
+own tooling regenerates. Two optional layers, read in this order:
+
+| Layer | Path |
+|---|---|
+| user | `~/.claude/config/review_exclusions.yaml` |
+| project | `<project_root>/.claude/review_exclusions.yaml` |
+
+```yaml
+exclude:
+  - ".databench/**"
+  - "docs/**/*.webp"
+  - "!docs/keep/**"
+```
+
+Each entry is a glob over the workspace-relative path. A `**/` prefix matches at any
+depth, including the root. An entry that starts with `!` re-admits matching paths and
+beats every positive glob in either layer. The layers concatenate. `exclude` is the only
+key. A malformed layer stops the review with an error.
+
+A matched file is reported in `bundle.machine_emitted_files` with
+`machine_emitted_axis: configured_path` and a signature that names the layer and glob.
+It is not reviewed and never counts as a pass. `--review-machine-emitted` reviews it anyway.
 
 ## Layers
 

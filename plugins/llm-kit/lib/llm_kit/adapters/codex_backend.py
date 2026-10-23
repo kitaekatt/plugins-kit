@@ -93,7 +93,7 @@ def _codex_argv_builder(*, need_ignore_user_config: bool) -> Callable[..., list]
     module.
     """
     from llm_kit import _runtime  # noqa: PLC0415
-    _runtime.require_legacy("the codex backend")
+    _runtime.require_fleet("the codex backend")
     try:
         from bootstrap_lib.codex import build_codex_exec_argv  # noqa: PLC0415
     except ImportError as exc:
@@ -543,7 +543,7 @@ class CodexCliBackend:
         prefix = self.argv_prefix
         if prefix is None:
             from llm_kit import _runtime  # noqa: PLC0415
-            _runtime.require_legacy("codex text-only mode")
+            _runtime.require_fleet("codex text-only mode")
             from bootstrap_lib.codex import CODEX_EXECUTABLE, resolve_cli  # noqa: PLC0415
 
             prefix = resolve_cli(CODEX_EXECUTABLE)

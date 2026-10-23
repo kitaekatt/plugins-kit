@@ -1376,6 +1376,14 @@ def _main_pass():
     )
     if sweep_failures:
         all_failures.extend(sweep_failures)
+    # Step 4c1: revoke standalone-interpreter links whose recorded owner no
+    # longer publishes the library. After the sweep so every owner manifest
+    # has been through its own pass; see _revoke_standalone_links.
+    rv_actions, rv_oks, rv_failures = _revoke_standalone_links(
+        enabled_plugins + new_plugins, data_dir, engine_version=version)
+    sweep_actions = sweep_actions + rv_actions
+    sweep_oks = sweep_oks + rv_oks
+    all_failures.extend(rv_failures)
     # Step 4c2: link the declared project_venv shared libs. Deliberately HERE,
     # after the sweep (every owner has published), and NOT inline at Step 3d,
     # which runs before any owner publishes and would soft-skip on a first pass.
@@ -5015,6 +5023,15 @@ def _process_project_venv(venv_def, project_dir, quiet_entries=None):
         ok_entries.append("project_venv: ok - no pyproject.toml (not a Python project)")
         return action_entries, ok_entries, failures
 
+    # A link the layered manifests no longer declare is revoked BEFORE the venv
+    # check (a stale link can shadow what the sync installs). Skipped when the
+    # declaration is malformed: the names it meant to keep are then unknown.
+    _revoke_venv_links(
+        os.path.join(target_dir, ".venv"),
+        None if import_failures else {e["name"] for e in _entries},
+        "project_venv: ", action_entries, ok_entries, failures, "config",
+    )
+
     # target_dir serves as both data_dir (.venv location) and plugin_root
     # (pyproject.toml location).
     _process_venv_def(
@@ -7421,6 +7438,141 @@ def _phase_pypi_packages(ctx):
         ctx.action(f"pypi: {_join_items(pypi_installed)}")
 
 
+def _declared_library_names(raw):
+    """The set of library names in a ``shared_lib_imports`` value, or None.
+
+    Accepts a missing value (nothing declared) and a list of name strings (the
+    only form a plugin manifest supports; the project venv's object form has
+    its own normalizer). Anything else is a malformed declaration whose names
+    cannot be known, so the caller must revoke nothing on it (None).
+    """
+    if raw is None:
+        return set()
+    if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+        return None
+    return set(raw)
+
+
+def _revoke_venv_links(venv_dir, declared, prefix, action_entries, ok_entries,
+                       failures, plugin):
+    """Revoke the bootstrap-written ``.pth`` links ``declared`` no longer names.
+
+    Shared by the plugin-venv and project-venv paths; ``prefix`` leads each
+    entry ("" for a plugin, "project_venv: " for the project). Each removal is an action
+    entry (displayed, and logged to the owner's bootstrap.log); a removal that
+    fails is a ``shared_lib`` failure. ``declared`` None means the declaration
+    was malformed: nothing is revoked, and the skip is logged.
+    """
+    from .shared_lib import revoke_undeclared_links, venv_site_packages
+
+    if declared is None:
+        ok_entries.append(
+            f"{prefix}shared-lib revocation skipped (shared_lib_imports is malformed)")
+        return
+    site = venv_site_packages(venv_dir)
+    if site is None:
+        return
+    for result in revoke_undeclared_links(site, declared):
+        if result.status == "revoked":
+            action_entries.append(f"{prefix}shared-lib {result.name}: {result.message}")
+        else:
+            action_entries.append(
+                f"{prefix}shared-lib {result.name}: FAILED - {result.message}")
+            failures.append({
+                "type": "shared_lib", "name": result.name,
+                "message": result.message, "plugin": plugin,
+            })
+
+
+def _phase_revoke_shared_lib_links(ctx):
+    """Revoke this plugin's venv links its manifest no longer declares.
+
+    Runs before every other phase, so before the venv check: a stale link can
+    shadow a newly installed package of the same name and fail the check
+    itself. Unconditional (not keyed on a manifest key) because the case it
+    exists for is a manifest that STOPPED declaring ``shared_lib_imports``.
+    """
+    _revoke_venv_links(
+        os.path.join(ctx.data_dir, ".venv"),
+        _declared_library_names(ctx.manifest.get("shared_lib_imports")),
+        "", ctx.action_entries, ctx.ok_entries, ctx.failures,
+        ctx.plugin_name,
+    )
+
+
+def _revoke_standalone_links(plugins, data_dir, engine_version=""):
+    """Revoke standalone-interpreter links whose recorded owner stopped publishing.
+
+    A link in the machine-wide standalone interpreter is revoked only when ALL
+    hold: bootstrap wrote it (exact ``pth_line`` format); the tree it names
+    carries an ``.owner`` record; that owner plugin is installed, passes the
+    ``requires_bootstrap`` gate and its manifest parses; and its ``shared_libs``
+    no longer names the library. Every other case keeps the link (an owner
+    that is gone, gated or unreadable proves nothing). The published tree under
+    ``_shared_libs`` is never touched. A pass redirected by
+    ``CLAUDE_BOOTSTRAP_DATA_ROOT`` skips this, as it skips the broadcast.
+
+    Returns ``(actions, oks, failures)``.
+    """
+    from .shared_lib import (
+        iter_bootstrap_links, read_owner_record, revoke_link,
+        standalone_site_packages,
+    )
+
+    actions, oks, failures = [], [], []
+    if os.environ.get("CLAUDE_BOOTSTRAP_DATA_ROOT"):
+        return actions, oks, failures
+    site = standalone_site_packages()
+    links = list(iter_bootstrap_links(site)) if site else []
+    if not links:
+        return actions, oks, failures
+
+    engine_mkt = os.path.basename(os.path.dirname(data_dir))
+    published = {}   # (marketplace, plugin) -> names it publishes, None = unknown
+    for plugin_info in plugins:
+        key = (getattr(plugin_info, "marketplace", "") or engine_mkt, plugin_info.name)
+        try:
+            with open(os.path.join(plugin_info.install_path, "bootstrap.json"), "r") as f:
+                manifest = json.load(f)
+        except (OSError, ValueError):
+            manifest = None
+        if not isinstance(manifest, dict) or _requires_bootstrap_unmet(manifest, engine_version):
+            published[key] = None
+            continue
+        names = set()
+        for lib_def in manifest.get("shared_libs", []) or []:
+            if isinstance(lib_def, dict) and isinstance(lib_def.get("name"), str):
+                names.add(lib_def["name"])
+        published[key] = names
+
+    for link in links:
+        label = f"shared-lib {link.name}"
+        record = read_owner_record(link.entry_dir)
+        if record is None:
+            oks.append(f"{label}: standalone link kept (no owner record at {link.entry_dir})")
+            continue
+        key = (record["marketplace"], record["plugin"])
+        names = published.get(key)
+        if names is None:
+            oks.append(
+                f"{label}: standalone link kept (owner {key[1]} is not installed "
+                f"or its manifest cannot be trusted this pass)")
+            continue
+        if link.name in names:
+            continue
+        result = revoke_link(link)
+        if result.status == "revoked":
+            actions.append(
+                f"{label}: {result.message} (owner {key[1]} no longer publishes it)")
+        else:
+            actions.append(f"{label}: FAILED - {result.message}")
+            failures.append({
+                "type": "shared_lib", "name": link.name,
+                "message": result.message, "plugin": key[1],
+            })
+    return actions, oks, failures
+
+
 def _phase_shared_libs(ctx):
     """shared_libs / shared_lib_imports: owner publish + consumer link.
 
@@ -7475,6 +7627,8 @@ def _phase_shared_libs(ctx):
             ctx.plugin_root,
             shared_root,
             verify_python=owner_venv_python,
+            owner_marketplace=os.path.basename(os.path.dirname(ctx.data_dir)),
+            owner_plugin=ctx.plugin_name,
         )
         if sync_result.status == "published" and owner_venv_python is None:
             sync_result = sync_result._replace(
@@ -7593,6 +7747,11 @@ def _process_manifest(manifest, current_os, data_dir, plugin_root, action_entrie
         marketplace=marketplace,
     )
     _lint_manifest_python(ctx)
+    if plugin_name != _LAYERED_MANIFEST_NAME:
+        # Before every phase, the venv check included. The layered manifest is
+        # skipped: its project_venv is revoked by _process_project_venv, which
+        # knows the project's venv path and merged declaration.
+        _phase_revoke_shared_lib_links(ctx)
     for keys, handler in _MANIFEST_PHASES:
         if any(manifest.get(k) for k in keys):
             handler(ctx)

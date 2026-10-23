@@ -169,3 +169,91 @@ class TestMain:
         assert "_BOOTSTRAP_GUARD_VENV_REEXEC" not in env
         assert "_BOOTSTRAP_GUARD_SKIP_REEXEC" not in env
         assert env[THIRD_PARTY_ROOT] == "third-party"
+
+
+FIXTURE_DIST = "katsoft-fixture"
+FIXTURE_REGISTRY = f"""\
+schema = 1
+repository = "https://example.invalid/fixture"
+
+[[package]]
+name = "{FIXTURE_DIST}"
+import = "fixlib"
+marker = "fixlib/_release.py"
+sources = ["lib/fixlib"]
+surface = {{ all = "lib/fixlib/__init__.py" }}
+"""
+
+
+def _git(root: Path, *args: str) -> str:
+    import subprocess
+    out = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+                          *args], cwd=root, check=True, capture_output=True, text=True)
+    return out.stdout.strip()
+
+
+@pytest.fixture
+def released_repo(tmp_path):
+    """A git repo whose newest ledger entry names the commit holding its build inputs."""
+    import json
+    root = tmp_path / "repo"
+    (root / "packages" / FIXTURE_DIST).mkdir(parents=True)
+    (root / "lib" / "fixlib").mkdir(parents=True)
+    (root / "packages" / "registry.toml").write_text(FIXTURE_REGISTRY, encoding="utf-8")
+    (root / "packages" / FIXTURE_DIST / "pyproject.toml").write_text(
+        '[project]\nname = "katsoft-fixture"\nversion = "2.0.0"\n', encoding="utf-8")
+    (root / "lib" / "fixlib" / "__init__.py").write_text("__all__ = []\n", encoding="utf-8")
+    _git(root, "init", "-q")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "release inputs")
+    commit = _git(root, "rev-parse", "HEAD")
+    ledger = {FIXTURE_DIST: {"1.9.0": {"commit": "0" * 40, "version": "1.9.0"},
+                             "2.0.0": {"commit": commit, "version": "2.0.0"}}}
+    (root / "packages" / "released.json").write_text(json.dumps(ledger), encoding="utf-8")
+    return root
+
+
+class TestDriftedPackages:
+    """The note names a registered package whose working tree differs from its newest release."""
+
+    def test_a_package_matching_its_release_is_not_named(self, launcher, released_repo):
+        assert launcher.drifted_packages(released_repo) == []
+
+    def test_an_edited_source_is_named_with_the_newest_version(self, launcher, released_repo):
+        (released_repo / "lib" / "fixlib" / "__init__.py").write_text(
+            "__all__ = ['x']\n", encoding="utf-8")
+        assert launcher.drifted_packages(released_repo) == [(FIXTURE_DIST, "2.0.0")]
+
+    def test_a_new_untracked_source_file_is_named(self, launcher, released_repo):
+        (released_repo / "lib" / "fixlib" / "extra.py").write_text("x = 1\n", encoding="utf-8")
+        assert launcher.drifted_packages(released_repo) == [(FIXTURE_DIST, "2.0.0")]
+
+    def test_a_changed_registry_entry_is_named(self, launcher, released_repo):
+        reg = released_repo / "packages" / "registry.toml"
+        reg.write_text(FIXTURE_REGISTRY.replace('marker = "fixlib/_release.py"',
+                                                'marker = "fixlib/_marker.py"'),
+                       encoding="utf-8")
+        assert launcher.drifted_packages(released_repo) == [(FIXTURE_DIST, "2.0.0")]
+
+    def test_a_change_outside_the_build_inputs_is_not_named(self, launcher, released_repo):
+        (released_repo / "README.md").write_text("unrelated\n", encoding="utf-8")
+        assert launcher.drifted_packages(released_repo) == []
+
+    def test_the_note_text_names_the_distribution_and_version(self, launcher, released_repo,
+                                                              capsys):
+        (released_repo / "lib" / "fixlib" / "__init__.py").write_text(
+            "__all__ = ['x']\n", encoding="utf-8")
+        launcher._note_drifted_packages(released_repo)
+        err = capsys.readouterr().err
+        assert f"plugin venvs use {FIXTURE_DIST} 2.0.0 from PyPI" in err
+        assert "working-tree changes to it are not loaded" in err
+
+    def test_no_note_is_printed_for_a_matching_package(self, launcher, released_repo, capsys):
+        launcher._note_drifted_packages(released_repo)
+        assert capsys.readouterr().err == ""
+
+    def test_main_prints_the_note_before_launching(self, launcher, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr(launcher, "drifted_packages", lambda root=None: [("katsoft-x", "3.1.4")])
+        monkeypatch.setattr(sys, "argv", ["claude_plugin_test.py", "--all", "--print"])
+        assert launcher.main() == 0
+        assert "plugin venvs use katsoft-x 3.1.4 from PyPI" in capsys.readouterr().err

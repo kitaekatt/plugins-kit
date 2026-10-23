@@ -98,11 +98,17 @@ choosing a side:
   mode the existing probes and their diagnostics run unchanged. Add no fourth
   routed name without extending `ROUTED_CONTRACTS` and its test.
 - Any other `bootstrap_lib` use (codex, claudx, skill material, the code-review
-  lane) calls `_runtime.require_legacy("<feature>")` before the import, which
-  raises `UnsupportedInPackageMode` in package mode.
+  lane) calls `_runtime.require_fleet("<feature>")` before the import. It
+  raises `UnsupportedInPackageMode` in package mode only when `_runtime.fleet()`
+  is False, that is, when `bootstrap_lib` does not import (cached per process).
+  `fleet()` tests availability only; whether the linked `bootstrap_lib` is new
+  enough stays in each feature's own probe (skill context, the codex argv
+  builder), never in a global gate.
 - `cli.main()` re-execs into the plugin venv only in legacy mode.
-- Package-mode model config is the one policy point
-  `registry.models.package_mode_model_config`.
+- Package-mode model config without the fleet is the one policy point
+  `registry.models.package_mode_model_config`; with the fleet, package mode
+  uses the layered registry like legacy mode, and codex reachability uses
+  `bootstrap_lib.codex.detect_codex`.
 - `_runtime` is a support module outside the 16 components: any component may
   import it, it imports only `_deployment`, and only `_runtime` imports
   `_deployment`. `tests/llm-kit/test_import_graph.py` enforces this. Import it

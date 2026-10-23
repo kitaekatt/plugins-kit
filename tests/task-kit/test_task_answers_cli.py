@@ -19,13 +19,14 @@ import json
 import os
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 from dashboard_support import ENTRYPOINT, clean_env
-from git_remote_support import git, remote_files
+from git_remote_support import clone, git, make_remote, remote_files, write
 from test_task_answer_engine import (  # noqa: F401 -- fixtures
-    CONFIG, LLM_KIT_LIB, ME, NOW, FakeRun, NeverRun, World, isolated_git, llm, new_answer, world,
+    CONFIG, LLM_KIT_LIB, ME, NOW, TASK_YAML, FakeRun, NeverRun, World, isolated_git, llm, new_answer, world,
 )
 
 from task_system import answer_store, answers_cli, export_cli, questions
@@ -296,3 +297,247 @@ def test_the_launcher_answers_a_usage_error_with_a_document():
 def test_the_retired_message_lists_the_answers_command():
     done = run_entrypoint("frobnicate")
     assert done.returncode == 2 and "task-kit answers ..." in done.stderr
+
+
+# --- --project: a pass scoped to the task folders of named project checkouts (M7-U6a) ------------------------------
+#
+# Revert checks (each named test goes red when the named change is made to ``answers_cli.py`` / ``export.py``;
+# recorded in the unit's report):
+# - ``_repositories`` ignoring ``--project`` -> ``test_a_project_scopes_refresh_to_its_task_folders``,
+#   ``test_status_is_scoped_by_project``, ``test_prune_is_scoped_by_project``
+# - ``status`` alone ignoring ``--project`` -> ``test_status_is_scoped_by_project``; ``prune`` alone ->
+#   ``test_prune_is_scoped_by_project``
+# - a shared folder dropped when the checkout that discovery prefers is not selected ->
+#   ``test_a_folder_shared_with_an_unselected_checkout_is_still_answered``
+# - tasks grouped by project checkout instead of by the repository that holds them ->
+#   ``test_two_projects_sharing_a_tasks_repository_make_one_report``
+# - ``--parent`` ignored when ``--project`` is given -> ``test_project_and_parent_are_intersected``
+# - the path check removed from ``export.resolve_projects`` -> ``test_a_bad_project_path_is_a_usage_error``
+# - ``project`` dropped from ``_OPTIONS`` -> ``test_protocols_lists_the_project_option``
+
+
+@dataclass
+class Fleet:
+    """Projects ``alpha``, ``beta`` and ``gamma`` (tasks repository one), ``delta`` (tasks repository two) and ``x``
+    (a second checkout of alpha's task folders with a shorter name, so discovery prefers it) under ``root``."""
+
+    root: Path
+    config: Path
+    second_top: Path
+
+    def project(self, name: str) -> str:
+        return str(self.root / name)
+
+
+def _add_task_in(top: Path, directory: str, stub: str) -> None:
+    write(top, f"{directory}/{stub}/task.yaml", TASK_YAML.format(stub=stub))
+    write(top, f"{directory}/{stub}/plan.md", f"# Plan for task-{stub}-marker\n")
+    write(top, f"{directory}/{stub}/CLAUDE.md", f"Notes of {stub}.\n")
+    write(top, f"{directory}/{stub}/log.md", f"# Log\n\n- 2026-10-01: created {stub}\n")
+    git(top, "add", "--", f"{directory}/{stub}")
+    git(top, "commit", "-q", "-m", f"add {stub}")
+
+
+@pytest.fixture
+def fleet(world: World) -> Fleet:
+    top = world.top
+    for directory, stub in (("alpha", "a1"), ("beta", "b1"), ("gamma", "g1")):
+        _add_task_in(top, directory, stub)
+    git(top, "push", "-q", "origin", "HEAD:main")
+    second_remote = make_remote(world.tmp_path, "remote2.git")
+    second = clone(world.tmp_path, second_remote, "tasks2")
+    _add_task_in(second, "delta", "d1")
+    git(second, "push", "-q", "origin", "HEAD:main")
+    root = world.tmp_path / "fleet"
+    for name, target in (
+        ("alpha", top / "alpha"), ("beta", top / "beta"), ("gamma", top / "gamma"), ("delta", second / "delta"),
+        ("x", top / "alpha"),
+    ):
+        (root / name / "dev").mkdir(parents=True)
+        os.symlink(target, root / name / "dev" / "tasks", target_is_directory=True)
+    config = world.tmp_path / "task.local.yaml"  # the configured parents a pass without --project would use
+    config.write_text(f"project_directories:\n  - {root}\n", encoding="utf-8")
+    return Fleet(root, config, second)
+
+
+def scoped(world, fleet, verb, *extra, run=None, **inject):
+    """``answers <verb>`` with no ``--parent``: only ``--project`` selects, and the configured parents are the fleet."""
+    protocol = ["--format", "json", "--protocol", "1"]
+    return call(world, fleet.root, verb, *protocol, *extra, run=run, config_path=fleet.config, **inject)
+
+
+def projects(fleet, *names):
+    return [arg for name in names for arg in ("--project", fleet.project(name))]
+
+
+def answered(doc: dict) -> set[str]:
+    return {item["task"] for repository in doc["payload"]["repositories"] for item in repository["answered"]}
+
+
+def test_a_project_scopes_refresh_to_its_task_folders(world, fleet, llm):
+    run = FakeRun(llm)
+    code, doc, _text, _err = scoped(world, fleet, "refresh", "--allow", "free", *projects(fleet, "beta"), run=run)
+    assert code == 0 and doc["kind"] == "answers-pass"
+    assert answered(doc) == {"beta/b1"} and run.calls == 1
+    files = remote_files(world.remote)
+    assert "beta/b1/answers/orientation/studio.yaml" in files
+    assert not any(path.startswith(("alpha/a1/answers", "gamma/g1/answers")) for path in files)
+    # the configured parents alone would have reached all of them: --project is what narrows
+    _code, everything, _text, _err = scoped(world, fleet, "status")
+    assert everything["payload"]["totals"]["tasks"] == 4  # a1 (linked twice, counted once), b1, g1, d1
+
+
+def test_a_folder_shared_with_an_unselected_checkout_is_still_answered(world, fleet, llm):
+    # discovery prefers ``x`` (the shorter name) for alpha's folders, but ``x`` is not selected
+    code, doc, _text, _err = scoped(world, fleet, "refresh", "--allow", "free", *projects(fleet, "alpha"), run=FakeRun(llm))
+    assert code == 0 and answered(doc) == {"alpha/a1"}
+    assert doc["payload"]["errors"] == []
+    # and the unselected checkout alone reaches the same folder once
+    _code, status, _text, _err = scoped(world, fleet, "status", *projects(fleet, "x", "alpha"))
+    assert status["payload"]["totals"]["tasks"] == 1
+
+
+def test_two_projects_sharing_a_tasks_repository_make_one_report(world, fleet, llm):
+    code, doc, _text, _err = scoped(
+        world, fleet, "refresh", "--allow", "free", *projects(fleet, "alpha", "beta"), run=FakeRun(llm)
+    )
+    assert code == 0
+    repository = only_repository(doc)  # exactly one report, for the repository that holds both folders
+    assert repository["repo"] == str(world.top.resolve())
+    assert answered(doc) == {"alpha/a1", "beta/b1"}
+
+
+def test_projects_in_different_task_repositories_make_one_report_each(world, fleet, llm):
+    code, doc, _text, _err = scoped(
+        world, fleet, "refresh", "--allow", "free", *projects(fleet, "alpha", "delta"), run=FakeRun(llm)
+    )
+    assert code == 0
+    assert [r["repo"] for r in doc["payload"]["repositories"]] == sorted(
+        [str(world.top.resolve()), str(fleet.second_top.resolve())]
+    )
+    assert answered(doc) == {"alpha/a1", "delta/d1"}
+
+
+def test_status_is_scoped_by_project(world, fleet):
+    code, doc, _text, _err = scoped(world, fleet, "status", *projects(fleet, "gamma"))
+    assert code == 0 and doc["kind"] == "answers-status"
+    assert doc["payload"]["totals"]["tasks"] == 1
+    assert [task["task"] for task in only_repository(doc)["tasks"]] == ["gamma/g1"]
+
+
+def test_prune_is_scoped_by_project(world, fleet, llm):
+    scoped(world, fleet, "refresh", "--allow", "free", run=FakeRun(llm))  # every project answered
+    for stub_dir in ("alpha/a1", "beta/b1"):
+        own = world.top / stub_dir / "answers" / "orientation" / "studio.yaml"
+        retired = world.top / stub_dir / "answers" / "retired_q"
+        retired.mkdir()
+        (retired / "studio.yaml").write_text(own.read_text(encoding="utf-8").replace("orientation", "retired_q"))
+        git(world.top, "add", "--", f"{stub_dir}/answers/retired_q/studio.yaml")
+        git(world.top, "commit", "-q", "-m", "retired", "--", f"{stub_dir}/answers/retired_q/studio.yaml")
+    code, doc, _text, _err = scoped(world, fleet, "prune", *projects(fleet, "beta"))
+    assert code == 0 and only_repository(doc)["pruned"] == ["beta/b1/answers/retired_q/studio.yaml"]
+    assert (world.top / "alpha/a1/answers/retired_q/studio.yaml").exists()  # alpha was not selected
+    assert not (world.top / "beta/b1/answers/retired_q/studio.yaml").exists()
+
+
+def test_a_project_named_twice_counts_once(world, fleet, llm):
+    run = FakeRun(llm)
+    link = world.tmp_path / "alpha-link"
+    os.symlink(fleet.root / "alpha", link, target_is_directory=True)
+    _code, doc, _text, _err = scoped(
+        world, fleet, "refresh", "--allow", "free", *projects(fleet, "alpha", "alpha"), "--project", str(link), run=run
+    )
+    assert answered(doc) == {"alpha/a1"} and run.calls == 1
+
+
+def test_project_and_parent_are_intersected(world, fleet, llm):
+    outside = world.tmp_path / "elsewhere" / "alpha2"
+    (outside / "dev").mkdir(parents=True)
+    os.symlink(world.top / "alpha", outside / "dev" / "tasks", target_is_directory=True)
+    code, doc, _text, _err = scoped(
+        world, fleet, "status", "--parent", str(fleet.root), *projects(fleet, "beta"), "--project", str(outside)
+    )
+    assert code == 0 and [task["task"] for task in only_repository(doc)["tasks"]] == ["beta/b1"]
+    [error] = doc["payload"]["errors"]
+    assert error["code"] == "answers" and "not a project directory under any --parent" in error["message"]
+    assert error["root"] == str(outside)
+    # a parent that holds none of the selection leaves nothing to answer
+    empty = world.tmp_path / "empty-parent"
+    empty.mkdir()
+    code, doc, _text, _err = scoped(world, fleet, "status", "--parent", str(empty), *projects(fleet, "beta"))
+    assert code == 0 and doc["payload"]["repositories"] == [] and doc["payload"]["totals"]["tasks"] == 0
+    assert len(doc["payload"]["errors"]) == 1
+
+
+def test_a_project_without_task_folders_selects_nothing(world, fleet, llm):
+    bare = world.tmp_path / "bare"
+    bare.mkdir()
+    code, doc, _text, _err = scoped(world, fleet, "refresh", "--allow", "free", "--project", str(bare), run=NeverRun())
+    assert code == 0 and doc["payload"]["repositories"] == [] and doc["payload"]["errors"] == []
+
+
+@pytest.mark.parametrize("verb", ["refresh", "status", "prune"])
+def test_a_bad_project_path_is_a_usage_error(world, fleet, verb):
+    for bad in ("relative/dir", str(fleet.root / "missing"), str(fleet.root / "alpha" / "dev" / "tasks" / "a1" / "task.yaml")):
+        code, doc, text, stderr = scoped(world, fleet, verb, "--project", bad)
+        assert code == 2 and text.count("\n") == 1
+        assert doc["error"]["code"] == "usage" and "--project is not an existing absolute directory" in doc["error"]["message"]
+        assert stderr.startswith("task-kit answers: usage:")
+
+
+def test_the_protocol_refusal_is_unchanged_by_project(world, fleet):
+    for verb in ("refresh", "status", "prune"):
+        code, doc, text, _err = scoped_with_protocol(world, fleet, verb, "2", *projects(fleet, "alpha"))
+        assert code == 4 and text.count("\n") == 1
+        assert doc["protocol"] == 1 and doc["error"]["code"] == "protocol_unsupported"
+    export_code, export_doc = export_cli.document(["tasks", "--format", "json", "--protocol", "2"])
+    assert (export_code, export_doc) == (code, doc)
+
+
+def scoped_with_protocol(world, fleet, verb, protocol, *extra):
+    return call(world, fleet.root, verb, "--format", "json", "--protocol", protocol, *extra, config_path=fleet.config)
+
+
+# --- answers protocols ---------------------------------------------------------------------------------------------------
+
+
+def test_protocols_lists_the_project_option(world, parent):
+    code, doc, text, stderr = call(world, parent, "protocols", "--format", "json")
+    assert code == 0 and stderr == "" and text.count("\n") == 1
+    assert doc["kind"] == "answers-protocols" and doc["protocol"] == 1 and doc["task_kit_version"]
+    assert doc["payload"] == {
+        "protocols": [1], "options": ["parent", "project", "allow", "batch", "stop-file", "deadline-s"],
+    }
+    assert "project" in doc["payload"]["options"]
+
+
+def test_every_listed_option_is_a_flag_the_verbs_accept(world, parent):
+    # the list is what a client probes before passing a flag, so it must name only flags that parse
+    _code, doc, _text, _err = call(world, parent, "protocols", "--format", "json")
+    for option in doc["payload"]["options"]:
+        value = {"batch": "1", "deadline-s": "1", "allow": "free"}.get(option, str(parent))
+        code, answer, _text, _err = call(
+            world, parent, "refresh", "--format", "json", "--protocol", "2", f"--{option}", value
+        )
+        assert (code, answer["error"]["code"]) == (4, "protocol_unsupported"), option  # parsed, then the protocol refused
+
+
+@pytest.mark.parametrize(
+    "argv, fragment",
+    [
+        (["protocols"], "--format"),
+        (["protocols", "--format", "json", "--protocol", "1"], "takes no --protocol"),
+        (["protocols", "--format", "json", "--parent", "/tmp"], "takes no --parent"),
+        (["protocols", "--format", "json", "--project", "/tmp"], "takes no --project"),
+    ],
+)
+def test_protocols_takes_nothing_else(world, parent, argv, fragment):
+    code, doc, _text, _err = call(world, parent, *argv)
+    assert code == 2 and doc["error"]["code"] == "usage" and fragment in doc["error"]["message"]
+
+
+def test_the_launcher_serves_protocols_without_discovery():
+    done = run_entrypoint("answers", "protocols", "--format", "json")
+    doc = json.loads(done.stdout)
+    assert done.returncode == 0 and done.stdout.count("\n") == 1
+    assert doc["kind"] == "answers-protocols" and "project" in doc["payload"]["options"]

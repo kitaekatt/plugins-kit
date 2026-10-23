@@ -39,6 +39,11 @@ in docs/reference/testing.md, section "claudx containment mechanics". That
 reference distinguishes the reproduced missing-venv mechanism from the earlier
 invocation whose exact import path was not captured.
 
+PACKAGE-BACKED LIBRARIES. A package registered in packages/registry.toml is
+installed into plugin venvs from PyPI, never from the working tree. The launcher
+prints a stderr note for each one whose working-tree build inputs differ from its
+newest packages/released.json entry.
+
 ENABLEMENT FILTERING. Without `--all`, only plugins ENABLED for `--project-dir`
 are loaded; the rest are reported on stderr as "not enabled, skipping". Smoke-
 testing a plugin that is disabled for that project yields a green run in which
@@ -66,6 +71,68 @@ SYNTHETIC_REGISTRY = PLUGINS_DIR / "installed_plugins.json"
 DEFAULT_DATA_ROOT = Path(os.path.expanduser("~")) / ".claude" / "plugins" / "data-dev"
 
 sys.path.insert(0, str(PLUGINS_DIR / "bootstrap"))
+
+
+def drifted_packages(repo_root: Path = REPO_ROOT) -> list[tuple[str, str]]:
+    """(distribution, newest released version) for each registered package whose
+    working-tree build inputs differ from that release.
+
+    The newest entry of packages/released.json names the commit the wheel was
+    built from. The inputs are the entry's own S(X) from scripts/_packages.py
+    (`Entry.inputs()`), compared against that commit with the same registry-entry
+    rule `same_src` applies: the entry is compared parsed, so registering another
+    package does not read as a change to this one. Tracked edits and untracked
+    files under the inputs both count. A package with no ledger entry is not
+    listed: it has no released wheel to differ from.
+    """
+    sys.path.insert(0, str(REPO_ROOT / "scripts"))
+    import _packages
+    from packaging.version import Version
+
+    repo = _packages.Repo(repo_root)
+    registry_file = repo_root / _packages.REGISTRY_PATH
+    if not registry_file.is_file():
+        return []
+    try:
+        registry = _packages.rb.parse_registry(registry_file.read_text(encoding="utf-8"))
+    except _packages.rb.BuildError as exc:
+        sys.exit(f"error: {exc}")
+    ledger_file = repo_root / _packages.RELEASED_PATH
+    ledger = json.loads(ledger_file.read_text(encoding="utf-8")) if ledger_file.is_file() else {}
+
+    drifted = []
+    for entry in registry.entries:
+        versions = ledger.get(entry.name) or {}
+        if not versions:
+            continue
+        newest = max(versions, key=Version)
+        commit = versions[newest]["commit"]
+        released = _packages.read_registry(repo, commit)
+        try:
+            released_entry = released.entry(entry.name)
+        except _packages.rb.BuildError:
+            released_entry = None
+        paths = [p for p in entry.inputs() if p != _packages.REGISTRY_PATH]
+        tracked = repo.run("diff", "--quiet", commit, "--", *paths)
+        if tracked.returncode not in (0, 1):
+            sys.exit(f"error: git diff {commit} failed: "
+                     + tracked.stderr.decode(errors="replace").strip())
+        untracked = repo.git("ls-files", "--others", "--exclude-standard", "--", *paths)
+        if (released_entry != entry or released.repository != registry.repository
+                or tracked.returncode == 1 or untracked):
+            drifted.append((entry.name, newest))
+    return drifted
+
+
+def _note_drifted_packages(repo_root: Path = REPO_ROOT) -> None:
+    """Name each registered package whose working tree the session will not load.
+
+    Plugin venvs install registered packages from PyPI, so a working-tree edit
+    to one is invisible to the session even though the plugin code is dev code.
+    """
+    for dist, version in drifted_packages(repo_root):
+        print(f"note: plugin venvs use {dist} {version} from PyPI; "
+              "working-tree changes to it are not loaded", file=sys.stderr)
 
 
 def _marketplace_name() -> str:
@@ -219,6 +286,7 @@ def main() -> int:
         print(f"not enabled, skipping: {' '.join(skipped)}", file=sys.stderr)
 
     data_root = Path(args.data_root)
+    _note_drifted_packages()
 
     # --print is READ-ONLY, and must stay that way: it is what a caller uses to
     # confirm where a run would write BEFORE letting it write there. Returning

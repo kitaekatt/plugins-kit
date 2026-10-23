@@ -96,7 +96,7 @@ def _skill_material() -> Any:
     """
     from llm_kit import _runtime  # noqa: PLC0415
 
-    _runtime.require_legacy("skill context")
+    _runtime.require_fleet("skill context")
     try:
         import bootstrap_lib  # noqa: F401, PLC0415
     except ModuleNotFoundError as exc:

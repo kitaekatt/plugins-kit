@@ -298,7 +298,21 @@ a seconds-long call into a minutes-long session. It earns that only when the
 information needed is not knowable when the prompt is written: the unit must
 discover what to read, verify its own output, iterate, edit in place across
 files, or honour instruction files it was not handed. If you can hand the unit
-everything it needs, keep it a completion. Run a completion through
+everything it needs, keep it a completion.
+
+If you do use a headless harness call, strip it to the task prompt. A harness
+call inherits the operator's and the project's agent context (user and project
+instruction files, settings, memory) unless you turn that off. The harness
+places that context after the system-prompt cache breakpoint, so every call
+re-writes it to the prompt cache and never reads it back: one measured
+pipeline paid about 30k cache-write tokens per call for context unrelated to
+the task, and about 0.6k once it was removed. Use the text-only mode (see
+"Text-only mode" in `references/llm-access.md`), keep the cacheable prefix
+identical across calls and limited to the task prompt, and record cache read
+and cache write per call in the run ledger so a regression like this shows up
+in the first pilot instead of in the bill.
+
+Run a completion through
 `platform.call_llm(backend, system, user, model=..., cache_dir=..., pricing=...)`,
 which layers a budget guard, a content-addressed response cache, retry, and
 cost accounting over one `backend.complete`. For a cap that two OS processes
@@ -819,6 +833,43 @@ What this cannot do, and what a consumer therefore owns: a `call_llm` without
 see it. Reserve-before-pay is a property of the call site. A pipeline that wants
 it mechanically gives itself one wrapper around `call_llm` that always supplies
 `spend=` and calls nothing else.
+
+### Run efficiency
+
+Rules for a pipeline whose run is long enough that its cost matters. Each one
+exists because a measured run paid for ignoring it.
+
+- **Re-measure the cost model after every efficiency change.** A rate
+  calibrated before a change is wrong after it. A conservative estimator that
+  never re-anchors on fresh observations drifts without bound, and a spend
+  floor built on it fails in the harmful direction: one pipeline modelled
+  spend at a pre-fix rate about 20 times too high, ratcheted its view of the
+  remaining quota down while the real quota was nearly full, and stopped a
+  healthy run. Re-base the model on every newer observed snapshot of the real
+  quota, and update the per-call rates from measurement (with a margin) whenever
+  transport, prompt size or caching changes.
+- **Persist what you need to size a call.** If the ledger stores only hashes
+  and replies, you cannot later reconstruct request sizes, and every cost
+  question becomes a new experiment. Record a size counter (not the body) and
+  the per-call token and cache fields for each request.
+- **Prove a fix on a small replay before a live run.** Replay a few dozen known
+  failures and known successes through the new prompt and transport, with the
+  same request builder as the real run, and compare cost and answers against
+  the ledger of the old run. It is far cheaper than a pilot and shows the cost
+  effect directly.
+- **Measure the cost of a feature before adopting it.** Native structured
+  output through a harness can add a turn per call (one observed call took two
+  turns with a schema). Measure tokens and requests with the schema on and off
+  before you make it the default.
+- **Stop early on a bad first stage.** Check a sample of the first (usually
+  most expensive and most error-prone) stage before the later stages run.
+  Running every downstream stage over a bad first stage spent roughly a third
+  of that run's quota on results that the final acceptance check then rejected.
+- **Report pilot-vs-run differences; refuse only when the change can alter
+  answers.** A pilot certifies a configuration. When a later change touches
+  only transport (not prompts, models or parsing), report the per-phase
+  differences instead of refusing the run, so you do not repay a pilot for a
+  change that cannot move the answers. Decide a re-pilot case by case.
 
 ### The tracked path
 

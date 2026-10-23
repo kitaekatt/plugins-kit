@@ -138,14 +138,33 @@ diagnostics on stderr, `--protocol N` required, an unsupported protocol answered
 are not covered by `task-export.schema.json`; this section is their contract.
 
 ```
-task-kit answers refresh --format json --protocol N [--parent DIR]... [--allow CLASSES] [--batch N]
-                         [--stop-file PATH] [--deadline-s N]
-task-kit answers status  --format json --protocol N [--parent DIR]...
-task-kit answers prune   --format json --protocol N [--parent DIR]...
+task-kit answers protocols --format json
+task-kit answers refresh --format json --protocol N [--parent DIR]... [--project DIR]... [--allow CLASSES]
+                         [--batch N] [--stop-file PATH] [--deadline-s N]
+task-kit answers status  --format json --protocol N [--parent DIR]... [--project DIR]...
+task-kit answers prune   --format json --protocol N [--parent DIR]... [--project DIR]...
 ```
 
 - `--parent` is as for `export tasks`. Tasks are grouped by the git repository that holds the task folder; a
   folder outside git is an `errors[]` entry with code `answers`.
+- `--project DIR` (absolute, an existing directory, repeatable; anything else is a `usage` error, exit 2) scopes a
+  pass to the task folders of exactly those project checkouts: discovery visits only them, not the children of a
+  parent, and finds what `export tasks` finds for them (the `dev/tasks` root, wherever its link resolves; `tmp/`
+  tasks are not part of it). A project whose `dev/tasks` is linked into a tasks repository is grouped by that
+  repository, so two selected projects that share one tasks repository make one `repositories[]` entry. A folder
+  several checkouts reach is owned by the first SELECTED checkout, never dropped because a checkout that is not
+  selected would have owned it. Without `--parent`, configured parents are not consulted. With both, the
+  selection is their intersection: a project that is not a visible child directory of a `--parent` is left out and
+  named in an `errors[]` entry with code `answers`. A selection that reaches no task folders gives an empty
+  `repositories[]`.
+- `answers protocols` takes `--format json` and nothing else (a `--protocol`, `--parent` or `--project` is a
+  `usage` error) and does no discovery. Kind `answers-protocols`, payload `{"protocols": [1], "options": [...]}`:
+  `options` lists, as flag names without the leading dashes, the flags the answers verbs accept (`parent`,
+  `project`, `allow`, `batch`, `stop-file`, `deadline-s`; a verb takes its own subset, as above). A client tells a
+  task-kit with `--project` from one without by running this verb and looking for `project` in `options`. A task-kit
+  without the verb answers exit 2: a `usage` error document ("invalid choice") from 0.17.0, an empty stdout from a
+  task-kit that predates `answers`. `export protocols` cannot tell these apart, because it answers on every
+  task-kit since 0.15.
 - `--allow CLASSES` is a comma-separated set of llm-kit cost classes (`free`, `usage`, `spend`) the pass may
   use; `free` is always allowed. Without it, the classes are llm-kit's per-machine consent, read once, the first
   time a pass has a model to ask. Free entries are always tried before the others.

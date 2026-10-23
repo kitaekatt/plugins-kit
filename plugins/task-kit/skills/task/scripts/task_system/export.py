@@ -124,6 +124,34 @@ def resolve_parents(parents: tuple[Path, ...] | None, config_path: Path | None =
     return found
 
 
+def resolve_projects(
+    projects: tuple[Path, ...], parents: tuple[Path, ...] | None = None, errors: list[dict] | None = None
+) -> tuple[ProjectRoot, ...]:
+    """The project checkouts a ``--project`` selection names, as discovery would have found them.
+
+    Each is an absolute existing directory (anything else is a ``usage`` error); one named twice, or through a
+    link to the same directory, counts once. With ``parents`` (already resolved) the selection is intersected
+    with discovery: a project that is not a visible child directory of one of them is left out and reported in
+    ``errors``, as ``discover_project_roots`` would not have found it.
+    """
+    selected: dict[Path, ProjectRoot] = {}
+    for project in projects:
+        candidate = Path(project).expanduser()
+        if not candidate.is_absolute() or not candidate.is_dir():
+            raise ExportError("usage", f"--project is not an existing absolute directory: {candidate}")
+        candidate = Path(os.path.normpath(candidate))
+        selected.setdefault(candidate.resolve(), ProjectRoot(name=candidate.name, root=candidate))
+    if parents is None:
+        return tuple(selected.values())
+    kept = []
+    for found in selected.values():
+        if found.root.parent.resolve() in parents and not found.name.startswith("."):
+            kept.append(found)
+        elif errors is not None:
+            errors.append(_error("answers", f"{found.root} is not a project directory under any --parent", found.root))
+    return tuple(kept)
+
+
 @dataclass(frozen=True)
 class _Owner:
     project: ProjectRoot
@@ -150,14 +178,18 @@ def _list_task_stubs(base: Path) -> list[str]:
     return sorted(stubs)
 
 
-def _owners(parents: tuple[Path, ...], errors: list[dict]) -> tuple[dict[str, _Owner], dict[str, tuple[ProjectRoot, Path]]]:
+def _owners(
+    parents: tuple[Path, ...], errors: list[dict], projects: tuple[ProjectRoot, ...] | None = None
+) -> tuple[dict[str, _Owner], dict[str, tuple[ProjectRoot, Path]]]:
     """Every task folder once, keyed by its physical path, and every physical task root once.
 
     Projects are visited most-preferred first, so the first checkout to reach
-    a folder owns it.
+    a folder owns it. ``projects`` (from ``resolve_projects``) replaces the
+    discovery under ``parents``: only those checkouts are visited, so a folder
+    they reach is owned by the first of THEM, whatever other checkouts link it.
     """
     try:
-        roots = discover_project_roots(parents)
+        roots = discover_project_roots(parents) if projects is None else projects
     except DiscoveryError as exc:
         raise ExportError("discovery_failed", str(exc)) from exc
     owners: dict[str, _Owner] = {}

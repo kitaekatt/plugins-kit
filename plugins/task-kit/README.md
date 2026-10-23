@@ -59,6 +59,11 @@ task-kit answers refresh --format json --protocol N   answer pending questions, 
 task-kit answers prune   --format json --protocol N   delete this machine's files of questions the catalog no longer holds
 ```
 
+`--project DIR` (absolute, repeatable) on `refresh`, `status` and `prune` scopes the pass to the task folders of exactly those
+project checkouts, wherever their `dev/tasks` link resolves; `--parent` keeps its meaning, and given with `--project` the two are
+intersected. `task-kit answers protocols --format json` prints `{"protocols": [1], "options": [...]}` so a caller can check that
+`project` is among the options before using it.
+
 `/task review` runs the same engine for the orientation question. The models are the config key `answers.models`
 (`~/.claude/config/task-kit.yaml`, section `answers:`; shipped default `[luna, haiku]`, `effort: medium`); free entries
 run first. A paid cost class (`usage`, `spend`) runs only when llm-kit's per-machine consent allows it or the caller

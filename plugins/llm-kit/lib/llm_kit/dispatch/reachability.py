@@ -316,10 +316,10 @@ def _check_codex(*, timeout: float) -> Reachability:
     importable: it is cached, it parses a structured version, and it is the
     same detector bootstrap's own tooling relies on elsewhere.
 
-    Package mode has no ``bootstrap_lib`` and never imports it: the PATH +
-    ``--version`` check is its verdict, the same real check.
+    Package mode without the fleet (``bootstrap_lib`` not importable) takes the
+    same PATH + ``--version`` check as its verdict, the same real check.
     """
-    if _runtime.mode() == "package":
+    if _runtime.mode() == "package" and not _runtime.fleet():
         return _codex_path_check(timeout=timeout)
     try:
         from bootstrap_lib.codex import detect_codex  # noqa: PLC0415

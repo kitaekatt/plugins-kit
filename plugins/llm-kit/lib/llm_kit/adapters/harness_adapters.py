@@ -251,7 +251,7 @@ class CodexAdapter(HarnessAdapter):
         # bootstrap_lib; the missing shared library should fail only here.
         from llm_kit import _runtime  # noqa: PLC0415
 
-        _runtime.require_legacy("the codex adapter")
+        _runtime.require_fleet("the codex adapter")
         from bootstrap_lib.codex import build_codex_exec_argv  # noqa: PLC0415
 
         kwargs = {"root": cwd, "model": entry.model}
@@ -271,7 +271,7 @@ class CodexAdapter(HarnessAdapter):
         """Use bootstrap's existing Codex presence detector, without a model run."""
         from llm_kit import _runtime  # noqa: PLC0415
 
-        _runtime.require_legacy("the codex adapter")
+        _runtime.require_fleet("the codex adapter")
         from bootstrap_lib.codex import detect_codex  # noqa: PLC0415
 
         return bool(detect_codex().available)

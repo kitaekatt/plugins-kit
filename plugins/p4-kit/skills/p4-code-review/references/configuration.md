@@ -38,6 +38,32 @@ An unlocatable diagnostic leaves coverage unavailable. Other shipped checks reta
 their added-line scope. Both reviewer dispatch paths receive the covered question
 with instructions not to repeat it. These results do not select or suppress lanes.
 
+## Excluding files from review
+
+A separate file lists paths `p4-code-review` must not review, such as assets a project's
+own tooling regenerates. Two optional layers, read in this order:
+
+| Layer | Path |
+|---|---|
+| user | `~/.claude/config/review_exclusions.yaml` |
+| project | `<project_root>/.claude/review_exclusions.yaml` |
+
+```yaml
+exclude:
+  - ".databench/**"
+  - "docs/**/*.webp"
+  - "!docs/keep/**"
+```
+
+Each entry is a glob over the workspace-relative path. A `**/` prefix matches at any
+depth, including the root. An entry that starts with `!` re-admits matching paths and
+beats every positive glob in either layer. The layers concatenate. `exclude` is the only
+key. A malformed layer stops the review with an error.
+
+A matched file is reported in `bundle.machine_emitted_files` with
+`machine_emitted_axis: configured_path` and a signature that names the layer and glob.
+It is not reviewed and never counts as a pass. `--review-machine-emitted` reviews it anyway.
+
 ## Layers
 
 Three layers are merged from lowest to highest precedence:

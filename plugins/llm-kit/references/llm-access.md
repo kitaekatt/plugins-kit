@@ -654,9 +654,12 @@ schema is a stdlib JSON Schema subset; a keyword outside it (`pattern`,
   three policies, but accepts only OpenAI strict-mode schemas
   (`additionalProperties` false and every property in `required`, at every
   object level); anything else is refused before it spawns.
-- `openrouter`, `claude-cli` and `opencode-cli` append an exact schema
-  instruction to the system text, list `validated-result` and `text-only`, and
-  never `native-required`. `openrouter` sends no `response_format`.
+- `claude-cli` delivers the schema natively (`--json-schema`), reads the
+  answer from the envelope's `structured_output` field, and lists all three
+  policies. It accepts any schema in the stdlib subset.
+- `openrouter` and `opencode-cli` append an exact schema instruction to the
+  system text, list `validated-result` and `text-only`, and never
+  `native-required`. `openrouter` sends no `response_format`.
 - `contract_requirements(contract)` gives the selection requirement, and
   `declaration.run` applies it before choosing a model, so an entry that cannot
   satisfy the policy is skipped.

@@ -37,6 +37,13 @@ Mechanism (a generalization of llm-scripting-kit's B1 prototype):
   swapped in place on every publish: it is the documented location a
   foreign-interpreter consumer reads (library-consumption.md, mode 3b).
 
+- Revocation: a link is removed when its declaration is. Bootstrap removes only
+  the ``.pth`` files IT wrote (content exactly equal to ``pth_line``'s output
+  for the file's own name), from a venv whose owner no longer declares that
+  name, and from the standalone interpreter when the recorded owner
+  (``<shared_root>/<pkg>/.owner``) is installed and no longer publishes the
+  library. A published tree under ``_shared_libs`` is never deleted.
+
 This module shares first-party SOURCE only. Third-party deps the package needs
 (e.g. ``openai`` for ``llm_scripting_kit``) are the importing plugin's own concern,
 declared in its ``pyproject.toml`` -- NOT installed here. A separate static test
@@ -52,8 +59,12 @@ its logging discipline (cached -> log_ok; published/linked -> action log; skippe
 log; failed -> action log + failure).
 """
 
+import ast
+import glob
 import hashlib
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -66,7 +77,7 @@ from .atomic_write import write_atomic
 
 class SharedLibResult(NamedTuple):
     name: str
-    status: str   # "cached" | "published" | "linked" | "skipped" | "failed"
+    status: str   # "cached" | "published" | "linked" | "revoked" | "skipped" | "failed"
     message: str
 
 
@@ -298,6 +309,8 @@ def sync_shared_lib(
     plugin_root: str,
     shared_root: str,
     verify_python: Optional[str] = None,
+    owner_marketplace: str = "",
+    owner_plugin: str = "",
 ) -> SharedLibResult:
     """Publish an owner package's SOURCE to the shared location.
 
@@ -307,6 +320,13 @@ def sync_shared_lib(
     when the source tree hash is unchanged.
 
     Returns "published" (synced), "cached" (unchanged), or "failed" (no source).
+
+    When ``owner_plugin`` is given, the owner's identity is recorded in
+    ``<shared_root>/<name>/.owner`` on every outcome that leaves a published
+    tree (including "cached", so a tree published before the record existed
+    gains one). The record is what lets a later pass revoke the standalone
+    ``<name>.pth`` once its owner stops publishing the library
+    (``read_owner_record``); it is not part of the content hash.
     """
     src_pkg = os.path.join(plugin_root, src, name)
     if not os.path.isdir(src_pkg):
@@ -330,6 +350,11 @@ def sync_shared_lib(
         and _read_text(pointer) == gen_id
         and os.path.isdir(os.path.join(gen_dir, name))
     ):
+        try:
+            _record_owner(entry_dir, owner_marketplace, owner_plugin)
+        except OSError as exc:
+            return SharedLibResult(
+                name, "failed", f"could not record the owner of {name}: {exc}")
         return SharedLibResult(name, "cached", f"synced (cached, {dest_pkg})")
 
     stage_root = None
@@ -383,6 +408,7 @@ def sync_shared_lib(
             _mark_superseded(os.path.join(entry_dir, GENERATIONS_DIR, previous_gen))
         with open(hash_file, "w", encoding="utf-8") as f:
             f.write(stamp + "\n")
+        _record_owner(entry_dir, owner_marketplace, owner_plugin)
     except OSError as exc:
         return SharedLibResult(name, "failed", f"failed to publish {name}: {exc}")
     finally:
@@ -513,6 +539,160 @@ def _swap_directory(staged: str, destination: str) -> None:
             pass
         raise
     shutil.rmtree(backup, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Owner records and targeted revocation
+# ---------------------------------------------------------------------------
+
+OWNER_RECORD = ".owner"
+# A bootstrap-written .pth is under 1 KiB; anything much larger is not ours,
+# so it is never read.
+_MAX_PTH_BYTES = 8192
+_PTH_EXEC_PREFIX = "import sys; exec("
+_PTH_ENTRY_RE = re.compile(r"^_bsl_e = (.+)$", re.MULTILINE)
+
+
+class BootstrapLink(NamedTuple):
+    name: str
+    path: str
+    entry_dir: str
+
+
+def parse_pth_entry_dir(name: str, content: str) -> Optional[str]:
+    """The ``entry_dir`` of a ``.pth`` bootstrap wrote for ``name``, else None.
+
+    "Bootstrap wrote it" means the stripped content EQUALS
+    ``pth_line(name, entry_dir)`` for the ``entry_dir`` the content itself
+    names. The literals are read with ``ast.literal_eval`` (never executed),
+    and the final equality check rejects anything that merely resembles the
+    format, so a hand-written, edited or foreign ``.pth`` is never claimed.
+    None means "not ours", not an error.
+    """
+    text = content.strip()
+    if not (text.startswith(_PTH_EXEC_PREFIX) and text.endswith(")")):
+        return None
+    try:
+        code = ast.literal_eval(text[len(_PTH_EXEC_PREFIX):-1])
+        match = _PTH_ENTRY_RE.search(code) if isinstance(code, str) else None
+        entry_dir = ast.literal_eval(match.group(1)) if match else None
+    except (ValueError, SyntaxError, MemoryError, RecursionError):
+        return None
+    if not isinstance(entry_dir, str):
+        return None
+    return entry_dir if pth_line(name, entry_dir) == text else None
+
+
+def iter_bootstrap_links(site_dir: str):
+    """Yield a ``BootstrapLink`` for every bootstrap-written ``.pth`` in ``site_dir``."""
+    try:
+        names = sorted(os.listdir(site_dir))
+    except OSError:
+        return
+    for fname in names:
+        if not fname.endswith(".pth") or len(fname) == len(".pth"):
+            continue
+        path = os.path.join(site_dir, fname)
+        try:
+            if not os.path.isfile(path) or os.path.getsize(path) > _MAX_PTH_BYTES:
+                continue
+        except OSError:
+            continue
+        name = fname[: -len(".pth")]
+        raw = _read_raw(path)
+        entry_dir = parse_pth_entry_dir(name, raw) if raw is not None else None
+        if entry_dir is not None:
+            yield BootstrapLink(name, path, entry_dir)
+
+
+def venv_site_packages(venv_dir: str) -> Optional[str]:
+    """The site-packages directory of the venv at ``venv_dir``, or None.
+
+    Resolved from the venv layout without running its interpreter: revocation
+    runs BEFORE the venv check, when the interpreter may be missing or broken.
+    """
+    if sys.platform == "win32":
+        candidates = [os.path.join(venv_dir, "Lib", "site-packages")]
+    else:
+        candidates = sorted(glob.glob(os.path.join(venv_dir, "lib", "python*", "site-packages")))
+    for candidate in candidates:
+        if os.path.isdir(candidate):
+            return candidate
+    return None
+
+
+def standalone_site_packages() -> Optional[str]:
+    """site-packages of the bootstrap-managed standalone Python, or None."""
+    python = find_standalone_python()
+    if python is None:
+        return None
+    # Windows: <prefix>/python.exe. POSIX: <prefix>/bin/python3.
+    prefix = os.path.dirname(python)
+    if sys.platform != "win32":
+        prefix = os.path.dirname(prefix)
+    return venv_site_packages(prefix)
+
+
+def revoke_link(link: BootstrapLink) -> SharedLibResult:
+    """Remove one bootstrap-written ``.pth``; returns "revoked" or "failed"."""
+    try:
+        os.remove(link.path)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        return SharedLibResult(
+            link.name, "failed",
+            f"could not revoke the undeclared link {link.path}: {exc}",
+        )
+    return SharedLibResult(link.name, "revoked", f"revoked undeclared link -> {link.path}")
+
+
+def revoke_undeclared_links(site_dir: str, declared) -> list:
+    """Revoke every bootstrap-written ``.pth`` in ``site_dir`` not in ``declared``.
+
+    ``declared`` is the set of library names the venv's owner still declares in
+    ``shared_lib_imports``. A ``.pth`` whose content is not exactly what
+    bootstrap writes is never touched. Returns one ``SharedLibResult`` per
+    removal attempt ("revoked" or "failed"); nothing for a kept or foreign file.
+    """
+    return [
+        revoke_link(link)
+        for link in iter_bootstrap_links(site_dir)
+        if link.name not in declared
+    ]
+
+
+def _record_owner(entry_dir: str, marketplace: str, plugin: str) -> None:
+    """Write ``<entry_dir>/.owner`` when it differs from the desired record."""
+    if not plugin:
+        return
+    desired = json.dumps({"marketplace": marketplace, "plugin": plugin}, sort_keys=True) + "\n"
+    if _read_raw(os.path.join(entry_dir, OWNER_RECORD)) == desired:
+        return
+    write_atomic(os.path.join(entry_dir, OWNER_RECORD), desired)
+
+
+def read_owner_record(entry_dir: str) -> Optional[dict]:
+    """The ``{"marketplace", "plugin"}`` record beside a published tree, or None.
+
+    None covers a tree published before records existed and a record that is
+    not the expected shape; the caller treats both as "ownership unknown" and
+    revokes nothing.
+    """
+    raw = _read_raw(os.path.join(entry_dir, OWNER_RECORD))
+    if raw is None:
+        return None
+    try:
+        record = json.loads(raw)
+    except ValueError:
+        return None
+    if (
+        isinstance(record, dict)
+        and isinstance(record.get("plugin"), str) and record["plugin"]
+        and isinstance(record.get("marketplace"), str)
+    ):
+        return record
+    return None
 
 
 def link_shared_lib(name: str, python: Optional[str], shared_root: str) -> SharedLibResult:

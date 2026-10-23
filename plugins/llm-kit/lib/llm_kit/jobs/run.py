@@ -348,7 +348,7 @@ def _claudx_contract_command(
         "CLAUDE_PLUGIN_TEST"
     ):
         return list(command)
-    _runtime.require_legacy("claudx propagation")
+    _runtime.require_fleet("claudx propagation")
     try:
         from bootstrap_lib.claudx import contract_command
     except ImportError as exc:
