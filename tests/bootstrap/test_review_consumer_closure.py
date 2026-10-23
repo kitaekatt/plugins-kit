@@ -22,6 +22,14 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 
+# Released first-party packages the consumers declare for the review LANE
+# (llm_kit.dispatch.review_lane), not for bundle assembly. bootstrap_lib imports
+# neither (tests/bootstrap/test_run_review_lane_drift.py asserts it never imports
+# llm_kit), so the bundle must assemble in a private site-packages that holds
+# none of them. They are also not installed in the repository test environment,
+# so there is nothing to copy.
+_LANE_PACKAGES = {"katsoft-llm-kit", "katsoft-contracts"}
+
 
 def _copy_dependencies(requirements: list[str], target: Path) -> None:
     """Copy only declared distributions and their active transitive requirements."""
@@ -56,8 +64,11 @@ def _assemble_in_consumer(
     project = tomllib.loads(
         (ROOT / "plugins" / plugin / "pyproject.toml").read_text(encoding="utf-8")
     )["project"]
+    declared = {Requirement(req).name for req in project["dependencies"]}
+    assert _LANE_PACKAGES <= declared, "the consumer must declare the lane packages"
     requirements = [
-        req for req in project["dependencies"] if Requirement(req).name != omit
+        req for req in project["dependencies"]
+        if Requirement(req).name != omit and Requirement(req).name not in _LANE_PACKAGES
     ]
     site_packages = tmp_path / "site-packages"
     site_packages.mkdir()

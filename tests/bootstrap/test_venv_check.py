@@ -12,6 +12,10 @@ from bootstrap_lib.venv_check import (
     check_venv,
     ensure_venv,
     find_uv,
+    installed_version,
+    load_released_ledger,
+    package_targets,
+    parse_restricted_requirement,
     scan_editable_installs,
     site_packages_dirs,
     _project_content_hash,
@@ -686,8 +690,9 @@ class TestManifestExtrasReachEnsureVenv:
         seen = {}
 
         def fake_ensure_venv(project_dir, venv_path, extras=(), check_imports=(),
-                             always_sync=False):
+                             always_sync=False, released_ledger=None):
             seen["extras"] = list(extras)
+            seen["released_ledger"] = released_ledger
             from bootstrap_lib.venv_check import Result
             return Result(subject="venv", passed=True, message="ok"), []
 
@@ -705,6 +710,7 @@ class TestManifestExtrasReachEnsureVenv:
             plugin_root = str(tmp_path / "root")
             prefix = ""
             plugin_name = "llm-scripting-kit"
+            marketplace = "plugins-kit"
             action_entries: list = []
             ok_entries: list = []
             quiet_entries: list = []
@@ -724,6 +730,7 @@ class TestManifestExtrasReachEnsureVenv:
             plugin_root = str(tmp_path / "root")
             prefix = ""
             plugin_name = "some-plugin"
+            marketplace = "plugins-kit"
             action_entries: list = []
             ok_entries: list = []
             quiet_entries: list = []
@@ -739,3 +746,435 @@ class TestManifestExtrasReachEnsureVenv:
                             ["openai"], extras=["sdk"])
         assert not result.passed
         assert "--extra sdk" in result.remediation_cmd
+
+
+# --- released-package targets (U6) ----------------------------------------
+
+_LLM = "katsoft-llm-kit"
+
+
+def _ledger(path, **dists):
+    """Write a released.json: dists maps distribution -> [version, ...]."""
+    import json
+    data = {d: {v: {"version": v} for v in versions} for d, versions in dists.items()}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return str(path)
+
+
+def _project(tmp_path, *requirements, optional=None):
+    project = tmp_path / "proj"
+    project.mkdir(exist_ok=True)
+    deps = ", ".join(repr(r) for r in requirements)
+    text = f"[project]\nname = 'demo'\nversion = '1.0.0'\ndependencies = [{deps}]\n"
+    for extra, reqs in (optional or {}).items():
+        text += f"[project.optional-dependencies]\n{extra} = [{', '.join(repr(r) for r in reqs)}]\n"
+    (project / "pyproject.toml").write_text(text, encoding="utf-8")
+    return project
+
+
+def _install(venv_path, dist, version):
+    """Record `dist` as installed the way the installer does (a dist-info dir)."""
+    site = os.path.join(venv_path, "Lib", "site-packages")
+    for stale in [e for e in (os.listdir(site) if os.path.isdir(site) else [])
+                  if e.startswith(dist.replace("-", "_") + "-")]:
+        os.rmdir(os.path.join(site, stale))
+    os.makedirs(os.path.join(site, f"{dist.replace('-', '_')}-{version}.dist-info"))
+
+
+class TestRestrictedRequirementForm:
+    def test_restricted_form_parser(self):
+        assert parse_restricted_requirement("katsoft-llm-kit>=1.1,<2") == (
+            "katsoft-llm-kit", (1, 1, 0), 2)
+        assert parse_restricted_requirement("katsoft_llm_kit[sdk, jobs] >= 1.2.3 , < 3") == (
+            "katsoft_llm_kit", (1, 2, 3), 3)
+        for bad in (
+            "katsoft-llm-kit",                    # no range
+            "katsoft-llm-kit>=1",                 # lower bound needs A.B
+            "katsoft-llm-kit>=1.1",               # no upper bound
+            "katsoft-llm-kit>=1.1,<2.0",          # upper bound is a bare major
+            "katsoft-llm-kit<2,>=1.1",            # fixed order
+            "katsoft-llm-kit==1.1.0",
+            "katsoft-llm-kit~=1.1",
+            "katsoft-llm-kit>=1.1,<2; python_version>'3.8'",
+            "katsoft-llm-kit @ https://example.invalid/x.whl",
+            "katsoft-llm-kit>=1.1rc1,<2",
+            "",
+        ):
+            assert parse_restricted_requirement(bad) is None, bad
+
+    def test_targets_are_the_highest_admitted_release(self, tmp_path):
+        project = _project(tmp_path, f"{_LLM}[sdk]>=1.1,<2", "openai>=1.0")
+        ledger = _ledger(tmp_path / "m" / "released.json",
+                         **{_LLM: ["1.0.0", "1.1.0", "1.4.2", "1.10.0", "2.0.0", "1.5.0rc1"]})
+        targets, errors = package_targets(str(project), ledger)
+        assert errors == []
+        assert targets == [(_LLM, "1.10.0")]   # numeric order; 2.0.0 and the rc excluded
+
+    def test_extras_requirements_count_only_when_the_extra_is_installed(self, tmp_path):
+        project = _project(tmp_path, "openai>=1.0",
+                           optional={"sdk": [f"{_LLM}>=1.1,<2"]})
+        ledger = _ledger(tmp_path / "m" / "released.json", **{_LLM: ["1.1.0", "1.2.0"]})
+        assert package_targets(str(project), ledger) == ([], [])
+        assert package_targets(str(project), ledger, ["sdk"]) == ([(_LLM, "1.2.0")], [])
+
+    def test_no_ledger_or_no_registered_requirement_means_no_targets(self, tmp_path):
+        project = _project(tmp_path, "openai>=1.0")
+        assert package_targets(str(project), str(tmp_path / "absent.json")) == ([], [])
+        ledger = _ledger(tmp_path / "m" / "released.json", **{_LLM: ["1.1.0"]})
+        assert package_targets(str(project), ledger) == ([], [])
+
+    def test_unparseable_requirement_fails_loudly(self, tmp_path):
+        """Loosening the parser to skip an unrecognized form turns this red: the
+        requirement would silently get no target."""
+        ledger = _ledger(tmp_path / "m" / "released.json", **{_LLM: ["1.1.0"]})
+        for text in (_LLM, f"{_LLM}~=1.1", f"{_LLM}>=1.1", f"{_LLM}==1.1.0"):
+            project = _project(tmp_path, text)
+            targets, errors = package_targets(str(project), ledger)
+            assert targets == [], text
+            assert len(errors) == 1 and repr(text) in errors[0], (text, errors)
+            assert "name[extras]>=A.B[.C],<N" in errors[0]
+
+    def test_range_no_release_satisfies_is_an_error(self, tmp_path):
+        project = _project(tmp_path, f"{_LLM}>=1.5,<2")
+        ledger = _ledger(tmp_path / "m" / "released.json", **{_LLM: ["1.0.0", "1.4.0"]})
+        targets, errors = package_targets(str(project), ledger)
+        assert targets == [] and "no released version of katsoft-llm-kit" in errors[0]
+
+    def test_unreadable_ledger_is_an_error_not_a_skip(self, tmp_path):
+        bad = tmp_path / "released.json"
+        bad.write_text("{not json", encoding="utf-8")
+        assert load_released_ledger(str(bad))[1].startswith("released-package ledger")
+        bad.write_text('{"d": {"1.0.0": "not an entry"}}', encoding="utf-8")
+        assert "distribution -> version -> entry" in load_released_ledger(str(bad))[1]
+        project = _project(tmp_path, f"{_LLM}>=1.1,<2")
+        assert package_targets(str(project), str(bad))[1]
+
+    def test_installed_version_reads_the_dist_info(self, tmp_path):
+        venv = str(tmp_path / ".venv")
+        assert installed_version(venv, _LLM) is None
+        _install(venv, _LLM, "1.3.0")
+        assert installed_version(venv, _LLM) == "1.3.0"
+        assert installed_version(venv, "Katsoft.LLM_kit") == "1.3.0"   # normalized name
+        assert installed_version(venv, "katsoft-contracts") is None
+
+
+class TestEnsureVenvReleasedTargets:
+    """ensure_venv holds each registered package at its ledger target."""
+
+    def _wire(self, tmp_path, monkeypatch, *, requirement=f"{_LLM}>=1.1,<2",
+              versions=("1.1.0", "1.2.0"), sync_installs=None, sync_rc=0):
+        """A project + ledger, a passing check, and a fake `uv sync`.
+
+        `sync_installs` maps dist -> version the fake sync leaves installed
+        (what a real uv would do for the -P pins it is given); None installs
+        whatever `-P dist==v` asks for.
+        """
+        from bootstrap_lib.result import Result
+        project = _project(tmp_path, requirement)
+        ledger = _ledger(tmp_path / "mkt" / "packages" / "released.json", **{_LLM: list(versions)})
+        venv_path = str(tmp_path / "data" / ".venv")
+        os.makedirs(venv_path)
+        monkeypatch.setattr(
+            "bootstrap_lib.venv_check.check_venv",
+            lambda d, r, i, extras=(), venv_path=None: Result(
+                passed=True, subject=venv_path, message="venv ok"))
+        monkeypatch.setattr("bootstrap_lib.venv_check.find_uv", lambda: "/fake/uv")
+        ran = []
+
+        class _Proc:
+            returncode = sync_rc
+            stderr = b"No solution found" if sync_rc else b""
+
+        def _run(cmd, **kw):
+            ran.append(cmd)
+            if sync_rc == 0:
+                pins = [c.split("==") for c in cmd if "==" in c]
+                for dist, ver in pins:
+                    _install(venv_path, dist,
+                             (sync_installs or {}).get(dist, ver))
+            return _Proc()
+
+        monkeypatch.setattr("bootstrap_lib.venv_check.subprocess.run", _run)
+        return project, ledger, venv_path, ran
+
+    def test_target_change_changes_stamp(self, tmp_path):
+        """Dropping the fold from `_project_content_hash` turns this red."""
+        project = _project(tmp_path, f"{_LLM}>=1.1,<2")
+        base = _project_content_hash(str(project))
+        a = _project_content_hash(str(project), [(_LLM, "1.1.0")])
+        b = _project_content_hash(str(project), [(_LLM, "1.2.0")])
+        assert len({base, a, b}) == 3
+        assert a == _project_content_hash(str(project), [(_LLM, "1.1.0")])
+
+    def test_no_targets_hashes_exactly_as_before(self, tmp_path):
+        """The fold must not re-sync a single venv that has no registered package."""
+        import hashlib
+        project = _project(tmp_path, "openai>=1.0")
+        (project / "uv.lock").write_text("version = 1\n")
+        legacy = hashlib.sha256()
+        for name in ("pyproject.toml", "uv.lock"):
+            legacy.update(name.encode() + b"\0")
+            legacy.update((project / name).read_bytes() + b"\0")
+        assert _project_content_hash(str(project)) == legacy.hexdigest()
+        assert _project_content_hash(str(project), []) == legacy.hexdigest()
+
+    def test_behind_venv_syncs_with_upgrade_package_pin(self, tmp_path, monkeypatch):
+        """Without the `-P` pin, or without the `behind` trigger, this is red:
+        the stamp is current and the venv passes, yet it holds 1.1.0."""
+        project, ledger, venv_path, ran = self._wire(tmp_path, monkeypatch)
+        _install(venv_path, _LLM, "1.1.0")
+        # Stamp is current for the TARGET, so only the version gap can trigger a sync.
+        stamp = _venv_sync_stamp_path(venv_path)
+        stamp.write_text(_project_content_hash(str(project), [(_LLM, "1.2.0")]))
+
+        result, entries = ensure_venv(str(project), venv_path, released_ledger=ledger)
+
+        assert result.passed, result.message
+        assert len(ran) == 1
+        assert ran[0][:4] == ["/fake/uv", "sync", "--project", str(project)]
+        assert ran[0][4:] == ["-P", f"{_LLM}==1.2.0"]
+        assert installed_version(venv_path, _LLM) == "1.2.0"
+        assert "re-synced" in entries
+        assert any("installed 1.1.0, released target 1.2.0" in e for e in entries)
+        assert stamp.read_text().strip() == _project_content_hash(
+            str(project), [(_LLM, "1.2.0")])
+
+    def test_venv_at_target_with_current_stamp_does_not_sync(self, tmp_path, monkeypatch):
+        project, ledger, venv_path, ran = self._wire(tmp_path, monkeypatch)
+        _install(venv_path, _LLM, "1.2.0")
+        _venv_sync_stamp_path(venv_path).write_text(
+            _project_content_hash(str(project), [(_LLM, "1.2.0")]))
+
+        result, entries = ensure_venv(str(project), venv_path, released_ledger=ledger)
+
+        assert result.passed and entries == [] and ran == []
+
+    def test_new_release_alone_triggers_the_sync(self, tmp_path, monkeypatch):
+        """A release inside the range changes nothing in pyproject.toml or uv.lock."""
+        project, ledger, venv_path, ran = self._wire(tmp_path, monkeypatch)
+        _install(venv_path, _LLM, "1.2.0")
+        _venv_sync_stamp_path(venv_path).write_text(
+            _project_content_hash(str(project), [(_LLM, "1.2.0")]))
+        _ledger(tmp_path / "mkt" / "packages" / "released.json",
+                **{_LLM: ["1.1.0", "1.2.0", "1.3.0"]})
+
+        result, _entries = ensure_venv(str(project), venv_path, released_ledger=ledger)
+
+        assert result.passed and ran and ran[0][-2:] == ["-P", f"{_LLM}==1.3.0"]
+        assert installed_version(venv_path, _LLM) == "1.3.0"
+
+    def test_major_release_is_not_adopted(self, tmp_path, monkeypatch):
+        project, ledger, venv_path, ran = self._wire(
+            tmp_path, monkeypatch, versions=("1.1.0", "1.2.0", "2.0.0"))
+        _install(venv_path, _LLM, "1.2.0")
+        _venv_sync_stamp_path(venv_path).write_text(
+            _project_content_hash(str(project), [(_LLM, "1.2.0")]))
+
+        result, entries = ensure_venv(str(project), venv_path, released_ledger=ledger)
+
+        assert result.passed and ran == [] and entries == []
+
+    def test_target_miss_is_failed_no_stamp(self, tmp_path, monkeypatch):
+        """Treating a failed pinned sync as the old passing venv turns this red."""
+        project, ledger, venv_path, ran = self._wire(
+            tmp_path, monkeypatch, sync_rc=1)
+        _install(venv_path, _LLM, "1.1.0")
+
+        result, entries = ensure_venv(str(project), venv_path, released_ledger=ledger)
+
+        assert not result.passed
+        assert "katsoft-llm-kit 1.2.0" in result.message
+        assert result.remediation_cmd == "bootstrap run"
+        assert any("uv sync failed (exit 1)" in e for e in entries)
+        assert not _venv_sync_stamp_path(venv_path).exists()
+
+    def test_sync_that_leaves_the_wrong_version_is_failed_no_stamp(self, tmp_path, monkeypatch):
+        project, ledger, venv_path, ran = self._wire(
+            tmp_path, monkeypatch, sync_installs={_LLM: "1.1.0"})
+        _install(venv_path, _LLM, "1.1.0")
+
+        result, entries = ensure_venv(str(project), venv_path, released_ledger=ledger)
+
+        assert not result.passed
+        assert "is 1.1.0, target 1.2.0" in result.message
+        assert not _venv_sync_stamp_path(venv_path).exists()
+
+    def test_unparseable_requirement_is_failed_even_when_the_venv_is_healthy(
+            self, tmp_path, monkeypatch):
+        project, ledger, venv_path, ran = self._wire(
+            tmp_path, monkeypatch, requirement=f"{_LLM}~=1.1")
+        stamp = _venv_sync_stamp_path(venv_path)
+        stamp.write_text(_project_content_hash(str(project)) + "\n")   # current
+
+        result, entries = ensure_venv(str(project), venv_path, released_ledger=ledger)
+
+        assert not result.passed
+        assert "name[extras]>=A.B[.C],<N" in result.message
+        assert ran == []
+        assert any("name[extras]>=A.B[.C],<N" in e for e in entries)
+
+    def test_unparseable_requirement_never_writes_a_stamp_after_a_sync(
+            self, tmp_path, monkeypatch):
+        project, ledger, venv_path, ran = self._wire(
+            tmp_path, monkeypatch, requirement=f"{_LLM}~=1.1")
+        always = ensure_venv(str(project), venv_path, always_sync=True,
+                             released_ledger=ledger)
+        assert ran and not always[0].passed
+        assert not _venv_sync_stamp_path(venv_path).exists()
+
+    def test_unresolved_target_fails_when_uv_is_missing(self, tmp_path, monkeypatch):
+        """Passing check, stale stamp, nothing behind, unresolved target, no uv:
+        the `uv not found` return used to hand back the passing result."""
+        project, ledger, venv_path, ran = self._wire(
+            tmp_path, monkeypatch, requirement=f"{_LLM}~=1.1")
+        monkeypatch.setattr("bootstrap_lib.venv_check.find_uv", lambda: None)
+        assert not _venv_sync_stamp_path(venv_path).exists()   # stale: content_changed
+
+        result, entries = ensure_venv(str(project), venv_path, released_ledger=ledger)
+
+        assert not result.passed
+        assert "name[extras]>=A.B[.C],<N" in result.message
+        assert result.remediation_cmd == "bootstrap run"
+        assert any("uv not found" in e for e in entries)
+        assert any("name[extras]>=A.B[.C],<N" in e for e in entries)
+        assert ran == []
+        assert not _venv_sync_stamp_path(venv_path).exists()
+
+    def test_unresolved_target_fails_when_uv_cannot_be_run(self, tmp_path, monkeypatch):
+        """Same state, but launching uv raises: the `uv sync error` return."""
+        project, ledger, venv_path, ran = self._wire(
+            tmp_path, monkeypatch, requirement=f"{_LLM}~=1.1")
+
+        def _boom(cmd, **kw):
+            raise OSError("exec failed")
+
+        monkeypatch.setattr("bootstrap_lib.venv_check.subprocess.run", _boom)
+
+        result, entries = ensure_venv(str(project), venv_path, released_ledger=ledger)
+
+        assert not result.passed
+        assert result.remediation_cmd == "bootstrap run"
+        assert any("uv sync error" in e for e in entries)
+        assert not _venv_sync_stamp_path(venv_path).exists()
+
+    def test_without_a_ledger_nothing_changes(self, tmp_path, monkeypatch):
+        project, _ledger_path, venv_path, ran = self._wire(tmp_path, monkeypatch)
+        _venv_sync_stamp_path(venv_path).write_text(_project_content_hash(str(project)))
+
+        result, entries = ensure_venv(str(project), venv_path)
+
+        assert result.passed and entries == [] and ran == []
+
+    def test_real_uv_moves_a_behind_venv_to_the_ledger_target(self, tmp_path, monkeypatch):
+        """End to end against the installed uv and two local wheels (no network):
+        the plain venv holds 1.1.0, the ledger says 1.2.0, and `-P name==version`
+        is what moves it."""
+        import zipfile
+        uv = find_uv()
+        if not uv:
+            pytest.skip("uv not available")
+        wheels = tmp_path / "wheels"
+        wheels.mkdir()
+        for version in ("1.1.0", "1.2.0"):
+            name = f"relprobe-{version}-py3-none-any.whl"
+            info = f"relprobe-{version}.dist-info"
+            with zipfile.ZipFile(wheels / name, "w") as z:
+                z.writestr("relprobe/__init__.py", f"VERSION = '{version}'\n")
+                z.writestr(f"{info}/METADATA",
+                           f"Metadata-Version: 2.1\nName: relprobe\nVersion: {version}\n")
+                z.writestr(f"{info}/WHEEL",
+                           "Wheel-Version: 1.0\nGenerator: t\nRoot-Is-Purelib: true\n"
+                           "Tag: py3-none-any\n")
+                z.writestr(f"{info}/RECORD", "")
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / "pyproject.toml").write_text(
+            "[project]\nname = 'demo'\nversion = '0'\nrequires-python = '>=3.12'\n"
+            "dependencies = ['relprobe>=1.1,<2']\n[tool.uv]\npackage = false\n",
+            encoding="utf-8")
+        monkeypatch.setenv("UV_NO_INDEX", "1")
+        monkeypatch.setenv("UV_FIND_LINKS", str(wheels))
+        venv_path = str(tmp_path / "data" / ".venv")
+        # Install 1.1.0 first by hiding 1.2.0, then reveal it and publish it in the ledger.
+        hidden = wheels / "relprobe-1.2.0-py3-none-any.whl"
+        hidden.rename(tmp_path / "relprobe-1.2.0-py3-none-any.whl")
+        first, entries = ensure_venv(str(project), venv_path)
+        assert first.passed, entries
+        assert installed_version(venv_path, "relprobe") == "1.1.0"
+        (tmp_path / "relprobe-1.2.0-py3-none-any.whl").rename(hidden)
+        ledger = _ledger(tmp_path / "mkt" / "released.json", relprobe=["1.1.0", "1.2.0"])
+
+        result, entries = ensure_venv(str(project), venv_path, released_ledger=ledger)
+
+        assert result.passed, entries
+        assert installed_version(venv_path, "relprobe") == "1.2.0", entries
+        assert "re-synced" in entries
+
+
+class TestPhaseVenvLedgerPlumbing:
+    def test_phase_venv_passes_the_marketplace_clone_ledger(self, tmp_path, monkeypatch):
+        from bootstrap_lib import engine
+
+        monkeypatch.delenv("CLAUDE_BOOTSTRAP_DATA_ROOT", raising=False)
+        monkeypatch.setattr(
+            "bootstrap_lib.marketplace_lifecycle.marketplace_install_location",
+            lambda name: str(tmp_path / "clones" / name))
+        seen = {}
+
+        def fake_ensure_venv(project_dir, venv_path, extras=(), check_imports=(),
+                             always_sync=False, released_ledger=None):
+            seen["ledger"] = released_ledger
+            from bootstrap_lib.venv_check import Result
+            return Result(subject="venv", passed=True, message="ok"), []
+
+        monkeypatch.setattr("bootstrap_lib.venv_check.ensure_venv", fake_ensure_venv)
+
+        class Ctx:
+            manifest = {"venv": {}}
+            data_dir = str(tmp_path / "data")
+            plugin_root = str(tmp_path / "root")
+            plugin_name = "git-kit"
+            marketplace = "plugins-kit"
+            action_entries: list = []
+            ok_entries: list = []
+            quiet_entries: list = []
+            failures: list = []
+
+        engine._phase_venv(Ctx())
+        assert seen["ledger"] == str(tmp_path / "clones" / "plugins-kit" / "packages" / "released.json")
+
+    def test_redirected_pass_reads_the_working_tree_ledger(self, tmp_path, monkeypatch):
+        from bootstrap_lib import engine
+
+        monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(tmp_path / "redirected"))
+        plugin_root = tmp_path / "repo" / "plugins" / "git-kit"
+        assert engine._released_ledger_path("plugins-kit", str(plugin_root)) == str(
+            tmp_path / "repo" / "packages" / "released.json")
+
+    def test_layered_manifest_venv_is_not_held_to_a_ledger(self, tmp_path, monkeypatch):
+        from bootstrap_lib import engine
+
+        seen = {}
+
+        def fake_ensure_venv(project_dir, venv_path, extras=(), check_imports=(),
+                             always_sync=False, released_ledger=None):
+            seen["ledger"] = released_ledger
+            from bootstrap_lib.venv_check import Result
+            return Result(subject="venv", passed=True, message="ok"), []
+
+        monkeypatch.setattr("bootstrap_lib.venv_check.ensure_venv", fake_ensure_venv)
+
+        class Ctx:
+            manifest = {"venv": {}}
+            data_dir = str(tmp_path / "data")
+            plugin_root = str(tmp_path / "root")
+            plugin_name = "config"
+            marketplace = "data"
+            action_entries: list = []
+            ok_entries: list = []
+            quiet_entries: list = []
+            failures: list = []
+
+        engine._phase_venv(Ctx())
+        assert seen["ledger"] is None

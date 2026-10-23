@@ -662,6 +662,15 @@ The step also owns the pass's **single shared-lib display line**: successful lin
 
 This is the engine-side half of "provision everything in one pass." The shell-side half is the cooldown registry-change bypass (see [Throttling](#throttling)): together they remove the common reasons a user had to reload Claude more than once after a plugin update.
 
+### Step 4c1 and per-venv revocation: a link is removed when its declaration is
+
+Two revocation sites remove the `.pth` links bootstrap wrote once nothing declares them; contract and rules in [library-consumption.md](library-consumption.md#a-link-is-removed-when-its-declaration-is).
+
+- **Per venv, before the venv check.** `_process_manifest` runs `_phase_revoke_shared_lib_links` ahead of every phase, so ahead of `_phase_venv`; a project venv is revoked by `_process_project_venv` ahead of its own `_process_venv_def`. Both call `_revoke_venv_links`, which resolves the venv's site-packages from its layout (no interpreter is run: the venv may be missing or broken at this point) and removes each `<name>.pth` that `shared_lib.parse_pth_entry_dir` recognizes as bootstrap-written and whose name the owner no longer declares. The order matters because a stale link prepends a legacy copy of a library to `sys.path`, which can fail the venv's own `check_imports` against a newly installed package of the same name.
+- **Standalone interpreter, after the sweep (Step 4c1).** `_revoke_standalone_links` revokes a standalone link only when the tree it names carries an `.owner` record (written by `sync_shared_lib` on every publish and every cached pass) naming a plugin that is installed, passes the `requires_bootstrap` gate, and no longer lists the library in `shared_libs`. It is skipped under `CLAUDE_BOOTSTRAP_DATA_ROOT`, as the owner broadcast is.
+
+Plugins gated by `requires_bootstrap` never reach `_process_manifest`, so an engine older than a plugin's floor revokes nothing for it.
+
 ### Step 4c2: Project-venv shared-lib link
 
 Runs immediately after the Step 4c sweep, when the layered manifest declares `project_venv` and the engine has a `--project-dir`. It links each library named in `project_venv.shared_lib_imports` into the project's own venv (`_link_project_shared_libs`); the field's schema is in [manifest-reference.md](manifest-reference.md), and the outcomes and what a consumer sees are in [library-consumption.md](library-consumption.md).
@@ -716,6 +725,27 @@ Today `_reload_advice` *infers* restart-vs-reload from whether the plugin regist
 - `none` — pure library/data (e.g. a `shared_libs` owner) consumed by freshly-spawned subprocesses; nothing Claude Code holds needs reloading.
 
 `_reload_advice` would prefer this field and **fall back to hook-inference when absent** (so the convention is opt-in and backward compatible). It would also unlock safely nagging on *updates* (not just installs): a plugin that declares `restart` can warrant a nag when its hooks may be stale, while `none`/`reload` plugins stay quiet. The "shape of changes → required action" taxonomy authors use to choose a policy is in the repo `CLAUDE.md`. Until this lands, the hook-inference default is in effect.
+
+## Venv released-package targets (U6)
+
+A plugin that requires a package registered in the marketplace's `packages/released.json` (for example `katsoft-llm-kit`) gets the highest released version its requirement admits, without a plugin release. The plugin states only the requirement, in one restricted form that `bootstrap_lib/venv_check.py` reads with the standard library alone:
+
+```
+name[extras]>=A.B[.C],<N
+```
+
+`>=` is the lowest version the plugin's code needs; `<N` is the next major version. A minor release therefore reaches the plugin on the next `bootstrap run` (or a SessionStart pass the cooldown lets through), and a major release reaches it only when the plugin raises `N` in a plugin release. `scripts/_packages.py` refuses a publish whose shipping plugin requires a registered package in any other form, using the same parser.
+
+Per plugin venv, `ensure_venv(..., released_ledger=<path>)` (the engine passes it from `_phase_venv` via `_released_ledger_path`; the layered manifest's venv and bootstrap's self-setup venv pass none):
+
+1. `package_targets` reads the plugin's direct requirements (`[project].dependencies` plus the optional-dependency groups of the extras the manifest installs). A requirement whose distribution is a key of the ledger is registered; its target is the highest final-release ledger version satisfying every such requirement on that distribution. A pre-release is never a target.
+2. The `(distribution, target)` pairs are folded into the stamp hash after the file contents. A new release inside the range changes the hash with no edit to `pyproject.toml` or `uv.lock`; a project with no registered requirement hashes exactly as before, so no venv re-syncs because of the fold.
+3. A venv whose installed `<dist>-<version>.dist-info` differs from the target is synced with `uv sync --project ... -P <dist>==<target>` (measured against uv 0.12.5: `-P name==version` is accepted, can move a venv up or down, and fails with a resolution error when the version does not exist). After the sync every target must be installed; the stamp is written only then.
+4. These are FAILED venv results, never silent skips, and none writes a stamp: a target uv cannot resolve or install, a sync that leaves another version, a registered requirement outside the restricted form, a range no released version satisfies, and a ledger file that exists but cannot be read. The remediation is `bootstrap run`.
+
+The ledger is `packages/released.json` in the plugin's own marketplace clone (the `installLocation` in `known_marketplaces.json`, else `~/.claude/plugins/marketplaces/<marketplace>`); the clone is refreshed before any plugin check, so a release published since the last pass is visible in the same pass. Under `CLAUDE_BOOTSTRAP_DATA_ROOT` (a claudx session) the ledger is the working tree's `packages/released.json` two directories above the plugin. A missing ledger file registers no package, so the feature is inert for a marketplace that releases none.
+
+Only an explicit `bootstrap run` is promised to pick up a release: the SessionStart cooldown can skip a pass, and `bootstrap run` is exempt from it. An engine older than the release that introduced this skips plugins whose `requires_bootstrap` floor it cannot meet, so a machine that missed several releases can need the harvest or a second `bootstrap run` before every plugin converges; one pass is not guaranteed.
 
 ## First Run Lifecycle
 

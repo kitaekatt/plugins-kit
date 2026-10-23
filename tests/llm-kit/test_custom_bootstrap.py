@@ -8,21 +8,35 @@ the legacy ``.env`` migration (the loc-ops key) or the pre-rename data-directory
 move: under decision 7 the legacy credential and config locations are the
 shared ones, so llm-kit reads them and writes none of them.
 
+The script imports no ``llm_kit`` module: it runs the plugin venv's ``llm-kit``
+console script (``account status --json``) and reads the ``state`` field of the
+document. These tests replace ``subprocess.run`` with a fake that runs the real
+CLI (``llm_kit.cli.main``) in this process on the argv the script built, so the
+script, the CLI and the JSON contract are exercised together; one POSIX test
+runs the real subprocess.
+
 Every test runs under a temporary HOME and a fake network. ``USER_ENV_FILE`` is
 computed from ``Path.home()`` at import time, so the fixture re-points it in the
-three modules that hold it and asserts it landed under ``tmp_path`` before any
-test body runs; the transport seam (``llm_kit.adapters.account._get``) is
-replaced, and a second guard fails any real ``urlopen``. Each behavior test was
-shown to fail with its behavior removed (see the final test class and the
-recorded revert checks in the unit report).
+modules that hold it and asserts it landed under ``tmp_path`` before any test
+body runs; the transport seam (``llm_kit.adapters.account._get``) is replaced,
+and a second guard fails any real ``urlopen``. Each behavior test was shown to
+fail with its behavior removed (see the final test class and the recorded
+revert checks in the unit report).
 """
 
 from __future__ import annotations
 
+import ast
+import contextlib
 import hashlib
 import importlib.util
+import io
 import json
+import os
 import re
+import site
+import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -47,8 +61,10 @@ def _load_script():
 
 cb = _load_script()
 
+import llm_kit.cli as llm_kit_cli  # noqa: E402
 from llm_kit.adapters import account as account_mod  # noqa: E402
 from llm_kit.adapters.account import AccountCheckError, AccountStatus  # noqa: E402
+from llm_kit.cli import account as account_cli  # noqa: E402
 from llm_kit.registry import api_key as api_key_mod  # noqa: E402
 from llm_kit.registry import constants  # noqa: E402
 from llm_kit.registry.env_file import read_env_file, write_env_file  # noqa: E402
@@ -96,6 +112,42 @@ class FakeNetwork:
         self.reply = (b"", urllib.error.URLError("offline"))
 
 
+_REAL_RUN = subprocess.run
+
+
+def _fake_venv(data_dir) -> Path:
+    """A file where the script looks for the plugin venv's ``llm-kit`` console script (never executed)."""
+    script = Path(data_dir) / ".venv" / "bin" / "llm-kit"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text("", encoding="utf-8")
+    return script
+
+
+class FakeStatusRunner:
+    """Stands in for ``subprocess.run``: runs the real CLI in this process on the script's argv.
+
+    The script launches ``<venv>/bin/llm-kit account status --json ...``. This
+    replays the arguments through ``llm_kit.cli.main``, so the script reads the
+    CLI's real output. Any other command, or a console script that is not a
+    plugin-venv one, fails the test instead of running.
+    """
+
+    def __init__(self, data_dir):
+        self.calls: list[list[str]] = []
+        self.cli = _fake_venv(data_dir)
+
+    def __call__(self, argv, **kwargs):
+        argv = list(argv)
+        assert Path(argv[0]).parent.parent.name == ".venv" and Path(argv[0]).name == "llm-kit", argv
+        assert argv[1] == "account", argv
+        assert kwargs.get("capture_output") is True and kwargs.get("text") is True, kwargs
+        self.calls.append(argv)
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = llm_kit_cli.main(argv[1:])
+        return subprocess.CompletedProcess(argv, code, out.getvalue(), err.getvalue())
+
+
 @pytest.fixture
 def env(monkeypatch, tmp_path):
     """A temporary HOME, a redirected user .env, a clean key variable and a fake network."""
@@ -108,9 +160,9 @@ def env(monkeypatch, tmp_path):
     user_env = home / ".claude" / "plugins" / "data" / "plugins-kit" / "llm-scripting-kit" / ".env"
     monkeypatch.setattr(constants, "USER_ENV_FILE", user_env)
     monkeypatch.setattr(api_key_mod, "USER_ENV_FILE", user_env)
-    monkeypatch.setattr(cb, "USER_ENV_FILE", user_env)
+    monkeypatch.setattr(account_cli, "USER_ENV_FILE", user_env)
     # the fixture's own safety: nothing below may resolve to the real home
-    assert str(cb.USER_ENV_FILE).startswith(str(tmp_path))
+    assert str(constants.USER_ENV_FILE).startswith(str(tmp_path))
     assert Path.home() == home
 
     network = FakeNetwork()
@@ -125,7 +177,10 @@ def env(monkeypatch, tmp_path):
     project_dir = tmp_path / "project"
     data_dir.mkdir()
     project_dir.mkdir()
+    runner = FakeStatusRunner(data_dir)
+    monkeypatch.setattr(subprocess, "run", runner)
     return {
+        "runner": runner,
         "user_env": user_env,
         "data_dir": data_dir,
         "project_dir": project_dir,
@@ -333,21 +388,22 @@ class TestRejectedKey:
         assert ctx.failures == [] and ctx.deferred == []
         assert any("validation skipped" in m for m in ctx.actions)
 
-    def test_the_status_seam_is_the_module_name(self, env, monkeypatch):
-        """The script calls check_account through its own module name (patchable seam)."""
+    def test_the_validation_goes_through_the_cli_status_document(self, env, monkeypatch):
+        """The script reads the CLI's document: a 402 from the library seam becomes no_credit."""
         write_env_file(env["user_env"], {"OPENROUTER_API_KEY": "sk-or-v1-x"})
-        monkeypatch.setattr(cb, "check_account", lambda key: _fail_status("no_credit"))
+        monkeypatch.setattr(account_mod, "check_account", lambda key, **_k: _fail_status("no_credit"))
         ctx = _ctx(env)
         cb.bootstrap(ctx)
         assert len(ctx.deferred) == 1 and env["network"].calls == []
+        assert "credit" in ctx.deferred[0]["user_msg"].lower()
 
     def test_a_transport_error_from_the_seam_is_reported_not_raised(self, env, monkeypatch):
         write_env_file(env["user_env"], {"OPENROUTER_API_KEY": "sk-or-v1-x"})
 
-        def boom(key):
+        def boom(key, **_k):
             raise AccountCheckError("offline")
 
-        monkeypatch.setattr(cb, "check_account", boom)
+        monkeypatch.setattr(account_mod, "check_account", boom)
         ctx = _ctx(env)
         cb.bootstrap(ctx)
         assert any("validation skipped (offline)" in m for m in ctx.actions)
@@ -465,7 +521,9 @@ class TestSkillReadsWhereTheEngineWrites:
         engine_dir = root / "plugins-kit" / "bootstrap"
         engine_dir.mkdir(parents=True)
         info = SimpleNamespace(name="llm-kit", marketplace="plugins-kit")
-        return root, Path(engine._plugin_data_dir(str(engine_dir), info))
+        data_dir = Path(engine._plugin_data_dir(str(engine_dir), info))
+        _fake_venv(data_dir)
+        return root, data_dir
 
     def _run(self, env, data_dir):
         from bootstrap_lib import engine
@@ -504,6 +562,150 @@ class TestSkillReadsWhereTheEngineWrites:
         for line in text.splitlines():
             if "deferred_requirements.json" in line or "last_validated.sha256" in line:
                 assert "llm-scripting-kit" not in line, line
+
+
+def _imported_modules(source: str) -> set[str]:
+    """Every module a source file imports, however it is spelled (static and dynamic)."""
+    modules: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            modules.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            modules.add("." * node.level + (node.module or ""))
+        elif isinstance(node, ast.Call):
+            name = getattr(node.func, "attr", getattr(node.func, "id", ""))
+            if name in {"import_module", "__import__"} and node.args \
+                    and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+                modules.add(node.args[0].value)
+    return modules
+
+
+class TestTheScriptImportsNoLibrary:
+    """The script runs inside the engine process; the library lives in the plugin venv."""
+
+    def test_no_llm_kit_module_is_imported(self):
+        modules = _imported_modules(SCRIPT.read_text(encoding="utf-8"))
+        assert not [m for m in modules if m.split(".")[0] == "llm_kit"], modules
+
+    def test_only_the_standard_library_is_imported(self):
+        modules = _imported_modules(SCRIPT.read_text(encoding="utf-8"))
+        assert modules, "the scan found no imports at all"
+        assert {m.split(".")[0] for m in modules} <= set(sys.stdlib_module_names), modules
+
+    def test_the_bundled_lib_directory_is_not_put_on_sys_path(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+        assert "sys.path" not in source and '"lib"' not in source
+
+    def test_the_scan_catches_every_spelling(self):
+        spellings = [
+            "import llm_kit",
+            "import llm_kit.registry.api_key",
+            "from llm_kit.registry import api_key",
+            "def f():\n    from llm_kit.adapters.account import check_account",
+            "import importlib\nimportlib.import_module('llm_kit.cli')",
+            "__import__('llm_kit')",
+        ]
+        for text in spellings:
+            assert [m for m in _imported_modules(text) if m.split(".")[0] == "llm_kit"], text
+
+
+class TestStatusSubprocessProtocol:
+    """What the script runs, what it reads back, and what it refuses to guess."""
+
+    def test_a_missing_key_costs_one_status_call_without_validation(self, env):
+        cb.bootstrap(_ctx(env))
+        (argv,) = env["runner"].calls
+        assert argv[0] == str(env["data_dir"] / ".venv" / "bin" / "llm-kit")
+        assert argv[1:] == [
+            "account", "status", "--json", "--endpoint", "openrouter",
+            "--project-root", str(env["project_dir"]), "--no-validate",
+        ]
+
+    def test_a_fresh_cache_costs_one_status_call_and_a_stale_one_two(self, env):
+        write_env_file(env["user_env"], {"OPENROUTER_API_KEY": "sk-or-v1-cached"})
+        _write_cache_file(env["data_dir"], "sk-or-v1-cached", epoch=time.time())
+        cb.bootstrap(_ctx(env))
+        assert [a[-1] == "--no-validate" for a in env["runner"].calls] == [True]
+        env["runner"].calls.clear()
+        _write_cache_file(env["data_dir"], "sk-or-v1-cached", epoch=None)
+        cb.bootstrap(_ctx(env))
+        assert [a[-1] == "--no-validate" for a in env["runner"].calls] == [True, False]
+
+    def test_the_key_text_is_never_on_the_command_line_or_in_the_cache(self, env):
+        write_env_file(env["user_env"], {"OPENROUTER_API_KEY": "sk-or-v1-secret"})
+        cb.bootstrap(_ctx(env))
+        assert not any("sk-or-v1-secret" in " ".join(a) for a in env["runner"].calls)
+        assert "sk-or-v1-secret" not in (env["data_dir"] / "last_validated.sha256").read_text()
+
+    def test_the_cache_holds_the_documents_key_hash(self, env):
+        write_env_file(env["user_env"], {"OPENROUTER_API_KEY": "sk-or-v1-good"})
+        cb.bootstrap(_ctx(env))
+        lines = (env["data_dir"] / "last_validated.sha256").read_text().split()
+        assert lines[0] == hashlib.sha256(b"sk-or-v1-good").hexdigest()
+
+    def test_the_script_acts_on_the_state_field_not_the_exit_code(self, env, monkeypatch):
+        """A rejected key and a missing key exit alike in prose mode; the document tells them apart."""
+        write_env_file(env["user_env"], {"OPENROUTER_API_KEY": "sk-or-v1-bad"})
+        env["network"].http_error(401)
+        rejected = _ctx(env)
+        cb.bootstrap(rejected)
+        env["user_env"].unlink()
+        missing = _ctx(env)
+        cb.bootstrap(missing)
+        assert "rejected" in rejected.deferred[0]["user_msg"].lower()
+        assert "no OpenRouter API key" in missing.deferred[0]["user_msg"]
+
+    @pytest.mark.parametrize("reply, needle", [
+        (subprocess.CompletedProcess([], 2, "", "usage: llm-kit account status"), "exited 2"),
+        (subprocess.CompletedProcess([], 0, "No API key found", ""), "printed no JSON document"),
+        (subprocess.CompletedProcess([], 0, json.dumps({"state": "ok"}), ""), "is not llm-kit.account-status/v1"),
+        (subprocess.CompletedProcess(
+            [], 0, json.dumps({"schema": "llm-kit.account-status/v1", "state": "weird"}), ""), "unknown state"),
+    ])
+    def test_an_unusable_reply_raises_instead_of_guessing(self, env, monkeypatch, reply, needle):
+        monkeypatch.setattr(subprocess, "run", lambda argv, **kw: reply)
+        with pytest.raises(RuntimeError, match=needle):
+            cb.bootstrap(_ctx(env))
+
+    def test_a_timeout_raises(self, env, monkeypatch):
+        def hang(argv, **kw):
+            raise subprocess.TimeoutExpired(argv, kw["timeout"])
+
+        monkeypatch.setattr(subprocess, "run", hang)
+        with pytest.raises(RuntimeError, match="timed out"):
+            cb.bootstrap(_ctx(env))
+
+    def test_an_unprovisioned_venv_raises_and_runs_nothing(self, env):
+        env["runner"].cli.unlink()
+        with pytest.raises(RuntimeError, match="not provisioned"):
+            cb.bootstrap(_ctx(env))
+        assert env["runner"].calls == []
+
+    def test_the_engine_reports_a_failed_check_as_a_failed_script(self, env):
+        from bootstrap_lib import engine
+
+        env["runner"].cli.unlink()
+        manifest = json.loads((PLUGIN / "bootstrap.json").read_text(encoding="utf-8"))
+        actions: list[str] = []
+        engine._run_script_phase(manifest["script"], str(PLUGIN), str(env["data_dir"]), {}, actions, [],
+                                 "", "llm-kit", str(env["project_dir"]))
+        assert any("script: FAILED" in a and "not provisioned" in a for a in actions), actions
+        assert not (env["data_dir"] / engine.DEFERRED_REQUIREMENTS_FILENAME).exists()
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="the stand-in console script is a POSIX shell wrapper")
+    def test_the_real_subprocess_path(self, env, monkeypatch):
+        """No fake runner: the script launches the venv-path console script and reads the real document."""
+        monkeypatch.setattr(subprocess, "run", _REAL_RUN)
+        cli = env["runner"].cli
+        cli.write_text(f'#!/bin/sh\nexec "{sys.executable}" -m llm_kit.cli "$@"\n', encoding="utf-8")
+        cli.chmod(0o755)
+        monkeypatch.setenv("_BOOTSTRAP_GUARD_SKIP_REEXEC", "1")
+        monkeypatch.setenv("PYTHONPATH", os.pathsep.join([str(PLUGIN / "lib"), *site.getsitepackages()]))
+        ctx = _ctx(env)
+        cb.bootstrap(ctx)
+        assert ctx.failures == [] and len(ctx.deferred) == 1
+        assert ctx.deferred[0]["name"] == "openrouter_credential"
+        assert ctx.deferred[0]["satisfied_by"].endswith("account set-key")
 
 
 class TestTheTestsCanFail:

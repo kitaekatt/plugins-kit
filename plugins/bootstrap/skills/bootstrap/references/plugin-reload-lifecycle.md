@@ -382,6 +382,15 @@ question answered above, not a new one:
   satisfy the gate. A satisfying bootstrap version has to be published and
   fetched before this plugin converges.
 
+### A library release reaches plugin venvs through `bootstrap run`
+
+A first-party package registered in the marketplace's `packages/released.json` (for example `katsoft-llm-kit`) reaches a plugin's venv without a plugin release when that plugin's requirement admits the new version (`name[extras]>=A.B[.C],<N`: minor releases arrive, a major needs a plugin release that raises `N`). The usual sequence is publish, then `bootstrap run`: the pass refreshes the marketplace clone, reads its ledger, and syncs every venv whose installed version differs from its target (mechanics: [engine-internals.md](engine-internals.md#venv-released-package-targets-u6)).
+
+- **Only an explicit `bootstrap run` is promised to pick the release up.** A SessionStart pass does the same work but the per-project cooldown can skip it, and a skipped pass leaves the venv where it was.
+- **One pass is not guaranteed to finish a machine that skipped releases.** An engine older than a plugin's `requires_bootstrap` floor skips that plugin (the section above); the harvest or a second `bootstrap run` under the newer engine finishes it. Read `engine_ran_version` against the installed version before concluding a venv is current.
+- **A target that cannot be met is a FAILED venv, not a quiet skip.** The usual causes are a ledger entry whose wheel the index has not propagated yet and a stale marketplace clone; the remediation printed is `bootstrap run`, and no dependency stamp is written, so the next pass retries.
+- **A claudx session reads the working tree's ledger**, not the installed clone, and installs the released package from the index: working-tree changes to a registered package are not loaded into plugin venvs.
+
 ### Anomalies — stop, investigate, surface to the user
 
 These mean the normal flow did **not** happen. Raise them; do not report success:

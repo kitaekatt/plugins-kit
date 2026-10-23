@@ -1,12 +1,17 @@
 [project]
 name = "workflow-kit"
-version = "0.12.1"
+version = "0.13.0"
 description = "Host-side library for the workflow-kit plugin: validate + compile .workflow.yaml to native Workflow tool scripts."
 requires-python = ">=3.12"
 
 dependencies = [
     "pyyaml>=6.0",
-    "openai>=1.0.0",
+    # llm_kit: the declaration API, transport factory and output contract the
+    # openrouter node strategy calls. The sdk extra brings the openai SDK its
+    # OpenRouter backend uses; the config extra brings the pyyaml its registry
+    # loader imports.
+    "katsoft-llm-kit[config,sdk]>=1.1,<2",
+    "katsoft-contracts>=1.0,<2",
 ]
 
 [project.optional-dependencies]

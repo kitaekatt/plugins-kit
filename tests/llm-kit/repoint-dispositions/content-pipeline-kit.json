@@ -1148,7 +1148,7 @@
     {
       "path": "tests/content-pipeline-kit/test_version_matches_plugin_json.py",
       "disposition": "legacy-only",
-      "reason": "Asserts content_pipeline.__version__ equals the content-pipeline-kit manifest version; llm-kit versions independently and has its own manifest.",
+      "reason": "Asserts that the content-pipeline-kit pyproject version equals its manifest version and that content_pipeline.__version__ is no newer than the manifest; it reads the frozen plugin's own files, and llm-kit versions independently and has its own manifest.",
       "rewrite_classes": [],
       "collection_count": 1,
       "baseline_failures": []

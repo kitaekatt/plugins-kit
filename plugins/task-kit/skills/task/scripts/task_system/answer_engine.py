@@ -31,7 +31,7 @@ A stop request (``should_stop``) is honoured before each phase starts and, while
 it ends the pass between phases. Answers already finished are still committed: a stop never discards paid work.
 ``budget.deadline`` (absolute ``time.monotonic()`` seconds) works the same way and is also handed to the chain.
 
-Model answering REFUSES when llm-kit is absent or too old (``answer_chain.ModelAnsweringUnavailable``): the report
+Model answering REFUSES when llm_kit is not importable (``answer_chain.ModelAnsweringUnavailable``): the report
 carries the refusal with its remedy, the pass answers nothing, and nothing substitutes. Prepare and commit steps
 that need no model still run.
 

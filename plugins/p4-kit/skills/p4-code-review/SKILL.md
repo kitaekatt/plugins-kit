@@ -227,8 +227,8 @@ technique_skill:
             apply the pre-dispatch launch-correction rule in references/configuration.md.
             Exit 2 from the runner is a REFUSAL: it declined the dispatch as configured --
             for example a lane it does not support by name, an effort outside a codex entry's
-            effort menu, an effort a transport entry cannot deliver, or an installed
-            llm-kit older than 0.1.9, the first published release, which accepts `--effort`. A
+            effort menu, an effort a transport entry cannot deliver, or a plugin venv that
+            has no katsoft-llm-kit package installed yet. A
             refusal the launch-correction rule does not explain is a configuration error for
             the user to fix, not something to work around: report it in step 9 under
             `## Lane failures` with the runner's stderr verbatim and mark coverage missing.

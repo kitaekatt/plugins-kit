@@ -106,12 +106,20 @@ def test_no_config_block_and_only_the_credential_check_script():
 
 
 def test_venv_carries_every_extra_the_bundled_code_reaches():
-    pyproject = (PLUGIN / "pyproject.toml").read_text(encoding="utf-8")
-    extras = set(MANIFEST["venv"]["extras"])
+    """The extras flow from the katsoft-llm-kit requirement, not from a manifest list."""
+    import tomllib
+
+    project = tomllib.loads((PLUGIN / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    assert "extras" not in MANIFEST["venv"]
+    (requirement,) = [r for r in project["dependencies"] if r.startswith("katsoft-llm-kit")]
+    extras = set(re.fullmatch(r"katsoft-llm-kit\[([^\]]*)\].*", requirement).group(1).split(","))
     assert extras == {"config", "sdk", "local", "frontdoor", "jobs", "pipeline"}
-    for extra in extras:
-        assert re.search(rf"^{extra}\s*=", pyproject, re.M), extra
-    assert 'llm-kit = "llm_kit.cli:main"' in pyproject
+    assert "scripts" not in project, "the console script llm-kit is the distribution's"
+
+
+def test_requires_bootstrap_is_the_package_consumer_floor():
+    """0.160.0 revokes undeclared .pth links and holds the venv at the released package target."""
+    assert MANIFEST["requires_bootstrap"] == "0.160.0"
 
 
 def test_plugin_and_pyproject_versions_agree():

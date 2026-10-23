@@ -2,16 +2,14 @@
 """Bootstrap and dispatch one configured endpoint review lane.
 
 This thin wrapper is byte-identical in git-kit and p4-kit. It owns bootstrap
-setup and the REFUSE probe; the seam-calling implementation lives in
-llm_kit.dispatch.review_lane.
+setup and the absent-library diagnostic; the seam-calling implementation lives
+in llm_kit.dispatch.review_lane, which each kit installs as the pinned
+katsoft-llm-kit package (its pyproject.toml). The pin guarantees the lane's
+flags and signatures, so this wrapper probes none of them.
 """
 
 from __future__ import annotations
 
-import contextlib
-import importlib
-import inspect
-import io
 import re
 import sys
 from pathlib import Path
@@ -68,252 +66,22 @@ _EXIT_USAGE = 2
 
 def _refuse_absent(exc: BaseException) -> None:
     print(
-        "the llm-kit plugin is not installed, so this endpoint lane "
-        "cannot start. Install it with "
-        "`claude plugin install llm-kit@plugins-kit` and start a "
-        "new session so bootstrap links its shared library. An Agent-model "
-        "review lane needs no llm-kit.",
+        "the katsoft-llm-kit package is not installed in this plugin's venv, "
+        "so this endpoint lane cannot start. Bootstrap installs it from the "
+        "plugin's pyproject.toml; run `bootstrap run` (or start a new "
+        "session) so bootstrap provisions the venv. An Agent-model review "
+        "lane needs no llm_kit.",
         file=sys.stderr,
     )
     raise SystemExit(_EXIT_USAGE) from exc
 
 
-#: The first published llm-kit release. Every capability probed below ships in
-#: it, so one floor names the owner version for every refusal.
-_OWNER_MIN_VERSION = "0.1.9"
-
-
-def _refuse_too_old(
-    reason: str,
-    min_version: str = _OWNER_MIN_VERSION,
-    capability: str = "llm_kit.dispatch.review_lane.main",
-) -> None:
-    print(
-        f"the installed llm-kit is too old for this endpoint lane: "
-        f"{capability} requires owner version {min_version}. "
-        "Update it with "
-        "`claude plugin update llm-kit@plugins-kit` and start a "
-        "new session so bootstrap re-syncs its shared library. "
-        f"Underlying error: {reason}",
-        file=sys.stderr,
-    )
-    raise SystemExit(_EXIT_USAGE)
-
-
 try:
-    import llm_kit
+    from llm_kit.dispatch.review_lane import main as _main
 except ModuleNotFoundError as exc:
     if exc.name == "llm_kit":
         _refuse_absent(exc)
     raise
 
-try:
-    _review_lane = importlib.import_module("llm_kit.dispatch.review_lane")
-except ModuleNotFoundError as exc:
-    if exc.name in ("llm_kit.dispatch", "llm_kit.dispatch.review_lane"):
-        _refuse_too_old(str(exc))
-    raise
-
-_main = getattr(_review_lane, "main", None)
-if not callable(_main):
-    _refuse_too_old("review_lane.main is missing")
-
-# review_lane.main is present but that alone does not mean it accepts every
-# flag THIS wrapper's caller may pass. A stale or skewed llm-kit passes the
-# module/main presence checks above, and calling main() with an unknown flag on
-# argv reaches argparse's own "unrecognized arguments" error, which exits 2 --
-# the SAME code this wrapper uses for "this lane is not endpoint-eligible".
-# The skill then tells the agent a 2 is a configuration error for the user
-# to fix, never mentioning that llm-kit itself needs an update.
-# Probe the CAPABILITY (does the parser accept the flag) rather than
-# comparing a version string, so a genuinely newer-but-differently-versioned
-# owner is not misdiagnosed. Every capability named below ships in the owner
-# floor, so each refusal names that one version.
-_CLAIMED_FILE_MIN_VERSION = _OWNER_MIN_VERSION
-
-_MECHANICAL_FINDINGS_MIN_VERSION = _OWNER_MIN_VERSION
-
-_BUNDLE_MIN_VERSION = _OWNER_MIN_VERSION
-
-_BUNDLE_PHRASE_MAP_MIN_VERSION = _OWNER_MIN_VERSION
-
-_CHUNK_INDEX_MIN_VERSION = _OWNER_MIN_VERSION
-
-_EFFORT_MIN_VERSION = _OWNER_MIN_VERSION
-
-
-def _parser_accepts(parse_args, probe_argv: list[str]) -> bool:
-    """Return whether ``parse_args`` accepts ``probe_argv``.
-
-    Each probe asks about ONE capability. llm-kit's parser makes
-    ``--effort`` required, so a probe argv that omits it fails on that
-    requirement instead of on the capability under test. Parse the bare argv
-    first (a pre-0.60 parser answers it directly); only when that is rejected,
-    retry once with a throwaway ``--effort``. A parser that lacks the probed
-    capability rejects both attempts, so the answer is still False, and a
-    parser that requires ``--effort`` is no longer misread as too old.
-    """
-    for extra in ([], ["--effort", "high"]):
-        try:
-            with contextlib.redirect_stderr(io.StringIO()):
-                parse_args([*probe_argv, *extra])
-        except SystemExit:
-            continue
-        return True
-    return False
-
-
-def _supports_claimed_file() -> bool | None:
-    """True/False if the probe ran and observed an answer; None if it could
-    not run at all because `_parse_args` is absent.
-
-    `_parse_args` is PRIVATE to llm-kit -- an owner that renames or
-    drops it is not thereby "too old"; it is simply an owner this probe
-    cannot ask, and that must not be misdiagnosed as the genuine too-old
-    signal (a present parser that rejects --claimed-file). Distinguishing
-    absent-probe (None) from present-and-rejects (False) is what lets the
-    caller fall through to main() in the former case instead of refusing.
-
-    When callable, parses a throwaway argv containing every required flag
-    (--lane, --model, --chunk) plus --claimed-file. `--chunk` is `type=Path`
-    in every version seen so far, which accepts any string without touching
-    the filesystem, so this is safe to call before any real dispatch. A
-    pre-0.37.0 parser raises SystemExit(2) ("unrecognized arguments:
-    --claimed-file"); this function converts that signal into a plain bool
-    and swallows the stderr argparse would otherwise print, since the caller
-    reports its own message.
-    """
-    parse_args = getattr(_review_lane, "_parse_args", None)
-    if not callable(parse_args):
-        return None
-    probe_argv = [
-        "--lane", "_probe", "--model", "_probe", "--chunk", "_probe",
-        "--claimed-file", "_probe",
-    ]
-    return _parser_accepts(parse_args, probe_argv)
-
-
-def _supports_mechanical_findings() -> bool | None:
-    """Return whether the shared parser accepts the mechanical scan flags."""
-    parse_args = getattr(_review_lane, "_parse_args", None)
-    if not callable(parse_args):
-        return None
-    probe_argv = [
-        "--lane", "_probe", "--model", "_probe", "--chunk", "_probe",
-        "--mechanical-scan-ran", "--mechanical-finding", "{}",
-    ]
-    return _parser_accepts(parse_args, probe_argv)
-
-
-def _supports_bundle() -> bool | None:
-    """Return whether the shared parser accepts the prepared bundle path."""
-    parse_args = getattr(_review_lane, "_parse_args", None)
-    if not callable(parse_args):
-        return None
-    probe_argv = [
-        "--lane", "_probe", "--model", "_probe", "--chunk", "_probe",
-        "--bundle", "_probe",
-    ]
-    return _parser_accepts(parse_args, probe_argv)
-
-
-def _supports_bundle_phrase_map() -> bool | None:
-    """Return whether run_lane accepts the bundle's mechanical phrase map."""
-    run_lane = getattr(_review_lane, "run_lane", None)
-    if not callable(run_lane):
-        return None
-    try:
-        parameters = inspect.signature(run_lane).parameters
-    except (TypeError, ValueError):
-        return None
-    return "mechanical_check_phrases" in parameters
-
-
-def _supports_effort() -> bool | None:
-    """Return whether run_lane takes the required per-entry ``effort``.
-
-    llm-kit's ``review_lane`` has the required ``--effort`` flag and
-    ``run_lane(effort=...)``. An owner without them ignores or rejects the
-    flag, so the wrapper refuses it by name instead of letting a lane run at
-    an effort nobody chose. None means the
-    probe could not run (run_lane absent or uninspectable); the caller
-    refuses that too.
-    """
-    run_lane = getattr(_review_lane, "run_lane", None)
-    if not callable(run_lane):
-        return None
-    try:
-        parameters = inspect.signature(run_lane).parameters
-    except (TypeError, ValueError):
-        return None
-    return "effort" in parameters
-
-
-def _supports_chunk_index() -> bool | None:
-    """Return whether the shared parser accepts --chunk-index.
-
-    Probed with --bundle and --chunk-index alone (no --chunk), since the flag
-    only became legal once the parser stopped requiring --chunk outright.
-    """
-    parse_args = getattr(_review_lane, "_parse_args", None)
-    if not callable(parse_args):
-        return None
-    probe_argv = [
-        "--lane", "_probe", "--model", "_probe",
-        "--bundle", "_probe", "--chunk-index", "0",
-    ]
-    return _parser_accepts(parse_args, probe_argv)
-
-
 if __name__ == "__main__":
-    if "--claimed-file" in sys.argv[1:] and _supports_claimed_file() is False:
-        _refuse_too_old(
-            "review_lane._parse_args does not accept --claimed-file",
-            min_version=_CLAIMED_FILE_MIN_VERSION,
-            capability="--claimed-file support",
-        )
-    if (
-        ("--mechanical-finding" in sys.argv[1:] or "--mechanical-scan-ran" in sys.argv[1:])
-        and _supports_mechanical_findings() is False
-    ):
-        _refuse_too_old(
-            "review_lane._parse_args does not accept mechanical scan findings",
-            min_version=_MECHANICAL_FINDINGS_MIN_VERSION,
-            capability="mechanical scan finding support",
-        )
-    if "--bundle" in sys.argv[1:] and _supports_bundle() is False:
-        _refuse_too_old(
-            "review_lane._parse_args does not accept --bundle",
-            min_version=_BUNDLE_MIN_VERSION,
-            capability="prepared review bundle support",
-        )
-    if (
-        "--bundle" in sys.argv[1:]
-        and (
-            "--mechanical-finding" in sys.argv[1:]
-            or "--mechanical-scan-ran" in sys.argv[1:]
-        )
-        and _supports_bundle_phrase_map() is False
-    ):
-        _refuse_too_old(
-            "review_lane.run_lane does not accept mechanical_check_phrases",
-            min_version=_BUNDLE_PHRASE_MAP_MIN_VERSION,
-            capability="bundle mechanical check phrase support",
-        )
-    if "--chunk-index" in sys.argv[1:] and _supports_chunk_index() is False:
-        _refuse_too_old(
-            "review_lane._parse_args does not accept --chunk-index",
-            min_version=_CHUNK_INDEX_MIN_VERSION,
-            capability="--chunk-index bundle-derived dispatch support",
-        )
-    # Last, so a more specific refusal above names its own missing capability.
-    # Effort is required on every run, and anything but a confirmed
-    # run_lane(effort=...) -- including a run_lane that is absent or cannot
-    # be inspected -- refuses rather than dispatching at an unchosen effort.
-    if _supports_effort() is not True:
-        _refuse_too_old(
-            "review_lane.run_lane does not accept effort",
-            min_version=_EFFORT_MIN_VERSION,
-            capability="--effort per-entry effort support",
-        )
     sys.exit(_main())

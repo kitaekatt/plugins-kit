@@ -2,9 +2,11 @@
 
 The runner lazy-imports llm_kit / openai inside main(), so importing the
 module here needs no network and no SDK. The import-guard tests install fake
-modules into sys.modules; an absent or too-old llm_kit is a refusal (exit 2)
-before any call. The dispatch tests use the REAL llm_kit
-(its lib/ is put on sys.path, standing in for the bootstrap shared-lib .pth)
+modules into sys.modules; an absent llm_kit is a refusal (exit 2) before any
+call, and a present one that lacks a symbol fails loudly (the katsoft-llm-kit
+pin guarantees the API). The dispatch tests use the REAL llm_kit
+(its lib/ is put on sys.path, standing in for the katsoft-llm-kit install in
+the plugin venv)
 against the shipped registry, with HOME isolated, the reachability probe
 answered, and OpenRouterBackend.complete replaced -- so no network is touched
 and no openai SDK is needed.
@@ -49,18 +51,20 @@ def test_missing_llm_kit_exits_2_via_single_guard(monkeypatch, capsys, tmp_path)
     assert rc == 2
     err = capsys.readouterr().err
     assert "llm_kit not importable" in err
-    assert "shared-libs .pth" in err
+    assert "katsoft-llm-kit" in err
+    assert "shared-libs .pth" not in err
     text = _SCRIPT.read_text(encoding="utf-8")
     assert text.count("import llm_kit  # noqa") == 1
     assert text.count("from llm_kit.dispatch.declaration import") == 1
 
 
-def test_llm_kit_too_old_exits_2_with_a_distinct_message(monkeypatch, capsys, tmp_path):
-    # llm_kit is present (unlike the absent-package case above) but
-    # predates the declaration API the node dispatches through
-    # (dispatch.factory.create_transport_backend is its newest symbol) -- a venv
-    # linked against an older shared lib. The message must name a minimum
-    # version and must not be the same text as the absent-package message.
+def test_a_present_llm_kit_missing_a_symbol_fails_loudly_not_as_a_refusal(
+    monkeypatch, tmp_path
+):
+    # llm_kit is present (unlike the absent-package case above) but lacks
+    # dispatch.factory.create_transport_backend. The katsoft-llm-kit pin in
+    # pyproject.toml guarantees the API, so no version probe remains: the
+    # ImportError propagates instead of becoming an exit-2 "too old" refusal.
     def fake(name, **attrs):
         module = types.ModuleType(name)
         module.__path__ = []
@@ -83,12 +87,8 @@ def test_llm_kit_too_old_exits_2_with_a_distinct_message(monkeypatch, capsys, tm
     for name, module in fakes.items():
         monkeypatch.setitem(sys.modules, name, module)
 
-    rc = orr.main(["--prompt", "hi", "--out", str(tmp_path / "o.txt")])
-    assert rc == 2
-    err = capsys.readouterr().err
-    assert "llm-kit >= 0.1.5" in err
-    assert "claude plugin update llm-kit@plugins-kit" in err
-    assert "llm_kit not importable" not in err
+    with pytest.raises(ImportError, match="create_transport_backend"):
+        orr.main(["--prompt", "hi", "--out", str(tmp_path / "o.txt")])
 
 
 # --------------------------------------------------------------------------- #
@@ -397,46 +397,6 @@ def test_events_probe_unbindable_sink_exits_2_before_call(kit, tmp_path, capsys,
     assert "claude plugin update bootstrap@plugins-kit" in err
 
 
-def _fake_run(kit, monkeypatch, fn):
-    ran = []
-
-    def wrapper(*args, **kwargs):
-        ran.append(1)
-        return fn(*args, **kwargs)
-
-    wrapper.__signature__ = inspect.signature(fn)
-    monkeypatch.setattr(kit["declaration"], "run", wrapper)
-    return ran
-
-
-def test_events_probe_run_without_observer_exits_2_before_call(kit, tmp_path, capsys, monkeypatch):
-    def old_run(names, request, *, project_root=None, backend_factory=None, max_attempts=None):
-        raise AssertionError("never called")
-
-    ran = _fake_run(kit, monkeypatch, old_run)
-    events = tmp_path / "ev" / "n.events.jsonl"
-    rc, _out, _payload = _run(tmp_path, "--model", "or-qwen", *_events_args(events))
-    err = _assert_refused_before_call(kit, rc, events, capsys)
-    assert ran == []
-    assert "claude plugin update llm-kit@plugins-kit" in err
-    assert "llm-kit >= 0.1.5" in err
-
-
-def test_events_probe_positional_only_observer_exits_2_before_call(
-    kit, tmp_path, capsys, monkeypatch
-):
-    def odd_run(names, request, observer=None, /, *, project_root=None,
-                backend_factory=None, max_attempts=None):
-        raise AssertionError("never called")
-
-    ran = _fake_run(kit, monkeypatch, odd_run)
-    events = tmp_path / "ev" / "n.events.jsonl"
-    rc, _out, _payload = _run(tmp_path, "--model", "or-qwen", *_events_args(events))
-    err = _assert_refused_before_call(kit, rc, events, capsys)
-    assert ran == []
-    assert "llm-kit >= 0.1.5" in err
-
-
 def test_events_invalid_ids_exit_2_before_call(kit, tmp_path, capsys):
     events = tmp_path / "ev" / "n.events.jsonl"
     rc, _out, _payload = _run(
@@ -743,38 +703,6 @@ def test_provider_schema_digest_mismatch_exits_2_before_call(kit_transport, tmp_
     assert not _verdict_path(tmp_path).parent.exists()
     assert payload is None and not out.exists()
     assert "changed in transit" in capsys.readouterr().err
-
-
-def test_provider_contract_probe_too_old_exits_2_before_call(
-    kit_transport, tmp_path, capsys, monkeypatch
-):
-    args = _provider_args(tmp_path)
-    monkeypatch.delattr(kit_transport["contract"], "OutputContract")
-    rc, _out, _payload = _run(tmp_path, "--model", "or-qwen", *args)
-    assert rc == 2
-    assert kit_transport["requests"] == []
-    assert _verdict(tmp_path) is None
-    err = capsys.readouterr().err
-    assert "llm-kit >= 0.1.3" in err
-    assert "not importable" not in err
-
-
-def test_provider_backend_options_without_output_contract_exits_2(
-    kit_transport, tmp_path, capsys, monkeypatch
-):
-    class OldBackendOptions:  # predates output_contract
-        def __init__(self, max_tokens=4096, temperature=None):
-            self.max_tokens = max_tokens
-            self.temperature = temperature
-
-    args = _provider_args(tmp_path)
-    monkeypatch.setattr(kit_transport["types"], "BackendOptions", OldBackendOptions)
-    rc, _out, _payload = _run(tmp_path, "--model", "or-qwen", *args)
-    assert rc == 2
-    assert kit_transport["requests"] == []
-    err = capsys.readouterr().err
-    assert "BackendOptions takes no `output_contract`" in err
-    assert "llm-kit >= 0.1.3" in err
 
 
 def test_provider_digest_mismatch_removes_seeded_verdict(kit_transport, tmp_path):

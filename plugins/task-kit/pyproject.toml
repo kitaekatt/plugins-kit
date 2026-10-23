@@ -1,12 +1,13 @@
 [project]
 name = "task-kit"
-version = "0.18.0"
+version = "0.19.0"
 description = "Runtime dependencies for the task-kit task skill and CLI, including YAML support."
 requires-python = ">=3.12"
 dependencies = [
     "pyyaml>=6.0",
-    "openai>=1.0.0",
     "psutil>=6",
+    "katsoft-llm-kit[config,sdk,local]>=1.1,<2",
+    "katsoft-contracts>=1.0,<2",
 ]
 
 # task-kit is not an importable package -- this pyproject exists only to

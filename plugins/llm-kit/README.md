@@ -7,7 +7,9 @@ published and unchanged, and llm-kit never imports them).
 
 ## Library
 
-`lib/llm_kit/` holds the library, plus `llm_kit/bootstrap_guard.py`. The
+`lib/llm_kit/` holds the library source, plus `llm_kit/bootstrap_guard.py`; the plugin's
+own venv installs it as the released `katsoft-llm-kit` distribution rather than
+running this copy (see `pyproject.toml`). The
 sub-packages are `completion`, `adapters`, `dispatch`, `registry`, `schema`,
 `storage`, `execution`, `jobs`, `pipeline` (`core`, `artifacts`, `runtime`,
 `execution`, `analysis`), `frontdoor` and `scaffold`. The root initializers are

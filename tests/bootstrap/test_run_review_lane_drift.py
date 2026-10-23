@@ -3,8 +3,9 @@
 git-kit and p4-kit run the same reviewer lanes with the same prompts against the
 same endpoints. Their scripts therefore stay byte-identical wrappers, the way
 bootstrap_guard.py is. The seam-calling implementation is shared in
-llm_kit.dispatch.review_lane; the wrappers only set up bootstrap and host its
-REFUSE probe.
+llm_kit.dispatch.review_lane, which each kit installs as the pinned
+katsoft-llm-kit package; the wrappers only set up bootstrap and print an
+absent-library diagnostic.
 
 The seam-calling implementation cannot live in bootstrap_lib with the rest of
 the shared review core, because it would make `openai` a transitive requirement
@@ -17,7 +18,6 @@ same reason test_skill_drift.py does: the invariant is the shared review
 contract, and neither kit owns it.
 """
 
-import argparse
 import ast
 import json
 import runpy
@@ -54,20 +54,19 @@ class TestWrapperCopiesMatch:
 
     def test_consumers_require_the_parser_owner_version(self) -> None:
         # The parser owner shipped in 0.113.0 (git-kit, p4-kit); that stays the
-        # minimum below. git-kit and
-        # p4-kit also launch skill scripts through the guarded BOOTSTRAP_PYTHON
-        # form, which raises their floor to the interpreter contract's
-        # MIN_VERSION (0.120.0), and to 0.133.0, the release whose bundle supplies
-        # the AGENTS.md ancestor chain those skills read, and to 0.159.0, the
-        # release that adds the review_exclusions.yaml axis their skills document.
-        # llm-kit's describe/run call
-        # bootstrap_lib.model_declaration (parse, CORE_IDS), first shipped in
-        # bootstrap 0.129.0, and its manifest requires the release that first
-        # recognizes llm_kit as a first-party shared library (0.157.0).
+        # minimum below. git-kit and p4-kit also launch skill scripts through
+        # the guarded BOOTSTRAP_PYTHON form (interpreter contract, 0.120.0),
+        # read the AGENTS.md ancestor chain (0.133.0) and the
+        # review_exclusions.yaml axis (0.159.0). All three consumers of the
+        # katsoft-llm-kit package require 0.160.0, the release that revokes a
+        # shared-library link the manifest no longer declares and stamps a venv
+        # against the released-package target of its requirement. llm-kit's
+        # describe/run call bootstrap_lib.model_declaration (parse, CORE_IDS),
+        # first shipped in bootstrap 0.129.0.
         expected = {
-            "git-kit": "0.159.0",
-            "p4-kit": "0.159.0",
-            "llm-kit": "0.157.0",
+            "git-kit": "0.160.0",
+            "p4-kit": "0.160.0",
+            "llm-kit": "0.160.0",
         }
         minimum = {"git-kit": "0.113.0", "p4-kit": "0.113.0",
                    "llm-kit": "0.129.0"}
@@ -135,90 +134,45 @@ class TestCopiesStayIdentical:
         assert path.parent.name == "scripts"
         assert path.parent.parent.name in {"git-kit", "p4-kit"}
 
-    def test_bundle_probe_refuses_an_old_owner(
+    @pytest.mark.parametrize("path", COPIES, ids=lambda p: p.parts[-3])
+    def test_copy_probes_no_owner_version(self, path: Path) -> None:
+        """The katsoft-llm-kit pin guarantees the lane's flags and signatures."""
+        source = path.read_text(encoding="utf-8")
+        for probe in ("_parse_args", "run_lane", "0.1.9", "REFUSE"):
+            assert probe not in source, (
+                f"{path} probes the owner ({probe!r}); the pinned "
+                "katsoft-llm-kit requirement replaces every signature probe"
+            )
+
+    def test_absent_owner_prints_a_diagnostic_and_exits_usage(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        package = types.ModuleType("llm_kit")
-        package.__path__ = []
-        review_lane = types.ModuleType("llm_kit.dispatch.review_lane")
-
-        def old_parse(argv):
-            parser = argparse.ArgumentParser()
-            parser.add_argument("--lane", required=True)
-            parser.add_argument("--model", required=True)
-            parser.add_argument("--chunk", required=True)
-            return parser.parse_args(argv)
-
-        review_lane._parse_args = old_parse
-        review_lane.main = lambda: 42
         bootstrap_guard = types.ModuleType("bootstrap_guard")
         bootstrap_guard.reexec_under_plugin_venv = lambda _plugin: None
         bootstrap_guard.require_bootstrap = lambda *_args, **_kwargs: None
         monkeypatch.setitem(sys.modules, "bootstrap_guard", bootstrap_guard)
-        monkeypatch.setitem(sys.modules, "llm_kit", package)
-        monkeypatch.setitem(sys.modules, "llm_kit.dispatch.review_lane", review_lane)
-        monkeypatch.setattr(
-            sys,
-            "argv",
-            [str(COPIES[0]), "--bundle", "bundle.json"],
-        )
+        # Make the package unimportable regardless of what the environment
+        # installs: drop cached modules and front the import system with a
+        # finder that reports llm_kit itself as missing.
+        for name in [n for n in sys.modules if n.split(".")[0] == "llm_kit"]:
+            monkeypatch.delitem(sys.modules, name)
+
+        class _Absent:
+            @staticmethod
+            def find_spec(name, path=None, target=None):
+                if name == "llm_kit":
+                    raise ModuleNotFoundError("No module named 'llm_kit'", name=name)
+                return None
+
+        monkeypatch.setattr(sys, "meta_path", [_Absent(), *sys.meta_path])
+        monkeypatch.setattr(sys, "argv", [str(COPIES[0])])
         monkeypatch.syspath_prepend(str(COPIES[0].parent))
 
         with pytest.raises(SystemExit) as excinfo:
             runpy.run_path(str(COPIES[0]), run_name="__main__")
 
-        assert excinfo.value.code != 0
-        stderr = capsys.readouterr().err
-        assert "prepared review bundle support" in stderr
-        assert "0.1.9" in stderr
-
-    def test_phrase_map_probe_refuses_owner_that_only_parses_bundle(
-        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        package = types.ModuleType("llm_kit")
-        package.__path__ = []
-        review_lane = types.ModuleType("llm_kit.dispatch.review_lane")
-
-        def old_run_lane(*, lane, model, diff_text, mechanical_findings=None):
-            return {}
-
-        def old_parse(argv):
-            parser = argparse.ArgumentParser()
-            parser.add_argument("--lane")
-            parser.add_argument("--model")
-            parser.add_argument("--chunk")
-            parser.add_argument("--bundle")
-            parser.add_argument("--mechanical-scan-ran", action="store_true")
-            parser.add_argument("--mechanical-finding", action="append")
-            return parser.parse_args(argv)
-
-        review_lane._parse_args = old_parse
-        review_lane.run_lane = old_run_lane
-        review_lane.main = lambda: 42
-        bootstrap_guard = types.ModuleType("bootstrap_guard")
-        bootstrap_guard.reexec_under_plugin_venv = lambda _plugin: None
-        bootstrap_guard.require_bootstrap = lambda *_args, **_kwargs: None
-        monkeypatch.setitem(sys.modules, "bootstrap_guard", bootstrap_guard)
-        monkeypatch.setitem(sys.modules, "llm_kit", package)
-        monkeypatch.setitem(sys.modules, "llm_kit.dispatch.review_lane", review_lane)
-        monkeypatch.setattr(
-            sys,
-            "argv",
-            [
-                str(COPIES[0]),
-                "--bundle", "bundle.json",
-                "--mechanical-scan-ran",
-            ],
-        )
-        monkeypatch.syspath_prepend(str(COPIES[0].parent))
-
-        with pytest.raises(SystemExit) as excinfo:
-            runpy.run_path(str(COPIES[0]), run_name="__main__")
-
-        assert excinfo.value.code != 0
-        stderr = capsys.readouterr().err
-        assert "bundle mechanical check phrase support" in stderr
-        assert "0.1.9" in stderr
+        assert excinfo.value.code == 2
+        assert "katsoft-llm-kit package is not installed" in capsys.readouterr().err
 
 
 _SEAM_OWNERS = frozenset({"llm_kit", "llm_scripting_kit"})
@@ -267,8 +221,10 @@ class TestOwnerDependenciesAreDeclared:
     The completeness scan cannot see it: the wrapper imports the owner by
     string, so the scan never follows it. llm_kit.dispatch.review_lane imports
     PyYAML at load time and the openai SDK when a transport entry dispatches.
-    Both are declared (PyYAML as a dependency, openai in the optional
-    endpoint-dispatch group), and the shared-library import names llm_kit.
+    Both come from the katsoft-llm-kit package (the config extra in the
+    dependencies, the sdk extra in the optional endpoint-dispatch group), and
+    the shared-library import names bootstrap_lib only: llm_kit is installed,
+    not linked.
     """
 
     @pytest.mark.parametrize("kit", ["git-kit", "p4-kit"])
@@ -279,7 +235,11 @@ class TestOwnerDependenciesAreDeclared:
         )["project"]
         assert project["requires-python"].startswith(">=3.12")
         assert "pyyaml" in project["dependencies"]
-        assert project["optional-dependencies"]["endpoint-dispatch"] == ["openai"]
+        assert "katsoft-llm-kit[config]>=1.1,<2" in project["dependencies"]
+        assert "katsoft-contracts>=1.0,<2" in project["dependencies"]
+        assert project["optional-dependencies"]["endpoint-dispatch"] == [
+            "katsoft-llm-kit[sdk]>=1.1,<2"
+        ]
         manifest = json.loads((plugin / "bootstrap.json").read_text(encoding="utf-8"))
-        assert manifest["shared_lib_imports"] == ["bootstrap_lib", "llm_kit"]
+        assert manifest["shared_lib_imports"] == ["bootstrap_lib"]
         assert "install" not in json.dumps(manifest.get("plugins", []))

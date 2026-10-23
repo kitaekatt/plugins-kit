@@ -153,10 +153,40 @@ class TestPreflightPolicy:
         _record_locally(root)
         h.write(root, "plugins/pub-kit/pyproject.toml",
                 '[project]\nname = "pub-kit"\nversion = "1.1.0"\n'
-                f'dependencies = ["{DIST}>=5"]\n')
+                f'dependencies = ["{DIST}>=5.0,<6"]\n')
         _bump_plugin(root, "1.1.0")
-        with pytest.raises(publish.PublishError, match="plugins/pub-kit/pyproject.toml"):
+        with pytest.raises(publish.PublishError, match="unsatisfiable"):
             publish.preflight()
+
+    @pytest.mark.parametrize("requirement", [
+        "{d}",                      # no range
+        "{d}>=1.0",                 # no upper bound
+        "{d}==1.0.0",               # exact pin
+        "{d}~=1.0",                 # compatible release
+        "{d}>=1.0,<2.0",            # upper bound is not a bare major
+        "{d}<2,>=1.0",              # fixed order
+        "{d}>=1.0,<2; python_version >= '3.12'",
+    ])
+    def test_shipping_plugin_requirement_must_use_the_restricted_form(
+            self, root, requirement):
+        """bootstrap resolves a venv's released-package target from one form only.
+        Removing `restricted_form_problems` from `_require_satisfiable` turns this red."""
+        _record_locally(root)
+        h.write(root, "plugins/pub-kit/pyproject.toml",
+                '[project]\nname = "pub-kit"\nversion = "1.1.0"\n'
+                f'dependencies = ["{requirement.format(d=DIST)}"]\n')
+        _bump_plugin(root, "1.1.0")
+        with pytest.raises(publish.PublishError,
+                           match=r"(?s)restricted form.*plugins/pub-kit/pyproject.toml"):
+            publish.preflight()
+
+    def test_restricted_form_requirement_passes_and_unregistered_is_free(self, root):
+        _record_locally(root)
+        h.write(root, "plugins/pub-kit/pyproject.toml",
+                '[project]\nname = "pub-kit"\nversion = "1.1.0"\n'
+                f'dependencies = ["{DIST}[extra]>=1.0,<2", "openai", "pyyaml~=6.0"]\n')
+        _bump_plugin(root, "1.1.0")
+        assert publish.preflight()[0] == ["pub-kit: 1.0.0 -> 1.1.0"]
 
     def test_removed_public_name_needs_a_major_bump(self, root):
         _record_locally(root)
@@ -300,3 +330,47 @@ class TestReleaseFlow:
         moved = h.commit_all(root, "moved")
         with pytest.raises(publish.PublishError, match="late.txt"):
             publish._require_final_is_p_plus_owned(p, moved)
+
+
+# --- the restricted requirement form --------------------------------------------
+
+class TestRestrictedRequirementForm:
+    """publish and the engine read one form, through one parser."""
+
+    CASES = [
+        (f"{DIST}>=1.0,<2", True),
+        (f"{DIST}[sdk, jobs]>=1.2.3,<3", True),
+        (f"{DIST}>=1.0", False),
+        (f"{DIST}~=1.0", False),
+        (f"{DIST}>=1.0,<2.0", False),
+        (f"{DIST}>=1,<2", False),
+        (DIST, False),
+    ]
+
+    def test_publish_and_engine_agree_on_the_form(self):
+        sys.path.insert(0, str(_HERE.parents[1] / "plugins" / "bootstrap"))
+        from bootstrap_lib.venv_check import parse_restricted_requirement
+        registered = {rb.normalize_dist(DIST)}
+        for text, ok in self.CASES:
+            problems = _packages.restricted_form_problems([text], registered, "x")
+            assert (not problems) is ok, text
+            assert (parse_restricted_requirement(text) is not None) is ok, text
+
+    def test_an_unregistered_requirement_is_never_a_problem(self):
+        assert _packages.restricted_form_problems(
+            ["openai", "pyyaml~=6.0", "x>=1"], {rb.normalize_dist(DIST)}, "x") == []
+
+    def test_every_plugin_pyproject_in_this_checkout_uses_the_form(self):
+        """Guards the checkout the suite runs in, not a fixture: a plugin that
+        requires a package registered in packages/registry.toml in any other
+        spelling gets no released-package target from bootstrap."""
+        root = _HERE.parents[1]
+        registry = rb.parse_registry((root / "packages" / "registry.toml").read_text())
+        registered = {rb.normalize_dist(e.name) for e in registry.entries}
+        problems = []
+        for pyproject in sorted((root / "plugins").glob("*/pyproject.toml")):
+            where = str(pyproject.relative_to(root)).replace("\\", "/")
+            problems += _packages.restricted_form_problems(
+                _packages._requirement_texts(pyproject.read_text(encoding="utf-8")),
+                registered, where)
+        assert problems == []

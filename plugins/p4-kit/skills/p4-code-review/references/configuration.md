@@ -209,8 +209,7 @@ How the effort reaches the model depends on the entry's harness:
   llm-kit. The runner refuses the lane with exit 2 when a codex entry's effort menu
   does not include the level, or when a transport entry cannot deliver an effort at all; the
   review reports that refusal as a configuration error. The runner's JSON envelope records the
-  effort it sent in its `effort` field. `--effort` needs llm-kit 0.1.9 or later; the
-  runner refuses an older release.
+  effort it sent in its `effort` field.
 
 `model` and `effort` are therefore independent: any model may pair with any effort the model's
 harness accepts, and neither is ever traded for the other.
@@ -343,7 +342,7 @@ and announces the choice with the prior entry and its failure kind as the reason
 entry runs at its own stated effort. Each entry is tried at most once per lane, and a lane only
 ever runs on an entry its own declaration named. A runner refusal (exit 2) that the
 launch-correction rule does not explain -- an unsupported lane, an effort the entry cannot take,
-or an llm-kit too old for `--effort` -- is a configuration error: the lane is reported
+or a plugin venv with no katsoft-llm-kit package installed yet -- is a configuration error: the lane is reported
 under `## Lane failures` and is not re-selected.
 Every choice from a multi-entry declaration, first choice and re-selections alike, is
 announced as a `route:` line, and the rendered review carries a `## Lane routes` section with

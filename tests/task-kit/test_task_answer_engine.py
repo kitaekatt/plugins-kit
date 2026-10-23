@@ -468,7 +468,7 @@ def test_a_failed_chain_is_reported_with_its_attempts_and_writes_nothing(world, 
 def test_without_llm_kit_model_answering_refuses(world):
     report = world.pass_(NeverRun(), targets=world.targets(["c"]))
     assert report.outcome == "refused" and report.refusal["state"] == "absent"
-    assert "claude plugin install llm-kit" in report.refusal["message"]
+    assert "bootstrap run" in report.refusal["message"]
     assert report.answered == () and not (world.folder("c") / "answers").exists()
     assert report.unattempted == (("proj/c", "orientation"),)
 

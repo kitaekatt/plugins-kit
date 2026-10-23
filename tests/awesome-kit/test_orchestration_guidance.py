@@ -776,41 +776,35 @@ class TestConsultSeats:
         assert "**Degraded render.**" in rendered
         assert "consult seats unavailable" in rendered
         assert "llm_kit is absent" in rendered
-        assert "claude plugin install llm-kit@plugins-kit" in rendered
+        assert "katsoft-llm-kit" in rendered
+        assert "claude plugin install" not in rendered
 
         assert og.main(["--self", "opus", "--explain", "--project-root", str(layered.project_root)]) == 0
         explained = capsys.readouterr().out
         assert "seats  skipped" in explained
         assert "llm_kit is absent" in explained
-        assert "claude plugin install llm-kit@plugins-kit" in explained
+        assert "katsoft-llm-kit" in explained
 
-    def test_self_with_old_library_is_disclosed_in_the_degraded_render(
-        self, layered, monkeypatch, capsys
+    def test_self_with_a_broken_library_discloses_the_failed_discovery(
+        self, layered, monkeypatch
     ):
-        """Formerly test_self_with_old_library_is_silent_but_explain_discloses_the_frontier.
+        """A present llm_kit without dispatch.seats is a failure, not a version.
 
-        Before the fix a too-old library made the Consult seats section
-        vanish from `render()` with nothing said, indistinguishable from a
-        render where no seat qualified -- pinned here (a hit before the fix
-        reverts): render() must disclose the same diagnosis --explain
-        always carried, not only --explain.
+        The katsoft-llm-kit pin guarantees the module, so no too-old status
+        exists: the missing module surfaces as a failed discovery, rendered in
+        the section with the error class, never as a silent absent section.
         """
         _install_fake_llm_kit(monkeypatch)
         monkeypatch.setattr(og, "discover_model_definitions", lambda _root: ({}, []))
         config, provenance = self._config(layered)
         rendered = og.render(config, provenance, self_ref="opus")
-        assert "## Consult seats" not in rendered
-        assert "**Degraded render.**" in rendered
-        assert "discover_seats" in rendered
-        assert "0.1.9" in rendered
-        assert "claude plugin update llm-kit@plugins-kit" in rendered
+        assert "## Consult seats" in rendered
+        assert "seats unavailable: ModuleNotFoundError" in rendered
+        assert "llm_kit is absent" not in rendered
 
-        assert og.main(["--self", "opus", "--explain", "--project-root", str(layered.project_root)]) == 0
-        explained = capsys.readouterr().out
-        assert "seats  skipped" in explained
-        assert "lacks discover_seats" in explained
-        assert "0.1.9" in explained
-        assert "claude plugin update llm-kit@plugins-kit" in explained
+        status = og.discover_consult_seats("opus", layered.project_root)[1]
+        assert status == "discovery_failed"
+        assert not hasattr(og, "LLM_KIT_FLOOR")
 
     def test_without_self_is_silent_even_when_seats_are_available(self, layered, monkeypatch):
         calls = []
@@ -2005,16 +1999,12 @@ class TestRenderedCodexCommandKeepsItsSilentFailureFlags:
         )
 
 
-class TestAddDirsProbeDiagnosesAStaleLlmKit:
-    """A too-old llm-kit lacks build_argv's `add_dirs` keyword.
+class TestAnAdapterFailureIsDisclosedNotProbed:
+    """An adapter whose build_argv rejects `add_dirs` falls back with its own error.
 
-    A bare try/except Exception around the whole call would mean the
-    fallback note was `TypeError: build_argv() got an unexpected keyword
-    argument 'add_dirs'` -- true, but naming neither the owning plugin nor
-    the remedy, and indistinguishable from an adapter bug. The probe must
-    check the keyword BEFORE the call and name llm-kit, the floor
-    (0.1.9, the first published version carrying add_dirs), and the update
-    command.
+    llm-kit is the pinned katsoft-llm-kit package, so the renderer carries no
+    version probe for the keyword: the TypeError an adapter raises is the
+    disclosed fallback reason.
     """
 
     @pytest.fixture(autouse=True)
@@ -2023,12 +2013,10 @@ class TestAddDirsProbeDiagnosesAStaleLlmKit:
         for lib in (repo / "plugins" / "llm-kit" / "lib", repo / "plugins" / "bootstrap"):
             monkeypatch.syspath_prepend(str(lib))
 
-    def test_probe_names_the_owner_and_the_floor_not_a_raw_typeerror(self, monkeypatch):
+    def test_the_fallback_note_carries_the_adapters_error(self, monkeypatch):
         import llm_kit.adapters.harness_adapters as harness_adapters
 
         class _PreAddDirsCodexAdapter:
-            """Stands in for a CodexAdapter published before add_dirs existed."""
-
             def __init__(self, argv_prefix=None):
                 self.argv_prefix = argv_prefix
 
@@ -2054,13 +2042,9 @@ class TestAddDirsProbeDiagnosesAStaleLlmKit:
         )
         assert rendered == "codex exec ... -"
         assert len(notes) == 1
-        note = notes[0]
-        assert "llm-kit" in note
-        assert "0.1.9" in note
-        assert "claude plugin update llm-kit@plugins-kit" in note
-        assert "update" in note.lower()
-        assert "TypeError" not in note
-        assert "unexpected keyword" not in note
+        assert "TypeError" in notes[0]
+        assert "add_dirs" in notes[0]
+        assert "claude plugin update" not in notes[0]
 
 
 class TestCodexDispatchDocMatchesTheShippedCommand:
@@ -2579,24 +2563,25 @@ class TestDeclarationRenderDegrades:
         assert "no usable routing target" in "\n".join(_row_lines(text, 2))
         degraded = text.split("**Degraded render.**", 1)[1]
         assert "llm_kit" in degraded
-        assert "claude plugin install llm-kit@plugins-kit" in degraded
+        assert "katsoft-llm-kit" in degraded
         assert not _has_word(degraded, "sol")
 
-    def test_a_library_older_than_describe_is_diagnosed_apart_from_absence(
-        self, layered, monkeypatch
-    ):
+    def test_a_broken_library_is_diagnosed_apart_from_absence(self, layered, monkeypatch):
+        # The katsoft-llm-kit pin guarantees the declaration API, so no version
+        # probe remains: a present llm_kit without it is disclosed as a failed
+        # import, apart from the absent library, and names no update command.
         layered("shipped", cfg(backends=[_AGENT_RECORD]))
         monkeypatch.setitem(sys.modules, "llm_kit", None)
         config, provenance = og.resolve_config(layered.project_root)
         absent = og.render(config, provenance).split("**Degraded render.**", 1)[1]
 
         _install_fake_llm_kit(monkeypatch)
-        too_old = og.render(config, provenance).split("**Degraded render.**", 1)[1]
+        broken = og.render(config, provenance).split("**Degraded render.**", 1)[1]
 
-        assert "claude plugin install llm-kit@plugins-kit" in absent
-        assert "0.1.9" in too_old
-        assert "claude plugin update llm-kit@plugins-kit" in too_old
-        assert absent != too_old
+        assert "katsoft-llm-kit" in absent
+        assert "could not be imported" in broken
+        assert "claude plugin update" not in broken
+        assert absent != broken
 
 
 def test_out_of_quota_consult_seats_render_with_their_reset_time(layered, monkeypatch):
@@ -2797,11 +2782,13 @@ class TestRoutingEffort:
         assert "claude plugin update bootstrap@plugins-kit" in str(too_old.value)
         assert str(too_old.value) != str(no_module.value)
 
-    def test_the_bootstrap_floor_matches_parse_entries(self):
+    def test_the_bootstrap_floor_covers_parse_entries(self):
         manifest = json.loads(
             (_AGENTS_DIR.parent / "bootstrap.json").read_text(encoding="utf-8")
         )
-        assert manifest["requires_bootstrap"] == og.PARSE_ENTRIES_BOOTSTRAP
+        floor = tuple(int(part) for part in manifest["requires_bootstrap"].split("."))
+        parse_entries = tuple(int(part) for part in og.PARSE_ENTRIES_BOOTSTRAP.split("."))
+        assert floor >= parse_entries
 
 
 class TestOrchestrateLaneAgents:

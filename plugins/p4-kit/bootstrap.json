@@ -1,6 +1,6 @@
 {
-  "$comment": "requires_bootstrap is the call shape this plugin needs: shipped skill text launches scripts as \"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}\", which only bootstrap 0.120.0's SessionStart hook exports; bootstrap 0.133.0 supplies the AGENTS.md ancestor chain (prepare_review.py's shared-API floor is 0.113.0); bootstrap 0.144.0 supplies the per-lane effort review_profiles schema and the per-entry shipped defaults; bootstrap 0.159.0 supplies the review_exclusions.yaml configured_path axis.",
-  "requires_bootstrap": "0.159.0",
+  "$comment": "requires_bootstrap is the call shape this plugin needs: shipped skill text launches scripts as \"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}\", which only bootstrap 0.120.0's SessionStart hook exports; bootstrap 0.133.0 supplies the AGENTS.md ancestor chain (prepare_review.py's shared-API floor is 0.113.0); bootstrap 0.144.0 supplies the per-lane effort review_profiles schema and the per-entry shipped defaults; bootstrap 0.159.0 supplies the review_exclusions.yaml configured_path axis; bootstrap 0.160.0 revokes a shared-library link the manifest no longer declares and stamps a venv against the released-package target of its katsoft-llm-kit requirement, so llm_kit is installed as a package and not linked.",
+  "requires_bootstrap": "0.160.0",
   "tools": [
     {
       "name": "p4",
@@ -27,7 +27,7 @@
   "venv": {
     "check_imports": ["p4kit_vcs"]
   },
-  "shared_lib_imports": ["bootstrap_lib", "llm_kit"],
+  "shared_lib_imports": ["bootstrap_lib"],
   "script": {
     "path": "scripts/cleanup_legacy_config.py",
     "entry_point": "cleanup"

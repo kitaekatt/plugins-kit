@@ -1,6 +1,6 @@
 [project]
 name = "job-kit"
-version = "0.14.0"
+version = "0.14.1"
 description = "Durable execution for heterogeneous agent jobs through a bounded worker pool."
 requires-python = ">=3.12"
 dependencies = [
@@ -10,6 +10,7 @@ dependencies = [
     # content-pipeline-kit declares it: the dependency is real at import time
     # whether or not this package names the module itself.
     "openai>=1.0.0",
+    "katsoft-contracts>=1.0,<2",
 ]
 
 [project.scripts]

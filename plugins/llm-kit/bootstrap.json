@@ -1,6 +1,6 @@
 {
-  "requires_bootstrap": "0.157.0",
-  "$comment": "requires_bootstrap is the bootstrap release that first recognizes the llm_kit shared library as first-party for the transient-import retry (engine._FIRST_PARTY_LIBS), shipped in the same bootstrap publication as this plugin. The copied code binds bootstrap_lib call shapes first shipped no later than bootstrap 0.154.1 (the claudx REFUSE edge), so 0.157.0 covers them. llm_kit is the only shared library this plugin publishes; the legacy libraries llm_scripting_kit, content_pipeline and job_kit keep their owning plugins and are never imported here. No config block: llm-kit seeds no user config and reads the legacy credential and config locations unchanged. The one custom script, custom_bootstrap.py, only checks the OpenRouter credential (reading those locations, never writing them) and records an unmet or rejected key as a deferred requirement in this plugin's own data directory; it migrates no legacy .env or data directory and seeds no layer. The venv carries every extra the bundled code reaches and the llm-kit console script (pyproject [project.scripts]); the standalone interpreter carries only the .pth links. The git tool is declared because the jobs group creates and reclaims per-attempt git worktrees.",
+  "requires_bootstrap": "0.160.0",
+  "$comment": "requires_bootstrap 0.160.0 is the first bootstrap that revokes undeclared bootstrap-written .pth links and holds a plugin venv at the highest released version of a first-party package its pyproject requires (the released-target venv stamp), so the venv's llm_kit is the katsoft-llm-kit wheel and never a stale link. It also covers every *_BOOTSTRAP floor the library names (the copied code binds bootstrap_lib call shapes first shipped no later than bootstrap 0.154.1). The shared_libs publication of llm_kit stays for the consumers that still link it; this plugin's own venv no longer uses it. No config block: llm-kit seeds no user config and reads the legacy credential and config locations unchanged. The one custom script, custom_bootstrap.py, only checks the OpenRouter credential (it runs `llm-kit account status --json` under the plugin venv, reads the credential locations through it, never writes them) and records an unmet or rejected key as a deferred requirement in this plugin's own data directory; it migrates no legacy .env or data directory and seeds no layer. The venv carries the extras named in pyproject.toml's katsoft-llm-kit requirement and the llm-kit console script that distribution installs; the standalone interpreter carries only the .pth links. The git tool is declared because the jobs group creates and reclaims per-attempt git worktrees.",
   "tools": [
     {
       "name": "git"
@@ -11,7 +11,6 @@
   ],
   "shared_lib_imports": ["bootstrap_lib"],
   "venv": {
-    "extras": ["config", "sdk", "local", "frontdoor", "jobs", "pipeline"],
     "check_imports": ["yaml", "openai", "psutil", "fastapi", "uvicorn", "httpx", "llm_kit"]
   },
   "script": {

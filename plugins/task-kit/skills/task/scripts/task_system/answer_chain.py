@@ -20,18 +20,18 @@ object must match the question's answer schema (``questions.validate_value``); e
 and non-empty; every ``grounding`` field must quote the inputs (a whitespace-normalised verbatim substring,
 compared after the same ASCII conversion of the inputs). A rejected answer is a task error for the chain.
 
-**llm-kit is optional (plugins/CLAUDE.md, optional plugin dependencies).** Q1: task-kit does its job without it
-(script answers and every other verb work), so it is not REQUIRED. Q2: an answer would be read as a model's
-answer and a missing model produces no answer to disclose in, so model answering REFUSES: ``ask`` raises
-``LlmKitAbsent`` or ``LlmKitTooOld`` and the enclosing pass or dashboard names the failed unit. Nothing
-substitutes. The probe targets the newest symbols used (llm-kit 0.4.0: ``declaration.run(allow=)``,
-``registry.consent.load_consent``, ``registry.cost.classify``).
+**llm-kit is a declared package, imported lazily.** task-kit's ``pyproject.toml`` pins ``katsoft-llm-kit`` to a
+range that carries every symbol used here, so no version probe exists. The import stays lazy because script
+answers and every other verb need no model. Q2 of the optional-dependency rule still holds for the one remaining
+state: an answer would be read as a model's answer and a missing model produces no answer to disclose in, so
+model answering REFUSES: ``ask`` raises ``LlmKitAbsent`` when ``llm_kit`` is not importable (the plugin venv
+has not been provisioned since the pin arrived) and the enclosing pass or dashboard names the failed unit.
+Nothing substitutes. Any other import failure is a defect and propagates unchanged.
 """
 
 from __future__ import annotations
 
 import importlib
-import inspect
 import json
 import re
 import time
@@ -45,9 +45,7 @@ from .answers_types import Answerer, InputBundle, Question, RunFn
 
 FREE = "free"
 COST_CLASSES = ("free", "usage", "spend")
-LLM_KIT_MIN_VERSION = "0.4.0"
-INSTALL_COMMAND = "claude plugin install llm-kit@plugins-kit"
-UPDATE_COMMAND = "claude plugin update llm-kit@plugins-kit"
+PROVISION_COMMAND = "bootstrap run"
 CALL_TIMEOUT_S = 180.0
 CLIENT_ID = "task-kit:answers"
 # A text-only call: the entry must not be given tools that write, execute or spawn.
@@ -63,17 +61,13 @@ _FENCE_RE = re.compile(r"\A```[A-Za-z]*[ \t]*\n(.*)\n```\Z", re.S)
 
 
 class ModelAnsweringUnavailable(RuntimeError):
-    """llm-kit cannot answer. ``state`` is ``absent`` or ``too-old``; the message names the remedy command."""
+    """llm-kit cannot answer. ``state`` is ``absent``; the message names the remedy command."""
 
     state = ""
 
 
 class LlmKitAbsent(ModelAnsweringUnavailable):
     state = "absent"
-
-
-class LlmKitTooOld(ModelAnsweringUnavailable):
-    state = "too-old"
 
 
 class AnswerRejected(ValueError):
@@ -116,7 +110,7 @@ class Allowed:
     note: str = ""
 
 
-# --- llm-kit (optional) ---------------------------------------------------------
+# --- llm-kit (declared package, imported lazily) ---------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -133,61 +127,39 @@ class LlmKitApi:
     HARNESS_KIND: str
 
 
-_USED = (
-    ("llm_kit.dispatch.declaration", ("run", "RunRequest", "NoUsableRoutingTarget", "RUN_COMPLETED")),
-    ("llm_kit.completion.types", ("BackendOptions",)),
-    ("llm_kit.registry.consent", ("load_consent",)),
-    ("llm_kit.registry.cost", ("classify",)),
-    ("llm_kit.registry.models", ("discover_model_entries",)),
-    ("llm_kit.registry.model_endpoints", ("HARNESS_KIND",)),
-    ("llm_kit.adapters.harness_auth", ("probe_harness_auth",)),
-)
-
-
-def _too_old(what: str) -> LlmKitTooOld:
-    return LlmKitTooOld(
-        f"llm-kit is too old or stale ({what}); model answers need llm-kit {LLM_KIT_MIN_VERSION} or later; "
-        f"update it with: {UPDATE_COMMAND}"
-    )
-
-
 def probe_llm_kit() -> LlmKitApi:
-    """Import the llm-kit symbols this module uses, telling an absent library from a too-old one."""
+    """Import the llm-kit symbols this module uses, telling an absent library from any other failure."""
     try:
         importlib.import_module("llm_kit")
     except ModuleNotFoundError as exc:
         if exc.name == "llm_kit":
             raise LlmKitAbsent(
-                "llm-kit is not installed, so model answers are unavailable (script answers and every other "
-                f"task verb still work); install it with: {INSTALL_COMMAND}"
+                "llm_kit (the katsoft-llm-kit package) is not importable, so model answers are unavailable "
+                "(script answers and every other task verb still work); provision task-kit's environment "
+                f"with: {PROVISION_COMMAND}"
             ) from exc
-        raise _too_old(str(exc)) from exc
-    except ImportError as exc:
-        raise _too_old(str(exc)) from exc
-    modules: dict[str, Any] = {}
-    for module_name, names in _USED:
-        try:
-            module = importlib.import_module(module_name)
-        except ImportError as exc:
-            raise _too_old(f"{module_name} is missing") from exc
-        for name in names:
-            if not hasattr(module, name):
-                raise _too_old(f"{module_name}.{name} is missing")
-        modules[module_name] = module
-    declaration = modules["llm_kit.dispatch.declaration"]
-    if "allow" not in inspect.signature(declaration.run).parameters:
-        raise _too_old("llm_kit.dispatch.declaration.run has no allow parameter")
+        raise
+    from llm_kit.adapters.harness_auth import probe_harness_auth  # noqa: PLC0415 -- lazy by design
+    from llm_kit.completion.types import BackendOptions  # noqa: PLC0415
+    from llm_kit.dispatch.declaration import (  # noqa: PLC0415
+        RUN_COMPLETED, NoUsableRoutingTarget, RunRequest, run,
+    )
+    from llm_kit.registry.consent import load_consent  # noqa: PLC0415
+    from llm_kit.registry.cost import classify  # noqa: PLC0415
+    from llm_kit.registry.model_endpoints import HARNESS_KIND  # noqa: PLC0415
+    from llm_kit.registry.models import discover_model_entries  # noqa: PLC0415
+
     return LlmKitApi(
-        run=declaration.run,
-        RunRequest=declaration.RunRequest,
-        BackendOptions=modules["llm_kit.completion.types"].BackendOptions,
-        NoUsableRoutingTarget=declaration.NoUsableRoutingTarget,
-        RUN_COMPLETED=declaration.RUN_COMPLETED,
-        load_consent=modules["llm_kit.registry.consent"].load_consent,
-        classify=modules["llm_kit.registry.cost"].classify,
-        discover_model_entries=modules["llm_kit.registry.models"].discover_model_entries,
-        probe_harness_auth=modules["llm_kit.adapters.harness_auth"].probe_harness_auth,
-        HARNESS_KIND=modules["llm_kit.registry.model_endpoints"].HARNESS_KIND,
+        run=run,
+        RunRequest=RunRequest,
+        BackendOptions=BackendOptions,
+        NoUsableRoutingTarget=NoUsableRoutingTarget,
+        RUN_COMPLETED=RUN_COMPLETED,
+        load_consent=load_consent,
+        classify=classify,
+        discover_model_entries=discover_model_entries,
+        probe_harness_auth=probe_harness_auth,
+        HARNESS_KIND=HARNESS_KIND,
     )
 
 
@@ -335,7 +307,7 @@ def ask(
     ``deadline``: absolute ``time.monotonic()`` seconds, or None. ``run``: replaces ``declaration.run``
     (called as ``run(names, request, project_root=, requirements=, exclude=, max_attempts=,
     reachability_cache=, allow=)``). ``classify``: replaces the entry-id -> cost-class lookup used for the
-    answerer tier of a phase 2 answer. Raises ``LlmKitAbsent`` / ``LlmKitTooOld`` (REFUSE), ``NoAnswer``.
+    answerer tier of a phase 2 answer. Raises ``LlmKitAbsent`` (REFUSE), ``NoAnswer``.
     """
     if not question.prompt:
         raise ValueError(f"question {question.id} has no prompt, so no model can answer it")

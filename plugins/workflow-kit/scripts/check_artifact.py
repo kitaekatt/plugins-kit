@@ -32,7 +32,7 @@ Judgment:
 
 Exit codes: 0 ``satisfied``; 1 ``violated``, or ``missing`` after a command
 that exited 0; the command's own code when it failed; 2 a usage error, an
-absent or too-old llm-kit, a schema outside the subset, a
+absent llm-kit, a schema outside the subset, a
 ``--schema-digest`` that does not match the schema (the schema changed in
 transit), a previous verdict or events file that cannot be removed, or (with
 ``--events``) a bootstrap_lib without execution-event schema v3 or ids that
@@ -47,10 +47,10 @@ at most 100 ``[json_pointer, keyword]`` errors -- never a payload value -- with
 1. The previous verdict at ``--verdict`` is removed first, before any probe.
    An absent file is fine; any other error exits 2 having done nothing else.
    No directory is created.
-2. Probes (kind ``schema`` only): ``llm_kit.completion.contract`` exports
-   ``OutputContract`` (with ``schema_digest``) and ``POLICY_VALIDATED_RESULT``,
-   and ``llm_kit.schema.json_schema.validate`` binds ``(schema, value)``. An absent and a
-   too-old library get different messages; both exit 2 and write nothing.
+2. Probe (kind ``schema`` only): ``llm_kit`` is importable. It is the
+   ``katsoft-llm-kit`` package in workflow-kit's venv, whose release range
+   pyproject.toml pins, so only absence is diagnosed; an absent library exits 2
+   and writes nothing.
 3. The artifact is judged inside one ``try``/``finally`` whose cleanup writes
    the verdict (``missing`` when the body did not reach a judgment), so every
    path after the probes leaves a verdict. The write is atomic: a uniquely
@@ -87,13 +87,13 @@ output-contract probe and the contract-event probe and payload that
 ``openrouter_run.py --provides`` uses, so both node runners write the same
 files the same way.
 
-Run it with workflow-kit's own venv interpreter, which bootstrap links
-``llm_kit`` onto.
+Run it with workflow-kit's own venv interpreter, which bootstrap provisions
+with ``llm_kit`` (the ``katsoft-llm-kit`` package) and links ``bootstrap_lib``
+onto.
 """
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import hashlib
 import inspect
 import json
@@ -102,8 +102,8 @@ import secrets
 import sys
 from pathlib import Path
 
-# Run under workflow-kit's bootstrap-provisioned venv (the shared-libs .pth
-# links llm_kit and bootstrap_lib onto it). The interpreter that
+# Run under workflow-kit's bootstrap-provisioned venv (katsoft-llm-kit is
+# installed in it and the shared-libs .pth links bootstrap_lib onto it). The interpreter that
 # launched this script is caller-supplied (the compiled workflow's
 # ${inputs.workflowKitVenvPython}), and the Workflow tool expands nothing in
 # args, so this guard is the only runtime check that the interpreter is the
@@ -151,9 +151,9 @@ EVENT_PLUGIN = "workflow-kit"
 UNPARSEABLE_ERRORS = (("", "unparseable"),)
 
 _LLM_KIT_ABSENT = (
-    "llm_kit not importable. Enable the llm-kit plugin and run this "
-    "with workflow-kit's venv interpreter (bootstrap links llm_kit onto it via "
-    "the shared-libs .pth)."
+    "llm_kit not importable. It is the katsoft-llm-kit package in workflow-kit's "
+    "venv: run this with workflow-kit's venv interpreter, or run `bootstrap run` "
+    "to provision the venv."
 )
 
 
@@ -171,11 +171,6 @@ def _declarations():
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
         from workflow_kit_lib import declarations  # noqa: PLC0415
     return declarations
-
-
-def output_contract_llm_kit() -> str:
-    """workflow-kit's own constant for the llm-kit release the contract calls need."""
-    return _declarations().OUTPUT_CONTRACT_LLM_KIT
 
 
 def contract_event_bootstrap() -> str:
@@ -302,55 +297,25 @@ class ContractAPI:
 def probe_output_contract(*, need_validate: bool):
     """Return ``(ContractAPI, None)`` when usable, else ``(None, message)``.
 
-    Absent and too-old are different repairs (install vs. update), so they get
-    different messages. The version named is workflow-kit's own constant.
+    Only absence is diagnosed: the installed katsoft-llm-kit release range
+    guarantees the symbols, so an import failure past this point is a real
+    error and propagates.
     """
     try:
         import llm_kit  # noqa: F401, PLC0415
     except ImportError:
         return None, _LLM_KIT_ABSENT
-    reason = None
-    validate = None
-    try:
-        from llm_kit.completion.contract import (  # noqa: PLC0415
-            POLICY_VALIDATED_RESULT,
-            OutputContract,
-        )
-    except ImportError:
-        reason = "no completion.contract.OutputContract / POLICY_VALIDATED_RESULT"
-    if reason is None:
-        if not callable(OutputContract):
-            reason = "OutputContract is not callable"
-        else:
-            try:
-                inspect.signature(OutputContract).bind(
-                    id="x", policy=POLICY_VALIDATED_RESULT, schema={}
-                )
-            except (TypeError, ValueError):
-                reason = "OutputContract(id=, policy=, schema=) does not bind"
-    if reason is None:
-        try:
-            fields = {f.name for f in dataclasses.fields(OutputContract)}
-        except TypeError:
-            fields = set()
-        if "schema_digest" not in fields:
-            reason = "OutputContract has no schema_digest"
-    if reason is None and need_validate:
-        try:
-            from llm_kit.schema import json_schema  # noqa: PLC0415
-
-            validate = json_schema.validate
-            inspect.signature(validate).bind({}, None)
-        except (ImportError, AttributeError, TypeError, ValueError):
-            reason = "schema.json_schema.validate(schema, value) is missing or does not bind"
-    if reason is None:
-        return ContractAPI(OutputContract, POLICY_VALIDATED_RESULT, validate), None
-    return None, (
-        f"the linked llm_kit predates the output-contract calls a schema-typed "
-        f"artifact needs ({reason}); this requires llm-kit >= {output_contract_llm_kit()}. "
-        "Run `claude plugin update llm-kit@plugins-kit` and restart so bootstrap "
-        "re-links the newer shared lib onto workflow-kit's venv."
+    from llm_kit.completion.contract import (  # noqa: PLC0415
+        POLICY_VALIDATED_RESULT,
+        OutputContract,
     )
+
+    validate = None
+    if need_validate:
+        from llm_kit.schema import json_schema  # noqa: PLC0415
+
+        validate = json_schema.validate
+    return ContractAPI(OutputContract, POLICY_VALIDATED_RESULT, validate), None
 
 
 def _refuse_constant(name):

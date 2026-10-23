@@ -66,8 +66,8 @@ function wkScript(command, out, opts) {
 // openrouter strategy: one non-Claude model call via llm-kit's
 // declaration API (scripts/openrouter_run.py -> llm_kit.dispatch.declaration.run),
 // written to `out`. `runner` is the command prefix that runs that script under
-// workflow-kit's OWN venv python -- it declares `openai` (its pyproject) and gets
-// `llm_kit` on its path via the bootstrap shared-libs .pth, e.g.
+// workflow-kit's OWN venv python -- its pyproject installs `katsoft-llm-kit` (the
+// `llm_kit` package) with its `openai` SDK, e.g.
 //   '"<workflow-kit-venv-python>" "<pluginRoot>/scripts/openrouter_run.py"'
 // where <workflow-kit-venv-python> is, expanded in a shell first (the Workflow
 // tool expands nothing in args; under a claudx session CLAUDE_BOOTSTRAP_DATA_ROOT

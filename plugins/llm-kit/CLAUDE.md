@@ -68,8 +68,13 @@ need PyYAML, `sdk` the OpenAI SDK, `local` psutil, `frontdoor` FastAPI, Uvicorn
 and httpx) and are imported at the call site, so a missing requested capability
 refuses at the call rather than at import. Shared libs share source, not dependencies: a
 consumer venv that links `llm_kit` declares the packages for the extras it reaches in its
-own `pyproject.toml`. `bootstrap.json` lists the extras the
-plugin venv carries.
+own `pyproject.toml`. The plugin's own venv does not run the copy under `lib/`: its
+`pyproject.toml` is a non-package project that requires the released
+`katsoft-llm-kit[<every extra>]>=1.2,<2` and `katsoft-contracts>=1.0,<2`, so the extras flow
+from that distribution and `bootstrap.json` names none. The floor is 1.2 because
+`custom_bootstrap.py` reads `llm-kit account status --json`, which first shipped in 1.2.0;
+bootstrap holds the venv at the highest released version the requirement admits, so a change
+to `lib/llm_kit/` reaches the plugin's venv only through a `katsoft-llm-kit` release.
 
 `bootstrap_lib` is a shared library with its own owner. The library reaches it
 lazily (the codex argv builder, skill material, execution events, the interrupt
@@ -83,9 +88,11 @@ edges to a consumer: each consumer declares what it needs (`plugins/CLAUDE.md`,
 ## Runtime mode: plugin copy or installed package
 
 The same `llm_kit` source runs in two deployments, told apart by
-`llm_kit/_deployment.py`: the plugin's copy (`MODE = "legacy"`, linked into the
-plugin venv together with `bootstrap_lib`), and the `katsoft-llm-kit` wheel
-(`MODE = "package"`, written at build time, depending on `katsoft-contracts`).
+`llm_kit/_deployment.py`: the plugin's copy under `lib/` (`MODE = "legacy"`, what the
+repo tests import and what a consumer venv sees through the `shared_libs` link), and the
+`katsoft-llm-kit` wheel (`MODE = "package"`, written at build time, depending on
+`katsoft-contracts`), which is what the plugin's own venv installs. `bootstrap_lib` reaches
+that venv through `shared_lib_imports`, which is what `fleet()` tests.
 `llm_kit._runtime.mode()` decides once per process and raises
 `RuntimeIdentityError` or `UnsupportedLayout` for an environment it cannot
 identify (both copies present, a duplicate or editable install, a zip or frozen
@@ -1148,16 +1155,26 @@ protocol, 5 indeterminate; `jobs` uses 3 for a runner failure and 4 for a waitin
 each group's module documents its own.
 
 - **Launchers.** `bin/llm-kit` and `bin/llm-kit.cmd` are venv-first and delegate to
-  `bin/llm_kit_entrypoint.py`. Under a redirected `CLAUDE_BOOTSTRAP_DATA_ROOT` the redirected
+  `bin/llm_kit_entrypoint.py`, which puts nothing on `sys.path`: the library that runs is
+  the installed package in the chosen interpreter (the standalone interpreter sees the
+  `shared_libs` link instead). Under a redirected `CLAUDE_BOOTSTRAP_DATA_ROOT` the redirected
   venv is the only candidate (a missing one exits 2, never the production venv), and under
   `CLAUDE_PLUGIN_TEST` a shim running from the plugin cache refuses.
   `tests/llm-kit/test_launchers.py` covers both platforms.
-- **`custom_bootstrap.py`** checks the OpenRouter credential at session start and nothing else:
-  it resolves the key from the historical locations, validates it against `GET /auth/key` with a
-  hash-and-age cache (`last_validated.sha256` in the plugin's own data directory), and records a
-  missing, rejected (401) or out-of-credit (402) key as a deferred requirement, never as a fix-all
-  entry. It writes no credential or config file and migrates nothing.
-  `tests/llm-kit/test_custom_bootstrap.py` covers it.
+- **`custom_bootstrap.py`** checks the OpenRouter credential at session start and nothing else.
+  It runs inside the engine process and imports no `llm_kit` module (an AST test pins this):
+  it launches `llm-kit account status --json --endpoint openrouter` under the plugin venv's
+  interpreter and reads the document's `state` field (`missing_key`, `key_present`,
+  `not_validated`, `ok`, `rejected_key`, `no_credit`, `check_failed`; schema
+  `llm-kit.account-status/v1`), never prose or the exit code. A first call with
+  `--no-validate` finds the key's hash and source; a second validates it against
+  `GET /auth/key` only when the hash-and-age cache (`last_validated.sha256` in the plugin's own
+  data directory) is stale. A missing, rejected (401) or out-of-credit (402) key becomes a
+  deferred requirement, never a fix-all entry. A subprocess that cannot run, exits nonzero,
+  prints no document or names an unknown state raises, and the engine reports the script as
+  FAILED. It writes no credential or config file and migrates nothing.
+  `tests/llm-kit/test_custom_bootstrap.py` covers the script and
+  `tests/llm-kit/test_account_status_json.py` the document.
 - **Consumer contract.** `contract/public-surface.json` lists the public names of the pipeline
   products and `scripts/check_consumer_contract.py` reports deprecated and removed names in a
   consumer's source (invocation: `README.md`).

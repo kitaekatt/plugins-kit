@@ -320,7 +320,42 @@ def _dist_of(req):
     return _norm(re.split(r"[<>=!~;\[ @]", req.strip(), maxsplit=1)[0])
 
 
-def _declared_dists(plugin_root):
+def _extras_of(req):
+    """Extras named in a requirement string, as a set (empty when it names none)."""
+    m = re.match(r"^\s*[A-Za-z0-9_.\-]+\s*\[([^\]]*)\]", req)
+    if not m:
+        return set()
+    return {_norm(e) for e in m.group(1).split(",") if e.strip()}
+
+
+# First-party distributions whose extras carry third-party requirements. A
+# consumer that declares ``katsoft-llm-kit[sdk]`` has its openai need met
+# through the extra, because the library's source is linked or installed
+# without its own pins (plugins/CLAUDE.md, "The source is shared; third-party
+# dependencies are not"). The extras are read from the distribution's own
+# pyproject, so the check cannot disagree with what pip would install.
+_PACKAGE_PYPROJECTS = {
+    "katsoft-llm-kit": _REPO_ROOT / "packages" / "katsoft-llm-kit" / "pyproject.toml",
+}
+
+
+def _package_extra_dists(dist, extras, pyprojects=None):
+    """Distribution names the declared ``extras`` of first-party ``dist`` install."""
+    path = (pyprojects or _PACKAGE_PYPROJECTS).get(dist)
+    if path is None or not extras:
+        return set()
+    data = _load_toml(path)
+    if data is None:
+        raise RuntimeError(f"no TOML parser available to read {path}")
+    groups = data.get("project", {}).get("optional-dependencies", {})
+    normalized = {_norm(name): reqs for name, reqs in groups.items()}
+    unknown = sorted(extras - normalized.keys())
+    if unknown:
+        raise AssertionError(f"{dist} declares no extra named {unknown} in {path}")
+    return {_dist_of(req) for extra in extras for req in normalized[extra]}
+
+
+def _declared_dists(plugin_root, pyprojects=None):
     pyproject = plugin_root / "pyproject.toml"
     if not pyproject.is_file():
         return None  # no declaration surface at all
@@ -328,11 +363,12 @@ def _declared_dists(plugin_root):
     declared = set()
     if data is not None:
         project = data.get("project", {})
-        for req in project.get("dependencies", []):
-            declared.add(_dist_of(req))
+        requirements = list(project.get("dependencies", []))
         for group in project.get("optional-dependencies", {}).values():
-            for req in group:
-                declared.add(_dist_of(req))
+            requirements.extend(group)
+        for req in requirements:
+            declared.add(_dist_of(req))
+            declared |= _package_extra_dists(_dist_of(req), _extras_of(req), pyprojects)
     else:
         # Fallback when no TOML parser is available: regex-extract requirement strings.
         text = pyproject.read_text(encoding="utf-8")
@@ -437,3 +473,28 @@ def test_foreign_definition_time_code_remains_reachable() -> None:
     )
     imports = {item[1] for item in _imports_in(_reachable_tree(tree, set()))}
     assert imports == {"yaml", "markdown_it"}
+
+
+def test_declared_package_extras_count_as_declared_third_party_needs(tmp_path: Path) -> None:
+    package = tmp_path / "pkg.toml"
+    package.write_text(
+        '[project]\nname = "katsoft-llm-kit"\ndependencies = ["katsoft-contracts>=1.0,<2"]\n'
+        '[project.optional-dependencies]\nsdk = ["openai>=1.0.0"]\nconfig = ["pyyaml>=6.0"]\n',
+        encoding="utf-8",
+    )
+    pyprojects = {"katsoft-llm-kit": package}
+    plugin = tmp_path / "plugin"
+    plugin.mkdir()
+
+    def declare(requirement: str) -> set[str]:
+        (plugin / "pyproject.toml").write_text(
+            f'[project]\nname = "p"\ndependencies = ["{requirement}"]\n', encoding="utf-8")
+        return _declared_dists(plugin, pyprojects)
+
+    assert declare("katsoft-llm-kit[sdk,config]>=1.1,<2") == {
+        "katsoft-llm-kit", "openai", "pyyaml"}
+    # Counterfactual: without the extra the same need stays undeclared.
+    assert declare("katsoft-llm-kit>=1.1,<2") == {"katsoft-llm-kit"}
+    # A misspelled extra is an error, not a silently empty declaration.
+    with pytest.raises(AssertionError, match="no extra named"):
+        declare("katsoft-llm-kit[sdkk]>=1.1,<2")

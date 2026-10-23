@@ -1,6 +1,6 @@
 {
-  "$comment": "awesome-kit depends on plugins-kit:skills-kit for the plugin-ecosystem audit framework and skills_kit_lib. bootstrap_lib is REQUIRED: dispatch.py needs bootstrap_lib.codex for launcher resolution and the cmd-metacharacter refusal, and the orchestrate renderer parses routing rows with bootstrap_lib.model_declaration. llm_kit (the llm-kit plugin's library) has no install edge: the renderer DEGRADES without it (rows list only the Claude core ids, disclosed in the render) and dispatch.py REFUSES without it (--model is resolved through its registry); both probe for llm-kit >= 0.1.9 (llm_kit.dispatch.declaration.describe, llm_kit.registry.models.discover_model_entries, llm_kit.dispatch.seats.discover_seats, llm_kit.adapters.harness_adapters) and diagnose absent and too-old apart. No legacy library is consulted in its place. Auto-install skills-kit when missing. requires_bootstrap is set from the newest bootstrap call this plugin makes: orchestration_guidance.py calls bootstrap_lib.model_declaration.parse_entries ({id, effort} routing entries), first shipped in bootstrap 0.150.0 (the plugin-ecosystem skill's BOOTSTRAP_PYTHON launch needs 0.120.0, and dispatch.py's bootstrap_lib.codex.build_codex_exec_argv 0.79.0).",
-  "requires_bootstrap": "0.150.0",
+  "$comment": "awesome-kit depends on plugins-kit:skills-kit for the plugin-ecosystem audit framework and skills_kit_lib. bootstrap_lib is REQUIRED: dispatch.py needs bootstrap_lib.codex for launcher resolution and the cmd-metacharacter refusal, and the orchestrate renderer parses routing rows with bootstrap_lib.model_declaration. llm_kit is the katsoft-llm-kit[config] package installed in awesome-kit's own venv from pyproject.toml (>=1.1,<2), not a shared-lib link, and it has no plugin edge: the renderer DEGRADES when llm_kit is not importable (rows list only the Claude core ids, disclosed in the render) and dispatch.py REFUSES (--model is resolved through its registry); only absence is probed, because the package pin guarantees the API. Auto-install skills-kit when missing. requires_bootstrap is 0.160.0, the first bootstrap that revokes undeclared bootstrap-written .pth links and stamps released-package targets in the venv check, which a venv holding a package-installed llm_kit relies on; the newest bootstrap CALLS this plugin makes are older (orchestration_guidance.py calls bootstrap_lib.model_declaration.parse_entries, first shipped in 0.150.0, and dispatch.py's bootstrap_lib.codex.build_codex_exec_argv 0.79.0).",
+  "requires_bootstrap": "0.160.0",
   "plugins": [
     {
       "ref": "plugins-kit:skills-kit",
@@ -13,5 +13,5 @@
   "venv": {
     "check_imports": ["yaml"]
   },
-  "shared_lib_imports": ["skills_kit_lib", "llm_kit", "bootstrap_lib"]
+  "shared_lib_imports": ["skills_kit_lib", "bootstrap_lib"]
 }

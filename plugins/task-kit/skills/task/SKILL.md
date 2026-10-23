@@ -237,7 +237,7 @@ capability_skill:
           action: "Write a self-contained HTML document, open it in the user's browser unless --no-open is set, and report generation failures on stderr. --output - writes HTML to stdout; otherwise the default is a private temporary HTML file."
       gotchas:
         - "Missing or stale summaries have a distinct warning treatment in HTML and remain visible in the structured diagnostics. Unavailable, remote, invalid, or orphaned tasks are shown as unavailable and are never sent to the model. Answer states (current, stale, missing, invalid, not-applicable) have distinct treatments."
-        - "Exit code: review exits 1 when a model refusal (llm-kit absent or too old; the message names the install or update command) or any failed answer was reported, and 0 otherwise; the HTML is written either way. Errors and advisory note: lines (uncommitted task folder skipped, answer superseded, answers waiting to be published) print to stderr."
+        - "Exit code: review exits 1 when a model refusal (llm_kit not importable; the message names the provisioning command) or any failed answer was reported, and 0 otherwise; the HTML is written either way. Errors and advisory note: lines (uncommitted task folder skipped, answer superseded, answers waiting to be published) print to stderr."
         - "Answering writes no log entry, so it does not advance last_update. A substantive task change makes the answer stale (its stored fingerprint no longer matches the question and inputs) and the next default review answers it again. Model answering REFUSES when llm-kit is absent or older than 0.4.0; nothing substitutes, and every other verb works without llm-kit."
     - id: answers
       keywords: [task answers, answers refresh, answers status, answers prune, orientation, coverage, question catalog]
@@ -247,7 +247,7 @@ capability_skill:
         - "Contract: the same command as `task-kit answers`; it writes exactly one JSON document to stdout, diagnostics to stderr, and requires --format json and --protocol N (answers protocols takes only --format json). The payloads, flags and exit codes (0 ok, 1 internal/discovery_failed/config_invalid, 2 usage, 4 protocol_unsupported) are in references/task-export-protocol.md, section Answers commands."
         - "status writes nothing and takes no lock. refresh answers the pending questions of the most recently modified tasks (--batch, default 4 tasks per repository), commits only this machine's answer files and publishes them. prune deletes this machine's answer files of questions the catalog no longer holds."
         - "Spend: refresh asks free entries first. A usage or spend class entry runs only when --allow names the class or, without --allow, llm-kit's per-machine consent allows it. Do not pass --allow with a paid class unless the user said so."
-        - "Model answering REFUSES when llm-kit is absent or too old: the repository report carries a refusal naming the install or update command. Relay it as printed; do not install llm-kit unasked."
+        - "Model answering REFUSES when llm_kit is not importable: the repository report carries a refusal naming the provisioning command. Relay it as printed; do not run it unasked."
     - id: dashboard
       keywords: [task dashboard, dashboard, /task dashboard, open the dashboard, task-kit, browser view of tasks]
       user_objective: "Open the browser view over every configured project's task folders."
@@ -257,6 +257,7 @@ capability_skill:
           action: "Run `bash \"${CLAUDE_PLUGIN_ROOT}/bin/task-kit\"` (what typing `task-kit` in a terminal does once bootstrap has put it on PATH). It runs `databench --view tasks`, which serves databench's tasks view over task-kit's export. Report the command's exit status and its output, or its stderr when it fails."
       gotchas:
         - "task-kit no longer has a dashboard of its own. When databench is not on PATH, bare `task-kit` exits 1 and says databench provides the task view; relay that message as printed and do not install databench unasked. What databench shows and how it reads tasks: references/dashboard.md."
+        - "The async SessionStart hook in `hooks/hooks.json` calls `databench ensure` on startup, resume and clear; it opens no browser, and Databench's `regeneration.enabled` setting controls whether the server starts."
         - "`task-kit stop [--force]` stops a dashboard server an earlier task-kit version started, and refuses while that server has jobs running unless `--force`. Relay its message as printed; do not delete the server record or kill a process to get past a refusal."
     - id: queue
       keywords: [queue, queued work, queue this, queue it, queue up, add to the queue, put in the queue, run unattended, do this when you can]

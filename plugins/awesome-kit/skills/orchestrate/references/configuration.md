@@ -105,7 +105,7 @@ bootstrap 0.150.0 or later.
 
 ### How a row's menu is rendered
 
-With `llm-kit` 0.1.9 or later, each row's menu is that library's `describe` output
+With `llm-kit` importable, each row's menu is that library's `describe` output
 for an in-session caller:
 
 - An id that resolves to nothing, or that this policy cannot drive, is left out of the render
@@ -129,7 +129,7 @@ and why it cannot run here. The row is kept rather than deleted, because deletin
 send the unit to a row chosen for a different shape. A unit that matches it stops, and the
 floor goes to the user.
 
-When `llm-kit` is absent or older than 0.1.9, each row lists only its core ids, in
+When `llm-kit` is not importable, each row lists only its core ids, in
 declared order, without pace ordering or rule lines, and the rendered policy says so under
 **Degraded render**. Setting `ORCHESTRATE_QUOTA_ROUTING=0` turns quota reads off deliberately
 and emits no note: no entry shows a pace or an out-of-quota status. Use it when a policy
@@ -234,14 +234,13 @@ Command detection is fail-closed and resolves bare commands through `PATHEXT` on
 A `detect` mapping must name `always`, `command`, or `path`; an unrecognized mapping fails
 closed and omits the backend.
 
-The optional `llm_kit` dependency is feature-detected. An importable stale or
-version-skewed copy is insufficient: the renderer requires the model-discovery callable and
-the harness entry-kind markers. A missing feature drops registry entries from every row and
-removes their model section; the Agent-tool core ids still render, and a row left with no core
-id renders the floor.
+`llm_kit` is the `katsoft-llm-kit` package in awesome-kit's venv, so the install pins its
+release range and the renderer probes only for its absence. When it is not importable
+(for example the script ran outside the venv), registry entries drop from every row and
+their model section is removed; the Agent-tool core ids still render, and a row left with no
+core id renders the floor.
 
-Consult seats use a separate degradation ladder: no `llm-kit` -> no section;
-`llm-kit` without `llm_kit.dispatch.seats.discover_seats` (< 0.1.9) -> no section; entries without tier
+Consult seats use a separate degradation ladder: no `llm-kit` -> no section; entries without tier
 or family are listed as `unclassified`, never `BESIDE`; nothing reachable ->
 `none reachable -- decide and say so`. The section makes no claim when the optional library
 is absent, so its absence is not a degraded answer; `--explain` reports why it was skipped.

@@ -1,29 +1,26 @@
 [project]
 name = "llm-kit"
-version = "0.6.0"
+version = "0.7.0"
 description = "LLM access, durable agent jobs and batch content pipelines in one library (dev-only consolidation)"
 requires-python = ">=3.12"
 
-# The base shared-library path is standard-library only. Each capability that
-# needs a third-party package names it in an extra; the owner venv enables every
-# extra its bundled commands reach (see bootstrap.json).
-dependencies = []
-
-[project.scripts]
-llm-kit = "llm_kit.cli:main"
+# The plugin venv installs the released library as a consumer. Each extra names
+# a capability's third-party packages; the plugin venv enables every extra its
+# bundled commands reach. The floor is 1.2 because custom_bootstrap.py reads
+# `llm-kit account status --json`, which first shipped in 1.2.0. bootstrap holds
+# the venv at the highest released version the requirement admits
+# (packages/released.json), so a requirement must keep this exact form.
+dependencies = [
+    "katsoft-llm-kit[config,sdk,local,frontdoor,jobs,pipeline]>=1.2,<2",
+    "katsoft-contracts>=1.0,<2",
+]
 
 [project.optional-dependencies]
-config = ["pyyaml>=6.0"]
-sdk = ["openai>=1.0.0"]
-local = ["psutil>=6.0"]
-frontdoor = ["fastapi>=0.110", "uvicorn>=0.29", "httpx>=0.27"]
-jobs = ["pyyaml>=6.0"]
-pipeline = ["pyyaml>=6.0"]
 dev = ["pytest>=8.0"]
 
-[build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
-
-[tool.setuptools.packages.find]
-where = ["lib"]
+# llm-kit is not an importable package here: the library comes from the
+# katsoft-llm-kit distribution above, and the console script `llm-kit` is that
+# distribution's. Marking the project non-package stops uv from installing the
+# plugin itself (and from keeping an editable llm_kit beside the wheel).
+[tool.uv]
+package = false

@@ -34,8 +34,7 @@ cli = _load_cli()
 
 @pytest.fixture(autouse=True)
 def _kit_on_path(monkeypatch):
-    # Stands in for the bootstrap shared-libs .pth that links llm_kit
-    # onto workflow-kit's venv.
+    # Stands in for the katsoft-llm-kit install in workflow-kit's venv.
     monkeypatch.syspath_prepend(str(_KIT_LIB))
 
 
@@ -325,11 +324,14 @@ def test_node_artifact_schema_at_cap_is_accepted(write_workflow):
 def test_contract_probe_absent_message(write_workflow, capsys, monkeypatch):
     monkeypatch.setitem(sys.modules, "llm_kit", None)
     err = _rejected(write_workflow, capsys, _wf(_PROVIDER), r"llm_kit is not importable")
-    assert "shared-libs .pth" in err
-    assert ">= 0.1.3" not in err
+    assert "katsoft-llm-kit" in err
+    assert "shared-libs .pth" not in err
 
 
-def test_contract_probe_too_old_message(write_workflow, capsys, monkeypatch):
+def test_a_kit_missing_the_contract_fails_loudly_not_as_a_refusal(write_workflow, monkeypatch):
+    # llm_kit is present but lacks OutputContract. The katsoft-llm-kit pin
+    # guarantees the API, so no version probe remains: the ImportError
+    # propagates instead of becoming a "too old" WorkflowError.
     fake_pkg = types.ModuleType("llm_kit")
     fake_completion = types.ModuleType("llm_kit.completion")
     fake_completion.__path__ = []
@@ -340,10 +342,8 @@ def test_contract_probe_too_old_message(write_workflow, capsys, monkeypatch):
     monkeypatch.setitem(sys.modules, "llm_kit", fake_pkg)
     monkeypatch.setitem(sys.modules, "llm_kit.completion", fake_completion)
     monkeypatch.setitem(sys.modules, "llm_kit.completion.contract", fake_contract)
-    err = _rejected(write_workflow, capsys, _wf(_PROVIDER),
-                    r"llm-kit >= 0\.1\.3")
-    assert "not importable" not in err
-    assert "claude plugin update llm-kit@plugins-kit" in err
+    with pytest.raises(ImportError):
+        load_workflow(write_workflow(_wf(_PROVIDER)))
 
 
 def test_documents_without_schema_artifacts_need_no_kit(write_workflow, monkeypatch):

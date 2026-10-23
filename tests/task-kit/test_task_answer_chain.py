@@ -8,16 +8,17 @@ it honours ``exclude`` and ``allow`` as llm-kit does, and replays scripted outco
 
 from __future__ import annotations
 
+import inspect
 import json
 import sys
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 
 import pytest
 
 from task_system import answer_chain
 from task_system.answer_chain import (
-    AnswerRejected, Allowed, LlmKitAbsent, LlmKitTooOld, NoAnswer, ask, check_answer, parse_allow, resolve_allow,
+    AnswerRejected, Allowed, LlmKitAbsent, NoAnswer, ask, check_answer, parse_allow, resolve_allow,
 )
 from task_system.answers_config import AnswersConfig
 from task_system.answers_types import InputBundle, Question
@@ -370,86 +371,66 @@ class TestValidation:
             answer_chain.parse_answer("[1]")
 
 
+def _write_package(root: Path, files: dict[str, str]) -> None:
+    """Write a package tree under ``root``: ``files`` maps a path relative to ``root`` to its source."""
+    for relative, source in files.items():
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(source, encoding="utf-8")
+
+
+def _fake_llm_kit_files(*, harness_auth_source: str = "def probe_harness_auth(names, cwd):\n    return {}\n") -> dict[str, str]:
+    """A minimal ``llm_kit`` tree holding every module the probe imports. Its ``run`` takes no ``allow``."""
+    package = "llm_kit"
+    return {
+        f"{package}/__init__.py": "",
+        f"{package}/dispatch/__init__.py": "",
+        f"{package}/dispatch/declaration.py": (
+            "RUN_COMPLETED = 'completed'\nclass RunRequest: pass\nclass NoUsableRoutingTarget(Exception): pass\n"
+            "def run(names, request): return None\n"
+        ),
+        f"{package}/completion/__init__.py": "",
+        f"{package}/completion/types.py": "class BackendOptions: pass\n",
+        f"{package}/registry/__init__.py": "",
+        f"{package}/registry/consent.py": "def load_consent(): return None\n",
+        f"{package}/registry/cost.py": "def classify(*a, **k): return None\n",
+        f"{package}/registry/models.py": "def discover_model_entries(*a, **k): return {}\n",
+        f"{package}/registry/model_endpoints.py": "HARNESS_KIND = 'harness'\n",
+        f"{package}/adapters/__init__.py": "",
+        f"{package}/adapters/harness_auth.py": harness_auth_source,
+    }
+
+
 class TestLlmKitProbe:
-    def _fake_library(self, monkeypatch, *, drop=None, allow_parameter=True):
-        """A complete fake llm_kit; ``drop`` names one ``module.symbol`` to leave out."""
-        def run(names, request, *, allow=None):  # noqa: ARG001
-            return None
+    """The pin in task-kit's pyproject guarantees the symbols, so the probe tells only absent from present.
 
-        def run_without_allow(names, request):  # noqa: ARG001
-            return None
-
-        symbols = {
-            "llm_kit.dispatch.declaration": {
-                "run": run if allow_parameter else run_without_allow, "RunRequest": object,
-                "NoUsableRoutingTarget": Exception, "RUN_COMPLETED": "completed",
-            },
-            "llm_kit.completion.types": {"BackendOptions": object},
-            "llm_kit.registry.consent": {"load_consent": object},
-            "llm_kit.registry.cost": {"classify": object},
-            "llm_kit.registry.models": {"discover_model_entries": object},
-            "llm_kit.registry.model_endpoints": {"HARNESS_KIND": "harness"},
-            "llm_kit.adapters.harness_auth": {"probe_harness_auth": object},
-        }
-        root = ModuleType("llm_kit")
-        root.__path__ = []
-        monkeypatch.setitem(sys.modules, "llm_kit", root)
-        for name, attrs in symbols.items():
-            if name == drop:
-                continue
-            module = ModuleType(name)
-            for key, value in attrs.items():
-                if f"{name}.{key}" != drop:
-                    setattr(module, key, value)
-            monkeypatch.setitem(sys.modules, name, module)
-            parent, _, leaf = name.rpartition(".")
-            package = sys.modules.get(parent)
-            if package is None:
-                package = ModuleType(parent)
-                package.__path__ = []
-                monkeypatch.setitem(sys.modules, parent, package)
-            setattr(package, leaf, module)
+    Red: restore a signature or version probe in ``probe_llm_kit`` and the library without ``allow`` is refused; make
+    it swallow a non-``llm_kit`` ``ModuleNotFoundError`` and the broken-dependency test passes it off as absent.
+    """
 
     def test_absent_library(self, monkeypatch):
         monkeypatch.setitem(sys.modules, "llm_kit", None)
         with pytest.raises(LlmKitAbsent) as caught:
             ask(make_question(), BUNDLE, CONFIG, allow=["free"], run=lambda *a, **k: None)
-        assert "not installed" in str(caught.value)
-        assert "claude plugin install llm-kit@plugins-kit" in str(caught.value)
+        assert "not importable" in str(caught.value)
+        assert "bootstrap run" in str(caught.value)
+        assert "claude plugin" not in str(caught.value)
         assert caught.value.state == "absent"
 
-    @pytest.mark.parametrize("drop", [
-        "llm_kit.dispatch.declaration.run",
-        "llm_kit.registry.consent.load_consent",
-        "llm_kit.registry.consent",
-        "llm_kit.registry.cost.classify",
-    ])
-    def test_too_old_library_names_a_different_remedy(self, monkeypatch, drop):
-        self._fake_library(monkeypatch, drop=drop)
-        with pytest.raises(LlmKitTooOld) as caught:
-            answer_chain.probe_llm_kit()
-        message = str(caught.value)
-        assert "too old or stale" in message and "not installed" not in message
-        assert "claude plugin update llm-kit@plugins-kit" in message and "0.4.0" in message
-        assert caught.value.state == "too-old"
+    def test_the_probe_reads_no_version_or_signature(self, monkeypatch, tmp_path):
+        _write_package(tmp_path, _fake_llm_kit_files())
+        monkeypatch.syspath_prepend(str(tmp_path))
+        api = answer_chain.probe_llm_kit()
+        assert api.RUN_COMPLETED == "completed"
+        assert "allow" not in inspect.signature(api.run).parameters
 
-    def test_a_run_without_the_allow_parameter_is_too_old(self, monkeypatch):
-        self._fake_library(monkeypatch, allow_parameter=False)
-        with pytest.raises(LlmKitTooOld, match="no allow parameter"):
+    def test_a_missing_dependency_inside_the_library_is_not_called_absent(self, monkeypatch, tmp_path):
+        _write_package(tmp_path, _fake_llm_kit_files(harness_auth_source="import a_dependency_nobody_installed_xyz\n"))
+        monkeypatch.syspath_prepend(str(tmp_path))
+        with pytest.raises(ModuleNotFoundError) as caught:
             answer_chain.probe_llm_kit()
-
-    def test_a_complete_library_probes_clean(self, monkeypatch):
-        self._fake_library(monkeypatch)
-        assert answer_chain.probe_llm_kit().RUN_COMPLETED == "completed"
-
-    def test_the_two_failure_messages_differ(self, monkeypatch):
-        monkeypatch.setitem(sys.modules, "llm_kit", None)
-        with pytest.raises(LlmKitAbsent) as absent:
-            answer_chain.probe_llm_kit()
-        self._fake_library(monkeypatch, drop="llm_kit.registry.cost.classify")
-        with pytest.raises(LlmKitTooOld) as old:
-            answer_chain.probe_llm_kit()
-        assert str(absent.value) != str(old.value)
+        assert caught.value.name == "a_dependency_nobody_installed_xyz"
+        assert not isinstance(caught.value, LlmKitAbsent)
 
     def test_the_probe_accepts_the_real_library(self, llm):
         api = answer_chain.probe_llm_kit()

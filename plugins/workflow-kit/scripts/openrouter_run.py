@@ -18,12 +18,14 @@ With no ``--model`` the node runs the configured default declaration
 the floor like any other unresolved id.
 
 Run this with WORKFLOW-KIT's OWN venv python, which bootstrap provisions with:
-  - `llm_kit` and `bootstrap_lib` -- shared libraries linked onto this
-    venv via the bootstrap shared-libs .pth because workflow-kit declares both
-    in `shared_lib_imports`. llm-kit is REQUIRED (an `install: auto`
-    plugin edge in bootstrap.json); an absent copy and a too-old one are
-    diagnosed apart, and each is a refusal (exit 2) before any call.
-  - the `openai` SDK -- a declared workflow-kit dependency, used lazily inside
+  - `llm_kit` -- the `katsoft-llm-kit[config,sdk]` package, installed in this
+    venv from pyproject.toml, whose release range pins the API this runner
+    calls. llm-kit is REQUIRED: an absent copy is a refusal (exit 2) before any
+    call.
+  - `bootstrap_lib` -- the shared library linked onto this venv via the
+    bootstrap shared-libs .pth because workflow-kit declares it in
+    `shared_lib_imports`.
+  - the `openai` SDK -- the `sdk` extra of katsoft-llm-kit, used lazily inside
     llm-kit's OpenRouterBackend.
 
     <workflow-kit-venv-python> scripts/openrouter_run.py \\
@@ -34,8 +36,8 @@ Run this with WORKFLOW-KIT's OWN venv python, which bootstrap provisions with:
          [--schema <JSON> --schema-digest <HEX>]]
 
 Contract: writes the reply to --out and exits 0 on success. Exit 2 is a
-resolution failure (the floor, an invalid declaration, a missing or too-old
-shared library); exit 1 is a call that ran and failed. The optional --status
+resolution failure (the floor, an invalid declaration, a missing
+library); exit 1 is a call that ran and failed. The optional --status
 JSON names the entry that ran or, on failure, the error kind, the halt kind
 when one was classified, and the floor's dispositions. The seam classifies
 transport, HTTP and halt failures; this script reports them.
@@ -95,9 +97,8 @@ Lifecycle with --provides, for every execution whose arguments parse: the
 previous verdict (and, with --events, the previous events file) is removed
 first, before any probe (an absent file is fine; any other error exits 2
 having done nothing else, creating no directory). The probes follow; with
---kind schema they add ``OutputContract`` (with ``schema_digest``),
-``POLICY_VALIDATED_RESULT`` and ``BackendOptions(output_contract=)``, and an
-absent and a too-old library get different messages. Everything after the
+--kind schema they add the contract imports from the same llm-kit
+package, whose absence refuses the same way. Everything after the
 probes runs in one ``try``/``finally`` whose cleanup is three independent
 layers, each attempted whatever the others did: (1) write the verdict
 atomically (``missing`` when no judgment was reached); (2) with --events,
@@ -120,8 +121,8 @@ import os
 import sys
 from pathlib import Path
 
-# Run under workflow-kit's bootstrap-provisioned venv (openai lives there, and
-# the shared-libs .pth links llm_kit and bootstrap_lib onto it). The
+# Run under workflow-kit's bootstrap-provisioned venv (katsoft-llm-kit and its
+# openai SDK live there, and the shared-libs .pth links bootstrap_lib onto it). The
 # interpreter that launched this script is caller-supplied (the compiled
 # workflow's ${inputs.workflowKitVenvPython}), and the Workflow tool expands
 # nothing in args, so this guard is the only runtime check that the interpreter
@@ -138,23 +139,12 @@ from bootstrap_guard import reexec_under_plugin_venv  # noqa: E402
 
 reexec_under_plugin_venv("workflow-kit")
 
-#: The llm-kit release that first shipped ``llm_kit.dispatch.factory``
-#: (create_transport_backend) and ``llm_kit.dispatch.declaration``
-#: (run/NoUsableRoutingTarget): the newest modules this runner imports.
-_LLM_KIT_MIN = "0.1.5"
-
-#: The llm-kit release that shipped ``run(..., observer=...)``, the call
-#: --events makes. ``llm_kit.dispatch.declaration`` takes it from its first release.
-_LLM_KIT_OBSERVER = "0.1.5"
-
 #: The execution-event schema this runner writes. Its own literal, never read
 #: from the (possibly stale) linked module.
 _REQUIRED_SCHEMA = "plugins-kit.execution-event/v1"
 
 #: ``source.plugin`` of every event this runner records.
 _EVENT_PLUGIN = "workflow-kit"
-
-_OBSERVER_KINDS = (inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
 
 #: Contract dispositions that make a provided artifact ``violated``.
 _VIOLATIONS = frozenset({"schema-mismatch", "unparseable"})
@@ -283,37 +273,6 @@ def _probe_execution_event():
     )
 
 
-def _probe_run_observer(run):
-    """Return None when ``run`` accepts ``observer=`` as a keyword, else a message."""
-    try:
-        param = inspect.signature(run).parameters.get("observer")
-    except (TypeError, ValueError):
-        param = None
-    if param is not None and param.kind in _OBSERVER_KINDS:
-        return None
-    return (
-        "the linked llm_kit's dispatch.declaration.run takes no `observer` keyword, which "
-        f"--events passes; this requires llm-kit >= {_LLM_KIT_OBSERVER}. "
-        "Run `claude plugin update llm-kit@plugins-kit` and restart so bootstrap "
-        "re-links the newer shared lib onto workflow-kit's venv."
-    )
-
-
-def _probe_backend_options(backend_options, checker):
-    """None when ``BackendOptions`` takes ``output_contract``, else the too-old message."""
-    try:
-        inspect.signature(backend_options).bind_partial(output_contract=None)
-    except (TypeError, ValueError):
-        return (
-            "the linked llm_kit's completion.types.BackendOptions takes no "
-            "`output_contract`, which --provides --kind schema sends; this requires "
-            f"llm-kit >= {checker.output_contract_llm_kit()}. Run `claude plugin update "
-            "llm-kit@plugins-kit` and restart so bootstrap re-links the newer shared "
-            "lib onto workflow-kit's venv."
-        )
-    return None
-
-
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description="workflow-kit: one non-Claude model call via llm-kit's declaration API."
@@ -391,47 +350,34 @@ def main(argv=None):
             print(message, file=sys.stderr)
             return 2
 
-    # The package and the newest symbol are probed separately: a .pth links no
-    # version, so this venv can resolve an llm-kit predating the declaration
-    # API. An absent package and a too-old one are different repairs (enable
-    # the plugin vs. update it), so they get different messages. Either one
-    # refuses here (exit 2), before any model call.
+    # Only absence is probed: the installed katsoft-llm-kit release range
+    # guarantees the declaration API, so an import failure past this point is a
+    # real error and propagates. An absent package refuses here (exit 2),
+    # before any model call.
     try:
         import llm_kit  # noqa: F401
     except ImportError:
         print(
-            "llm_kit not importable. Enable the llm-kit plugin and run this "
-            "with workflow-kit's venv python (bootstrap links llm_kit onto it via "
-            "the shared-libs .pth).",
+            "llm_kit not importable. It is the katsoft-llm-kit package in "
+            "workflow-kit's venv: run this with workflow-kit's venv python, or "
+            "run `bootstrap run` to provision the venv.",
             file=sys.stderr,
         )
         return 2
-    try:
-        from llm_kit.completion.types import BackendOptions
-        from llm_kit.dispatch.declaration import (
-            DeclarationSupportError,
-            NoUsableRoutingTarget,
-            RUN_COMPLETED,
-            RunRequest,
-            run,
-        )
-        from llm_kit.dispatch.factory import create_transport_backend
-        from llm_kit.registry.models import default_declaration
-    except ImportError:
-        print(
-            "the linked llm_kit predates the model-declaration API "
-            "(dispatch.factory.create_transport_backend). This requires llm-kit >= "
-            f"{_LLM_KIT_MIN}. Run `claude plugin update llm-kit@plugins-kit` "
-            "and restart so bootstrap re-links the newer shared lib onto workflow-kit's venv.",
-            file=sys.stderr,
-        )
-        return 2
+    from llm_kit.completion.types import BackendOptions
+    from llm_kit.dispatch.declaration import (
+        DeclarationSupportError,
+        NoUsableRoutingTarget,
+        RUN_COMPLETED,
+        RunRequest,
+        run,
+    )
+    from llm_kit.dispatch.factory import create_transport_backend
+    from llm_kit.registry.models import default_declaration
 
     contract = None
     if args.kind == "schema":
         api, message = checker.probe_output_contract(need_validate=False)
-        if message is None:
-            message = _probe_backend_options(BackendOptions, checker)
         if message is not None:
             print(message, file=sys.stderr)
             return 2
@@ -462,8 +408,6 @@ def main(argv=None):
             execution_event, message = checker.probe_contract_events()
         else:
             execution_event, message = _probe_execution_event()
-        if message is None:
-            message = _probe_run_observer(run)
         if message is None and contract_events:
             message = checker.check_contract_event(
                 execution_event, args.run_id, args.unit_id, event_payload()

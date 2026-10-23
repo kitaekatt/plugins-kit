@@ -8,10 +8,10 @@
 #   2. the standalone Python bootstrap installs, only through BOOTSTRAP_PYTHON
 #      and only when it resolves inside that install directory.
 #   3. anything on PATH.
-# The target is bin/llm_kit_entrypoint.py rather than llm_kit.cli directly: it
-# puts this plugin's lib/ on sys.path (so the code that runs is the code beside
-# this shim, whichever interpreter was chosen) and the CLI then moves into the
-# plugin venv itself when it is not already there.
+# The target is bin/llm_kit_entrypoint.py rather than llm_kit.cli directly. It
+# adds nothing to sys.path: the library that runs is the katsoft-llm-kit package
+# installed in the chosen interpreter's environment (the plugin venv), or the
+# shared-lib link bootstrap writes into the standalone interpreter.
 
 set -uo pipefail
 

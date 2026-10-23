@@ -33,7 +33,7 @@ class ReviewAnswerReport:
     """What a review's answering step did.
 
     ``answered`` and ``failed`` name tasks (``project/id`` in all scope, else ``id``). ``refusals`` are the
-    repository-level reasons no model could answer (llm-kit absent or too old). ``notes`` are advisory lines
+    repository-level reasons no model could answer (llm_kit not importable). ``notes`` are advisory lines
     (a task folder with uncommitted changes is skipped, an answer was superseded, answers wait to be published).
     """
 

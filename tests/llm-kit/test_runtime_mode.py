@@ -30,21 +30,35 @@ FLEET_LIB = ds.REPO / "plugins" / "bootstrap"      # the directory that holds bo
 #: Makes `bootstrap_lib` absent the way an environment without the fleet is:
 #: the top-level import raises ModuleNotFoundError (so `fleet()` can answer
 #: False), and any other bootstrap_lib name still fails loudly.
-ABSENT_PRELUDE = (
-    "class _Absent:\n"
-    "    def find_spec(self, name, path=None, target=None):\n"
-    "        if name == 'bootstrap_lib':\n"
-    "            raise ModuleNotFoundError(\"No module named 'bootstrap_lib'\", name='bootstrap_lib')\n"
-    "        return None\n"
-    "sys.meta_path.insert(0, _Absent())\n"
-)
+def absent_prelude(*names: str) -> str:
+    """Make each top-level module in `names` absent: its import raises
+    ModuleNotFoundError, whatever the interpreter's environment installs."""
+    return (
+        f"_absent_names = {tuple(names)!r}\n"
+        "class _Absent:\n"
+        "    def find_spec(self, name, path=None, target=None):\n"
+        "        if name in _absent_names:\n"
+        "            raise ModuleNotFoundError(f\"No module named '{name}'\", name=name)\n"
+        "        return None\n"
+        "sys.meta_path.insert(0, _Absent())\n"
+    )
 
 
-def package(site, body, *, extra_paths=(), contracts=True, env=None, cwd=None, fleet=False):
+ABSENT_PRELUDE = absent_prelude("bootstrap_lib")
+
+
+def package(site, body, *, extra_paths=(), contracts=True, env=None, cwd=None, fleet=False,
+            no_contracts=False):
+    """`contracts=False` only leaves the contracts source tree off sys.path, which
+    is not absence when the environment installs katsoft_contracts itself;
+    `no_contracts=True` makes the package unimportable explicitly."""
     paths = [site, *extra_paths] + ([CONTRACTS] if contracts else [])
+    absent = ("katsoft_contracts",) if no_contracts else ()
     if fleet:
-        return ds.run(body, [*paths, FLEET_LIB], env=env, cwd=cwd)
-    return ds.run(ABSENT_PRELUDE + body, paths, blocked=BLOCK, env=env, cwd=cwd)
+        return ds.run(absent_prelude(*absent) + body if absent else body,
+                      [*paths, FLEET_LIB], env=env, cwd=cwd)
+    prelude = absent_prelude("bootstrap_lib", *absent) if absent else ABSENT_PRELUDE
+    return ds.run(prelude + body, paths, blocked=BLOCK, env=env, cwd=cwd)
 
 
 @pytest.fixture()
@@ -215,7 +229,7 @@ def test_contracts_too_old_is_worded_apart_from_absent(site, tmp_path):
         "    result = str(exc)"
     )
     too_old = package(site, body, extra_paths=[stale], contracts=False)["ok"]
-    absent = package(site, body, contracts=False)["ok"]
+    absent = package(site, body, contracts=False, no_contracts=True)["ok"]
     assert "is installed but has no model_declaration" in too_old and "upgrade katsoft-contracts" in too_old
     assert ">=1.0,<2" in too_old and "install katsoft-contracts" not in too_old
     assert "install katsoft-contracts" in absent and "upgrade" not in absent
@@ -229,7 +243,7 @@ def test_contracts_missing_named(site):
         "    _runtime.load('model_declaration')\n"
         "except _runtime.ContractsMissing as exc:\n"
         "    result = [str(exc), isinstance(exc, ImportError), type(exc.__cause__).__name__]"
-    ), contracts=False)
+    ), contracts=False, no_contracts=True)
     message, is_import_error, cause = out["ok"]
     assert "install katsoft-contracts" in message and is_import_error and cause == "ModuleNotFoundError"
 
@@ -253,7 +267,7 @@ def test_contracts_missing_reaches_each_product_in_its_own_error_type(site):
         "    except error as exc:\n"
         "        seen.append('install katsoft-contracts' in str(exc))\n"
         "result = seen"
-    ), contracts=False)
+    ), contracts=False, no_contracts=True)
     assert out["ok"] == [True] * 5, out
 
 

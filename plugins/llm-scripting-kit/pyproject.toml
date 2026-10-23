@@ -1,10 +1,10 @@
 [project]
 name = "llm-scripting-kit"
-version = "0.68.1"
+version = "0.68.2"
 description = "LLM access, local model launch profiles, and completion backends for Claude Code plugins"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 
-dependencies = ["pyyaml", "psutil>=6.0"]
+dependencies = ["pyyaml", "psutil>=6.0", "katsoft-contracts>=1.0,<2"]
 
 [project.scripts]
 llm-scripting-kit = "llm_scripting_kit.cli:main"

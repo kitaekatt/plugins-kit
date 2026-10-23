@@ -8,10 +8,10 @@ rem      and the shared-lib links (bootstrap_lib).
 rem   2. the standalone Python bootstrap installs, only through BOOTSTRAP_PYTHON
 rem      and only when it resolves inside that install directory.
 rem   3. anything on PATH.
-rem The target is bin\llm_kit_entrypoint.py rather than llm_kit.cli directly: it
-rem puts this plugin's lib\ on sys.path (so the code that runs is the code beside
-rem this shim, whichever interpreter was chosen) and the CLI then moves into the
-rem plugin venv itself when it is not already there.
+rem The target is bin\llm_kit_entrypoint.py rather than llm_kit.cli directly. It
+rem adds nothing to sys.path: the library that runs is the katsoft-llm-kit package
+rem installed in the chosen interpreter's environment (the plugin venv), or the
+rem shared-lib link bootstrap writes into the standalone interpreter.
 setlocal enabledelayedexpansion
 set "SCRIPT_DIR=%~dp0"
 set "PLUGIN_ROOT=%SCRIPT_DIR%.."

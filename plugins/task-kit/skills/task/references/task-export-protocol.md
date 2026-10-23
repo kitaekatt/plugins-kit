@@ -203,11 +203,11 @@ earlier pass), `pending` (tasks with work), `kept[]` (the batch, project-relativ
 `skipped_tasks[]` (`{task, reason}`: for example uncommitted changes outside `answers/`), `commit?` (sha),
 `commit_error?` (written files stay for the next pass), `publish[]` (`{status, message, committed, published,
 attempts}` of each publish), `unpublished` (this machine's committed files not yet on the upstream, judged
-against the last fetch), `refusal?` (`{state: "absent" or "too-old", message}`: llm-kit cannot answer; nothing
-is substituted and the message names the install or update command), `notes[]`.
+against the last fetch), `refusal?` (`{state: "absent", message}`: llm-kit cannot answer; nothing
+is substituted and the message names the provisioning command), `notes[]`.
 
 `status` (kind `answers-status`) writes nothing, takes no lock and runs git without optional locks. Payload:
-`catalog_version`, `questions[]` (ids), `model_answering` (`{available, state: "ok", "absent" or "too-old",
+`catalog_version`, `questions[]` (ids), `model_answering` (`{available, state: "ok" or "absent",
 message?}`), `totals` (`{tasks, applicable, current, pending_tasks, pending_questions, unpublished}`),
 `repositories[]` and `errors[]`. A repository entry: `repo`, `skip_reason?` (why a pass would skip it),
 `pending_tasks`, `pending_questions`, `own_uncommitted[]`, `unpublished[]`, `notes[]` and `tasks[]`, each

@@ -1,11 +1,15 @@
 [project]
 name = "p4-kit"
-version = "0.68.0"
+version = "0.69.0"
 description = "Host-side dependencies for p4-kit plugin (importable package: p4kit_vcs)"
 requires-python = ">=3.12,!=3.14.*"
 
 # bootstrap_lib is provided via the bootstrap shared-libs .pth (this plugin declares
 # "shared_lib_imports": ["bootstrap_lib"] in bootstrap.json), not as a pip dependency.
+# llm_kit is NOT linked: it is the katsoft-llm-kit package, installed into this venv
+# from the released-package requirement below. The review lane
+# (llm_kit.dispatch.review_lane) runs in package mode through that package plus the
+# linked bootstrap_lib, which is why bootstrap_lib stays a shared-lib link.
 # PyYAML is needed because the review pipeline resolves a project's declared
 # plugin-write paths through bootstrap_lib.config_resolve, which reads the
 # project's config layer to honour a plugin_data_dir relocation.
@@ -16,21 +20,27 @@ requires-python = ">=3.12,!=3.14.*"
 # of the shared-lib code paths this plugin actually calls has to be
 # declared here. regex is loaded when bundle assembly resolves configured
 # mechanical pattern checks, after the pipeline itself has imported.
-# PyYAML also serves llm_kit.dispatch.review_lane, which reads the model
-# registry configuration; it is the only third-party package that module
-# imports at load time.
-dependencies = ["pyyaml", "markdown-it-py", "regex"]
+# katsoft-llm-kit[config] adds the PyYAML that llm_kit.dispatch.review_lane
+# needs to read the model registry configuration. katsoft-contracts is the
+# stdlib-only contracts distribution that katsoft-llm-kit routes its shared
+# contracts through.
+dependencies = [
+    "pyyaml",
+    "markdown-it-py",
+    "regex",
+    "katsoft-llm-kit[config]>=1.1,<2",
+    "katsoft-contracts>=1.0,<2",
+]
 
 # OPTIONAL, and deliberately not a hard dependency. A review lane reaches an
 # llm-kit endpoint only when the user configures a non-Agent `model`
 # in a review profile, and only a TRANSPORT entry needs the SDK at all (a
 # harness entry shells out to a CLI). Everyone else -- which is everyone, by
 # default -- would be installing an SDK for a code path they never run.
-# Absence degrades rather than breaks: scripts/run_review_lane.py reports the
-# missing dependency by name and exits as a configuration error, and the
-# default Agent dispatch is untouched.
+# The group names the sdk extra of the same package, so the SDK pin comes from
+# katsoft-llm-kit and not from a second declaration here.
 [project.optional-dependencies]
-endpoint-dispatch = ["openai"]
+endpoint-dispatch = ["katsoft-llm-kit[sdk]>=1.1,<2"]
 
 [build-system]
 requires = ["setuptools>=68"]

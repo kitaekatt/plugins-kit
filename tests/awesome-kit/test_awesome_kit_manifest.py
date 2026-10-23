@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,33 @@ def test_awesome_kit_keeps_yaml_only_in_check_imports() -> None:
 
     assert manifest["venv"]["check_imports"] == ["yaml"]
     assert "script" not in manifest
+
+
+def test_awesome_kit_links_bootstrap_lib_but_not_llm_kit() -> None:
+    shared = _read_json(_MANIFEST)["shared_lib_imports"]
+
+    assert "bootstrap_lib" in shared
+    # llm_kit arrives as the katsoft-llm-kit package in the plugin venv; a link
+    # would shadow the pinned release with whatever the owner ships.
+    assert "llm_kit" not in shared
+
+
+def test_awesome_kit_requires_the_package_mode_bootstrap() -> None:
+    # 0.160.0 revokes undeclared bootstrap-written .pth links and stamps
+    # released-package targets in the venv check.
+    assert _read_json(_MANIFEST)["requires_bootstrap"] == "0.160.0"
+
+
+def test_awesome_kit_pins_the_released_packages() -> None:
+    pyproject = _MANIFEST.parent / "pyproject.toml"
+    dependencies = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["dependencies"]
+
+    # config: the registry loader's pyyaml. No sdk extra: no awesome-kit path
+    # makes a model call, so it needs no openai SDK.
+    assert "katsoft-llm-kit[config]>=1.1,<2" in dependencies
+    assert "katsoft-contracts>=1.0,<2" in dependencies
+    assert any(dep.startswith("pyyaml") for dep in dependencies)
+    assert not any(dep.startswith("openai") for dep in dependencies)
 
 
 def test_awesome_kit_description_matches_remaining_skills() -> None:

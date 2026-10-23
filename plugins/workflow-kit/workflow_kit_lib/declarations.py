@@ -54,12 +54,11 @@ EXECUTION_EVENT_BOOTSTRAP = "0.135.0"
 #: --provides --events``, ``scripts/check_artifact.py --events``).
 CONTRACT_EVENT_BOOTSTRAP = "0.137.0"
 
-#: The llm-kit release that first shipped ``completion.contract.OutputContract``
-#: (with ``schema_digest``) and ``completion.types.BackendOptions(output_contract=...)``
-#: (``schema.json_schema`` shipped one release earlier): the calls a node that
-#: provides a schema-typed artifact makes (``scripts/check_artifact.py``,
-#: ``scripts/openrouter_run.py --provides``).
-OUTPUT_CONTRACT_LLM_KIT = "0.1.3"
+#: The bootstrap release that revokes undeclared bootstrap-written ``.pth``
+#: links and stamps released-package targets in the venv check: the floor of
+#: every plugin whose venv holds ``llm_kit`` as the ``katsoft-llm-kit``
+#: package rather than as a shared-lib link.
+PACKAGE_MODE_BOOTSTRAP = "0.160.0"
 
 #: The node executor's model (W3, W4): a one-entry declaration. The agent
 #: definition's frontmatter and the preamble's ``agent()`` options can carry
@@ -177,7 +176,7 @@ __all__ = [
     "EXECUTOR_MODELS",
     "MODEL_DECLARATION_BOOTSTRAP",
     "MODEL_ENTRIES_BOOTSTRAP",
-    "OUTPUT_CONTRACT_LLM_KIT",
+    "PACKAGE_MODE_BOOTSTRAP",
     "agent_model",
     "parse_agent_declaration",
     "parse_declaration",

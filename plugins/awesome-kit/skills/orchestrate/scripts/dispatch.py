@@ -74,10 +74,9 @@ if not callable(getattr(codex_lib, "build_codex_exec_argv", None)):
 # no default model: the row's chosen entry is always passed. Posture: REFUSE --
 # without llm-kit there is no registry to resolve an id against, and a dispatch
 # on a guessed model value would be read as the entry the routing chose. No
-# legacy library is consulted in its place. awesome-kit declares no install
-# edge to llm-kit, so the probe below carries the floor: llm-kit 0.1.9 is the
-# first published release and carries `discover_model_entries`.
-LLM_KIT_FLOOR = "0.1.9"
+# legacy library is consulted in its place. llm-kit is the `katsoft-llm-kit`
+# package in awesome-kit's own venv (pyproject.toml pins the release range), so
+# only absence is diagnosed.
 EXIT_REFUSED = 3
 DEFAULT_EFFORT = "high"
 DEFAULT_SANDBOX = "workspace-write"
@@ -249,41 +248,23 @@ def _argv(
 
 
 class RefusedError(RuntimeError):
-    """The model registry this dispatch needs is absent or too old."""
+    """The model registry this dispatch needs is not importable."""
 
 
 def _discover_model_entries() -> Any:
-    """Return llm-kit's discover_model_entries, or refuse.
-
-    Absent and too old are diagnosed apart: a shared-lib link pins no
-    version, and the two states have different remedies.
-    """
+    """Return llm-kit's discover_model_entries, or refuse when llm_kit is absent."""
     try:
         importlib.import_module("llm_kit")
     except ImportError as exc:
         raise RefusedError(
-            "[awesome-kit] codex dispatch resolves --model through the "
-            "plugins-kit:llm-kit model registry, which is not "
-            f"available here ({type(exc).__name__}). Install it with `claude "
-            "plugin install llm-kit@plugins-kit` and start a new session."
+            "[awesome-kit] codex dispatch resolves --model through llm-kit's "
+            "model registry (the katsoft-llm-kit package in awesome-kit's "
+            f"venv), which is not importable here ({type(exc).__name__}). Run "
+            "this script with the plugin venv's interpreter; if that venv is "
+            "not provisioned yet, run `bootstrap run` and start a new session."
         ) from exc
-    try:
-        registry = importlib.import_module("llm_kit.registry.models")
-    except ModuleNotFoundError as exc:
-        # Only a missing llm-kit module is "too old"; a broken import inside
-        # a present module is a real error and propagates.
-        if exc.name not in ("llm_kit.registry", "llm_kit.registry.models"):
-            raise
-        registry = None
-    discover = getattr(registry, "discover_model_entries", None)
-    if not callable(discover):
-        raise RefusedError(
-            "[awesome-kit] the plugins-kit:llm-kit installed here predates "
-            "llm_kit.registry.models.discover_model_entries, so codex dispatch "
-            f"cannot resolve --model (awesome-kit needs llm-kit >= {LLM_KIT_FLOOR}). "
-            "Update it with `claude plugin update llm-kit@plugins-kit`."
-        )
-    return discover
+    registry = importlib.import_module("llm_kit.registry.models")
+    return registry.discover_model_entries
 
 
 def _resolve_codex_entry(

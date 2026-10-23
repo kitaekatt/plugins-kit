@@ -1,11 +1,15 @@
 [project]
 name = "awesome-kit"
-version = "0.76.0"
+version = "0.77.0"
 description = "Runtime dependencies for awesome-kit skills, including YAML support."
 requires-python = ">=3.12"
 dependencies = [
     "pyyaml>=6.0",
-    "openai>=1.0.0",
+    # llm_kit: the model registry, describe/seats discovery and harness adapters
+    # the orchestrate renderer and dispatch.py read. The config extra brings the
+    # pyyaml its registry loader imports.
+    "katsoft-llm-kit[config]>=1.1,<2",
+    "katsoft-contracts>=1.0,<2",
 ]
 
 # awesome-kit is not an importable package -- this pyproject exists only to

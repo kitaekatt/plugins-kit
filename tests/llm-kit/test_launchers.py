@@ -270,8 +270,10 @@ def _real_plugin_tree(tmp_path: Path, template: Path) -> Plugin:
 @needs_bash
 class TestPosixLauncherThroughTheRealEntrypoint:
     def _env(self, plugin: Plugin) -> dict[str, str]:
-        # The venv is stdlib-only; bootstrap_lib comes from the repo, as the shared-lib link does in production.
-        return {"PYTHONPATH": str(REPO / "plugins" / "bootstrap")}
+        # The venv is stdlib-only. bootstrap_lib comes from the repo, as the shared-lib link does in
+        # production, and llm_kit from the repo's lib/, standing in for the installed katsoft-llm-kit
+        # package the plugin venv carries: the entrypoint adds no path of its own.
+        return {"PYTHONPATH": os.pathsep.join([str(REPO / "plugins" / "bootstrap"), str(PLUGIN / "lib")])}
 
     def test_a_cli_call_runs_end_to_end_and_the_exit_code_propagates(self, tmp_path, venv_template):
         plugin = _real_plugin_tree(tmp_path, venv_template)
@@ -281,8 +283,8 @@ class TestPosixLauncherThroughTheRealEntrypoint:
         hint = plugin.posix("set-key", **self._env(plugin))
         assert hint.returncode == 2 and "'set-key' is now 'llm-kit account set-key'" in hint.stderr
 
-    def test_the_code_that_runs_is_the_code_beside_the_shim(self, tmp_path, venv_template):
-        """The entrypoint puts ITS lib/ first on sys.path, so a working copy never runs a cached release."""
+    def test_the_code_that_runs_is_the_installed_library_never_a_copy_beside_the_shim(self, tmp_path, venv_template):
+        """The entrypoint puts no lib/ on sys.path: a copy beside it is ignored, the importable one runs."""
         plugin = _real_plugin_tree(tmp_path, venv_template)
         marker = plugin.root / "lib" / "llm_kit" / "cli" / "__init__.py"
         text = marker.read_text(encoding="utf-8")
@@ -298,8 +300,10 @@ class TestPosixLauncherThroughTheRealEntrypoint:
         done = subprocess.run([str(venv_python), str(probe)], env=plugin.env(**self._env(plugin)),
                               capture_output=True, text=True, timeout=120)
         assert done.returncode == 0, done.stderr
-        assert done.stdout.startswith("True ")
-        assert Path(done.stdout.split(" ", 1)[1].strip()).resolve().is_relative_to(plugin.root.resolve())
+        assert done.stdout.startswith("False ")
+        ran = Path(done.stdout.split(" ", 1)[1].strip()).resolve()
+        assert ran.is_relative_to((PLUGIN / "lib").resolve())
+        assert not ran.is_relative_to(plugin.root.resolve())
 
 
 @windows_only
@@ -361,6 +365,9 @@ class TestShimShape:
     def test_the_launcher_targets_the_entrypoint_that_calls_the_console_main(self):
         entry = (PLUGIN / "bin" / "llm_kit_entrypoint.py").read_text(encoding="ascii")
         assert "from llm_kit.cli import main" in entry and "raise SystemExit(_run())" in entry
-        assert 'llm-kit = "llm_kit.cli:main"' in (PLUGIN / "pyproject.toml").read_text(encoding="ascii")
+        assert "import sys" not in entry and ".insert(" not in entry and "Path(" not in entry
+        # The console script is the katsoft-llm-kit distribution's; the plugin project installs nothing.
+        assert "[project.scripts]" not in (PLUGIN / "pyproject.toml").read_text(encoding="ascii")
+        assert 'llm-kit = "llm_kit.cli:main"' in (REPO / "packages" / "katsoft-llm-kit" / "pyproject.toml").read_text(encoding="ascii")
         for shim in ("llm-kit", "llm-kit.cmd"):
             assert "llm_kit_entrypoint.py" in (PLUGIN / "bin" / shim).read_text(encoding="ascii")

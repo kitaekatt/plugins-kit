@@ -26,21 +26,18 @@ This module owns:
      (``each: true`` iff the provider fans out with ``for_each``).
 
 llm-kit is imported lazily, and only for a document that names at
-least one schema artifact. An absent and a too-old library are diagnosed
-apart, and each is a refusal (a ``WorkflowError``) at that boundary. The one check that needs expression compilation -- a
+least one schema artifact. An absent library is a refusal (a
+``WorkflowError``) at that boundary. The one check that needs expression compilation -- a
 ``{{ artifacts.X }}`` use without a matching ``requires`` -- runs in the
 compiler only, like the unknown ``steps.ID`` check.
 """
 
 from __future__ import annotations
 
-import dataclasses
-import inspect
 import json
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from .declarations import OUTPUT_CONTRACT_LLM_KIT
 from .errors import WorkflowError
 
 KIND_SCHEMA = "schema"
@@ -151,48 +148,27 @@ def has_provides(doc) -> bool:
 # llm-kit (lazy)
 # --------------------------------------------------------------------------- #
 def _output_contract():
-    """``(OutputContract, POLICY_VALIDATED_RESULT)``, probed; WorkflowError when unusable."""
+    """``(OutputContract, POLICY_VALIDATED_RESULT)``; WorkflowError when llm_kit is absent.
+
+    Only absence is diagnosed: llm_kit is the ``katsoft-llm-kit`` package in
+    workflow-kit's venv, whose release range pyproject.toml pins, so an import
+    failure past this point is a real error and propagates.
+    """
     try:
         import llm_kit  # noqa: F401, PLC0415
     except ImportError as exc:
         raise WorkflowError(
             "a schema-typed artifact is checked at compile time with llm-kit's "
-            "OutputContract, but llm_kit is not importable. Enable the "
-            "llm-kit plugin and run the compiler with workflow-kit's venv interpreter "
-            "(bootstrap links llm_kit onto it via the shared-libs .pth)."
+            "OutputContract, but llm_kit is not importable. It is the "
+            "katsoft-llm-kit package in workflow-kit's venv: run the compiler "
+            "with workflow-kit's venv interpreter, or run `bootstrap run` to "
+            "provision the venv."
         ) from exc
-    reason = None
-    try:
-        from llm_kit.completion.contract import (  # noqa: PLC0415
-            POLICY_VALIDATED_RESULT,
-            OutputContract,
-        )
-    except ImportError:
-        reason = "no completion.contract.OutputContract / POLICY_VALIDATED_RESULT"
-    if reason is None and not callable(OutputContract):
-        reason = "OutputContract is not callable"
-    if reason is None:
-        try:
-            inspect.signature(OutputContract).bind(
-                id="x", policy=POLICY_VALIDATED_RESULT, schema={}
-            )
-        except (TypeError, ValueError):
-            reason = "OutputContract(id=, policy=, schema=) does not bind"
-    if reason is None:
-        try:
-            fields = {f.name for f in dataclasses.fields(OutputContract)}
-        except TypeError:
-            fields = set()
-        if "schema_digest" not in fields:
-            reason = "OutputContract has no schema_digest"
-    if reason is not None:
-        raise WorkflowError(
-            f"the linked llm_kit predates the output contract a schema-typed "
-            f"artifact is checked with ({reason}); this needs llm-kit >= "
-            f"{OUTPUT_CONTRACT_LLM_KIT}. Run `claude plugin update llm-kit@plugins-kit` "
-            "and start a new session so bootstrap re-links the newer shared lib onto "
-            "workflow-kit's venv."
-        )
+    from llm_kit.completion.contract import (  # noqa: PLC0415
+        POLICY_VALIDATED_RESULT,
+        OutputContract,
+    )
+
     return OutputContract, POLICY_VALIDATED_RESULT
 
 

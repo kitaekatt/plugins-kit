@@ -4593,13 +4593,16 @@ def _process_path_entries(path_entries, prefix, action_entries, ok_entries):
 def _process_venv_def(venv_def, data_dir, plugin_root, prefix, label, action_entries,
                       ok_entries, failures, plugin_name, failure_type="venv",
                       failure_plugin=None, always_sync=False, extras=(),
-                      quiet_entries=None):
+                      quiet_entries=None, released_ledger=None):
     """Run the shared ensure_venv flow and route its outcome to the entry lists.
 
     One wrapper for all three venv call sites (self-setup, manifest, project
     venv); `label` is the log-entry noun ("venv" / "project_venv"). Detailed
     sync commands and diagnostics are quiet entries. A successful remediation
     emits one short action summary, and a failure emits one short display label.
+
+    `released_ledger` is the path of the marketplace's packages/released.json;
+    only the per-plugin manifest venv passes it (see `_released_ledger_path`).
     """
     from .venv_check import ensure_venv
 
@@ -4608,6 +4611,7 @@ def _process_venv_def(venv_def, data_dir, plugin_root, prefix, label, action_ent
         extras=extras,
         check_imports=venv_def.get("check_imports", []),
         always_sync=always_sync,
+        released_ledger=released_ledger,
     )
     quiet_entries = [] if quiet_entries is None else quiet_entries
     summary = None
@@ -6288,14 +6292,47 @@ def _phase_path_entries(ctx):
     )
 
 
+def _released_ledger_path(marketplace, plugin_root):
+    """Path of the released-package ledger a plugin's venv is held to, or None.
+
+    The ledger is ``packages/released.json`` in the plugin's own marketplace
+    clone (the location Claude Code records in known_marketplaces.json, else
+    ``~/.claude/plugins/marketplaces/<marketplace>``). The clone is refreshed
+    before any plugin check in a pass, so a release published since the last
+    pass is visible in the same pass. Under ``CLAUDE_BOOTSTRAP_DATA_ROOT`` (a
+    claudx session) the plugin runs from a working tree, and the ledger is that
+    tree's ``packages/released.json`` -- the installed clone would describe
+    releases, not the code under test. The path need not exist: a marketplace
+    with no ledger registers no package (``venv_check.load_released_ledger``).
+    """
+    if os.environ.get("CLAUDE_BOOTSTRAP_DATA_ROOT"):
+        return os.path.normpath(
+            os.path.join(plugin_root, "..", "..", "packages", "released.json"))
+    from .marketplace_lifecycle import marketplace_install_location
+    clone = marketplace_install_location(marketplace) if marketplace else ""
+    if not clone and marketplace:
+        clone = os.path.join(
+            os.path.expanduser("~"), ".claude", "plugins", "marketplaces", marketplace)
+    return os.path.join(clone, "packages", "released.json") if clone else None
+
+
 def _phase_venv(ctx):
-    """venv: the shared check -> uv sync -> re-check flow (ensure_venv)."""
+    """venv: the shared check -> uv sync -> re-check flow (ensure_venv).
+
+    A plugin venv is held to the released-package ledger (U6); the layered
+    manifest's venv has no marketplace of its own and is not.
+    """
+    ledger = (
+        None if ctx.plugin_name == _LAYERED_MANIFEST_NAME
+        else _released_ledger_path(ctx.marketplace, ctx.plugin_root)
+    )
     _process_venv_def(
         ctx.manifest["venv"], ctx.data_dir, ctx.plugin_root, "", "venv",
         ctx.action_entries, ctx.ok_entries, ctx.failures,
         plugin_name=ctx.plugin_name,
         extras=ctx.manifest["venv"].get("extras", []),
         quiet_entries=ctx.quiet_entries,
+        released_ledger=ledger,
     )
 
 

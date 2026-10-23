@@ -101,5 +101,5 @@ domain_skill:
       description: Validate and compile a .workflow.yaml to a native Workflow tool script (validate-only mode available).
     - name: openrouter_run
       command: <plugin-venv-python> scripts/openrouter_run.py
-      description: One OpenRouter call via llm-kit's completion seam (llm_kit.adapters.backends.OpenRouterBackend); run with workflow-kit's own venv python (has openai declared + llm_kit via the shared-libs .pth); writes the reply to $OUT. Needs a key via llm-kit.
+      description: One OpenRouter call via llm-kit's completion seam (llm_kit.adapters.backends.OpenRouterBackend); run with workflow-kit's own venv python (has katsoft-llm-kit, with its openai SDK, installed); writes the reply to $OUT. Needs a key via llm-kit.
 ```

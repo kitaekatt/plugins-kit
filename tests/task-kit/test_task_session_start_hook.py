@@ -2,7 +2,7 @@
 
 Three layers, each with its own tests:
 
-* ``hooks.json`` shape (two matcher groups, ``resume`` and ``clear``, both async, the one script).
+* ``hooks.json`` keeps the async session-registration command on ``resume`` and ``clear``.
 * The real shell script, run with a fake interpreter planted where the forced interpreter chain looks first
   (``$HOME/.local/share/python-standalone/python/bin/python3``). The fake writes a marker, so "Python was never
   started" is a file that does not exist. The data root is redirected to a temporary directory.
@@ -48,16 +48,16 @@ def hook_input(source: str, session_id: str, transcript: str | None = None, cwd:
 # -- hooks.json ------------------------------------------------------------------------------------------------
 
 
-def test_hooks_json_has_two_async_matcher_groups_for_one_script():
+def test_hooks_json_keeps_the_async_session_script_on_resume_and_clear():
     document = json.loads(HOOKS_JSON.read_text(encoding="utf-8"))
     assert list(document["hooks"]) == ["SessionStart"], "task-kit ships no other hook"
-    groups = document["hooks"]["SessionStart"]
-    assert sorted(group["matcher"] for group in groups) == ["clear", "resume"]
-    for group in groups:
-        (entry,) = group["hooks"]
+    groups = {group["matcher"]: group["hooks"] for group in document["hooks"]["SessionStart"]}
+    for matcher in ("resume", "clear"):
+        entries = [entry for entry in groups[matcher]
+                   if entry["command"] == 'bash "${CLAUDE_PLUGIN_ROOT}/hooks/sessionstart/session-start.sh"']
+        (entry,) = entries
         assert entry["type"] == "command"
         assert entry["async"] is True
-        assert entry["command"] == 'bash "${CLAUDE_PLUGIN_ROOT}/hooks/sessionstart/session-start.sh"'
     assert SCRIPT.is_file()
 
 

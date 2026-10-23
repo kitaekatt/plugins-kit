@@ -85,7 +85,7 @@ The plugin ships one CLI, `llm-kit` (console script `llm_kit.cli:main`), with th
 
 | Command | What it does |
 |---------|--------------|
-| `account status` | Resolves the key from env / project / user .env (in that order), calls `GET /auth/key`, prints account label, usage, limit, free-tier flag, rate limit. Exit 0 = OK; non-zero = missing or rejected. |
+| `account status [--json] [--no-validate] [--project-root DIR]` | Resolves the key from env / project / user .env (in that order), calls `GET /auth/key`, prints account label, usage, limit, free-tier flag, rate limit. Exit 0 = OK; non-zero = missing or rejected. With `--json` it prints one document whose `state` field is `missing_key`, `key_present`, `not_validated`, `ok`, `rejected_key`, `no_credit` or `check_failed` (never the key; `key_sha256` identifies it) and exits 0 whenever the document was printed. `--no-validate` resolves the key and its source without calling the endpoint. |
 | `account set-key [--key VALUE] [--no-validate]` | Writes a new key to the user-scoped .env. With no `--key`, prompts via `getpass` (input hidden). Validates the key against `/auth/key` before writing unless `--no-validate` is passed. |
 | `account which` | Prints the source path of the resolved key (`env`, `project: <path>`, `user: <path>`, or `missing`). Useful when the user is confused about which file is being read. |
 

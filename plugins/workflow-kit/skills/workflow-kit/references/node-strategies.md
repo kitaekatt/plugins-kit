@@ -48,12 +48,9 @@ text to `$OUT`. The script does not build an `openai` client or call
 `chat.completions.create` itself -- the seam owns the transport, response
 normalization, and halt classification (auth / rate limit / insufficient
 credit); the script hands the node's model declaration to llm-kit's
-declaration API (`llm_kit.dispatch.declaration.run`) and reports the result. workflow-kit reuses `llm_kit` (owned by
-the llm-kit plugin, which its bootstrap.json installs automatically) and
-gets the library on its venv via the bootstrap shared-libs `.pth`. The one
-third-party dep the call needs, `openai`, IS declared by workflow-kit (its own
-`pyproject.toml`) -- the seam uses it internally; workflow-kit shares the source,
-not the SDK.
+declaration API (`llm_kit.dispatch.declaration.run`) and reports the result. workflow-kit reuses `llm_kit`, which its
+`pyproject.toml` installs into its own venv as `katsoft-llm-kit[config,sdk]`; the
+`sdk` extra brings `openai`, which the seam uses internally.
 
 When `--temperature` is omitted, the node leaves it unset on
 `llm_kit.completion.types.BackendOptions` (`temperature: Optional[float] =
@@ -62,16 +59,17 @@ None`) so the provider's own mode-dependent default applies. When
 applies. Pass either flag to override its value.
 
 Run the runner with **workflow-kit's own venv python** -- bootstrap provisions it
-with `openai` (declared) and links `llm_kit` onto it (declared via
-`shared_lib_imports`). llm-kit is REQUIRED for a model declaration and for a
-schema-typed artifact: when it is absent or too old, the runner, the checker
-and the compiler refuse (exit 2, or a compile error) with a message that names
+with `llm_kit` (the `katsoft-llm-kit[config,sdk]` package declared in
+`pyproject.toml`, which brings `openai`) and links `bootstrap_lib` onto it
+(`shared_lib_imports` names `bootstrap_lib` only). llm-kit is REQUIRED for a model
+declaration and for a schema-typed artifact: when it is absent, the runner, the
+checker and the compiler refuse (exit 2, or a compile error) with a message that names
 the repair, and never fall back to another provider. The API key is resolved the llm-kit way; run
 `"${CLAUDE_BOOTSTRAP_DATA_ROOT:-$HOME/.claude/plugins/data}"/plugins-kit/llm-kit/.venv/bin/llm-kit account set-key`
 (Windows: "${CLAUDE_BOOTSTRAP_DATA_ROOT:-$HOME/.claude/plugins/data}"/plugins-kit/llm-kit/.venv/Scripts/llm-kit.exe account set-key) once to provision it.
 
 ```js
-// workflow-kit's venv python: has openai + llm_kit (shared-libs .pth).
+// workflow-kit's venv python: has openai + llm_kit (katsoft-llm-kit).
 // The caller passes a resolved path, expanded in a shell first (the Workflow
 // tool expands nothing in args; under a claudx session CLAUDE_BOOTSTRAP_DATA_ROOT
 // is set and selects the redirected venv):
@@ -133,14 +131,13 @@ the OpenRouter call -- the cost-savings case is weaker than the model-diversity
 case (the reply still bypasses context via `$OUT`).
 
 Provisioning:
-- `llm_kit` (owned by the llm-kit plugin) is published as a
-  shared library by the bootstrap engine and linked onto workflow-kit's venv because workflow-kit
-  declares `"shared_lib_imports": ["llm_kit", "bootstrap_lib"]` -- the runner imports it
-  directly, with no path discovery. workflow-kit's bootstrap.json declares
-  llm-kit as a REQUIRED `install: "auto"` plugin edge, so bootstrap
-  installs the owning plugin.
-- `openai` is a declared workflow-kit dependency (`pyproject.toml` +
-  `venv.check_imports`), so bootstrap installs it into workflow-kit's venv.
+- `llm_kit` is the `katsoft-llm-kit[config,sdk]` package, declared in
+  workflow-kit's `pyproject.toml` with a release range, so bootstrap installs it
+  into workflow-kit's venv and the runner imports it directly, with no path
+  discovery. Only `bootstrap_lib` is linked onto the venv, through
+  `"shared_lib_imports": ["bootstrap_lib"]`.
+- `openai` is the `sdk` extra of that package and is listed in
+  `venv.check_imports`, so bootstrap verifies it in workflow-kit's venv.
 
 ### Execution events
 

@@ -77,12 +77,11 @@ def test_dashboard_is_not_a_task_py_verb():
 
 
 def test_task_kit_adds_no_llm_kit_install_edge():
-    """No plugin dependency and no auto/manual install entry for llm-kit. (llm_kit may
-    appear in shared_lib_imports for the summary-repair import.)
+    """No plugin dependency and no auto/manual install entry for llm-kit.
 
-    llm-kit is published, but optional: without it task-kit still lists and manages tasks, and only the review
-    verb's summary repair REFUSES with a diagnostic. So there is no ``install: "auto"`` edge and no ``plugin.json``
-    dependency, and no ``install: "manual"`` entry either.
+    llm_kit arrives as the katsoft-llm-kit package (see the next test), not through the llm-kit plugin: without it
+    task-kit still lists and manages tasks, and only model answering REFUSES with a diagnostic. So there is no
+    ``install: "auto"`` edge and no ``plugin.json`` dependency, and no ``install: "manual"`` entry either.
     """
     assert not any("llm-kit" in p["ref"] for p in BOOTSTRAP["plugins"])
     assert "llm-kit" not in PLUGIN_JSON["dependencies"]
@@ -115,3 +114,15 @@ def test_no_plugin_file_imports_the_retired_dashboard_package():
                  if "__pycache__" not in path.parts and pattern.search(path.read_text(encoding="utf-8"))]
     assert offenders == []
     assert not (PLUGIN_ROOT / "skills" / "task" / "scripts" / "task_system" / "dashboard").exists()
+
+
+def test_llm_kit_comes_from_the_declared_package_not_a_shared_lib_link():
+    """Red: put ``llm_kit`` back in ``shared_lib_imports`` (the link would beat the package in the venv), drop either
+    requirement, widen a range, or lower ``requires_bootstrap`` (a bootstrap older than 0.160.0 does not revoke the
+    link or stamp the released-package venv)."""
+    assert "llm_kit" not in BOOTSTRAP["shared_lib_imports"]
+    assert {"skills_kit_lib", "bootstrap_lib"} <= set(BOOTSTRAP["shared_lib_imports"])
+    dependencies = PYPROJECT["project"]["dependencies"]
+    assert "katsoft-llm-kit[config,sdk,local]>=1.1,<2" in dependencies
+    assert "katsoft-contracts>=1.0,<2" in dependencies
+    assert BOOTSTRAP["requires_bootstrap"] == "0.160.0"

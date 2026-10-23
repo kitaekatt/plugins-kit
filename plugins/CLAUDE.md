@@ -486,15 +486,28 @@ that has no such `.pth`, so the import fails there.
 ### Why shared libs rather than published packages
 
 Sharing SOURCE at a stable path and linking it with a `.pth` is deliberate, not
-a workaround for lacking an index. Every consumer is in-fleet, so one publish of
-the OWNING plugin updates the source every consumer resolves -- no version bump,
-no dependency constraint, no reinstall anywhere. The cost is the other side of
-that same coin: consumers cannot pin, so a breaking change to a shared lib
-reaches all of them at once.
+a workaround for lacking an index, and it is how `bootstrap_lib` reaches every
+consumer. Every consumer is in-fleet, so one publish of the OWNING plugin
+updates the source every consumer resolves -- no version bump, no dependency
+constraint, no reinstall anywhere. The cost is the other side of that same
+coin: consumers cannot pin, so a breaking change to a linked lib reaches all of
+them at once.
 
-Publish ordering: bootstrap must ship before or with llm-kit, or
-CodexCliBackend raises ModuleNotFoundError on every consumer -- shared libs
-resolve to the INSTALLED copy via .pth, not the dev tree.
+`llm_kit` and `katsoft_contracts` are the exception: they are the released
+`katsoft-llm-kit` and `katsoft-contracts` packages (`packages/`), and a
+consumer installs them into its own venv from a requirement of the exact form
+`katsoft-llm-kit[<extras>]>=A.B,<N` in its `pyproject.toml`. Bootstrap holds the
+venv at the highest released version the requirement admits
+(`packages/released.json`, bootstrap 0.160.0) and revokes a link the manifest
+does not declare, so a package consumer pins its range and needs no import
+probe.
+
+Publish ordering: bootstrap must ship before or with a consumer that needs a
+newer `bootstrap_lib` symbol or the 0.160.0 package handling (every consumer of
+`katsoft-llm-kit` sets `requires_bootstrap` to 0.160.0), because `bootstrap_lib`
+resolves to the INSTALLED copy via .pth, not the dev tree. A package
+consumer's venv resolves `llm_kit` from the released wheel, so a library change
+reaches it only after the package is released.
 
 The `.pth` linker pins no version, so an owner's change reaches every
 consumer's venv on its next bootstrap pass, whether or not that consumer asked
@@ -514,13 +527,13 @@ optional-dependency section above defers to it.
 
 | Plugin | Imports from llm-kit | Owns above the seam | Published |
 |---|---|---|---|
-| llm-kit (pipeline, jobs) | Its own library: `llm_kit.completion` (`capabilities.Capabilities`, `requirements.match_capabilities`, `halt`), `llm_kit.dispatch` (`declaration`, `factory.BackendSelection`, `endpoint_resolver`, `pipeline_backends`, `usage_budget`) | Batch-run policy in `llm_kit.pipeline` (retry, cost accounting, budgeting, concurrency, caching) and run policy in `llm_kit.jobs` over `describe(caller="process")`: halt narrowing, attempts, and the ledger's pace-reading record | Yes |
-| workflow-kit | `llm_kit.dispatch.declaration` (`run`, `RunRequest`, `NoUsableRoutingTarget`), `llm_kit.dispatch.factory.create_transport_backend`, `llm_kit.completion.types.BackendOptions`, and `llm_kit.registry.models.default_declaration` (via `scripts/openrouter_run.py`); `llm_kit.completion.contract` (`OutputContract`) and `llm_kit.schema.json_schema` for typed artifacts (via `workflow_kit_lib/contracts.py` at compile time, lazily and only for a schema artifact, and `scripts/check_artifact.py` and `scripts/openrouter_run.py --provides` at run time); every `model:` declaration is validated with `bootstrap_lib.model_declaration` (via `workflow_kit_lib/declarations.py`), not llm-kit | The `openrouter` node strategy: one non-Claude call per workflow node over a declaration of transport entries, reporting the typed floor; agent-step routing of Claude core ids at compile time; typed node artifacts (compile-time `provides`/`requires` checks with compatibility by `schema_digest` equality, and the per-execution verdict file) | Yes |
-| awesome-kit (orchestrate) | `llm_kit.registry.models.discover_model_entries` and `llm_kit.dispatch.declaration.describe(caller="session")` (lazy/optional, via `orchestration_guidance.py` and `dispatch.py`) | Each routing row ranked by `describe(caller="session")` and passed through verbatim (no local ranking); `dispatch.py` resolves `--model` through `discover_model_entries` and REFUSES (exit 3) without llm-kit | Yes |
+| llm-kit (pipeline, jobs) | Its own library, which the plugin venv consumes as the `katsoft-llm-kit` package (`pyproject.toml` pins the release range): `llm_kit.completion` (`capabilities.Capabilities`, `requirements.match_capabilities`, `halt`), `llm_kit.dispatch` (`declaration`, `factory.BackendSelection`, `endpoint_resolver`, `pipeline_backends`, `usage_budget`) | Batch-run policy in `llm_kit.pipeline` (retry, cost accounting, budgeting, concurrency, caching) and run policy in `llm_kit.jobs` over `describe(caller="process")`: halt narrowing, attempts, and the ledger's pace-reading record | Yes |
+| workflow-kit | `llm_kit.dispatch.declaration` (`run`, `RunRequest`, `NoUsableRoutingTarget`), `llm_kit.dispatch.factory.create_transport_backend`, `llm_kit.completion.types.BackendOptions`, and `llm_kit.registry.models.default_declaration` (via `scripts/openrouter_run.py`), where `llm_kit` is the `katsoft-llm-kit` package in workflow-kit's venv and `shared_lib_imports` names `bootstrap_lib` only; `llm_kit.completion.contract` (`OutputContract`) and `llm_kit.schema.json_schema` for typed artifacts (via `workflow_kit_lib/contracts.py` at compile time, lazily and only for a schema artifact, and `scripts/check_artifact.py` and `scripts/openrouter_run.py --provides` at run time); every `model:` declaration is validated with `bootstrap_lib.model_declaration` (via `workflow_kit_lib/declarations.py`), not llm-kit | The `openrouter` node strategy: one non-Claude call per workflow node over a declaration of transport entries, reporting the typed floor; agent-step routing of Claude core ids at compile time; typed node artifacts (compile-time `provides`/`requires` checks with compatibility by `schema_digest` equality, and the per-execution verdict file) | Yes |
+| awesome-kit (orchestrate) | `llm_kit.registry.models.discover_model_entries` and `llm_kit.dispatch.declaration.describe(caller="session")` (lazy/optional, via `orchestration_guidance.py` and `dispatch.py`) | Each routing row ranked by `describe(caller="session")` and passed through verbatim (no local ranking); `dispatch.py` resolves `--model` through `discover_model_entries` and prints an absent diagnostic when `llm_kit` (the `katsoft-llm-kit` package in awesome-kit's venv) is not importable | Yes |
 | bootstrap | none directly -- `bootstrap_lib.code_review.review_profiles` and `bootstrap_lib.model_declaration` are stdlib-only and import no llm_kit module | Shape validation of reviewer `model` priority lists (ordered registry ids); ranking and dispatch live in llm-kit and the code-review kits (see the git-kit, p4-kit row) | Yes |
-| git-kit, p4-kit | `llm_kit.dispatch.review_lane.main` via each kit's thin `scripts/run_review_lane.py` wrapper | The code-review skills rank each reviewer declaration through the `llm-kit models describe` CLI (session caller) and dispatch by entry harness; bootstrap setup and the REFUSE probe for the shared library live here, and the lane's prompt lives in `bootstrap_lib.code_review.lane_prompts` and its guards in `llm_kit.dispatch.review_lane` | Yes |
-| task-kit | `llm_kit.dispatch.declaration.run(allow=)`, `llm_kit.registry.consent.load_consent` and `llm_kit.registry.cost.classify` (lazy/optional, via `task_system/answer_chain.py`; the answers engine behind `task-kit answers` and the review verb) | The question catalog, the two-phase allow sets (free first, then llm-kit consent or `--allow`), answer validation and the answer files; without llm-kit 0.4.0 or later model answering refuses with an actionable diagnostic and every other verb works | Yes |
-| skills-kit | none directly -- consumes `bootstrap_lib.skill_material` through `skills_kit_lib/material.py` | Skill-material reading for audits; declares `llm_kit` in `shared_lib_imports` | Yes |
+| git-kit, p4-kit | `llm_kit.dispatch.review_lane.main` via each kit's thin `scripts/run_review_lane.py` wrapper | The code-review skills rank each reviewer declaration through the `llm-kit models describe` CLI (session caller) and dispatch by entry harness; bootstrap setup and an absent diagnostic for `llm_kit` live here (`llm_kit` is the pinned `katsoft-llm-kit` package in each kit's venv, so no version probe runs), and the lane's prompt lives in `bootstrap_lib.code_review.lane_prompts` and its guards in `llm_kit.dispatch.review_lane` | Yes |
+| task-kit | `llm_kit.dispatch.declaration.run(allow=)`, `llm_kit.registry.consent.load_consent` and `llm_kit.registry.cost.classify` (lazy/optional, via `task_system/answer_chain.py`; the answers engine behind `task-kit answers` and the review verb) | The question catalog, the two-phase allow sets (free first, then llm-kit consent or `--allow`), answer validation and the answer files; when `llm_kit` (the `katsoft-llm-kit` package in the plugin venv) is not importable, model answering refuses with an actionable diagnostic and every other verb works | Yes |
+| skills-kit | none directly -- consumes `bootstrap_lib.skill_material` through `skills_kit_lib/material.py` | Skill-material reading for audits; no `llm_kit` link (`shared_lib_imports` is `bootstrap_lib` only) | Yes |
 | yaml-data-editor-kit | `llm_kit.pipeline` (`core.workunit`, `execution`, `runtime.backends`, `runtime.platform`, `artifacts`) and `llm_kit.cli.run.build_commands` | The editor's dispatch planner, not the completion transport | No (`published: false`) |
 
 The code-review kits are the one entry whose consumer is a thin wrapper around a
@@ -528,8 +541,8 @@ shared library. `bootstrap_lib.code_review.lane_prompts` owns the LLM-neutral ha
 (prompts, issue schema, and dispatch classification). The seam-calling half lives
 in `llm_kit.dispatch.review_lane`, which owns endpoint resolution, backend calls,
 the context-window and output-contract guards, retries, and the result envelope.
-Each kit vendors only the wrapper that performs bootstrap setup and hosts the REFUSE
-probe for the shared library. This split is by DEPENDENCY, not by subject: importing
+Each kit vendors only the wrapper that performs bootstrap setup and prints the
+absent-library diagnostic for the `katsoft-llm-kit` package. This split is by DEPENDENCY, not by subject: importing
 the seam into `bootstrap_lib` would make `openai` transitive through BOOTSTRAP,
 which every other plugin depends on (`tests/bootstrap/test_dependency_completeness.py`
 walks the first-party closure and enforces this). Reach for the same split whenever
@@ -584,9 +597,9 @@ another than a `pip install` does. The re-exec rule below is how a script
 satisfies that precondition itself instead of pushing it onto its caller.
 
 **The source is shared; third-party dependencies are not.** A plugin that
-imports a shared lib declares that lib's third-party requirements in its OWN
-`pyproject.toml` -- a consumer driving `llm_kit`'s OpenRouter path
-declares `openai` itself. One shared lib is linked into several independently
+imports a linked shared lib declares that lib's third-party requirements in its
+OWN `pyproject.toml`. A consumer of the `katsoft-llm-kit` package names the
+extras it reaches (`[sdk]` for the OpenAI SDK) in its requirement instead. One shared lib is linked into several independently
 provisioned venvs, so shipping its pins with it would impose a single resolution
 on every consumer, and a consumer using only the paths that need no SDK would
 install one anyway. `tests/bootstrap/test_dependency_completeness.py` catches an

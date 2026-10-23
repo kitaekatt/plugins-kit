@@ -1,7 +1,7 @@
 [project]
 name = "plugins-kit"
 version = "0.1.0"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 
 [project.optional-dependencies]
 dev = [
@@ -15,6 +15,10 @@ dev = [
     "markdown-it-py",
     "psutil>=6.0",
     "packaging>=24.0",
+    # The consumer requirement the plugins declare, resolved from the index.
+    # No path source: packages/ distributions refuse to build without a release
+    # identity (packages/_build/hatch_build.py), so an editable install fails.
+    "katsoft-contracts>=1.0,<2",
 ]
 
 [tool.pytest.ini_options]

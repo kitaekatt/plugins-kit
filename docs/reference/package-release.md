@@ -124,9 +124,12 @@ the publishing machine; and a publish go-signal.
 
 ## katsoft-llm-kit
 
-Install and extras (the extras mirror `plugins/llm-kit/pyproject.toml`, minus
-its `dev` extra; `tests/llm-kit/test_dist_metadata_parity.py` holds them
-equal):
+Install and extras (the llm-kit plugin's venv requires
+`katsoft-llm-kit[<every extra below>]>=1.2,<2`; 1.2.0 added
+`llm-kit account status --json`, the document the plugin's
+`custom_bootstrap.py` reads, so the plugin's floor is 1.2;
+`tests/llm-kit/test_dist_metadata_parity.py` holds the requirement to the
+extras the distribution offers):
 
 ```bash
 pip install katsoft-llm-kit

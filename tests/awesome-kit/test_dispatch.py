@@ -29,7 +29,7 @@ def _install_registry(monkeypatch, entries=None, *, omit_discover=False, omit_re
 
     The registry lives in llm_kit.registry.models; `omit_discover` leaves that
     module without discover_model_entries and `omit_registry` leaves the
-    module out, the two shapes of a llm-kit that predates the registry API.
+    module out, the two shapes of a broken llm-kit install.
     """
     for name in tuple(sys.modules):
         if name == "llm_kit" or name.startswith("llm_kit."):
@@ -416,32 +416,31 @@ def test_an_id_without_a_codex_entry_is_refused(tmp_path, capsys, entry_id):
     assert "luna, sol" in err
 
 
-def test_an_absent_model_library_refuses_and_names_the_owner(tmp_path, monkeypatch, capsys):
+def test_an_absent_model_library_refuses_and_names_the_package(tmp_path, monkeypatch, capsys):
     monkeypatch.setitem(sys.modules, "llm_kit", None)
     code, captured = _print_only(tmp_path, capsys, "--model", "sol")
     assert code == dispatch.EXIT_REFUSED
-    assert "claude plugin install llm-kit@plugins-kit" in captured.err
+    assert "katsoft-llm-kit" in captured.err
+    assert "claude plugin install" not in captured.err
     assert not (tmp_path / "cache").exists() or not any((tmp_path / "cache").iterdir())
 
 
-LLM_FLOOR = "0.1.9"
-
-
 @pytest.mark.parametrize("shape", ["registry_without_discover", "registry_module_missing"])
-def test_a_too_old_model_library_is_diagnosed_apart_from_absence(
+def test_a_present_but_broken_model_library_fails_loudly_not_as_a_refusal(
     tmp_path, monkeypatch, capsys, shape
 ):
+    # The katsoft-llm-kit pin in pyproject.toml guarantees the registry API, so
+    # dispatch probes only for absence: a present llm_kit that lacks the
+    # registry surfaces as the import or attribute error it is, never as an
+    # exit-3 "too old" refusal.
     _install_registry(
         monkeypatch,
         omit_discover=shape == "registry_without_discover",
         omit_registry=shape == "registry_module_missing",
     )
-    code, captured = _print_only(tmp_path, capsys, "--model", "sol")
-    assert code == dispatch.EXIT_REFUSED
-    assert "claude plugin update llm-kit@plugins-kit" in captured.err
-    assert "claude plugin install" not in captured.err
-    assert LLM_FLOOR in captured.err
-    assert dispatch.LLM_KIT_FLOOR == LLM_FLOOR
+    with pytest.raises((AttributeError, ImportError)):
+        _print_only(tmp_path, capsys, "--model", "sol")
+    assert not hasattr(dispatch, "LLM_KIT_FLOOR")
 
 
 def test_list_needs_no_model_library(tmp_path, monkeypatch, capsys):

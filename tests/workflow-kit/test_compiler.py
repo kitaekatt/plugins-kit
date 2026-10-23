@@ -425,7 +425,7 @@ _KIT_LIB = PLUGIN_ROOT.parent / "llm-kit" / "lib"
 
 @pytest.fixture
 def kit_path(monkeypatch):
-    # Stands in for the shared-libs .pth linking llm_kit onto the venv.
+    # Stands in for the katsoft-llm-kit install in the plugin venv.
     monkeypatch.syspath_prepend(str(_KIT_LIB))
 
 
@@ -439,7 +439,9 @@ def kit_path(monkeypatch):
 # re-captured again when preamble.js's placeholder definitions became
 # redirect-aware (comment text only: no emitted statement changed), and again
 # when its openrouter comments named llm-kit (five comment lines; reverting
-# exactly those lines in the compiled output restores the previous digest).
+# exactly those lines in the compiled output restores the previous digest), and
+# again when its two comment lines on how the runner gets llm_kit named the
+# katsoft-llm-kit package instead of the shared-libs .pth (workflow-kit 0.13.0).
 _GOLDEN_DIGESTS = {
     # plugins/workflow-kit/examples/review-changes.workflow.yaml @ 2082c7fa
     "review-changes": (
@@ -449,7 +451,7 @@ _GOLDEN_DIGESTS = {
     # plugins/workflow-kit/examples/node-strategies.workflow.yaml @ 2082c7fa
     "node-strategies": (
         EXAMPLES / "node-strategies.workflow.yaml",
-        "0efe6924d2694599dc77f7a04ff6ad484d1d38779c5a00a9931970b4893be92e",
+        "8059e2a247534590d99e4590ce6c2b62be4f02d94d5e72b852a25e70e6324f2a",
     ),
     # tests/workflow-kit/fixtures/good/flat.workflow.yaml @ 2082c7fa
     "flat": (

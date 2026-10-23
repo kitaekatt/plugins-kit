@@ -146,7 +146,7 @@ def test_without_llm_kit_the_document_reports_the_refusal_and_stderr_names_the_r
     code, doc, _text, stderr = refresh(world, parent, "--allow", "free", run=NeverRun())
     repository = only_repository(doc)
     assert code == 0 and repository["outcome"] == "refused" and repository["refusal"]["state"] == "absent"
-    assert "claude plugin install llm-kit" in repository["refusal"]["message"]
+    assert "bootstrap run" in repository["refusal"]["message"]
     assert "model answering unavailable (absent)" in stderr
     assert repository["answered"] == []
 
@@ -199,7 +199,7 @@ def test_status_names_a_missing_llm_kit_and_its_remedy(world, parent):
     _code, doc, _text, _err = call(world, parent, "status", "--format", "json", "--protocol", "1", "--parent", str(parent))
     answering = doc["payload"]["model_answering"]
     assert (answering["available"], answering["state"]) == (False, "absent")
-    assert "claude plugin install llm-kit" in answering["message"]
+    assert "bootstrap run" in answering["message"]
 
 
 # --- prune ------------------------------------------------------------------------------------------------------------

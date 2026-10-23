@@ -25,6 +25,9 @@ facts `task-kit export` prints as JSON. The export contract is
 [skills/task/references/task-export-protocol.md](skills/task/references/task-export-protocol.md). task-kit works the
 same whether or not databench is installed.
 
+An async SessionStart hook runs `databench ensure` for `startup`, `resume` and `clear` when databench is on PATH. The hook
+never blocks the session or opens a browser; Databench's `regeneration.enabled` setting decides whether ensure starts the server.
+
 ```
 task-kit               run `databench --view tasks` (exit 1, with a message, when databench is not on PATH)
 task-kit export ...    print the task facts as JSON (the interface databench reads)
@@ -67,8 +70,9 @@ intersected. `task-kit answers protocols --format json` prints `{"protocols": [1
 `/task review` runs the same engine for the orientation question. The models are the config key `answers.models`
 (`~/.claude/config/task-kit.yaml`, section `answers:`; shipped default `[luna, haiku]`, `effort: medium`); free entries
 run first. A paid cost class (`usage`, `spend`) runs only when llm-kit's per-machine consent allows it or the caller
-passes `--allow`. Model answering needs llm-kit 0.4.0 or later and refuses without it; every other verb works without
-llm-kit. The command contract is in
+passes `--allow`. Model answering uses the `katsoft-llm-kit` package that task-kit's environment declares, and refuses
+when `llm_kit` is not importable (the environment has not been provisioned; run `bootstrap run`); every other verb works
+without it. The command contract is in
 [skills/task/references/task-export-protocol.md](skills/task/references/task-export-protocol.md).
 
 ## Working sessions

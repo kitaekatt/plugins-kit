@@ -43,7 +43,10 @@ the tree holds none, and fixtures cover it), and each has a mutation test below.
 * D, a placeholder definition: a paragraph that names a venv-interpreter placeholder AND a
   venv path holds no P literal.
 * C, a console script: each ``[project.scripts]`` function calls the guard on its
-  ``argv is None`` path (the wrapper's path).
+  ``argv is None`` path (the wrapper's path). A console script a plugin's venv gets from
+  a first-party package the plugin requires (``katsoft-*`` under ``packages/``) is that
+  package's own entry point: the venv holds the released wheel, so no stale plugin copy
+  can run and the launch needs no guard.
 * B, a launcher: a shell or cmd file that composes a production venv path needs a
   ``CLAUDE_BOOTSTRAP_DATA_ROOT`` branch that overrides the interpreter and REFUSES (exit 2) a
   missing redirected interpreter. A ``plugins/*/bin/*`` shim also refuses to run as the
@@ -758,6 +761,29 @@ def console_entries(tree: Tree) -> list[ConsoleEntry]:
     return out
 
 
+def package_console_scripts(tree: Tree, plugin: str) -> dict[str, str]:
+    """Console scripts the plugin's venv installs from first-party packages it requires.
+
+    Maps script name -> ``<distribution>: <target>``. Reads the plugin's pyproject from
+    ``tree`` and each required ``katsoft-*`` distribution's pyproject from ``packages/``.
+    """
+    pyproject = f"plugins/{plugin}/pyproject.toml"
+    if not tree.has(pyproject):
+        return {}
+    out: dict[str, str] = {}
+    for requirement in tomllib.loads(tree.text(pyproject)).get("project", {}).get("dependencies", []):
+        name = re.split(r"[\[<>=!~;\s]", requirement.strip(), maxsplit=1)[0].lower().replace("_", "-")
+        if not name.startswith("katsoft-"):
+            continue
+        source = _REPO_ROOT / "packages" / name / "pyproject.toml"
+        if not source.is_file():
+            continue
+        for script, target in (tomllib.loads(source.read_text(encoding="utf-8"))
+                               .get("project", {}).get("scripts") or {}).items():
+            out[script] = f"{name}: {target}"
+    return out
+
+
 def console_problem(tree: Tree, entry: ConsoleEntry) -> Optional[str]:
     if entry.module_path is None:
         return f"console script {entry.name!r} -> {entry.target}: the module is not a tracked file of the plugin"
@@ -1380,8 +1406,13 @@ def scan_file(tree: Tree, path: str, exempts: Optional[list[Exempt]] = None) -> 
             continue
         if launch.res_kind == "console":
             entry = consoles.get((launch.plugin or "", launch.tok))
-            msg = (f"console script {launch.tok!r} is not declared in plugins/{launch.plugin}/pyproject.toml "
-                   f"[project.scripts]") if entry is None else console_problem(tree, entry)
+            if entry is None:
+                if launch.tok in package_console_scripts(tree, launch.plugin or ""):
+                    continue
+                msg = (f"console script {launch.tok!r} is not declared in plugins/{launch.plugin}/pyproject.toml "
+                       f"[project.scripts] and is not installed by a first-party package it requires")
+            else:
+                msg = console_problem(tree, entry)
         elif launch.res_kind in {"template", "unresolved"}:
             msg = f"the launched target {launch.tok!r} does not resolve to a tracked script ({launch.res_kind})"
         else:
@@ -1922,27 +1953,32 @@ def test_unguarding_job_kit_cli_main_reopens_its_console_finding():
 # ---- the llm-kit console script ----------------------------------------------------------
 
 
-def test_llm_kit_cli_main_is_guarded_on_its_console_path():
+def test_llm_kit_console_script_comes_from_the_package_the_plugin_requires():
+    """The plugin venv's ``llm-kit`` is katsoft-llm-kit's entry point, not a plugin script."""
     tree = real_tree()
-    entry = next(c for c in console_entries(tree) if c.name == "llm-kit")
-    assert entry.target == "llm_kit.cli:main"
-    assert console_problem(tree, entry) is None
+    assert not [c for c in console_entries(tree) if c.plugin == "llm-kit"], (
+        "plugins/llm-kit/pyproject.toml declares its own console script; the plugin installs "
+        "the released package instead")
+    assert package_console_scripts(tree, "llm-kit").get("llm-kit") == "katsoft-llm-kit: llm_kit.cli:main"
     assert not any(e.kind == "C" and e.anchor == "llm-kit" for e in EXEMPT), "llm-kit needs no exemption"
+    llm_kit_launches = [
+        launch for fs in real_scan().files.values() for launch in fs.launches
+        if launch.res_kind == "console" and launch.tok == "llm-kit"
+    ]
+    assert llm_kit_launches, "no llm-kit console launch found; the resolution below would be vacuous"
 
 
-def test_unguarding_llm_kit_cli_main_reopens_its_console_finding():
-    """MUTATION: remove the guard, or move it off the ``argv is None`` path."""
+def test_dropping_the_package_requirement_reopens_the_llm_kit_launch_findings():
+    """MUTATION: without the katsoft-llm-kit requirement, nothing installs the launched script."""
     tree = real_tree()
-    entry = next(c for c in console_entries(tree) if c.name == "llm-kit")
-    text = tree.text(entry.module_path)
-    call = '            reexec_under_plugin_venv("llm-kit")\n'
-    assert text.count(call) == 1
-    removed = tree.with_text(entry.module_path, text.replace(call, "            pass\n"))
-    assert "never calls" in (console_problem(removed, entry) or "")
-    head = '    if argv is None and _runtime.mode() == "legacy":\n'
-    assert text.count(head) == 1
-    off_path = tree.with_text(entry.module_path, text.replace(head, "    if True:\n"))
-    assert "argv is None" in (console_problem(off_path, entry) or "")
+    path = "plugins/llm-kit/pyproject.toml"
+    text = tree.text(path)
+    start = text.index("dependencies = [")
+    end = text.index("\n]", start) + 2
+    mutated = tree.with_text(path, text[:start] + "dependencies = []" + text[end:])
+    assert package_console_scripts(mutated, "llm-kit") == {}
+    problems = scan_tree(mutated).problems
+    assert any(p.kind == "S" and "'llm-kit'" in p.message for p in problems), problems
 
 
 # ---- fixtures: forms with no instance in the tree, and the verdict's edges -------------

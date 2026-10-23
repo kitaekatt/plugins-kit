@@ -2,7 +2,7 @@
 
 The checker is loaded by path and run in-process through ``main``. Kind
 ``schema`` uses the REAL llm_kit (its lib/ is put on sys.path,
-standing in for the bootstrap shared-lib .pth): ``OutputContract`` for the
+standing in for the katsoft-llm-kit install in the plugin venv): ``OutputContract`` for the
 subset check and the digest, ``schema.json_schema.validate`` for the
 judgment. Kind ``opaque-file`` needs no llm_kit at all.
 """
@@ -318,7 +318,12 @@ def test_checker_kit_absent_exits_2_writes_nothing(tmp_path, capsys, monkeypatch
     assert "claude plugin update" not in err
 
 
-def test_checker_kit_too_old_exits_2_distinct_message(tmp_path, capsys, monkeypatch):
+def test_checker_kit_missing_the_contract_fails_loudly_not_as_a_refusal(
+    tmp_path, monkeypatch
+):
+    # llm_kit is present but lacks OutputContract. The katsoft-llm-kit pin
+    # guarantees the API, so no version probe remains: the ImportError
+    # propagates instead of becoming an exit-2 "too old" refusal.
     digest = _digest(SCHEMA)
     pkg = types.ModuleType("llm_kit")
     pkg.__path__ = []
@@ -330,13 +335,8 @@ def test_checker_kit_too_old_exits_2_distinct_message(tmp_path, capsys, monkeypa
     monkeypatch.setitem(sys.modules, "llm_kit", pkg)
     monkeypatch.setitem(sys.modules, "llm_kit.completion", completion)
     monkeypatch.setitem(sys.modules, "llm_kit.completion.contract", contract)
-    rc, record = _check(tmp_path, '{"lines": 3, "words": 5}', digest=digest)
-    assert rc == 2
-    assert record is None
-    err = capsys.readouterr().err
-    assert "llm-kit >= 0.1.3" in err
-    assert "claude plugin update llm-kit@plugins-kit" in err
-    assert "not importable" not in err
+    with pytest.raises(ImportError):
+        _check(tmp_path, '{"lines": 3, "words": 5}', digest=digest)
 
 
 def test_checker_refused_probe_creates_no_directory(tmp_path, monkeypatch):

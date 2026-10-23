@@ -266,8 +266,8 @@ def read_released(repo: Repo, ref: str) -> dict[str, dict[str, dict]]:
     return data
 
 
-def _requirements(text: str | None, where: str) -> list["Requirement"]:
-    from packaging.requirements import InvalidRequirement, Requirement
+def _requirement_texts(text: str | None) -> list[str]:
+    """Every requirement string a pyproject declares (dependencies and extras)."""
     if text is None:
         return []
     import tomllib
@@ -275,6 +275,43 @@ def _requirements(text: str | None, where: str) -> list["Requirement"]:
     raw = list(project.get("dependencies", []))
     for group in project.get("optional-dependencies", {}).values():
         raw.extend(group)
+    return raw
+
+
+def restricted_form_problems(texts: list[str], registered: set[str],
+                             where: str) -> list[str]:
+    """Requirements on a registered package that are not `name[extras]>=A.B[.C],<N`.
+
+    bootstrap resolves a plugin's released-package target from this one form
+    (bootstrap_lib.venv_check.package_targets), so any other spelling of a
+    requirement on a registered distribution would get no target. `registered`
+    holds normalized distribution names. The parser is bootstrap's own, so
+    publish and the engine cannot disagree about what the form is.
+    """
+    from packaging.requirements import InvalidRequirement, Requirement
+    bootstrap_dir = str(_REAL_ROOT / "plugins" / "bootstrap")
+    if bootstrap_dir not in sys.path:
+        sys.path.insert(0, bootstrap_dir)
+    from bootstrap_lib.venv_check import parse_restricted_requirement
+    problems = []
+    for item in texts:
+        try:
+            name = Requirement(item).name
+        except InvalidRequirement:
+            continue   # reported by _requirements with the same text
+        if rb.normalize_dist(name) in registered and parse_restricted_requirement(item) is None:
+            problems.append(
+                f"{where}: requirement {item!r} names a registered package but is "
+                f"not in the form name[extras]>=A.B[.C],<N (the form bootstrap "
+                f"resolves a venv's released-package target from)")
+    return problems
+
+
+def _requirements(text: str | None, where: str) -> list["Requirement"]:
+    from packaging.requirements import InvalidRequirement, Requirement
+    if text is None:
+        return []
+    raw = _requirement_texts(text)
     out = []
     for item in raw:
         try:
@@ -397,6 +434,13 @@ def _require_satisfiable(repo: Repo, ref: str, deps, names, versions, released,
             if rb.normalize_dist(req.name) in names:
                 owners.append((where, req))
     problems = []
+    for plugin in sorted(shipping_plugins):
+        where = f"plugins/{plugin}/pyproject.toml"
+        problems.extend(restricted_form_problems(
+            _requirement_texts(repo.show(ref, where)), set(names), where))
+    if problems:
+        raise Refusal("first-party requirement(s) outside the restricted form:\n  "
+                      + "\n  ".join(problems))
     for where, req in owners:
         dist = names[rb.normalize_dist(req.name)]
         candidates = list(released.get(dist, {}))

@@ -1,6 +1,6 @@
 [project]
 name = "unreal-kit"
-version = "0.17.12"
+version = "0.17.13"
 description = "Host-side dependencies for unreal-kit plugin"
 requires-python = ">=3.12,!=3.14.*"
 
@@ -8,4 +8,5 @@ dependencies = [
     "upyrc",
     "pyyaml",
     "websocket-client",
+    "katsoft-contracts>=1.0,<2",
 ]
