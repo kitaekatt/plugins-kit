@@ -175,7 +175,7 @@ def normalize_nodeid(nodeid: str) -> str:
 
 
 _NORMALIZERS = [
-    (re.compile(r"plugins[\\/]llm-kit[\\/]lib"), "<LIB>"),
+    (re.compile(r"packages[\\/]katsoft-llm-kit[\\/]src"), "<LIB>"),
     (re.compile(r"plugins[\\/](?:llm-scripting-kit|content-pipeline-kit|job-kit)[\\/]lib"), "<LIB>"),
     (re.compile(r"[A-Za-z]:[\\/][^\s'\"]*?(?:pytest-of-[^\\/]+|Temp)[\\/][^\s'\"]*"), "<TMP>"),
     (re.compile(r"(?:/tmp|/private/var)[^\s'\"]*"), "<TMP>"),

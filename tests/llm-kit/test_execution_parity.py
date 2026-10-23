@@ -1474,7 +1474,7 @@ def test_llm_kit_and_legacy_validators_agree_under_the_contract(legacy):
 
 
 def test_execution_package_names_no_legacy_module():
-    package = Path(__file__).resolve().parents[2] / "plugins" / "llm-kit" / "lib" / "llm_kit" / "execution"
+    package = Path(__file__).resolve().parents[2] / "packages" / "katsoft-llm-kit" / "src" / "llm_kit" / "execution"
     text = "\n".join(path.read_text(encoding="utf-8") for path in package.glob("*.py"))
     for forbidden in ("_copy", "job_kit", "content_pipeline", "from llm_scripting_kit", "import llm_scripting_kit"):
         assert forbidden not in text, forbidden
@@ -1484,7 +1484,7 @@ def test_execution_package_names_no_legacy_module():
 
 
 def test_every_execution_module_is_ascii():
-    package = Path(__file__).resolve().parents[2] / "plugins" / "llm-kit" / "lib" / "llm_kit" / "execution"
+    package = Path(__file__).resolve().parents[2] / "packages" / "katsoft-llm-kit" / "src" / "llm_kit" / "execution"
     for path in package.glob("*.py"):
         path.read_text(encoding="ascii")
 

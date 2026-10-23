@@ -27,7 +27,7 @@
         "code-string",
         "declared-skip",
         "import",
-        "path-plugin-dir",
+        "path-package-src",
         "prose-kept",
         "text-edit",
         "wording-edit"
@@ -69,7 +69,7 @@
         "code-string",
         "import",
         "module-string",
-        "path-plugin-dir",
+        "path-package-src",
         "text-edit"
       ],
       "collection_count": 6,
@@ -83,8 +83,7 @@
         "declared-skip",
         "import",
         "module-string",
-        "path-package-dir",
-        "path-plugin-dir",
+        "path-package-src",
         "text-edit"
       ],
       "collection_count": 34,
@@ -125,8 +124,7 @@
         "declared-skip",
         "import",
         "module-string",
-        "path-package-dir",
-        "path-plugin-dir",
+        "path-package-src",
         "text-edit",
         "wording-edit"
       ],
@@ -262,7 +260,7 @@
         "code-string",
         "import",
         "module-string",
-        "path-plugin-dir"
+        "path-package-src"
       ],
       "collection_count": 13,
       "baseline_failures": []

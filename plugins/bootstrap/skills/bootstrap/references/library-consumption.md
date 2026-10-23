@@ -317,8 +317,11 @@ other shared library stays unsupported off-fleet (4b).
   it depends on `katsoft-contracts`, which pip resolves.
 - `katsoft-contracts` provides the import package `katsoft_contracts`
   (`execution_event`, `interrupt_contract`, `model_declaration`). It uses only
-  the standard library. `bootstrap_lib` keeps byte copies of these modules for
-  fleet use; an off-fleet project imports them from `katsoft_contracts`.
+  the standard library. On the fleet, `bootstrap_lib.execution_event`,
+  `bootstrap_lib.interrupt_contract` and `bootstrap_lib.model_declaration` are
+  aliases of the `katsoft_contracts` modules of the same name, so a venv that
+  imports them needs `katsoft-contracts` installed. An off-fleet project imports
+  them from `katsoft_contracts`.
 
 Pin an exact version in the project's own `pyproject.toml` or requirements file
 and install into the project's own venv, with no bootstrap pass:
@@ -348,7 +351,8 @@ Not supported. `bootstrap_lib` as a whole, and any other library published
 through `shared_libs`, has no PyPI release. Do not point a project's
 `requirements.txt` or `pyproject.toml` at one via a git URL, and do not vendor a
 standalone copy of one into a project's own tree. The same prohibition applies
-to `llm_kit` and the contracts modules: install the PyPI wheels (4a), never a
+to `llm_kit` and the contracts modules (neither is delivered through
+`shared_libs`): install the PyPI wheels (4a), never a
 git URL or a copy. Three concrete reasons, not a general aversion to packaging:
 
 - **No real version to pin.** A git URL pins a ref, not a version, and a

@@ -30,7 +30,7 @@ from llm_kit.registry import api_key as api_key_mod
 from llm_kit.registry import constants
 from llm_kit.registry.env_file import write_env_file
 
-LIB = Path(__file__).resolve().parents[2] / "plugins" / "llm-kit" / "lib"
+LIB = Path(__file__).resolve().parents[2] / "packages" / "katsoft-llm-kit" / "src"
 KEY = "sk-or-v1-contract-key"
 KEY_SHA = hashlib.sha256(KEY.encode("utf-8")).hexdigest()
 DOCUMENT_FIELDS = {

@@ -1,10 +1,9 @@
 """The built katsoft-llm-kit wheel carries exactly llm_kit plus its release marker.
 
 The wheel is built the way the release machinery builds it (see dist_support).
-The library source is force-included from the plugin; the committed legacy
-`llm_kit/_deployment.py` must not reach the wheel -- the build hook's package
-marker replaces it (hatch skips a forced directory's file at a path an external
-forced FILE targets).
+The library source is the package's own src/llm_kit; the committed legacy
+`llm_kit/_deployment.py` must not reach the wheel -- the wheel target excludes
+it and the build hook's package marker takes its path.
 """
 import io
 import zipfile
@@ -57,7 +56,7 @@ def wheel_problems(path) -> list[str]:
             if member.startswith("llm_kit/"):
                 source = ds.SOURCE_DIR / member[len("llm_kit/"):]
                 if source.is_file() and zf.read(member) != source.read_bytes():
-                    problems.append(f"{member} is not the plugin source")
+                    problems.append(f"{member} is not the package source")
         if "llm_kit/_deployment.py" in names and zf.read("llm_kit/_deployment.py") == LEGACY_MARKER:
             problems.append("the legacy deployment marker reached the wheel")
         problems += [f"{m} must not be in this wheel" for m in sorted(names)
@@ -77,6 +76,25 @@ def test_wheel_marker_names_the_release_and_replaces_the_legacy_one(wheel):
     assert marker == rb.render_marker(ds.DIST, VERSION, tag, ds.COMMIT,
                                       rb.tag_url("https://github.com/kitaekatt/plugins-kit", tag))
     assert 'MODE = "package"' in marker and LEGACY_MARKER.decode() not in marker
+
+
+def test_sdist_carries_the_source_tree_as_committed(tmp_path):
+    """The sdist target packs src/llm_kit with the committed (legacy) marker and
+    carries no wheel hook: only release_build.py builds a release wheel."""
+    import tarfile
+    archive = ds.build_sdist(tmp_path)
+    prefix = archive.name[: -len(".tar.gz")]
+    with tarfile.open(archive) as tar:
+        names = {n for n in tar.getnames()}
+        marker = tar.extractfile(f"{prefix}/src/llm_kit/_deployment.py").read()
+    sources = {
+        f"{prefix}/src/llm_kit/{path.relative_to(ds.SOURCE_DIR).as_posix()}"
+        for path in ds.SOURCE_DIR.rglob("*")
+        if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
+    }
+    assert sources <= names
+    assert names - sources == {f"{prefix}/{n}" for n in ("LICENSE", "README.md", "pyproject.toml", "PKG-INFO")}
+    assert marker == LEGACY_MARKER
 
 
 def test_the_committed_marker_is_legacy():
@@ -118,7 +136,7 @@ def _rewrite(wheel, mutate):
     ("extra member", lambda m: m.update({"llm_kit/extra.py": b"x = 1\n"}), "members differ"),
     ("missing module", lambda m: m.pop("llm_kit/registry/models.py"), "members differ"),
     ("edited module", lambda m: m.update({"llm_kit/registry/models.py": b"# changed\n"}),
-     "is not the plugin source"),
+     "is not the package source"),
     ("legacy marker", lambda m: m.update({"llm_kit/_deployment.py": LEGACY_MARKER}),
      "legacy deployment marker reached the wheel"),
     ("missing marker", lambda m: m.pop("llm_kit/_deployment.py"), "release wheel-content test"),

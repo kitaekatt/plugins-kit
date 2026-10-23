@@ -771,7 +771,7 @@ def test_atomic_json_failed_write_matches_legacy_and_leaves_no_temp(legacy, tmp_
 
 
 def test_storage_carries_no_product_ddl_or_migration_loop():
-    root = _REPO / "plugins" / "llm-kit" / "lib" / "llm_kit" / "storage"
+    root = _REPO / "packages" / "katsoft-llm-kit" / "src" / "llm_kit" / "storage"
     forbidden = ("CREATE TABLE", "CREATE TRIGGER", "CREATE INDEX", "INSERT INTO schema_version",
                  "UPDATE schema_version", "_MIGRATIONS", "executescript")
     for source in root.glob("*.py"):

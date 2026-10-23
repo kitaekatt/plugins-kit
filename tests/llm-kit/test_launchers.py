@@ -38,6 +38,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 PLUGIN = REPO / "plugins" / "llm-kit"
+LIB_SRC = REPO / "packages" / "katsoft-llm-kit" / "src"
 IS_WINDOWS = os.name == "nt"
 STANDALONE_REL = Path(".local") / "share" / "python-standalone"
 _SCRUBBED = (
@@ -108,7 +109,7 @@ class Plugin:
         else:
             self.root = self.home / ".claude" / "plugins" / "cache" / cache_marketplace / "llm-kit" / "1.0.0"
         (self.root / "bin").mkdir(parents=True)
-        for name in ("llm-kit", "llm-kit.cmd", "llm_kit_entrypoint.py"):
+        for name in ("llm-kit", "llm-kit.cmd", "llm_kit_entrypoint.py", "bootstrap_guard.py"):
             shutil.copy2(PLUGIN / "bin" / name, self.root / "bin" / name)
         self.redirect_root = tmp_path / "redirected-data"
 
@@ -258,9 +259,10 @@ class TestPosixLauncher:
 
 
 def _real_plugin_tree(tmp_path: Path, template: Path) -> Plugin:
-    """The shim in the REAL plugin tree's shape: lib/ beside bin/, a real venv under the scratch HOME."""
+    """The shim in the plugin tree's shape, plus a stray lib/ copy of the library beside bin/ (the
+    real plugin has none), and a real venv under the scratch HOME."""
     plugin = Plugin(tmp_path)
-    shutil.copytree(PLUGIN / "lib", plugin.root / "lib", ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copytree(LIB_SRC, plugin.root / "lib", ignore=shutil.ignore_patterns("__pycache__"))
     venv = plugin.venv_dir()
     venv.parent.mkdir(parents=True)
     shutil.copytree(template, venv, symlinks=True)
@@ -271,9 +273,9 @@ def _real_plugin_tree(tmp_path: Path, template: Path) -> Plugin:
 class TestPosixLauncherThroughTheRealEntrypoint:
     def _env(self, plugin: Plugin) -> dict[str, str]:
         # The venv is stdlib-only. bootstrap_lib comes from the repo, as the shared-lib link does in
-        # production, and llm_kit from the repo's lib/, standing in for the installed katsoft-llm-kit
+        # production, and llm_kit from the repo's package source, standing in for the installed katsoft-llm-kit
         # package the plugin venv carries: the entrypoint adds no path of its own.
-        return {"PYTHONPATH": os.pathsep.join([str(REPO / "plugins" / "bootstrap"), str(PLUGIN / "lib")])}
+        return {"PYTHONPATH": os.pathsep.join([str(REPO / "plugins" / "bootstrap"), str(LIB_SRC)])}
 
     def test_a_cli_call_runs_end_to_end_and_the_exit_code_propagates(self, tmp_path, venv_template):
         plugin = _real_plugin_tree(tmp_path, venv_template)
@@ -302,7 +304,7 @@ class TestPosixLauncherThroughTheRealEntrypoint:
         assert done.returncode == 0, done.stderr
         assert done.stdout.startswith("False ")
         ran = Path(done.stdout.split(" ", 1)[1].strip()).resolve()
-        assert ran.is_relative_to((PLUGIN / "lib").resolve())
+        assert ran.is_relative_to(LIB_SRC.resolve())
         assert not ran.is_relative_to(plugin.root.resolve())
 
 
@@ -350,7 +352,7 @@ class TestShimShape:
     """Static facts about the shipped files that the behavior tests cannot see."""
 
     def test_the_shims_are_ascii_and_the_posix_one_is_executable_bash_3_safe(self):
-        for name in ("llm-kit", "llm-kit.cmd", "llm_kit_entrypoint.py"):
+        for name in ("llm-kit", "llm-kit.cmd", "llm_kit_entrypoint.py", "bootstrap_guard.py"):
             data = (PLUGIN / "bin" / name).read_bytes()
             data.decode("ascii")
             assert b"\r" not in data, name

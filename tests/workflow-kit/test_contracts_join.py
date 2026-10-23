@@ -33,7 +33,7 @@ from wk_testlib import EXAMPLES, PLUGIN_ROOT
 from bootstrap_lib import execution_event as ee
 from workflow_kit_lib import compile_doc, load_workflow
 
-_KIT_LIB = PLUGIN_ROOT.parent / "llm-kit" / "lib"
+_KIT_LIB = PLUGIN_ROOT.parent.parent / "packages" / "katsoft-llm-kit" / "src"
 _BOOTSTRAP = PLUGIN_ROOT.parent / "bootstrap"
 _TYPED = EXAMPLES / "typed-contracts.workflow.yaml"
 

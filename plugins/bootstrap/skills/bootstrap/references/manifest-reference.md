@@ -1067,12 +1067,25 @@ writes the Windows User PATH (registry) on Windows and no shell RC line: Git
 Bash inherits that PATH, so an RC line as well would put the directory on
 PATH twice in every shell. It falls back to an RC line only when the registry
 write does not persist (a failed write, or `BOOTSTRAP_SKIP_REGISTRY`). That
-fallback line is in Git Bash form: forward slashes
-and `/<lowercase-drive-letter>/...`, with the PATH expression double-quoted
-so spaces stay within one entry. Paths under the home directory retain
-`$HOME` form. Windows User PATH registry writes retain native Windows paths.
-Existing declarations, including legacy Windows spellings, are left in place;
-this writer change does not repair entries already present in shell RC files.
+fallback block is in Git Bash form: forward slashes and
+`/<lowercase-drive-letter>/...`. Windows User PATH registry writes retain
+native Windows paths.
+
+Shell persistence uses a bootstrap-marked POSIX `case` guard. The guard quotes
+literal path characters, retains intentional `$HOME` expansion, handles an
+unset PATH, and prepends only when the exact colon-delimited entry is absent.
+On macOS bootstrap writes the guard to `.zshrc`, `.bashrc`, and Bash's effective
+login file: the first existing readable file among `.bash_profile`,
+`.bash_login`, and `.profile`, or `.profile` when none is readable. Linux
+continues to target `.bashrc`; the Git Bash registry fallback also targets
+`.bashrc`. Linux login-only Bash is not covered.
+
+For each entry that remains declared, bootstrap replaces its marked block and
+recognizable adjacent legacy `# Added by bootstrap`/exact-export pair in every
+active target. After every active target verifies coverage, it removes those
+owned forms from inactive macOS Bash-login candidates. File-identity checks
+protect symlink aliases, and unmarked user lines are never removed. Removing a
+`path_entries` declaration does not revoke an already persisted PATH entry.
 
 ### Install exit codes are advisory
 

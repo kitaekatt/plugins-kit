@@ -39,7 +39,7 @@ from llm_kit.jobs.model import load_job_file
 from llm_kit.registry.model_endpoints import EndpointEntry
 from llm_kit.registry.models import EndpointResolveError
 
-_LIB = Path(__file__).resolve().parents[2] / "plugins" / "llm-kit" / "lib" / "llm_kit"
+_LIB = Path(__file__).resolve().parents[2] / "packages" / "katsoft-llm-kit" / "src" / "llm_kit"
 _PASS = [sys.executable, "-c", "pass"]
 
 _CONFIG = {

@@ -21,16 +21,19 @@ _CANON = _REPO_ROOT / "plugins" / "bootstrap" / "bootstrap_lib" / "bootstrap_gua
 
 
 def _vendored_copies():
-    """Every bootstrap_guard.py under plugins/ except the canonical and any that
-    live inside a virtualenv / site-packages / cache dir."""
+    """Every bootstrap_guard.py under plugins/ and packages/ except the canonical
+    and any that live inside a virtualenv / site-packages / cache dir. packages/
+    is searched because the llm_kit source (and its guard copy) lives in
+    packages/katsoft-llm-kit/src."""
     skip = {".venv", "site-packages", "__pycache__", "node_modules"}
     out = []
-    for p in _REPO_ROOT.glob("plugins/**/bootstrap_guard.py"):
-        if p.resolve() == _CANON.resolve():
-            continue
-        if any(part in skip for part in p.parts):
-            continue
-        out.append(p)
+    for root in ("plugins", "packages"):
+        for p in _REPO_ROOT.glob(f"{root}/**/bootstrap_guard.py"):
+            if p.resolve() == _CANON.resolve():
+                continue
+            if any(part in skip for part in p.parts):
+                continue
+            out.append(p)
     return out
 
 
@@ -126,6 +129,17 @@ class TestVendoredCopies:
         vendored = (
             _REPO_ROOT / "plugins" / "task-kit" / "skills" / "task"
             / "scripts" / "bootstrap_guard.py"
+        )
+        assert vendored.is_file(), f"missing vendored copy: {vendored}"
+        assert vendored in _vendored_copies()
+
+    def test_llm_kit_package_copy_present(self):
+        # The llm_kit guard copy lives in the katsoft-llm-kit package source,
+        # outside plugins/; assert the glob reaches it so a narrowed glob cannot
+        # silently drop it from the drift check.
+        vendored = (
+            _REPO_ROOT / "packages" / "katsoft-llm-kit" / "src" / "llm_kit"
+            / "bootstrap_guard.py"
         )
         assert vendored.is_file(), f"missing vendored copy: {vendored}"
         assert vendored in _vendored_copies()

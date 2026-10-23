@@ -21,8 +21,10 @@ model_declaration.parse(["opus", "sonnet"])  # ['opus', 'sonnet']
 ## Source
 
 The canonical source lives in this directory. The marketplace's bootstrap
-library keeps byte copies of the three modules, refreshed from here with
-`scripts/sync_contracts_copy.py` in the plugins-kit repository.
+library aliases the three modules to these (module identity, no copies).
+
+The package needs no AI harness, Claude Code, bootstrap or plugins-kit to
+install and use.
 
 Releases are tagged `katsoft-contracts-v<version>` in the repository named by
 the `Source` project URL.

@@ -340,7 +340,7 @@ def _run_with_containment(lock_args: tuple) -> None:
 # cache download can land some of a package's modules before others, so the
 # SessionStart hook may import one of these and hit a submodule that has not been
 # written YET -- a ModuleNotFoundError that self-heals once the download finishes.
-_FIRST_PARTY_LIBS = ("bootstrap_lib", "skills_kit_lib", "llm_scripting_kit", "llm_kit")
+_FIRST_PARTY_LIBS = ("bootstrap_lib", "skills_kit_lib", "llm_scripting_kit")
 _MAX_TRANSIENT_IMPORT_RETRIES = 3
 _IMPORT_RETRY_STATE_FILENAME = "import_retry_state.json"
 
@@ -4549,7 +4549,12 @@ def _process_path_entries(path_entries, prefix, action_entries, ok_entries):
     Comparison uses normcase+normpath — on Windows, case-differing spellings
     of an already-present entry must not re-prepend every phase (B16).
     """
-    from .path_check import add_path_to_shell_config, check_path_entry, normalize_path_for_compare
+    from .path_check import (
+        add_path_to_shell_config,
+        check_path_entry,
+        check_path_entry_persistence,
+        normalize_path_for_compare,
+    )
 
     def _prepend_live(expanded):
         current_path = os.environ.get("PATH", "")
@@ -4560,31 +4565,41 @@ def _process_path_entries(path_entries, prefix, action_entries, ok_entries):
     paths_added = []
     for path_entry in path_entries:
         expanded = os.path.expanduser(path_entry)
-        result = check_path_entry(path_entry)
-        if result.passed:
-            ok_entries.append(f"{prefix}PATH {result.subject}: ok - {result.message}")
-            _prepend_live(expanded)
-            continue
-        # Attempt persistent remediation: add to shell RC files
-        ok, msg = add_path_to_shell_config(path_entry)
+        live_result = check_path_entry(path_entry)
+        persistence_result = check_path_entry_persistence(path_entry)
+        persistence_was_present = persistence_result.passed
+        remediation_message = persistence_result.message
+        if not persistence_result.passed:
+            ok, remediation_message = add_path_to_shell_config(path_entry)
+            if ok:
+                persistence_result = check_path_entry_persistence(path_entry)
+                ok = persistence_result.passed
+                if not ok:
+                    remediation_message = persistence_result.message
+            if not ok:
+                _prepend_live(expanded)
+                action_entries.append(
+                    f"{prefix}PATH {live_result.subject}: FAILED - "
+                    f"{remediation_message}"
+                )
+                continue
+
         # Live-process PATH prepend happens regardless of the writer's
         # outcome, so subsequent phases this run can still find things there.
         _prepend_live(expanded)
-        if not ok:
+        live_recheck = check_path_entry(path_entry)
+        if not live_recheck.passed:
             action_entries.append(
-                f"{prefix}PATH {result.subject}: FAILED - {msg}"
+                f"{prefix}PATH {live_result.subject}: FAILED - persisted but "
+                f"still not resolving ({live_recheck.message})"
             )
-            continue
-        # The writer's say-so is not authoritative -- re-check exactly like
-        # every neighbouring phase (check -> fix -> authoritative re-check).
-        recheck = check_path_entry(path_entry)
-        if recheck.passed:
-            paths_added.append((result.subject, msg))
+        elif live_result.passed and persistence_was_present:
+            ok_entries.append(
+                f"{prefix}PATH {live_result.subject}: ok - "
+                f"{live_result.message}; {persistence_result.message}"
+            )
         else:
-            action_entries.append(
-                f"{prefix}PATH {result.subject}: FAILED - added to shell "
-                f"config but still not resolving ({recheck.message})"
-            )
+            paths_added.append((live_result.subject, remediation_message))
 
     if paths_added:
         action_entries.append(f"{prefix}PATH added: {_join_items(paths_added)}")

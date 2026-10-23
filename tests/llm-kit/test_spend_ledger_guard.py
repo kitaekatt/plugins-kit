@@ -24,8 +24,8 @@ import re
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-LEDGER = REPO / "plugins" / "llm-kit" / "lib" / "llm_kit" / "pipeline" / "runtime" / "spend_ledger.py"
-TRANSACTION = REPO / "plugins" / "llm-kit" / "lib" / "llm_kit" / "storage" / "transaction.py"
+LEDGER = REPO / "packages" / "katsoft-llm-kit" / "src" / "llm_kit" / "pipeline" / "runtime" / "spend_ledger.py"
+TRANSACTION = REPO / "packages" / "katsoft-llm-kit" / "src" / "llm_kit" / "storage" / "transaction.py"
 _WRITE = re.compile(r"\b(INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER)\b", re.I)
 
 

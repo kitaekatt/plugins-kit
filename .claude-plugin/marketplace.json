@@ -35,7 +35,7 @@
     {
       "name": "bootstrap",
       "description": "Installs each plugin's tools, Python venvs, and config automatically at session start.",
-      "version": "0.160.0",
+      "version": "0.162.0",
       "author": {
         "name": "Christina"
       },
@@ -215,7 +215,7 @@
     {
       "name": "task-kit",
       "description": "Provides the task skill (a file-backed task-folder system with a CLI for creating, listing, working, closing, archiving, and moving task folders and task_list references) and task-kit export, the task facts databench's tasks view reads; bare task-kit opens that view.",
-      "version": "0.19.0",
+      "version": "0.19.1",
       "author": {
         "name": "Christina"
       },
@@ -243,7 +243,7 @@
     {
       "name": "llm-kit",
       "description": "LLM access, durable agent jobs and batch content pipelines in one library. Consolidation of llm-scripting-kit, job-kit and content-pipeline-kit.",
-      "version": "0.7.0",
+      "version": "0.8.0",
       "author": {
         "name": "Christina"
       },

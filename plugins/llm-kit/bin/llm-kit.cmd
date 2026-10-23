@@ -4,14 +4,14 @@ rem
 rem Interpreter preference:
 rem   1. the plugin venv bootstrap provisions -- it carries every extra the CLI
 rem      reaches (PyYAML, the OpenAI SDK, psutil, the front door's web stack)
-rem      and the shared-lib links (bootstrap_lib).
+rem      and the shared-lib link (bootstrap_lib).
 rem   2. the standalone Python bootstrap installs, only through BOOTSTRAP_PYTHON
 rem      and only when it resolves inside that install directory.
 rem   3. anything on PATH.
 rem The target is bin\llm_kit_entrypoint.py rather than llm_kit.cli directly. It
 rem adds nothing to sys.path: the library that runs is the katsoft-llm-kit package
-rem installed in the chosen interpreter's environment (the plugin venv), or the
-rem shared-lib link bootstrap writes into the standalone interpreter.
+rem installed in the chosen interpreter's environment (the plugin venv). An
+rem interpreter that has no katsoft-llm-kit installed fails at the import.
 setlocal enabledelayedexpansion
 set "SCRIPT_DIR=%~dp0"
 set "PLUGIN_ROOT=%SCRIPT_DIR%.."

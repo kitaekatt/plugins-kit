@@ -23,7 +23,7 @@ from task_system.answer_chain import (
 from task_system.answers_config import AnswersConfig
 from task_system.answers_types import InputBundle, Question
 
-LLM_KIT_LIB = (Path(__file__).resolve().parents[2] / "plugins" / "llm-kit" / "lib").resolve()
+LLM_KIT_LIB = (Path(__file__).resolve().parents[2] / "packages" / "katsoft-llm-kit" / "src").resolve()
 
 
 @pytest.fixture

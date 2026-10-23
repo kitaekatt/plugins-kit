@@ -20,7 +20,7 @@ contract runs, which the job runner's own tests use as well.
 
 ``legacy`` is job_kit, content_pipeline and llm_scripting_kit imported from the
 three legacy plugins' ``lib`` directories. ``final`` is ``llm_kit`` from
-plugins/llm-kit/lib. Both also see plugins/bootstrap, whose
+packages/katsoft-llm-kit/src. Both also see plugins/bootstrap, whose
 ``bootstrap_lib.interrupt_contract`` both sides' interrupt adapters delegate to.
 """
 
@@ -48,7 +48,7 @@ LEGACY_PATHS = (
     REPO / "plugins" / "bootstrap",
 )
 FINAL_PATHS = (
-    REPO / "plugins" / "llm-kit" / "lib",
+    REPO / "packages" / "katsoft-llm-kit" / "src",
     REPO / "plugins" / "bootstrap",
 )
 LEGACY_ROOTS = ("job_kit", "content_pipeline", "llm_scripting_kit")

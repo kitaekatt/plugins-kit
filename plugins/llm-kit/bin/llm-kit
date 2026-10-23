@@ -4,14 +4,14 @@
 # Interpreter preference:
 #   1. the plugin venv bootstrap provisions -- it carries every extra the CLI
 #      reaches (PyYAML, the OpenAI SDK, psutil, the front door's web stack) and
-#      the shared-lib links (bootstrap_lib).
+#      the shared-lib link (bootstrap_lib).
 #   2. the standalone Python bootstrap installs, only through BOOTSTRAP_PYTHON
 #      and only when it resolves inside that install directory.
 #   3. anything on PATH.
 # The target is bin/llm_kit_entrypoint.py rather than llm_kit.cli directly. It
 # adds nothing to sys.path: the library that runs is the katsoft-llm-kit package
-# installed in the chosen interpreter's environment (the plugin venv), or the
-# shared-lib link bootstrap writes into the standalone interpreter.
+# installed in the chosen interpreter's environment (the plugin venv). An
+# interpreter that has no katsoft-llm-kit installed fails at the import.
 
 set -uo pipefail
 

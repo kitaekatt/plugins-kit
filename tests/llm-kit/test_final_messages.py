@@ -22,7 +22,7 @@ import pytest
 import final_wording as fw
 
 REPO = Path(__file__).resolve().parents[2]
-LIB = REPO / "plugins" / "llm-kit" / "lib" / "llm_kit"
+LIB = REPO / "packages" / "katsoft-llm-kit" / "src" / "llm_kit"
 
 _LEGACY = r"(?:llm-scripting-kit|job-kit|content-pipeline-kit)"
 
@@ -67,12 +67,12 @@ def test_floor_difference_matches_the_live_constants(name, legacy, final):
     texts = {
         "json_schema subset selector": (
             ("plugins/job-kit/lib/job_kit/interrupts.py", f'_JSON_SCHEMA_LSK_VERSION = "{legacy}"'),
-            ("plugins/llm-kit/lib/llm_kit/jobs/interrupts.py", f'_JSON_SCHEMA_LSK_VERSION = "{final}"'),
+            ("packages/katsoft-llm-kit/src/llm_kit/jobs/interrupts.py", f'_JSON_SCHEMA_LSK_VERSION = "{final}"'),
         ),
         "classify_backpressure": (
             ("plugins/content-pipeline-kit/lib/content_pipeline/llm/platform.py",
              f'_BACKPRESSURE_FLOOR = "{legacy}"'),
-            ("plugins/llm-kit/lib/llm_kit/pipeline/runtime/platform.py", f'_BACKPRESSURE_FLOOR = "{final}"'),
+            ("packages/katsoft-llm-kit/src/llm_kit/pipeline/runtime/platform.py", f'_BACKPRESSURE_FLOOR = "{final}"'),
         ),
     }[name]
     for (path, fragment) in texts:

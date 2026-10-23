@@ -1,7 +1,7 @@
 # CLAUDE.md -- llm-kit plugin
 
 Guidance for an AI agent working in this plugin. llm-kit is one plugin with one
-shared library, `llm_kit`, that answers three families of question:
+library, `llm_kit`, that answers three families of question:
 
 - **LLM access** -- which endpoint, which model, which key, which transport, how
   a configured local model server starts, and how one call is made correctly
@@ -66,33 +66,36 @@ is no internal version skew to probe. The library is stdlib-only on its base
 path; third-party packages arrive as extras (`config` and `jobs` and `pipeline`
 need PyYAML, `sdk` the OpenAI SDK, `local` psutil, `frontdoor` FastAPI, Uvicorn
 and httpx) and are imported at the call site, so a missing requested capability
-refuses at the call rather than at import. Shared libs share source, not dependencies: a
-consumer venv that links `llm_kit` declares the packages for the extras it reaches in its
-own `pyproject.toml`. The plugin's own venv does not run the copy under `lib/`: its
-`pyproject.toml` is a non-package project that requires the released
-`katsoft-llm-kit[<every extra>]>=1.2,<2` and `katsoft-contracts>=1.0,<2`, so the extras flow
-from that distribution and `bootstrap.json` names none. The floor is 1.2 because
-`custom_bootstrap.py` reads `llm-kit account status --json`, which first shipped in 1.2.0;
-bootstrap holds the venv at the highest released version the requirement admits, so a change
-to `lib/llm_kit/` reaches the plugin's venv only through a `katsoft-llm-kit` release.
+refuses at the call rather than at import. The library source is
+`packages/katsoft-llm-kit/src/llm_kit/`, the one source of the `katsoft-llm-kit`
+distribution; this plugin holds no library source and publishes no shared lib. A consumer
+venv installs the package with the extras it reaches (`katsoft-llm-kit[<extras>]>=A.B,<N` in
+its `pyproject.toml`). The plugin's own venv does the same: its `pyproject.toml` is a
+non-package project that requires the released `katsoft-llm-kit[<every extra>]>=1.2,<2` and
+`katsoft-contracts>=1.0,<2`, so the extras flow from that distribution and `bootstrap.json`
+names none. The floor is 1.2 because `custom_bootstrap.py` reads `llm-kit account status
+--json`, which first shipped in 1.2.0; bootstrap holds the venv at the highest released
+version the requirement admits, so a change under `packages/katsoft-llm-kit/src/llm_kit/`
+reaches the plugin's venv only through a `katsoft-llm-kit` release.
 
 `bootstrap_lib` is a shared library with its own owner. The library reaches it
 lazily (the codex argv builder, skill material, execution events, the interrupt
-contract, model-declaration validation). A consumer venv that links `llm_kit` but
+contract, model-declaration validation). A consumer venv that installs `llm_kit` but
 not `bootstrap_lib` imports `llm_kit.adapters.codex_backend` cleanly and fails on
-the first dispatch, because a shared library does not carry its own shared-lib
-edges to a consumer: each consumer declares what it needs (`plugins/CLAUDE.md`,
-"Why shared libs rather than published packages"). `shared_lib_imports` in
-`bootstrap.json` declares the edge for llm-kit's own venv.
+the first dispatch, because the package does not carry the shared-lib edge to a consumer:
+each consumer declares what it needs (`plugins/CLAUDE.md`, "Why shared libs rather than
+published packages"). `shared_lib_imports` in `bootstrap.json` declares the edge for
+llm-kit's own venv.
 
-## Runtime mode: plugin copy or installed package
+## Runtime mode: source tree or installed package
 
 The same `llm_kit` source runs in two deployments, told apart by
-`llm_kit/_deployment.py`: the plugin's copy under `lib/` (`MODE = "legacy"`, what the
-repo tests import and what a consumer venv sees through the `shared_libs` link), and the
+`llm_kit/_deployment.py`: the source tree under `packages/katsoft-llm-kit/src/` (`MODE =
+"legacy"`, what the repo tests import), and the
 `katsoft-llm-kit` wheel (`MODE = "package"`, written at build time, depending on
-`katsoft-contracts`), which is what the plugin's own venv installs. `bootstrap_lib` reaches
-that venv through `shared_lib_imports`, which is what `fleet()` tests.
+`katsoft-contracts`), which is what the plugin's own venv and every consumer venv install.
+`bootstrap_lib` reaches
+the plugin's venv through `shared_lib_imports`, which is what `fleet()` tests.
 `llm_kit._runtime.mode()` decides once per process and raises
 `RuntimeIdentityError` or `UnsupportedLayout` for an environment it cannot
 identify (both copies present, a duplicate or editable install, a zip or frozen
@@ -1156,8 +1159,8 @@ each group's module documents its own.
 
 - **Launchers.** `bin/llm-kit` and `bin/llm-kit.cmd` are venv-first and delegate to
   `bin/llm_kit_entrypoint.py`, which puts nothing on `sys.path`: the library that runs is
-  the installed package in the chosen interpreter (the standalone interpreter sees the
-  `shared_libs` link instead). Under a redirected `CLAUDE_BOOTSTRAP_DATA_ROOT` the redirected
+  the installed package in the chosen interpreter (an interpreter without the package fails
+  at the import). Under a redirected `CLAUDE_BOOTSTRAP_DATA_ROOT` the redirected
   venv is the only candidate (a missing one exits 2, never the production venv), and under
   `CLAUDE_PLUGIN_TEST` a shim running from the plugin cache refuses.
   `tests/llm-kit/test_launchers.py` covers both platforms.

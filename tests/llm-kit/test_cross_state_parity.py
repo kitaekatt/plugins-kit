@@ -13,7 +13,7 @@ How the sides are driven
 Every stretch of a scenario runs in its own interpreter
 (``fixtures/cross_state/cross_state_worker.py``). The legacy worker's
 ``sys.path`` holds only the three legacy ``lib`` directories (and bootstrap); the
-final worker's holds only ``plugins/llm-kit/lib`` (and bootstrap). HOME and
+final worker's holds only ``packages/katsoft-llm-kit/src`` (and bootstrap). HOME and
 USERPROFILE name a scratch directory before the interpreter starts, so every
 module that computes a path from HOME at import (the verdict cache, the
 credential file) resolves under it. Each worker reports the HOME it resolved
@@ -566,7 +566,7 @@ class TestJobLedgerHandover:
             _REPO / "plugins" / "job-kit" / "lib" / "job_kit" / "store.py",
             _REPO / "plugins" / "job-kit" / "lib" / "job_kit" / "run.py",
         ]
-        scanned += sorted((_REPO / "plugins" / "llm-kit" / "lib" / "llm_kit" / "jobs").glob("*.py"))
+        scanned += sorted((_REPO / "packages" / "katsoft-llm-kit" / "src" / "llm_kit" / "jobs").glob("*.py"))
         assert len(scanned) >= 4
         for path in scanned:
             hit = forbidden.search(path.read_text(encoding="utf-8"))

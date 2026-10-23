@@ -3,7 +3,7 @@
 The signed architecture (docs/reference/llm-kit-architecture.md, "Exact
 dependency graph") is the complete inter-component import set for the 16 final
 components. This module parses every ``.py`` file under
-``plugins/llm-kit/lib/llm_kit`` and reports each import whose
+``packages/katsoft-llm-kit/src/llm_kit`` and reports each import whose
 source component -> target component pair is not in that set.
 
 What counts as an import: eager (module level), local (inside a function or
@@ -44,7 +44,7 @@ from typing import Iterable, Mapping, Optional
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
-PACKAGE_ROOT = REPO / "plugins" / "llm-kit" / "lib" / "llm_kit"
+PACKAGE_ROOT = REPO / "packages" / "katsoft-llm-kit" / "src" / "llm_kit"
 MAP_PATH = REPO / "tests" / "llm-kit" / "repoint-map.json"
 ARCHITECTURE = REPO / "docs" / "reference" / "llm-kit-architecture.md"
 

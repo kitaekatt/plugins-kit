@@ -18,7 +18,7 @@ from workflow_kit_lib import compile_doc, load_workflow
 from workflow_kit_lib.contracts import NODE_SCHEMA_MAX_BYTES
 from workflow_kit_lib.errors import WorkflowError
 
-_KIT_LIB = PLUGIN_ROOT.parent / "llm-kit" / "lib"
+_KIT_LIB = PLUGIN_ROOT.parent.parent / "packages" / "katsoft-llm-kit" / "src"
 _COMPILE = PLUGIN_ROOT / "scripts" / "compile_workflow.py"
 
 

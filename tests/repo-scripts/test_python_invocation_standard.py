@@ -708,6 +708,11 @@ _SHELL_ALLOWLIST: dict[str, AllowlistEntry] = {
 # entries are present only where its files are tracked (the staleness test and the
 # scan both read git ls-files); an entry for an untracked or absent file would be stale.
 _LLM_KIT_SHELL_ALLOWLIST: dict[str, AllowlistEntry] = {
+    "plugins/llm-kit/bin/bootstrap_guard.py": AllowlistEntry(
+        'for rel in (("Scripts", "python.exe"), ("bin", "python"), ("bin", "python3")):',
+        "the entrypoint's vendored bootstrap_guard.py copy, which the shell-family lane "
+        "reads because it sits in bin/; it builds the plugin venv's interpreter path, not a "
+        "bare spawn (drift-tested byte-identical to the canonical copy)"),
     "plugins/llm-kit/bin/llm-kit": AllowlistEntry(
         "the plugin venv bootstrap provisions -- it carries every extra the CLI",
         "class C launcher shim; the redirected venv when CLAUDE_BOOTSTRAP_DATA_ROOT "
@@ -860,16 +865,19 @@ _PYTHON_ALLOWLIST: dict[str, AllowlistEntry] = {
 # are present only where its files are tracked (the staleness test and the scan
 # both read git ls-files); an entry for an untracked or absent file would be stale.
 _LLM_KIT_PYTHON_ALLOWLIST: dict[str, AllowlistEntry] = {
-    "plugins/llm-kit/lib/llm_kit/bootstrap_guard.py": AllowlistEntry(
+    "plugins/llm-kit/bin/bootstrap_guard.py": AllowlistEntry(
         'for rel in (("Scripts", "python.exe"), ("bin", "python"), ("bin", "python3")):',
         _BOOTSTRAP_GUARD_REASON),
-    "plugins/llm-kit/lib/llm_kit/adapters/backends.py": AllowlistEntry(
+    "packages/katsoft-llm-kit/src/llm_kit/bootstrap_guard.py": AllowlistEntry(
+        'for rel in (("Scripts", "python.exe"), ("bin", "python"), ("bin", "python3")):',
+        _BOOTSTRAP_GUARD_REASON),
+    "packages/katsoft-llm-kit/src/llm_kit/adapters/backends.py": AllowlistEntry(
         "Path(sys.argv[0]).name or 'python'",
         "display-label fallback string for an API user field, not a spawn"),
-    "plugins/llm-kit/lib/llm_kit/frontdoor/server.py": AllowlistEntry(
+    "packages/katsoft-llm-kit/src/llm_kit/frontdoor/server.py": AllowlistEntry(
         'prog="python -m llm_kit.frontdoor"',
         "argparse prog= display string, not an invocation"),
-    "plugins/llm-kit/lib/llm_kit/adapters/swapper.py": AllowlistEntry(
+    "packages/katsoft-llm-kit/src/llm_kit/adapters/swapper.py": AllowlistEntry(
         'name.lower().startswith("python")',
         "process-name classification (psutil name of an mlx_lm.server "
         "host process), not an interpreter spawn"),

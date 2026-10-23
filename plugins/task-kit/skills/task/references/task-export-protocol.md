@@ -167,7 +167,8 @@ task-kit answers prune   --format json --protocol N [--parent DIR]... [--project
   task-kit since 0.15.
 - `--allow CLASSES` is a comma-separated set of llm-kit cost classes (`free`, `usage`, `spend`) the pass may
   use; `free` is always allowed. Without it, the classes are llm-kit's per-machine consent, read once, the first
-  time a pass has a model to ask. Free entries are always tried before the others.
+  time a pass has a model to ask. Free entries are always tried before the others. Do not pass `--allow` with a
+  paid class unless the user said so.
 - `--batch N` (default 4, at least 1) is the number of TASKS one pass answers per repository, most recently
   modified first (the newest commit touching the task folder outside `answers/`); each kept task has every
   pending question answered.
@@ -218,6 +219,10 @@ pending[], notes[]}`.
 (retired or unknown ids), commits the deletions and publishes them; another machine's file is never touched.
 Payload: `repositories[]` of `{repo, outcome, reason?, pruned[], refused: [{path, reason}], commit?,
 commit_error?, publish[]}`, and `errors[]`.
+
+Model answering REFUSES when `llm_kit` is not importable. The repository report
+carries a refusal naming the provisioning command. Relay it as printed; do not
+run it unasked.
 
 ## What the export never does
 

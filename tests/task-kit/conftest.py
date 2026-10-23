@@ -62,7 +62,7 @@ def symlinked_root(tmp_path: Path) -> tuple[Path, Path]:
     return project_root, link_target
 
 
-_LLM_KIT_LIB = (_REPO_ROOT / "plugins" / "llm-kit" / "lib").resolve()
+_LLM_KIT_LIB = (_REPO_ROOT / "packages" / "katsoft-llm-kit" / "src").resolve()
 
 
 def _is_llm_kit_module(name: str) -> bool:
@@ -75,7 +75,7 @@ def llm_kit_is_absent_unless_a_test_adds_it():
 
     llm-kit is an OPTIONAL edge of task-kit (the review verb's summary repair), and the tests assert what it reports when the
     package is absent. Another suite's conftest (``tests/llm-kit/conftest.py``) puts
-    ``plugins/llm-kit/lib`` on ``sys.path`` while pytest collects, and any test may leave ``llm_kit``
+    ``packages/katsoft-llm-kit/src`` on ``sys.path`` while pytest collects, and any test may leave ``llm_kit``
     modules in ``sys.modules``; both are process-global, so under a full run (collection loads every
     conftest in every xdist worker) the "absent" probes found the real package. A test that wants
     llm-kit adds the library itself (``monkeypatch.syspath_prepend``) and purges what it imported;

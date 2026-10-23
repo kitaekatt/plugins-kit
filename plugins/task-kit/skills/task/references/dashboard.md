@@ -12,6 +12,14 @@ task-kit has no dashboard of its own. Databench provides the task view: its task
 
 Any other command exits 2 and names these three.
 
+Relay a missing-databench message as printed and do not install databench
+unasked. For `task-kit stop`, relay a refusal as printed; do not delete the
+server record or kill a process to bypass it.
+
+The async SessionStart hook in `hooks/hooks.json` calls `databench ensure` on
+startup, resume, and clear. It opens no browser. Databench's
+`regeneration.enabled` setting controls whether the server starts.
+
 ## What the retirement leaves alone
 
 The earlier dashboard's runtime data (`dashboard/` in task-kit's data directory: its database, run directories and `server.json`) is not deleted by task-kit. Delete it yourself when you no longer need it. The `dashboard:` settings in `~/.claude/task.local.yaml` are not read; `sessions:` and `project_directories` still are.

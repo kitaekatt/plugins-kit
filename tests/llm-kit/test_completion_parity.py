@@ -32,7 +32,7 @@ from final_wording import to_final
 
 _REPO = Path(__file__).resolve().parents[2]
 _LEGACY_LIB = _REPO / "plugins" / "llm-scripting-kit" / "lib"
-_FINAL_LIB = _REPO / "plugins" / "llm-kit" / "lib"
+_FINAL_LIB = _REPO / "packages" / "katsoft-llm-kit" / "src"
 
 COMPLETION_MODULES = (
     "capabilities",

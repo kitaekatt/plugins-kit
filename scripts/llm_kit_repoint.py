@@ -66,7 +66,7 @@ REPO = Path(__file__).resolve().parents[1]
 MAP_PATH = REPO / "tests" / "llm-kit" / "repoint-map.json"
 DISPOSITIONS_DIR = REPO / "tests" / "llm-kit" / "repoint-dispositions"
 PORTING_LEDGER = REPO / "tests" / "llm-kit" / "porting-ledger.json"
-LLM_KIT_LIB = REPO / "plugins" / "llm-kit" / "lib"
+LLM_KIT_LIB = REPO / "packages" / "katsoft-llm-kit" / "src"
 MIRROR_ROOT = REPO / "tmp"
 FACADE_PKG = "legacy_names"
 GUARD_MODULE = "llm_kit.bootstrap_guard"
@@ -530,6 +530,14 @@ _PLUGIN_DIR_RE_TMPL = (
     r"(?P<q1>[\"'])plugins(?P=q1)(?P<sep>\s*(?:/|,)\s*)"
     r"(?P<q2>[\"'])(?P<name>{names})(?P=q2)"
 )
+# A legacy plugin's lib directory, spelled as path segments from `plugins`; the
+# final library lives in the katsoft-llm-kit package, not under the plugin.
+_PLUGIN_LIB_RE_TMPL = (
+    r"(?P<q1>[\"'])plugins(?P=q1)(?P<sep>\s*(?:/|,)\s*)"
+    r"(?P<q2>[\"'])(?:{names})(?P=q2)(?P<sep2>\s*(?:/|,)\s*)"
+    r"(?P<q3>[\"'])lib(?P=q3)"
+    rf"(?:(?P<sep3>\s*(?:/|,)\s*)(?P<q4>[\"'])(?:{_ROOT_ALT})(?P=q4))?"
+)
 _LIB_PKG_RE = re.compile(
     r"(?P<q1>[\"'])lib(?P=q1)(?P<sep>\s*(?:/|,)\s*)(?P<q2>[\"'])"
     rf"(?P<pkg>{_ROOT_ALT})(?P=q2)"
@@ -550,7 +558,7 @@ def final_path(names: Names, pkg: str, rest: str) -> Optional[str]:
     row = names.rows.get(legacy)
     if row is None or row["kind"] not in ("module", "facade-package"):
         return None
-    base = "plugins/llm-kit/lib/" + row["final"].replace(".", "/")
+    base = "packages/katsoft-llm-kit/src/" + row["final"].replace(".", "/")
     return base + ("/__init__.py" if row["kind"] == "facade-package" else ".py")
 
 
@@ -637,6 +645,17 @@ def rewrite_test_source(data: bytes, relpath: str, mapping: Mapping,
     text = apply_edits(data, edits).decode("utf-8")
 
     plugin_names = "|".join(re.escape(spec["plugin"]) for spec in mapping["packages"].values())
+
+    def plugin_lib(m: "re.Match[str]") -> str:
+        classes.add("path-package-src")
+        q1, q2, q3, sep = m.group("q1"), m.group("q2"), m.group("q3"), m.group("sep")
+        out = (f"{q1}packages{q1}{sep}{q2}katsoft-llm-kit{q2}{m.group('sep2')}{q3}src{q3}")
+        if m.group("q4"):
+            q4 = m.group("q4")
+            out += f"{m.group('sep3')}{q4}llm_kit{q4}"
+        return out
+
+    text = re.compile(_PLUGIN_LIB_RE_TMPL.format(names=plugin_names)).sub(plugin_lib, text)
     plugin_re = re.compile(_PLUGIN_DIR_RE_TMPL.format(names=plugin_names))
 
     def plugin_dir(m: "re.Match[str]") -> str:
@@ -648,20 +667,24 @@ def rewrite_test_source(data: bytes, relpath: str, mapping: Mapping,
     def lib_pkg(m: "re.Match[str]") -> str:
         classes.add("path-package-dir")
         sep, q1, q2 = m.group("sep"), m.group("q1"), m.group("q2")
-        return f"{q1}lib{q1}{sep}{q2}llm_kit{q2}"
+        # A bare `<plugin dir> / "lib" / <package>` (the plugin directory named
+        # earlier, in another statement) climbs out of plugins/llm-kit to the
+        # package source.
+        return (f"{q1}..{q1}{sep}{q1}..{q1}{sep}{q1}packages{q1}{sep}{q1}katsoft-llm-kit{q1}{sep}"
+                f"{q1}src{q1}{sep}{q2}llm_kit{q2}")
 
     text = _LIB_PKG_RE.sub(lib_pkg, text)
 
     def slash_path(m: "re.Match[str]") -> str:
         classes.add("path-string")
         if not m.group("pkg"):
-            return "plugins/llm-kit/lib"
+            return "packages/katsoft-llm-kit/src"
         override = mapping.get("path_overrides", {}).get(m.group(0))
         if override is not None:
             return override["to"]
         rest = m.group("rest") or ""
         if not rest:
-            return "plugins/llm-kit/lib/llm_kit"
+            return "packages/katsoft-llm-kit/src/llm_kit"
         target = final_path(names, m.group("pkg"), rest)
         if target is None:
             bad.append(f"{relpath}: path {m.group(0)} has no final file")

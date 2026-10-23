@@ -45,6 +45,7 @@ _SKIP_DIRS = {".venv", "site-packages", "__pycache__", "node_modules", "stubs"}
 
 # import name -> distribution name, where they differ.
 _IMPORT_TO_DIST = {
+    "llm_kit": "katsoft-llm-kit",
     "markdown_it": "markdown-it-py",
     "yaml": "pyyaml",
     "websocket": "websocket-client",
@@ -411,8 +412,9 @@ def test_first_party_map_is_sane():
     # Sanity guard so a refactor that breaks package discovery is caught.
     assert "bootstrap_lib" in _FIRST_PARTY
     assert "llm_scripting_kit" in _FIRST_PARTY
-    if (_PLUGINS / "llm-kit").is_dir():  # a dev-only plugin: its source is held back from master
-        assert "llm_kit" in _FIRST_PARTY
+    # llm_kit is the katsoft-llm-kit package (packages/), not plugin source: a plugin
+    # that imports it declares that distribution (_IMPORT_TO_DIST).
+    assert "llm_kit" not in _FIRST_PARTY
 
 
 @pytest.mark.parametrize(

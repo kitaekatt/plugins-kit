@@ -173,10 +173,10 @@ Package mode (`llm_kit._runtime.mode() == "package"`, set by the hook-written
 ## Measured premises
 
 Measured 2026-10-22 (uv 0.12.5, hatchling 1.32.0, CPython 3.12.9, macOS
-arm64), building `plugins/llm-kit/lib/llm_kit` as `katsoft-llm-kit` 1.0.0 in
+arm64), building the llm_kit source (`plugins/llm-kit/lib/llm_kit`; the source moved to `packages/katsoft-llm-kit/src/llm_kit` in katsoft-llm-kit 1.2.1) as `katsoft-llm-kit` 1.0.0 in
 a scratch repository: three builds (two from one clone, one from a second
 clone at another path) produced byte-identical wheels; the hook refused a
 build without the identity variables. `gh` 2.92.0 exposes `displayTitle` in
 `gh run list --json`; that it equals `run-name` for both tag-push and
-dispatch runs is GitHub's documented behaviour, not yet observed on a run of
-this workflow.
+dispatch runs is GitHub's documented behaviour, not observed on a run of
+this workflow as of 2026-10-22.

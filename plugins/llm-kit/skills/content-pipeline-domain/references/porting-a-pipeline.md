@@ -143,44 +143,28 @@ stayed, and what was intentionally dropped -- not a pile of hedged stubs.
 
 ## The project-venv consumption note
 
-Once ported, a project imports `llm_kit.pipeline` as an ambient package. The
-bootstrap `shared_libs` mechanism publishes the library's source to a stable,
-version-independent path
-(`~/.claude/plugins/data/plugins-kit/_shared_libs/llm_kit/`)
-and registers a `.pth` on the shared standalone interpreter, so a process
-running under that interpreter can `import llm_kit.pipeline` with no path
-work. A consuming plugin that declares `shared_lib_imports:
-["llm_kit.pipeline"]` gets the same `.pth` written into its own venv.
+Once ported, a project imports `llm_kit.pipeline` from the `katsoft-llm-kit`
+package. The project declares `katsoft-llm-kit[pipeline]>=A.B,<N` in its own
+`pyproject.toml` (plus the extras for any other capability it reaches), and the
+package installs into the project's own venv. No path work and no
+bootstrap link is involved, so the project does not depend on the `llm-kit`
+plugin being installed.
 
-A project that runs its OWN interpreter (not the shared standalone, and not a
-plugin venv the engine linked) needs a **fail-soft shim** to reach the shared
-path. The pattern, generically:
+A project that must still start on a machine where the package is missing
+surfaces one clear message and exits cleanly, rather than an opaque
+`ImportError` deep in a stage. The pattern, generically:
 
 ```python
-# project bootstrap shim -- fail soft, never hard-fail an unbootstrapped machine
+# project entry point -- one guarded import, a clear message on a miss
 try:
-    import llm_kit.pipeline  # already importable (linked .pth) -- nothing to do
-except ImportError:
-    import os, sys
-    shared = os.path.expanduser(
-        "~/.claude/plugins/data/plugins-kit/_shared_libs/llm_kit"
-    )
-    if os.path.isdir(shared):
-        sys.path.insert(0, shared)
+    import llm_kit.pipeline
+except ImportError as exc:
+    raise SystemExit(
+        "llm_kit is not installed: add 'katsoft-llm-kit[pipeline]>=A.B,<N' to "
+        "this project's pyproject.toml and sync its venv"
+    ) from exc
 ```
 
-Three properties make it fail-soft:
-
-1. **Import-first.** When the `.pth` already exposes the package, the shim is a
-   no-op -- it never shadows or double-inserts.
-2. **Existence-gated.** It inserts the path only when the shared dir actually
-   exists (bootstrap has run). On a fresh, unbootstrapped machine the shim
-   does nothing rather than inserting a dead path.
-3. **Degrade, do not crash.** A caller that still cannot import after the shim
-   should surface a clear "run bootstrap first" message and exit cleanly, not
-   raise an opaque `ImportError` deep in a stage. The library is a
-   reuse-by-availability dependency: its absence is a provisioning state, not
-   a program bug.
-
-The stable path is the contract; pin the shim to it once, in the project's
-entry point, and no other module does path work.
+Do the import once, in the project's entry point, and no other module guards
+it. The library is a reuse-by-availability dependency: its absence is a
+provisioning state, not a program bug.

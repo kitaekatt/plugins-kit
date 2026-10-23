@@ -105,7 +105,7 @@ _REPOINT_MAP = json.loads((_REPO_ROOT / "tests" / "llm-kit" / "repoint-map.json"
 def _final_path(relpath: str) -> str:
     row = _REPOINT_MAP["modules"].get(relpath)
     if row is not None and row["kind"] == "module":
-        return "plugins/llm-kit/lib/" + row["final"].replace(".", "/") + ".py"
+        return "packages/katsoft-llm-kit/src/" + row["final"].replace(".", "/") + ".py"
     return relpath
 
 
@@ -227,7 +227,7 @@ def verdict(relpath: str, source: str, table=None):
 def _tree_files():
     out = subprocess.run(
         ["git", "-C", str(_REPO_ROOT), "ls-files", "--cached", "--others",
-         "--exclude-standard", "--", "plugins"],
+         "--exclude-standard", "--", "plugins", "packages/katsoft-llm-kit/src"],
         capture_output=True, text=True, check=True,
     ).stdout.splitlines()
     return sorted(

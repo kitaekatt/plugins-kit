@@ -19,7 +19,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 LEGACY_LIB = REPO / "plugins" / "content-pipeline-kit" / "lib"
-FINAL_ROOT = REPO / "plugins" / "llm-kit" / "lib" / "llm_kit" / "pipeline" / "artifacts"
+FINAL_ROOT = REPO / "packages" / "katsoft-llm-kit" / "src" / "llm_kit" / "pipeline" / "artifacts"
 
 # module path shared by legacy (under content_pipeline) and final (under
 # llm_kit.pipeline.artifacts)

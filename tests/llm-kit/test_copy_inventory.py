@@ -32,7 +32,7 @@ REPO = repoint.REPO
 SUITES = repoint.SUITES
 MAP = GEN.load_map()
 LEDGERS = {suite: repoint.load_ledger(suite) for suite in SUITES}
-FINAL_LIB = REPO / "plugins" / "llm-kit" / "lib" / "llm_kit"
+FINAL_LIB = REPO / "packages" / "katsoft-llm-kit" / "src" / "llm_kit"
 
 
 def _legacy_test_files(suite: str) -> list[str]:
@@ -253,7 +253,7 @@ def _child(code: str, tmp_path: Path, extra_env=None) -> subprocess.CompletedPro
     (site / "sitecustomize.py").write_text(GEN.render_sitecustomize(MAP), encoding="utf-8")
     env = dict(os.environ)
     env.update({
-        "PYTHONPATH": os.pathsep.join([str(site), str(REPO / "plugins/llm-kit/lib"),
+        "PYTHONPATH": os.pathsep.join([str(site), str(REPO / "packages/katsoft-llm-kit/src"),
                                        str(REPO / "plugins/bootstrap")]),
         "_BOOTSTRAP_GUARD_SKIP_REEXEC": "1",
         "PYTHONNOUSERSITE": "1",
@@ -335,7 +335,7 @@ def test_the_alias_tree_imports_without_a_legacy_package(tmp_path):
         "print('ok')\n"
     )
     result = _child(code, tmp_path, {"PYTHONPATH": os.pathsep.join([
-        str(tmp_path / "site"), str(REPO / "tmp"), str(REPO / "plugins/llm-kit/lib"),
+        str(tmp_path / "site"), str(REPO / "tmp"), str(REPO / "packages/katsoft-llm-kit/src"),
         str(REPO / "plugins/bootstrap")])})
     assert result.returncode == 0, result.stderr[-2000:]
     assert result.stdout.strip() == "ok"
@@ -364,7 +364,7 @@ def test_a_legacy_edit_is_refused_until_it_is_recorded(tmp_path, monkeypatch):
     legacy = tmp_path / legacy_path
     legacy.parent.mkdir(parents=True)
     legacy.write_bytes(b"A = 1\n")
-    final = tmp_path / "plugins/llm-kit/lib/llm_kit/pkg/mod.py"
+    final = tmp_path / "packages/katsoft-llm-kit/src/llm_kit/pkg/mod.py"
     final.parent.mkdir(parents=True)
     final.write_bytes(b"A = 1\n")
     ledger = tmp_path / "porting-ledger.json"
@@ -372,7 +372,7 @@ def test_a_legacy_edit_is_refused_until_it_is_recorded(tmp_path, monkeypatch):
     mapping = {"schema": 2, "modules": {legacy_path: {
         "kind": "module", "final": "llm_kit.pkg.mod", "legacy_sha256": sha(b"OLD\n")}}}
     monkeypatch.setattr(GEN, "REPO", tmp_path)
-    monkeypatch.setattr(GEN, "LLM_KIT_LIB", tmp_path / "plugins/llm-kit/lib")
+    monkeypatch.setattr(GEN, "LLM_KIT_LIB", tmp_path / "packages/katsoft-llm-kit/src")
     monkeypatch.setattr(GEN, "PORTING_LEDGER", ledger)
     monkeypatch.setattr(GEN, "load_map", lambda: mapping)
     monkeypatch.setattr(GEN, "legacy_package_files", lambda _m: [

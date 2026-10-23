@@ -18,6 +18,67 @@ from bootstrap_lib.tool_check import _tool_result
 
 
 class TestLinkToolDirToPath:
+    def test_inherited_live_path_still_persists_macos_login(
+        self, tmp_path, monkeypatch
+    ):
+        home = tmp_path / "home"
+        home.mkdir()
+        path_entry = home / "bin"
+        path_entry.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.setenv("PATH", os.pathsep.join((str(path_entry), "/usr/bin")))
+        monkeypatch.delenv("MSYSTEM", raising=False)
+        monkeypatch.setattr(path_check.sys, "platform", "darwin")
+        monkeypatch.setattr(path_check.os, "name", "posix")
+        actions, ok_entries = [], []
+
+        engine._process_path_entries(
+            [str(path_entry)], "", actions, ok_entries
+        )
+
+        profile = home / ".profile"
+        assert profile.exists()
+        assert "${HOME}/bin" in profile.read_text()
+        assert actions and "PATH added" in actions[0]
+
+    def test_partial_write_failure_retains_inactive_owned_block(
+        self, tmp_path, monkeypatch
+    ):
+        home = tmp_path / "home"
+        home.mkdir()
+        path_entry = home / "bin"
+        path_entry.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.setenv("PATH", os.pathsep.join((str(path_entry), "/usr/bin")))
+        monkeypatch.delenv("MSYSTEM", raising=False)
+        monkeypatch.setattr(path_check.sys, "platform", "darwin")
+        monkeypatch.setattr(path_check.os, "name", "posix")
+        ok, _message = path_check.add_path_to_shell_config(str(path_entry))
+        assert ok is True
+        profile = home / ".profile"
+        original_profile = profile.read_text()
+        bash_profile = home / ".bash_profile"
+        bash_profile.write_text("user_setting=kept\n")
+        real_open = open
+
+        def fail_bash_profile_write(path, mode="r", *args, **kwargs):
+            if os.fspath(path) == os.fspath(bash_profile) and "w" in mode:
+                raise OSError("read-only")
+            return real_open(path, mode, *args, **kwargs)
+
+        monkeypatch.setattr("builtins.open", fail_bash_profile_write)
+        actions, ok_entries = [], []
+
+        engine._process_path_entries(
+            [str(path_entry)], "", actions, ok_entries
+        )
+
+        assert actions and "FAILED" in actions[0]
+        assert profile.read_text() == original_profile
+        assert "bootstrap PATH" in profile.read_text()
+
     def test_off_path_tool_dir_added(self, monkeypatch):
         calls = []
         monkeypatch.setattr(path_check, "add_path_to_shell_config",
@@ -104,6 +165,21 @@ class TestLinkToolDirToPath:
         FAILED, never "PATH added"."""
         monkeypatch.setattr(path_check, "add_path_to_shell_config",
                             lambda d: (True, "added to .bashrc"))
+        persistence_results = iter((
+            path_check.Result(
+                passed=False, subject="/opt/missing",
+                message="not persisted",
+            ),
+            path_check.Result(
+                passed=True, subject="/opt/missing",
+                message="persisted",
+            ),
+        ))
+        monkeypatch.setattr(
+            path_check,
+            "check_path_entry_persistence",
+            lambda d: next(persistence_results),
+        )
         monkeypatch.setattr(path_check, "check_path_entry",
                             lambda d: path_check.Result(
                                 passed=False, subject=d,

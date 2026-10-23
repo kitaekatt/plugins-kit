@@ -1413,7 +1413,7 @@ def test_verdict_cache_default_path_resolves_under_home(tmp_path):
     """HOME-relative: a child interpreter with HOME and USERPROFILE exported to tmp."""
     code = (
         "import sys, json\n"
-        f"sys.path.insert(0, {str(_LEGACY_LIB)!r}); sys.path.insert(1, {str(_REPO / 'plugins' / 'llm-kit' / 'lib')!r})\n"
+        f"sys.path.insert(0, {str(_LEGACY_LIB)!r}); sys.path.insert(1, {str(_REPO / 'packages' / 'katsoft-llm-kit' / 'src')!r})\n"
         f"sys.path.insert(2, {str(_REPO / 'plugins' / 'bootstrap')!r})\n"
         "from llm_scripting_kit import usage_budget as legacy\n"
         "from llm_kit.dispatch import usage_budget as final\n"

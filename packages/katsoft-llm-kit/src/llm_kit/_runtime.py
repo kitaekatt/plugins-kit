@@ -3,8 +3,8 @@
 Two deployments exist and they must never be mixed in one environment:
 
 ``legacy``
-    The plugin's copy. Bootstrap links ``lib/llm_kit`` onto the plugin venv
-    through a ``.pth`` file, ``bootstrap_lib`` is linked the same way, and the
+    The source tree as a path-linked copy: a ``.pth`` file or ``sys.path`` entry
+    puts ``src/llm_kit`` on the path, ``bootstrap_lib`` is linked the same way, and the
     shared contracts (``execution_event``, ``interrupt_contract``,
     ``model_declaration``) are read from ``bootstrap_lib``. The committed
     ``llm_kit/_deployment.py`` says ``MODE = "legacy"``.

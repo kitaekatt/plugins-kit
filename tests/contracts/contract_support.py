@@ -18,8 +18,7 @@ import contract_goldens
 REPO = Path(__file__).resolve().parents[2]
 PACKAGE_DIR = REPO / "packages" / "katsoft-contracts"
 CANONICAL_DIR = PACKAGE_DIR / "src" / "katsoft_contracts"
-COPY_DIR = REPO / "plugins" / "bootstrap" / "bootstrap_lib"
-SYNC_SCRIPT = REPO / "scripts" / "sync_contracts_copy.py"
+BOOTSTRAP_LIB_DIR = REPO / "plugins" / "bootstrap" / "bootstrap_lib"
 RELEASE_BUILD = REPO / "packages" / "_build" / "release_build.py"
 MODULES = ("execution_event", "interrupt_contract", "model_declaration")
 

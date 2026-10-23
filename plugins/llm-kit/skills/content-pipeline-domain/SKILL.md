@@ -12,8 +12,8 @@ An LLM-in-the-loop batch content pipeline is a system that regenerates a
 corpus of authored content through an LLM, on a schedule or on demand,
 while never destroying human edits and never re-paying for work that hasn't
 gone stale. This domain owns the vocabulary and abstraction map for that
-architecture, and routes to the library (`llm_kit.pipeline`, this plugin's
-shared lib) that implements it. Neutral illustrations only in this skill and
+architecture, and routes to the library (`llm_kit.pipeline`, in the
+`katsoft-llm-kit` package) that implements it. Neutral illustrations only in this skill and
 its references -- e.g. a product-copy generator that mutates authored rows
 in place, or a support-macro translator that emits standalone artifacts.
 Never specifics of any particular consuming project.
@@ -104,14 +104,17 @@ domain_skill:
 
 The library's LIVE backends (`openrouter`, `model-endpoint`, `claude-cli`,
 `codex-cli`, `opencode-cli`) need the
-`llm_kit` shared lib, published by `plugins-kit:llm-kit`.
+`llm_kit` library, the `katsoft-llm-kit` package: installed in the `llm-kit`
+plugin's own venv, and in a consumer project's own venv from its
+`pyproject.toml` requirement.
 Only `MockBackend` is hermetic -- tests should use it and need none of this.
 
-Preflight before driving a live backend: shared lib at
-`~/.claude/plugins/data/plugins-kit/_shared_libs/llm_kit/`, or a
-guarded lazy `import llm_kit` at the call site. On a miss, name the
-plugin and ASK, then `claude plugin install llm-kit@plugins-kit`;
-retry a prompt or two later, no restart needed. This is bootstrap's generic
+Preflight before driving a live backend: a guarded lazy `import llm_kit` at
+the call site. On a miss, name the requirement and ASK. A project that uses
+the library from its own code adds `katsoft-llm-kit[<extras>]>=A.B,<N` to its
+`pyproject.toml`; a session that only needs the `llm-kit` command installs
+the plugin with `claude plugin install llm-kit@plugins-kit` and retries a
+prompt or two later, no restart needed. This is bootstrap's generic
 action-triggered-install pattern, not specific to this library -- full
 check-ask-install-retry mechanics: `Skill(bootstrap:bootstrap)`'s
 `action-triggered-install.md` reference. OpenRouter key preflight

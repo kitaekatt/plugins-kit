@@ -181,7 +181,7 @@ def test_effort_reaches_the_owner_main_untouched(
 
 def test_the_wrapper_binds_the_real_owner_main(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make the in-repo llm_kit the one the wrapper imports, and bind its main."""
-    owner_lib = _SCRIPT.parents[2] / "llm-kit" / "lib"
+    owner_lib = _SCRIPT.parents[3] / "packages" / "katsoft-llm-kit" / "src"
     monkeypatch.syspath_prepend(str(owner_lib))
     for name in [m for m in sys.modules if m.startswith("llm_kit")]:
         monkeypatch.delitem(sys.modules, name)

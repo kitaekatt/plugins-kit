@@ -24,7 +24,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 PLUGIN = REPO / "plugins" / "llm-kit"
-LIB = PLUGIN / "lib" / "llm_kit"
+LIB = REPO / "packages" / "katsoft-llm-kit" / "src" / "llm_kit"
 MANIFEST = json.loads((PLUGIN / "bootstrap.json").read_text(encoding="utf-8"))
 PLUGIN_JSON = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
 _SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
@@ -85,7 +85,7 @@ def test_documented_floors_are_pinned_to_their_literals():
 
 
 def test_manifest_adds_no_edge():
-    assert MANIFEST["shared_libs"] == [{"name": "llm_kit", "src": "lib"}]
+    assert "shared_libs" not in MANIFEST, "llm_kit reaches consumers as the katsoft-llm-kit package, never a shared lib"
     assert MANIFEST["shared_lib_imports"] == ["bootstrap_lib"]
     assert "plugins" not in MANIFEST, "llm-kit depends on no other plugin for the validator or the completion code"
     assert PLUGIN_JSON["dependencies"] == ["bootstrap"]

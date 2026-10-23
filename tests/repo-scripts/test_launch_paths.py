@@ -119,7 +119,7 @@ class Tree:
     def load(cls) -> "Tree":
         listed = subprocess.run(
             ["git", "-C", str(_REPO_ROOT), "ls-files", "--cached", "--others",
-             "--exclude-standard", "--", "plugins"],
+             "--exclude-standard", "--", "plugins", "packages/katsoft-llm-kit/src"],
             capture_output=True, text=True, check=True,
         ).stdout.splitlines()
         files: dict[str, str] = {}
@@ -1229,6 +1229,7 @@ EXEMPT: list[Exempt] = [
         "The plugin venv path is",
         "provisions (~/.claude/plugins/data/plugins-kit/skills-kit/.venv)"),
     *_p("plugins/*bootstrap_guard.py", _GUARD_DOC, "`~/.claude/plugins/data/<marketplace>/<plugin>/bootstrap.log`"),
+    *_p("packages/*bootstrap_guard.py", _GUARD_DOC, "`~/.claude/plugins/data/<marketplace>/<plugin>/bootstrap.log`"),
     *_p("plugins/bootstrap-stuck-fix/README.md", _BOOTSTRAP_DOCS, "tail ~/.claude/plugins/data/plugins-kit/bootstrap/bootstrap.log"),
     *_p("plugins/bootstrap/README.md", _BOOTSTRAP_DOCS, "~/.claude/plugins/data/plugins-kit/<plugin>/bootstrap.log"),
     *_p("plugins/bootstrap/skills/bootstrap/SKILL.md", _BOOTSTRAP_DOCS,
@@ -1294,7 +1295,7 @@ EXEMPT: list[Exempt] = [
 # are present only where its files are; an entry for an absent file would be stale.
 EXEMPT.extend(
     entry for entry in [
-        *_p("plugins/llm-kit/lib/llm_kit/registry/constants.py",
+        *_p("packages/katsoft-llm-kit/src/llm_kit/registry/constants.py",
             "CLI_COMMAND is the human contract: the literal ~/-prefixed display string an agent-facing "
             "message tells a reader to run for the llm-kit console script (the plugin venv's "
             "bin/llm-kit, Scripts/llm-kit.exe on Windows). It is text, not a launch path; the "

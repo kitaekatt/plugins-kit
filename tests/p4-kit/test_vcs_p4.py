@@ -33,7 +33,7 @@ if _P4KIT_LIB not in sys.path:
 
 _LLM_KIT_LIB = os.path.normpath(
     os.path.join(os.path.dirname(__file__), os.pardir, os.pardir,
-                 "plugins", "llm-kit", "lib")
+                 "packages", "katsoft-llm-kit", "src")
 )
 if _LLM_KIT_LIB not in sys.path:
     sys.path.insert(0, _LLM_KIT_LIB)

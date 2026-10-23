@@ -133,18 +133,23 @@ def test_bootstrap_resolves_the_requirement_against_the_released_ledger(tmp_path
     assert errors == [], "a major above the cap is not a candidate"
 
 
-def test_distribution_identity_and_wheel_only_layout(dist):
+def test_distribution_identity_and_src_layout(dist):
     project = dist["project"]
     assert project["name"] == "katsoft-llm-kit"
     assert project["dynamic"] == ["urls"]
     assert dist["build-system"]["build-backend"] == "hatchling.build"
     wheel = dist["tool"]["hatch"]["build"]["targets"]["wheel"]
-    assert wheel["force-include"] == {"../../plugins/llm-kit/lib/llm_kit": "llm_kit"}
-    assert "sdist" not in dist["tool"]["hatch"]["build"]["targets"]
+    assert wheel["packages"] == ["src/llm_kit"]
+    assert wheel["exclude"] == ["src/llm_kit/_deployment.py"]
+    assert "force-include" not in wheel
+    sdist = dist["tool"]["hatch"]["build"]["targets"]["sdist"]
+    assert sdist["include"] == ["src/llm_kit", "README.md", "LICENSE", "pyproject.toml"]
+    assert "hooks" not in sdist, "a release wheel is built only by release_build.py"
     assert dist["tool"]["hatch"]["metadata"]["hooks"]["custom"]["path"] == "../_build/hatch_build.py"
     assert wheel["hooks"]["custom"]["path"] == "../_build/hatch_build.py"
     assert (ds.PACKAGE_DIR / "../_build/hatch_build.py").resolve().is_file()
-    assert (ds.PACKAGE_DIR / "../../plugins/llm-kit/lib/llm_kit").resolve().is_dir()
+    assert (ds.PACKAGE_DIR / "src" / "llm_kit" / "__init__.py").is_file()
+    assert not (ds.REPO / "plugins" / "llm-kit" / "lib").exists(), "the library source lives only in the package"
 
 
 def test_the_distribution_version_is_independent_of_the_plugin_version(plugin, dist):

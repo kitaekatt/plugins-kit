@@ -1,15 +1,15 @@
 # llm-kit
 
-One plugin and one shared library, `llm_kit`, for LLM access, durable agent
+One plugin and one library, `llm_kit` (the `katsoft-llm-kit` package), for LLM access, durable agent
 jobs and batch content pipelines. It consolidates `llm-scripting-kit`, `job-kit`
 and `content-pipeline-kit` (migrated from those plugins; they stay installed,
 published and unchanged, and llm-kit never imports them).
 
 ## Library
 
-`lib/llm_kit/` holds the library source, plus `llm_kit/bootstrap_guard.py`; the plugin's
-own venv installs it as the released `katsoft-llm-kit` distribution rather than
-running this copy (see `pyproject.toml`). The
+The library source lives in `packages/katsoft-llm-kit/src/llm_kit/` (with
+`llm_kit/bootstrap_guard.py`), not in this plugin: the plugin's own venv installs the
+released `katsoft-llm-kit` distribution (see `pyproject.toml`). The
 sub-packages are `completion`, `adapters`, `dispatch`, `registry`, `schema`,
 `storage`, `execution`, `jobs`, `pipeline` (`core`, `artifacts`, `runtime`,
 `execution`, `analysis`), `frontdoor` and `scaffold`. The root initializers are

@@ -3,9 +3,17 @@
 import os
 import re
 import sys
+from hashlib import sha256
+from pathlib import Path
 from typing import Tuple
 
 from .result import Result
+from .shell_rc import bash_login_candidates, effective_bash_login_file
+
+
+_NATIVE_PATH_TYPE = type(Path.cwd())
+_BLOCK_START = "# >>> bootstrap PATH {token} >>>"
+_BLOCK_END = "# <<< bootstrap PATH {token} <<<"
 
 
 def normalize_path_for_compare(path: str) -> str:
@@ -63,6 +71,225 @@ def _shell_path(path: str) -> str:
     return normalized
 
 
+def _path_token(expanded: str) -> str:
+    """Return the stable ownership token for one expanded PATH entry."""
+    portable = _home_relative_path(expanded, _home()) or _shell_path(expanded)
+    canonical = normalize_path_for_compare(portable)
+    return sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+def _double_quote_literal(value: str) -> str:
+    """Escape literal text for inclusion inside POSIX double quotes."""
+    return (
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("$", "\\$")
+        .replace("`", "\\`")
+    )
+
+
+def _path_shell_expression(expanded: str, home: str) -> str:
+    """Render a double-quote-safe entry, expanding only intentional HOME."""
+    home_form = _home_relative_path(expanded, home)
+    if home_form is not None:
+        suffix = home_form[len("$HOME"):]
+        return "${HOME}" + _double_quote_literal(suffix)
+    return _double_quote_literal(_shell_path(expanded))
+
+
+def render_path_guard(path_entry: str) -> str:
+    """Render bootstrap's POSIX runtime-idempotent PATH guard."""
+    expanded = os.path.expanduser(path_entry)
+    if any(character in expanded for character in ("\x00", "\n", "\r")):
+        raise ValueError("PATH entries cannot contain NUL or newline characters")
+    expression = _path_shell_expression(expanded, _home())
+    token = _path_token(expanded)
+    return (
+        f"{_BLOCK_START.format(token=token)}\n"
+        'case ":${PATH-}:" in\n'
+        f'    *":{expression}:"*) ;;\n'
+        f'    *) export PATH="{expression}${{PATH:+:${{PATH}}}}" ;;\n'
+        "esac\n"
+        f"{_BLOCK_END.format(token=token)}\n"
+    )
+
+
+def _shell_targets(home: Path) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
+    """Return active PATH targets and inactive Bash-login candidates."""
+    if sys.platform == "darwin":
+        login_file = effective_bash_login_file(home)
+        active = (home / ".zshrc", home / ".bashrc", login_file)
+        inactive = tuple(
+            candidate
+            for candidate in bash_login_candidates(home)
+            if candidate != login_file
+        )
+        return _deduplicate_targets(active), inactive
+    return (home / ".bashrc",), ()
+
+
+def _file_identity(path: Path) -> tuple[str, int, int] | tuple[str, str]:
+    """Return inode identity for existing targets and pathname otherwise."""
+    try:
+        stat_result = path.stat()
+    except FileNotFoundError:
+        return ("path", str(path.absolute()))
+    return ("inode", stat_result.st_dev, stat_result.st_ino)
+
+
+def _deduplicate_targets(paths: tuple[Path, ...]) -> tuple[Path, ...]:
+    """Deduplicate aliases without replacing or resolving their symlinks."""
+    seen: set[tuple[str, int, int] | tuple[str, str]] = set()
+    unique = []
+    for path in paths:
+        identity = _file_identity(path)
+        if identity not in seen:
+            seen.add(identity)
+            unique.append(path)
+    return tuple(unique)
+
+
+def _owned_block_pattern(path_entry: str) -> re.Pattern[str]:
+    """Match the bootstrap-owned block for one PATH entry."""
+    token = _path_token(os.path.expanduser(path_entry))
+    start = re.escape(_BLOCK_START.format(token=token))
+    end = re.escape(_BLOCK_END.format(token=token))
+    return re.compile(
+        rf"^{start}\r?\n.*?^{end}(?:\r?\n|$)",
+        flags=re.MULTILINE | re.DOTALL,
+    )
+
+
+def _legacy_export_lines(path_entry: str) -> set[str]:
+    """Return exact unconditional exports emitted by older bootstrap builds."""
+    expanded = os.path.expanduser(path_entry)
+    home = _home()
+    home_form = _home_relative_path(expanded, home)
+    values = {
+        expanded,
+        expanded.replace("\\", "/"),
+        _shell_path(expanded),
+    }
+    if home_form is not None:
+        values.add(home_form)
+    return {f'export PATH="{value}:$PATH"' for value in values}
+
+
+def _remove_legacy_pair(content: str, path_entry: str) -> str:
+    """Remove only an adjacent bootstrap comment and exact legacy export."""
+    legacy_lines = _legacy_export_lines(path_entry)
+    lines = content.splitlines(keepends=True)
+    retained = []
+    index = 0
+    while index < len(lines):
+        if (
+            lines[index].rstrip("\r\n") == "# Added by bootstrap"
+            and index + 1 < len(lines)
+            and lines[index + 1].rstrip("\r\n") in legacy_lines
+        ):
+            index += 2
+            continue
+        retained.append(lines[index])
+        index += 1
+    return "".join(retained)
+
+
+def _without_owned_path(content: str, path_entry: str) -> str:
+    """Remove this entry's marked block and recognizable legacy pair."""
+    without_block = _owned_block_pattern(path_entry).sub("", content)
+    return _remove_legacy_pair(without_block, path_entry)
+
+
+def _read_text(path: Path) -> str:
+    """Read a shell file as UTF-8; a missing target is empty."""
+    try:
+        with open(path, encoding="utf-8") as stream:
+            return stream.read()
+    except FileNotFoundError:
+        return ""
+
+
+def _write_text(path: Path, content: str) -> None:
+    """Write through a pathname so existing symlinks remain symlinks."""
+    with open(path, "w", encoding="utf-8") as stream:
+        stream.write(content)
+
+
+def _content_with_guard(content: str, path_entry: str) -> str:
+    """Replace owned legacy/current content with one current guard."""
+    guard = render_path_guard(path_entry)
+    cleaned = _without_owned_path(content, path_entry)
+    if cleaned and not cleaned.startswith("\n"):
+        cleaned = "\n" + cleaned
+    return guard + cleaned
+
+
+def _shell_persistence_result(path_entry: str, targets: tuple[Path, ...]) -> Result:
+    """Check that every active shell target contains the exact owned guard."""
+    guard = render_path_guard(path_entry)
+    missing = []
+    failures = []
+    for target in targets:
+        try:
+            content = _read_text(target)
+        except OSError as exc:
+            failures.append(f"{target.name}: {exc}")
+            continue
+        if guard not in content:
+            missing.append(target.name)
+    if failures or missing:
+        detail = failures + [f"missing from {name}" for name in missing]
+        return Result(
+            passed=False,
+            subject=path_entry,
+            message="PATH persistence incomplete: " + "; ".join(detail),
+        )
+    names = ", ".join(target.name for target in targets)
+    return Result(
+        passed=True,
+        subject=path_entry,
+        message=f"guarded PATH entry is persisted in {names}",
+    )
+
+
+def _windows_registry_contains(path_entry: str) -> bool:
+    """Return whether Windows User PATH contains the exact entry."""
+    if os.environ.get("BOOTSTRAP_SKIP_REGISTRY"):
+        return False
+    try:
+        import winreg
+    except ImportError:
+        return False
+    expanded = os.path.expanduser(path_entry).replace("/", "\\")
+    target = expanded.rstrip("\\").lower()
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_READ
+        ) as key:
+            current, _value_type = winreg.QueryValueEx(key, "Path")
+    except (FileNotFoundError, OSError):
+        return False
+    return any(
+        item.rstrip("\\").lower() == target
+        for item in current.split(";")
+        if item
+    )
+
+
+def check_path_entry_persistence(path_entry: str) -> Result:
+    """Check persistent PATH coverage independently of the live process PATH."""
+    if sys.platform == "win32" or "MSYSTEM" in os.environ:
+        if _windows_registry_contains(path_entry):
+            return Result(
+                passed=True,
+                subject=path_entry,
+                message="PATH entry is persisted in Windows User PATH",
+            )
+    home = _NATIVE_PATH_TYPE(_home())
+    active, _inactive = _shell_targets(home)
+    return _shell_persistence_result(path_entry, active)
+
+
 def check_path_entry(path_entry: str) -> Result:
     """Check if a directory is present in PATH.
 
@@ -94,89 +321,77 @@ def check_path_entry(path_entry: str) -> Result:
 def add_path_to_shell_config(path_entry: str) -> Tuple[bool, str]:
     """Persistently add a path entry to shell RC files or Windows User PATH.
 
-    Appends `export PATH="<path>:$PATH"` to the appropriate RC file(s).
+    Writes a marked, runtime-idempotent POSIX guard to every active shell file.
     On Windows, writes the Windows User PATH (registry) instead, so the entry
     is visible to all new processes regardless of shell. Git Bash inherits
     that PATH, so an rc line as well would add the entry a second time in
     every shell; the rc file is written on Windows only when the registry
     write did not persist.
-    Idempotent: skips files/registry where the path is already declared.
+    On macOS the active files are .zshrc, .bashrc, and Bash's effective login
+    file. Inactive Bash login files are cleaned only after every active target
+    verifies persistent coverage.
 
     Returns:
         (success, message) tuple
     """
-    expanded = os.path.expanduser(path_entry)
-
     # On Windows, write to the User PATH registry key (affects all new processes)
     registry_ok = True
     registry_msg = ""
-    failures = []
-    durable = False
+    failures: list[str] = []
     if sys.platform == "win32" or "MSYSTEM" in os.environ:
         registry_ok, registry_msg = _add_path_to_windows_registry(path_entry)
         # A skipped registry write (BOOTSTRAP_SKIP_REGISTRY) persists nothing.
-        durable = registry_ok and not os.environ.get("BOOTSTRAP_SKIP_REGISTRY")
-        if durable:
+        if registry_ok and not os.environ.get("BOOTSTRAP_SKIP_REGISTRY"):
             return True, registry_msg
-        if not registry_ok:
-            failures.append(f"Windows User PATH registry: {registry_msg}")
 
-    # Build portable export line using $HOME where possible
-    home = _home()
-    home_form = _home_relative_path(expanded, home)
-    if home_form is not None:
-        path_expr = f'"{home_form}:$PATH"'
-    else:
-        path_expr = f'"{_shell_path(expanded)}:$PATH"'
-    export_line = f'export PATH={path_expr}'
-
-    # Determine RC files by platform
-    if sys.platform == "darwin":
-        rc_files = [os.path.join(home, ".zshrc"), os.path.join(home, ".bashrc")]
-    else:
-        # Linux and Windows (Git Bash)
-        rc_files = [os.path.join(home, ".bashrc")]
-
-    # Build a slash-normalized form of the $HOME-relative path we'd write,
-    # so the idempotency check matches regardless of whether a previous run
-    # wrote backslashes (native Windows Python) or forward slashes (MSYS/Cygwin
-    # Python). Without this, every run appends a fresh duplicate line.
-    expanded_fwd = _shell_path(expanded)
-    legacy_spellings = {expanded, expanded.replace("\\", "/"), expanded_fwd}
-    home_form = _home_relative_path(expanded, home) or expanded_fwd
-
-    written = []
-    for rc_file in rc_files:
+    home = _NATIVE_PATH_TYPE(_home())
+    active_targets, inactive_targets = _shell_targets(home)
+    changed: list[str] = []
+    for target in active_targets:
         try:
-            if os.path.exists(rc_file):
-                content_fwd = open(rc_file).read().replace("\\", "/")
-                if home_form in content_fwd or any(
-                    spelling in content_fwd for spelling in legacy_spellings
-                ):
-                    durable = True
-                    continue
-            with open(rc_file, "a") as f:
-                f.write(f'\n# Added by bootstrap\n{export_line}\n')
-            written.append(os.path.basename(rc_file))
+            current = _read_text(target)
+            replacement = _content_with_guard(current, path_entry)
+            if replacement != current:
+                _write_text(target, replacement)
+                changed.append(target.name)
         except OSError as exc:
-            failures.append(f"{os.path.basename(rc_file)}: {exc}")
-    if written:
-        durable = True
+            failures.append(f"{target.name}: {exc}")
 
-    parts = []
-    if written:
-        parts.append(f"added to {', '.join(written)}")
-    if registry_msg and registry_ok and not os.environ.get("BOOTSTRAP_SKIP_REGISTRY"):
-        parts.append(registry_msg)
-    if parts:
-        if failures:
-            parts.extend(failures)
-        return True, "; ".join(parts)
-    if durable:
-        return True, "already declared in shell config"
-    if failures:
-        return False, "; ".join(failures)
-    return False, "could not persist PATH in shell config"
+    coverage = _shell_persistence_result(path_entry, active_targets)
+    if failures or not coverage.passed:
+        detail = failures
+        if not coverage.passed:
+            detail.append(coverage.message)
+        return False, "; ".join(detail)
+
+    # Cleanup is migration, not revocation. It applies only to the currently
+    # declared entry and only after replacement persistence is complete.
+    active_identities = {_file_identity(target) for target in active_targets}
+    cleaned: list[str] = []
+    cleanup_failures: list[str] = []
+    for target in inactive_targets:
+        if _file_identity(target) in active_identities:
+            continue
+        try:
+            current = _read_text(target)
+            replacement = _without_owned_path(current, path_entry)
+            if replacement != current:
+                _write_text(target, replacement)
+                cleaned.append(target.name)
+        except OSError as exc:
+            cleanup_failures.append(f"{target.name}: {exc}")
+
+    if cleanup_failures:
+        return False, "inactive login cleanup failed: " + "; ".join(cleanup_failures)
+
+    parts = [coverage.message]
+    if changed:
+        parts.append(f"updated {', '.join(changed)}")
+    if cleaned:
+        parts.append(f"cleaned {', '.join(cleaned)}")
+    if registry_msg and not registry_ok:
+        parts.append(f"Windows User PATH registry: {registry_msg}")
+    return True, "; ".join(parts)
 
 
 def _add_path_to_windows_registry(path_entry: str) -> Tuple[bool, str]:

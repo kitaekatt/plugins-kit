@@ -206,11 +206,13 @@ The next bootstrap pass adds the dot-source line to the profile it finds.
 
 ## Gaps not covered
 
-- **zsh on Linux, and login-only bash profiles.** Bootstrap's rc-file writer
-  only touches the files it always has: `~/.bashrc` everywhere, and
-  `~/.zshrc` on macOS. A Linux zsh user, or a bash setup that reads only a
-  login profile, gets neither name in a fresh terminal. Add the line by hand,
-  once, to whichever file that shell actually sources:
+- **zsh on Linux, and login-only bash interpreter exports.** Interpreter
+  variables and the per-directory hook still target `~/.bashrc` everywhere
+  and `~/.zshrc` on macOS. A Linux zsh user, or a Bash setup that reads only a
+  login profile, gets neither interpreter name in a fresh terminal. Declared
+  `path_entries` are separate: macOS Bash login files receive their guarded
+  PATH blocks, while Linux login-only Bash remains unsupported. Add the hook
+  line by hand, once, to whichever file that shell actually sources:
 
       [ -f "$HOME/.claude/plugins/data/plugins-kit/bootstrap/shell/project-python.sh" ] && . "$HOME/.claude/plugins/data/plugins-kit/bootstrap/shell/project-python.sh"
 

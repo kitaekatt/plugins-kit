@@ -38,7 +38,7 @@ from test_registrations import LEGACY, interpreter_violations
 
 REPO = Path(__file__).resolve().parents[2]
 PLUGIN = REPO / "plugins" / "llm-kit"
-LIB = PLUGIN / "lib"
+LIB = REPO / "packages" / "katsoft-llm-kit" / "src"
 REFERENCES = PLUGIN / "references"
 CLAUDE_MD = PLUGIN / "CLAUDE.md"
 README = PLUGIN / "README.md"
@@ -133,7 +133,7 @@ def file_index() -> tuple[frozenset[str], frozenset[str]]:
 
 PATH_ROOTS = {
     "lib", "scripts", "bin", "skills", "references", "agents", "workflows", "contract",
-    "docs", "tests", "plugins", "bootstrap",
+    "docs", "tests", "plugins", "packages", "bootstrap",
 }
 BARE_EXTS = {"py", "md", "sh", "js", "cmd"}
 KNOWN_BARE_JSON = {"bootstrap.json", "public-surface.json", "plugin.json"}
@@ -430,8 +430,8 @@ BOOTSTRAP_EXPORTED = {"LLM_KIT_ROOT"}
 @lru_cache(maxsize=1)
 def plugin_source_text() -> str:
     chunks = []
-    for top in ("lib", "scripts", "bin"):
-        for path in sorted((PLUGIN / top).rglob("*")):
+    for base in (LIB, PLUGIN / "scripts", PLUGIN / "bin"):
+        for path in sorted(base.rglob("*")):
             if path.is_file() and path.suffix in {".py", ".sh", ".cmd", ""} and "__pycache__" not in path.parts:
                 chunks.append(path.read_text(encoding="utf-8", errors="replace"))
     for name in ("custom_bootstrap.py", "bootstrap.json"):
@@ -566,7 +566,7 @@ class TestCheckersCanFail:
         assert path_problems("see `references/no-such-doc.md`", PLUGIN)
         assert path_problems("see [x](no-such-doc.md)", REFERENCES)
         assert path_problems("run `no_such_script.py`", PLUGIN)
-        assert not path_problems("see `lib/llm_kit/completion/halt.py` and [y](jobs.md)", REFERENCES)
+        assert not path_problems("see `packages/katsoft-llm-kit/src/llm_kit/completion/halt.py` and [y](jobs.md)", REFERENCES)
         assert not path_problems("see `README.md` and `~/.claude/x.py`", PLUGIN)
 
     def test_a_missing_module_or_symbol_is_reported(self) -> None:

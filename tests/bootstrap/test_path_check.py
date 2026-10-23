@@ -14,8 +14,22 @@ from bootstrap_lib.path_check import (
     _path_diagnostic,
     add_path_to_shell_config,
     check_path_entry,
+    check_path_entry_persistence,
+    render_path_guard,
 )
 from test_support.fake_winreg import FakeWinreg
+
+
+@pytest.fixture
+def macos_home(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.delenv("MSYSTEM", raising=False)
+    monkeypatch.setattr("bootstrap_lib.path_check.sys.platform", "darwin")
+    monkeypatch.setattr("bootstrap_lib.path_check.os.name", "posix")
+    return home
 
 
 class TestHomeResolution:
@@ -271,7 +285,10 @@ class TestAddPathToShellConfigWindowsIntegration:
 
         assert ok is True
         assert "registry" in msg
-        assert 'export PATH="/c/Tools/bin:$PATH"' in (tmp_path / ".bashrc").read_text()
+        assert (
+            'export PATH="/c/Tools/bin${PATH:+:${PATH}}"'
+            in (tmp_path / ".bashrc").read_text()
+        )
 
     @patch("bootstrap_lib.path_check._add_path_to_windows_registry")
     def test_skips_registry_on_non_windows(self, mock_registry, tmp_path):
@@ -349,7 +366,7 @@ class TestAddPathToShellConfigIdempotency:
         expected = str(sibling).replace("\\", "/")
         if len(expected) >= 2 and expected[1] == ":":
             expected = f"/{expected[0].lower()}{expected[2:]}"
-        assert f'export PATH="{expected}:$PATH"' in content
+        assert f'export PATH="{expected}${{PATH:+:${{PATH}}}}"' in content
         assert "$HOMEby" not in content
 
     def test_idempotent_with_forward_slash_form_already_present(self, tmp_path, monkeypatch):
@@ -392,7 +409,10 @@ class TestAddPathToShellConfigIdempotency:
 
         assert ok is True
         line = (tmp_path / ".bashrc").read_text()
-        assert 'export PATH="/c/Program Files/Tools/bin:$PATH"' in line
+        assert (
+            'export PATH="/c/Program Files/Tools/bin${PATH:+:${PATH}}"'
+            in line
+        )
 
     def test_nonhome_windows_export_is_one_real_git_bash_path_entry(
         self, tmp_path, monkeypatch
@@ -430,7 +450,7 @@ class TestAddPathToShellConfigIdempotency:
         assert result.returncode == 0
 
     @pytest.mark.parametrize("legacy", [r"D:\Tools\bin", "D:/Tools/bin"])
-    def test_legacy_nonhome_drive_declaration_is_idempotent(
+    def test_unmarked_legacy_nonhome_drive_declaration_is_preserved(
         self, tmp_path, monkeypatch, legacy
     ):
         home = tmp_path / "home"
@@ -445,7 +465,9 @@ class TestAddPathToShellConfigIdempotency:
         ok, _message = add_path_to_shell_config(legacy)
 
         assert ok is True
-        assert (home / ".bashrc").read_text().count("export PATH=") == 1
+        content = (home / ".bashrc").read_text()
+        assert content.count("export PATH=") == 2
+        assert f'export PATH="{legacy}:$PATH"' in content
 
     def test_repeated_nonhome_windows_write_is_idempotent(self, tmp_path, monkeypatch):
         home = tmp_path / "home"
@@ -459,3 +481,220 @@ class TestAddPathToShellConfigIdempotency:
             assert ok is True
 
         assert (home / ".bashrc").read_text().count("export PATH=") == 1
+
+
+class TestMacosLoginPathPersistence:
+    def test_exact_guard_rendering(self, macos_home):
+        assert render_path_guard("~/.local/bin") == (
+            "# >>> bootstrap PATH 8b2d2ab25c045590 >>>\n"
+            'case ":${PATH-}:" in\n'
+            '    *":${HOME}/.local/bin:"*) ;;\n'
+            '    *) export PATH="${HOME}/.local/bin${PATH:+:${PATH}}" ;;\n'
+            "esac\n"
+            "# <<< bootstrap PATH 8b2d2ab25c045590 <<<\n"
+        )
+
+    def test_profile_transition_migrates_owned_block(self, macos_home):
+        entry = macos_home / "bin"
+        entry.mkdir()
+        ok, _message = add_path_to_shell_config(str(entry))
+        assert ok is True
+        profile = macos_home / ".profile"
+        profile.write_text(profile.read_text() + "user_setting=kept\n")
+        bash_profile = macos_home / ".bash_profile"
+        bash_profile.write_text("login_setting=kept\n")
+
+        ok, message = add_path_to_shell_config(str(entry))
+
+        assert ok is True
+        assert "cleaned .profile" in message
+        assert "bootstrap PATH" in bash_profile.read_text()
+        assert "login_setting=kept" in bash_profile.read_text()
+        assert "bootstrap PATH" not in profile.read_text()
+        assert "user_setting=kept" in profile.read_text()
+
+    def test_profile_transition_cleans_inactive_legacy_pair(self, macos_home):
+        entry = macos_home / "legacy bin"
+        entry.mkdir()
+        profile = macos_home / ".profile"
+        profile.write_text(
+            "# Added by bootstrap\n"
+            'export PATH="$HOME/legacy bin:$PATH"\n'
+            "user_setting=kept\n"
+        )
+        (macos_home / ".bash_profile").write_text("# active login\n")
+
+        ok, _message = add_path_to_shell_config(str(entry))
+
+        assert ok is True
+        assert "# Added by bootstrap" not in profile.read_text()
+        assert 'export PATH="$HOME/legacy bin:$PATH"' not in profile.read_text()
+        assert "user_setting=kept" in profile.read_text()
+
+    def test_conditional_source_and_early_return_cannot_hide_path(
+        self, macos_home
+    ):
+        entry = macos_home / "bin"
+        entry.mkdir()
+        bash_profile = macos_home / ".bash_profile"
+        bash_profile.write_text(
+            'if false; then . "$HOME/.bashrc"; fi\n'
+            "return 0\n"
+        )
+
+        ok, _message = add_path_to_shell_config(str(entry))
+
+        assert ok is True
+        content = bash_profile.read_text()
+        assert content.index("bootstrap PATH") < content.index("return 0")
+
+    def test_duplicate_bashrc_sourcing_keeps_one_runtime_entry(
+        self, macos_home
+    ):
+        entry = macos_home / "bin"
+        entry.mkdir()
+        (macos_home / ".bash_profile").write_text(
+            '. "$HOME/.bashrc"\n. "$HOME/.bashrc"\n'
+        )
+        ok, _message = add_path_to_shell_config(str(entry))
+        assert ok is True
+
+        result = subprocess.run(
+            [
+                "/bin/bash",
+                "--noprofile",
+                "--norc",
+                "-c",
+                '. "$HOME/.bash_profile"; printf "%s" "$PATH"',
+            ],
+            capture_output=True,
+            text=True,
+            env={
+                "HOME": str(macos_home),
+                "USERPROFILE": str(macos_home),
+                "PATH": "/usr/bin",
+            },
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.split(":").count(str(entry)) == 1
+
+    def test_interactive_login_initializes_path(self, macos_home):
+        entry = macos_home / "bin"
+        entry.mkdir()
+        (macos_home / ".bash_profile").write_text("# login\n")
+        ok, _message = add_path_to_shell_config(str(entry))
+        assert ok is True
+
+        result = subprocess.run(
+            [
+                "/bin/bash",
+                "--login",
+                "--norc",
+                "-i",
+                "-c",
+                'case ":$PATH:" in *":$HOME/bin:"*) exit 0;; *) exit 9;; esac',
+            ],
+            capture_output=True,
+            text=True,
+            env={
+                "HOME": str(macos_home),
+                "USERPROFILE": str(macos_home),
+                "PATH": "/usr/bin:/bin",
+            },
+        )
+
+        assert result.returncode == 0, result.stderr
+
+    @pytest.mark.parametrize("shell", ["/bin/sh", "/bin/bash"])
+    def test_guard_is_posix_safe_for_literal_characters_and_unset_path(
+        self, macos_home, shell
+    ):
+        entry = macos_home / 'bin space\'"$`[x]*'
+        entry.mkdir()
+        ok, _message = add_path_to_shell_config(str(entry))
+        assert ok is True
+        env = {
+            "HOME": str(macos_home),
+            "USERPROFILE": str(macos_home),
+        }
+
+        result = subprocess.run(
+            [
+                shell,
+                "-c",
+                '. "$HOME/.profile"; . "$HOME/.profile"; printf "%s" "$PATH"',
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.split(":")[0] == str(entry)
+        assert result.stdout.split(":").count(str(entry)) == 1
+
+    def test_active_legacy_exports_are_migrated(self, macos_home):
+        entry = macos_home / "legacy bin"
+        entry.mkdir()
+        legacy = (
+            "# Added by bootstrap\n"
+            'export PATH="$HOME/legacy bin:$PATH"\n'
+        )
+        for name in (".bashrc", ".zshrc", ".profile"):
+            (macos_home / name).write_text(legacy)
+
+        ok, _message = add_path_to_shell_config(str(entry))
+
+        assert ok is True
+        for name in (".bashrc", ".zshrc", ".profile"):
+            content = (macos_home / name).read_text()
+            assert "# Added by bootstrap" not in content
+            assert content.count("# >>> bootstrap PATH") == 1
+
+    def test_comment_only_path_mention_is_not_persistence(self, macos_home):
+        entry = macos_home / "mentioned"
+        for name in (".bashrc", ".zshrc", ".profile"):
+            (macos_home / name).write_text(f"# PATH note: {entry}\n")
+
+        result = check_path_entry_persistence(str(entry))
+
+        assert result.passed is False
+        assert "missing from" in result.message
+
+    def test_live_and_persistent_path_logs_ok(self, macos_home, monkeypatch):
+        entry = macos_home / "bin"
+        entry.mkdir()
+        ok, _message = add_path_to_shell_config(str(entry))
+        assert ok is True
+        monkeypatch.setenv("PATH", os.pathsep.join((str(entry), "/usr/bin")))
+        from bootstrap_lib import engine
+
+        actions, ok_entries = [], []
+        engine._process_path_entries([str(entry)], "", actions, ok_entries)
+
+        assert actions == []
+        assert len(ok_entries) == 1
+        assert "is in PATH" in ok_entries[0]
+        assert "persisted" in ok_entries[0]
+
+    def test_symlink_target_and_alias_are_preserved(self, macos_home):
+        entry = macos_home / "bin"
+        entry.mkdir()
+        shared = macos_home / "shared-login"
+        shared.write_text("user_setting=kept\n")
+        bash_profile = macos_home / ".bash_profile"
+        bashrc = macos_home / ".bashrc"
+        profile = macos_home / ".profile"
+        bash_profile.symlink_to(shared)
+        bashrc.symlink_to(shared)
+        profile.symlink_to(shared)
+
+        ok, _message = add_path_to_shell_config(str(entry))
+
+        assert ok is True
+        assert bash_profile.is_symlink()
+        assert bashrc.is_symlink()
+        assert profile.is_symlink()
+        assert shared.read_text().count("# >>> bootstrap PATH") == 1
+        assert "user_setting=kept" in shared.read_text()

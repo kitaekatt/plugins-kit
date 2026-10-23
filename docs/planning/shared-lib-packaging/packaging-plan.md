@@ -21,6 +21,12 @@ External consumers (databench, spiritcrossing) install them into their own `.ven
 and no plugins-kit. This repo's plugin venvs later install the same packages, which replaces the
 `shared_libs` `.pth` mechanism instead of living beside it. That plugin migration is not a priority.
 
+## Library goal
+
+The user's ruling, 2026-10-23, verbatim:
+
+> conceptually we want the libraries to be usable by someone who isn't using an AI harness. What I mean by this is, we developed these plugins in a claude-centric manner. Part of why we are moving to a library model is so claude usage isn't required to use the libraries.
+
 ## Consumers
 
 | Consumer | Install target | Reaches |

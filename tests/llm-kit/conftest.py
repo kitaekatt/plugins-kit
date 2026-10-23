@@ -13,9 +13,12 @@ PLUGIN_ROOT = os.path.normpath(
     os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, "plugins", "llm-kit")
 )
 
-# lib/ for `llm_kit.*`. Do NOT add `scripts/`: it holds the repoint generator,
-# which is loaded by path, never imported by name.
-_LIB = os.path.join(PLUGIN_ROOT, "lib")
+# The katsoft-llm-kit source root for `llm_kit.*` (the plugin holds no library
+# source). Do NOT add `scripts/`: it holds the repoint generator, which is loaded
+# by path, never imported by name.
+_LIB = os.path.normpath(
+    os.path.join(PLUGIN_ROOT, os.pardir, os.pardir, "packages", "katsoft-llm-kit", "src")
+)
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 

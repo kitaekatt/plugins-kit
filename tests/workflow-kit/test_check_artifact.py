@@ -21,7 +21,7 @@ import pytest
 
 _REPO = Path(__file__).resolve().parents[2]
 _SCRIPT = _REPO / "plugins" / "workflow-kit" / "scripts" / "check_artifact.py"
-_KIT_LIB = _REPO / "plugins" / "llm-kit" / "lib"
+_KIT_LIB = _REPO / "packages" / "katsoft-llm-kit" / "src"
 
 
 def _load():

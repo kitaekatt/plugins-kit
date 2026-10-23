@@ -104,7 +104,7 @@ def test_real_seam_backend_options_temperature_defaults_to_none(kit):
 # non-transport id is skipped silently; nothing usable is the typed floor,
 # propagated as exit 2 with the itemised dispositions in the status file.
 # --------------------------------------------------------------------------- #
-_KIT_LIB = Path(__file__).resolve().parents[2] / "plugins" / "llm-kit" / "lib"
+_KIT_LIB = Path(__file__).resolve().parents[2] / "packages" / "katsoft-llm-kit" / "src"
 
 
 class _Resp:

@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 LEGACY_FILE = (
     ROOT / "plugins" / "content-pipeline-kit" / "lib" / "content_pipeline" / "cli" / "scaffold.py"
 )
-LIB = ROOT / "plugins" / "llm-kit" / "lib"
+LIB = ROOT / "packages" / "katsoft-llm-kit" / "src"
 
 
 def _load_legacy() -> Any:

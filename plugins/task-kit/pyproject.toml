@@ -1,6 +1,6 @@
 [project]
 name = "task-kit"
-version = "0.19.0"
+version = "0.19.1"
 description = "Runtime dependencies for the task-kit task skill and CLI, including YAML support."
 requires-python = ">=3.12"
 dependencies = [

@@ -1,9 +1,10 @@
 """The contract modules still behave as the bootstrap_lib modules did at a1257278.
 
 The goldens are literals captured once from those modules
-(tests/contracts/contract_goldens.py). Both the canonical package and the
-bootstrap_lib copies are run through the same fixed cases and must reproduce
-them: messages for bad inputs, exception classes, constants, canonical bytes.
+(tests/contracts/contract_goldens.py). The canonical package, and the
+bootstrap_lib aliases of it, are run through the same fixed cases and must
+reproduce them: messages for bad inputs, exception classes, constants,
+canonical bytes.
 """
 import ast
 from pathlib import Path
@@ -17,8 +18,8 @@ def test_canonical_package_matches_goldens(canonical, tmp_path):
     assert support.golden_mismatches(canonical, tmp_path) == []
 
 
-def test_bootstrap_lib_copy_matches_goldens(bootstrap_copy, tmp_path):
-    assert support.golden_mismatches(bootstrap_copy, tmp_path) == []
+def test_bootstrap_lib_alias_matches_goldens(bootstrap_alias, tmp_path):
+    assert support.golden_mismatches(bootstrap_alias, tmp_path) == []
 
 
 def test_canonical_modules_come_from_the_source_tree(canonical):

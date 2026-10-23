@@ -11,7 +11,7 @@ is the generalized hand-off folder). The shared vocabulary -- `work-unit`,
 `State A / State B`, `orientation moment`, `self-contained briefs`,
 `hand-off baton`, `provenance triad` -- is canonical in
 the communication framework in the awesome-kit:verbose-updates skill
-(`references/communication-framework.md`). A worked example of a fully-populated CLAUDE.md
+(`../../../../awesome-kit/skills/verbose-updates/references/communication-framework.md`). A worked example of a fully-populated CLAUDE.md
 is at `example-claude-md.md` -- read it if the template below feels abstract.
 
 ## The core idea: two gates

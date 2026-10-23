@@ -16,7 +16,7 @@ Where qualified names are persisted
 
 A qualified skill, agent or workflow name (``<plugin>:<name>``) is persisted
 only by a store that records which registration was selected. Measured over
-``plugins/llm-kit/lib/llm_kit``:
+``packages/katsoft-llm-kit/src/llm_kit``:
 
 * the job ledger (schema 12) and the pipeline execution store (schema 10) hold
   ids, states, tokens, endpoints, models, JSON payloads and event rows; no
@@ -75,7 +75,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 LLM_KIT = REPO / "plugins" / "llm-kit"
-LIB = LLM_KIT / "lib" / "llm_kit"
+LIB = REPO / "packages" / "katsoft-llm-kit" / "src" / "llm_kit"
 
 # Spelled as fragments so that this file does not match the scan for old
 # qualified references (tests/llm-kit/ is exempt from it, but keep it honest).

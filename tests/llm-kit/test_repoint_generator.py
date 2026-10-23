@@ -233,10 +233,10 @@ def test_slash_paths_map_a_module_file_to_its_final_file(gen):
         "D = 'plugins/job-kit/lib/job_kit/sub/__init__.py'\n"
     ))
     assert text == (
-        "A = 'plugins/llm-kit/lib/llm_kit/final/thing.py'\n"
-        "B = 'plugins/llm-kit/lib'\n"
-        "C = 'plugins/llm-kit/lib/llm_kit'\n"
-        "D = 'plugins/llm-kit/lib/llm_kit/final/sub/__init__.py'\n"
+        "A = 'packages/katsoft-llm-kit/src/llm_kit/final/thing.py'\n"
+        "B = 'packages/katsoft-llm-kit/src'\n"
+        "C = 'packages/katsoft-llm-kit/src/llm_kit'\n"
+        "D = 'packages/katsoft-llm-kit/src/llm_kit/final/sub/__init__.py'\n"
     )
     assert classes == ["path-string", "prose-kept"] and bad == []
 
@@ -254,6 +254,22 @@ def test_a_slash_path_with_no_final_file_is_collected_unless_overridden(gen):
 def test_plugin_directory_segments_point_at_llm_kit(gen):
     text, classes, _ = _rewrite(gen, "from pathlib import Path\nP = Path('r') / 'plugins' / 'job-kit' / 'bootstrap.json'\n")
     assert "'plugins' / 'llm-kit'" in text and classes == ["path-plugin-dir"]
+
+
+def test_plugin_lib_segments_point_at_the_package_source(gen):
+    text, classes, bad = _rewrite(gen, (
+        "from pathlib import Path\n"
+        "P = Path('r') / 'plugins' / 'job-kit' / 'lib' / 'job_kit' / 'store.py'\n"
+        "Q = Path('r') / 'plugins' / 'job-kit' / 'lib'\n"
+        "R = Path(plugin) / 'lib' / 'job_kit'\n"
+    ))
+    assert text == (
+        "from pathlib import Path\n"
+        "P = Path('r') / 'packages' / 'katsoft-llm-kit' / 'src' / 'llm_kit' / 'store.py'\n"
+        "Q = Path('r') / 'packages' / 'katsoft-llm-kit' / 'src'\n"
+        "R = Path(plugin) / '..' / '..' / 'packages' / 'katsoft-llm-kit' / 'src' / 'llm_kit'\n"
+    )
+    assert "path-package-src" in classes and bad == []
 
 
 def test_a_declared_skip_is_injected_on_the_named_test(gen):
@@ -416,18 +432,18 @@ def test_check_reports_a_row_whose_final_module_does_not_exist(gen, tmp_path, mo
     legacy.write_bytes(b"A = 1\n")
     mapping = {"schema": 2, "modules": {f"{LEGACY_PKG}/thing.py": {
         "kind": "module", "final": "llm_kit.final.thing", "legacy_sha256": gen._sha(b"A = 1\n")}}}
-    (tmp_path / "plugins/llm-kit/lib/llm_kit").mkdir(parents=True)
+    (tmp_path / "packages/katsoft-llm-kit/src/llm_kit").mkdir(parents=True)
     ledger = tmp_path / "ledger.json"
     ledger.write_text(json.dumps({"schema": 1, "entries": []}), encoding="utf-8")
     monkeypatch.setattr(gen, "REPO", tmp_path)
-    monkeypatch.setattr(gen, "LLM_KIT_LIB", tmp_path / "plugins/llm-kit/lib")
+    monkeypatch.setattr(gen, "LLM_KIT_LIB", tmp_path / "packages/katsoft-llm-kit/src")
     monkeypatch.setattr(gen, "PORTING_LEDGER", ledger)
     monkeypatch.setattr(gen, "load_map", lambda: mapping)
     monkeypatch.setattr(gen, "legacy_package_files", lambda _m: [
         {"legacy": f"{LEGACY_PKG}/thing.py", "package": "job_kit", "state": "module"}])
     problems = gen.check_problems()
     assert any("final module llm_kit.final.thing does not exist" in p for p in problems), problems
-    final = tmp_path / "plugins/llm-kit/lib/llm_kit/final/thing.py"
+    final = tmp_path / "packages/katsoft-llm-kit/src/llm_kit/final/thing.py"
     final.parent.mkdir(parents=True)
     final.write_bytes(b"A = 1\n")
     assert gen.check_problems() == []
@@ -440,13 +456,13 @@ def test_check_reports_a_facade_name_the_final_module_does_not_bind(gen, tmp_pat
     mapping = {"schema": 2, "modules": {path: {
         "kind": "facade-names", "names": {"x": ["llm_kit.final.thing", "missing"]},
         "legacy_sha256": gen._sha(b"")}}}
-    final = tmp_path / "plugins/llm-kit/lib/llm_kit/final/thing.py"
+    final = tmp_path / "packages/katsoft-llm-kit/src/llm_kit/final/thing.py"
     final.parent.mkdir(parents=True)
     final.write_bytes(b"present = 1\n")
     ledger = tmp_path / "ledger.json"
     ledger.write_text(json.dumps({"schema": 1, "entries": []}), encoding="utf-8")
     monkeypatch.setattr(gen, "REPO", tmp_path)
-    monkeypatch.setattr(gen, "LLM_KIT_LIB", tmp_path / "plugins/llm-kit/lib")
+    monkeypatch.setattr(gen, "LLM_KIT_LIB", tmp_path / "packages/katsoft-llm-kit/src")
     monkeypatch.setattr(gen, "PORTING_LEDGER", ledger)
     monkeypatch.setattr(gen, "load_map", lambda: mapping)
     monkeypatch.setattr(gen, "legacy_package_files", lambda _m: [

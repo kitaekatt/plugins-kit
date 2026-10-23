@@ -494,7 +494,9 @@ coin: consumers cannot pin, so a breaking change to a linked lib reaches all of
 them at once.
 
 `llm_kit` and `katsoft_contracts` are the exception: they are the released
-`katsoft-llm-kit` and `katsoft-contracts` packages (`packages/`), and a
+`katsoft-llm-kit` and `katsoft-contracts` packages (`packages/`; `llm_kit`'s
+source is `packages/katsoft-llm-kit/src/llm_kit/`), llm-kit publishes no shared
+lib (existing `_shared_libs/llm_kit` trees stay frozen), and a
 consumer installs them into its own venv from a requirement of the exact form
 `katsoft-llm-kit[<extras>]>=A.B,<N` in its `pyproject.toml`. Bootstrap holds the
 venv at the highest released version the requirement admits
@@ -505,7 +507,10 @@ probe.
 Publish ordering: bootstrap must ship before or with a consumer that needs a
 newer `bootstrap_lib` symbol or the 0.160.0 package handling (every consumer of
 `katsoft-llm-kit` sets `requires_bootstrap` to 0.160.0), because `bootstrap_lib`
-resolves to the INSTALLED copy via .pth, not the dev tree. A package
+resolves to the INSTALLED copy via .pth, not the dev tree. A
+`bootstrap_lib` contract-module import (`execution_event`, `interrupt_contract`,
+`model_declaration`; bootstrap 0.161.0) also needs `katsoft-contracts` in the
+importing venv. A package
 consumer's venv resolves `llm_kit` from the released wheel, so a library change
 reaches it only after the package is released.
 
@@ -563,8 +568,9 @@ stdlib-only and generic over every backend, duplicating `resolve_cli` (three
 lines, trusted config argv, no caller-supplied path) rather than coupling a
 renderer to a codex-specific module. Change both copies together.
 
-`bootstrap_lib/interrupt_contract.py` is the one place the durable-interrupt
-rules execute for both job-kit and content-pipeline-kit: the request and
+The durable-interrupt rules execute in `katsoft_contracts.interrupt_contract`,
+which `bootstrap_lib/interrupt_contract.py` aliases (module identity, no copy), for
+both job-kit and content-pipeline-kit: the request and
 resolution envelopes, the size and expiry limits, answer validation, the
 replay test, expiry arithmetic and the resolution document. It also defines the
 lapse rule; content-pipeline-kit calls it when it records an expiry, while
@@ -798,10 +804,10 @@ copies: `git-kit/scripts`, `p4-kit/scripts`, `skills-kit/scripts`,
 `unreal-kit/lib`, `hue-kit/scripts`, `job-kit/lib`,
 `task-kit/skills/task/scripts`,
 `awesome-kit/skills/orchestrate/scripts`,
-`llm-scripting-kit/lib/llm_scripting_kit`, `llm-kit/lib/llm_kit`, `workflow-kit/scripts`,
+`llm-scripting-kit/lib/llm_scripting_kit`, `llm-kit/bin`, `packages/katsoft-llm-kit/src/llm_kit`, `workflow-kit/scripts`,
 `pdf-kit/skills/html-pdf/scripts`.
 
-**The test globs `plugins/**/bootstrap_guard.py`, so it is the authority on that
+**The test globs `plugins/**/bootstrap_guard.py` and `packages/**/bootstrap_guard.py`, so it is the authority on that
 list and this prose is not.** Sync by running the glob, never by working through
 the names above: two copies (`hue-kit`, `awesome-kit/skills/orchestrate`) were
 added without the list being updated, so an edit propagated by hand to the five

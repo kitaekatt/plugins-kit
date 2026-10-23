@@ -8,7 +8,7 @@
       "rewrite_classes": [
         "import",
         "module-string",
-        "path-plugin-dir"
+        "path-package-src"
       ],
       "collection_count": 18,
       "baseline_failures": []
@@ -30,7 +30,7 @@
       "rewrite_classes": [
         "import",
         "module-string",
-        "path-plugin-dir",
+        "path-package-src",
         "prose-kept"
       ],
       "collection_count": 10,
@@ -210,7 +210,7 @@
       "rewrite_classes": [
         "import",
         "module-string",
-        "path-plugin-dir",
+        "path-package-src",
         "prose-kept"
       ],
       "collection_count": 33,
@@ -223,7 +223,7 @@
       "rewrite_classes": [
         "code-string",
         "import",
-        "path-plugin-dir"
+        "path-package-src"
       ],
       "collection_count": 158,
       "baseline_failures": []
@@ -255,7 +255,7 @@
       "rewrite_classes": [
         "import",
         "module-string",
-        "path-plugin-dir",
+        "path-package-src",
         "prose-kept"
       ],
       "collection_count": 14,
@@ -268,7 +268,7 @@
       "rewrite_classes": [
         "import",
         "module-string",
-        "path-plugin-dir",
+        "path-package-src",
         "prose-kept"
       ],
       "collection_count": 46,
@@ -281,6 +281,7 @@
       "rewrite_classes": [
         "import",
         "module-string",
+        "path-package-src",
         "path-plugin-dir",
         "prose-kept",
         "text-edit",
@@ -318,7 +319,7 @@
       "rewrite_classes": [
         "import",
         "module-string",
-        "path-plugin-dir",
+        "path-package-src",
         "prose-kept",
         "text-edit"
       ],
@@ -332,7 +333,7 @@
       "rewrite_classes": [
         "import",
         "module-string",
-        "path-plugin-dir",
+        "path-package-src",
         "prose-kept"
       ],
       "collection_count": 22,
@@ -345,7 +346,7 @@
       "rewrite_classes": [
         "import",
         "module-string",
-        "path-plugin-dir",
+        "path-package-src",
         "prose-kept"
       ],
       "collection_count": 81,
@@ -360,6 +361,7 @@
         "import",
         "module-string",
         "named-message",
+        "path-package-src",
         "path-plugin-dir",
         "prose-kept",
         "text-edit",
@@ -391,7 +393,7 @@
       "rewrite_classes": [
         "code-string",
         "import",
-        "path-plugin-dir"
+        "path-package-src"
       ],
       "collection_count": 45,
       "baseline_failures": []
@@ -413,7 +415,7 @@
       "rewrite_classes": [
         "code-string",
         "import",
-        "path-plugin-dir"
+        "path-package-src"
       ],
       "collection_count": 61,
       "baseline_failures": []
@@ -465,7 +467,7 @@
       "rewrite_classes": [
         "code-string",
         "import",
-        "path-plugin-dir"
+        "path-package-src"
       ],
       "collection_count": 23,
       "baseline_failures": []
@@ -485,8 +487,7 @@
       "disposition": "rewrite",
       "reason": "Re-pointed at llm-kit's final module names: lib/<pkg> path to the llm_kit tree, plugins/<kit> path to plugins/llm-kit, test_text_edits rows; 1 test_text_edits row(s) in repoint-map.json adapt the test to the final layout.",
       "rewrite_classes": [
-        "path-package-dir",
-        "path-plugin-dir",
+        "path-package-src",
         "text-edit"
       ],
       "collection_count": 1,
@@ -510,7 +511,7 @@
         "declared-skip",
         "import",
         "module-string",
-        "path-plugin-dir",
+        "path-package-src",
         "prose-kept",
         "text-edit",
         "wording-edit"
@@ -584,7 +585,7 @@
         "declared-skip",
         "import",
         "module-string",
-        "path-plugin-dir"
+        "path-package-src"
       ],
       "collection_count": 96,
       "baseline_failures": [],
@@ -629,7 +630,7 @@
         "declared-skip",
         "import",
         "module-string",
-        "path-plugin-dir"
+        "path-package-src"
       ],
       "collection_count": 106,
       "baseline_failures": [],
@@ -648,7 +649,7 @@
         "code-string",
         "declared-skip",
         "import",
-        "path-plugin-dir"
+        "path-package-src"
       ],
       "collection_count": 10,
       "baseline_failures": [],
@@ -671,7 +672,7 @@
       "rewrite_classes": [
         "code-string",
         "import",
-        "path-plugin-dir"
+        "path-package-src"
       ],
       "collection_count": 37,
       "baseline_failures": []
@@ -683,7 +684,7 @@
       "rewrite_classes": [
         "code-string",
         "import",
-        "path-plugin-dir"
+        "path-package-src"
       ],
       "collection_count": 43,
       "baseline_failures": []
@@ -696,7 +697,7 @@
         "declared-skip",
         "import",
         "module-string",
-        "path-plugin-dir",
+        "path-package-src",
         "prose-kept",
         "wording-edit"
       ],
@@ -760,8 +761,7 @@
       "rewrite_classes": [
         "import",
         "module-string",
-        "path-package-dir",
-        "path-plugin-dir",
+        "path-package-src",
         "prose-kept",
         "text-edit"
       ],
@@ -775,8 +775,7 @@
       "rewrite_classes": [
         "import",
         "module-string",
-        "path-package-dir",
-        "path-plugin-dir",
+        "path-package-src",
         "prose-kept",
         "text-edit"
       ],
@@ -968,7 +967,7 @@
       "rewrite_classes": [
         "import",
         "module-string",
-        "path-plugin-dir",
+        "path-package-src",
         "prose-kept"
       ],
       "collection_count": 55,

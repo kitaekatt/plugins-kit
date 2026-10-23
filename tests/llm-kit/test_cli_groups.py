@@ -36,7 +36,7 @@ from test_cli_harness import (  # noqa: F401 -- fixtures
     run,
 )
 
-LIB = REPO / "plugins" / "llm-kit" / "lib"
+LIB = REPO / "packages" / "katsoft-llm-kit" / "src"
 
 
 def _choices(parser: Any) -> set[str]:

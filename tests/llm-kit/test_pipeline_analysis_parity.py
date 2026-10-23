@@ -23,7 +23,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 LEGACY_LIB = REPO / "plugins" / "content-pipeline-kit" / "lib"
 LEGACY_ROOT = LEGACY_LIB / "content_pipeline"
-FINAL_ROOT = REPO / "plugins" / "llm-kit" / "lib" / "llm_kit" / "pipeline" / "analysis"
+FINAL_ROOT = REPO / "packages" / "katsoft-llm-kit" / "src" / "llm_kit" / "pipeline" / "analysis"
 
 FILES = [
     "audit/__init__.py",

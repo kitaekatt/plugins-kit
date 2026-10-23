@@ -22,6 +22,11 @@ BOOTSTRAP = json.loads((PLUGIN_ROOT / "bootstrap.json").read_text(encoding="utf-
 PYPROJECT = tomllib.loads((PLUGIN_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 SKILL = (PLUGIN_ROOT / "skills" / "task" / "SKILL.md").read_text(encoding="utf-8")
 
+EXPECTED_CAPABILITY_IDS = (
+    "init", "validate", "work", "update", "hand_off", "close", "reopen", "archive", "delete", "move",
+    "list", "triage", "review", "answers", "dashboard", "queue", "show", "items", "status", "sessions",
+)
+
 
 def skill_capabilities() -> dict[str, dict]:
     blocks = re.findall(r"```yaml\n(.*?)```", SKILL, re.S)
@@ -30,6 +35,28 @@ def skill_capabilities() -> dict[str, dict]:
         if isinstance(data, dict) and "capability_skill" in data:
             return {c["id"]: c for c in data["capability_skill"]["capabilities"]}
     raise AssertionError("no capability_skill block in SKILL.md")
+
+
+def markdown_heading_ids(text: str) -> set[str]:
+    ids: set[str] = set()
+    for heading in re.findall(r"^#{1,6}\s+(.+?)\s*#*\s*$", text, re.M):
+        anchor = re.sub(r"[^\w\s-]", "", heading.lower()).strip()
+        ids.add(re.sub(r"\s+", "-", anchor))
+    return ids
+
+
+def test_skill_keeps_the_exact_capability_surface_and_resolvable_details():
+    caps = skill_capabilities()
+    assert tuple(caps) == EXPECTED_CAPABILITY_IDS
+    skill_dir = PLUGIN_ROOT / "skills" / "task"
+    for capability_id, capability in caps.items():
+        details = capability.get("details")
+        assert isinstance(details, str), capability_id
+        path_text, separator, heading = details.partition("#")
+        assert separator and path_text and heading, (capability_id, details)
+        path = skill_dir / path_text
+        assert path.is_file(), (capability_id, details)
+        assert heading in markdown_heading_ids(path.read_text(encoding="utf-8")), (capability_id, details)
 
 
 def test_plugin_json_and_pyproject_state_one_version():

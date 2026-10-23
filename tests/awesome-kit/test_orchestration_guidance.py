@@ -878,7 +878,7 @@ def _install_repo_harness_library(monkeypatch):
     """Put the working shared libraries before any stale installed copies."""
     repo_root = Path(__file__).resolve().parents[2]
     monkeypatch.syspath_prepend(str(repo_root / "plugins" / "bootstrap"))
-    monkeypatch.syspath_prepend(str(repo_root / "plugins" / "llm-kit" / "lib"))
+    monkeypatch.syspath_prepend(str(repo_root / "packages" / "katsoft-llm-kit" / "src"))
     for name in tuple(sys.modules):
         if name == "llm_kit" or name.startswith("llm_kit."):
             monkeypatch.delitem(sys.modules, name, raising=False)
@@ -1975,7 +1975,7 @@ class TestRenderedCodexCommandKeepsItsSilentFailureFlags:
         # adapter dropped the flag. Put the libs on the path so the ADAPTER
         # path is the one under test.
         repo = Path(__file__).resolve().parents[2]
-        for lib in (repo / "plugins" / "llm-kit" / "lib", repo / "plugins" / "bootstrap"):
+        for lib in (repo / "packages" / "katsoft-llm-kit" / "src", repo / "plugins" / "bootstrap"):
             monkeypatch.syspath_prepend(str(lib))
 
     def test_the_adapter_rendered_command_grants_the_scratchpad(self):
@@ -2010,7 +2010,7 @@ class TestAnAdapterFailureIsDisclosedNotProbed:
     @pytest.fixture(autouse=True)
     def _shared_libs_on_path(self, monkeypatch):
         repo = Path(__file__).resolve().parents[2]
-        for lib in (repo / "plugins" / "llm-kit" / "lib", repo / "plugins" / "bootstrap"):
+        for lib in (repo / "packages" / "katsoft-llm-kit" / "src", repo / "plugins" / "bootstrap"):
             monkeypatch.syspath_prepend(str(lib))
 
     def test_the_fallback_note_carries_the_adapters_error(self, monkeypatch):

@@ -26,7 +26,7 @@ def canonical():
 
 
 @pytest.fixture(scope="session")
-def bootstrap_copy():
+def bootstrap_alias():
     from bootstrap_lib import execution_event, interrupt_contract, model_declaration
     return SimpleNamespace(execution_event=execution_event,
                            interrupt_contract=interrupt_contract,

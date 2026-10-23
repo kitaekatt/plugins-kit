@@ -28,7 +28,9 @@ from bootstrap_lib import interrupt_contract as ic
 
 
 MODULE_PATH = Path(ic.__file__)
-PLUGIN_DEV = MODULE_PATH.parent.parent / "skills" / "plugin-dev"
+# The contract module is katsoft_contracts (an installed package), so the skill
+# reference is located from this test file, not from the module.
+PLUGIN_DEV = Path(__file__).resolve().parents[2] / "plugins" / "bootstrap" / "skills" / "plugin-dev"
 
 SUBSET = "llm-scripting-kit.json-schema-subset/v1"
 JOB_KIT_REQUEST = "job-kit.interrupt-request/v1"

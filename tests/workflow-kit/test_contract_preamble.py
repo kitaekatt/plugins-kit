@@ -29,7 +29,7 @@ _PREAMBLE = _REFS / "preamble.js"
 _CONTRACTS = _REFS / "preamble-contracts.js"
 _CHECKER = PLUGIN_ROOT / "scripts" / "check_artifact.py"
 _RUNNER = PLUGIN_ROOT / "scripts" / "openrouter_run.py"
-_KIT_LIB = PLUGIN_ROOT.parent / "llm-kit" / "lib"
+_KIT_LIB = PLUGIN_ROOT.parent.parent / "packages" / "katsoft-llm-kit" / "src"
 
 
 def _find_bash():

@@ -38,7 +38,7 @@ from task_system.answers_types import Answerer
 from task_system.discovery import read_task_block
 from task_system.machine import Machine
 
-LLM_KIT_LIB = (Path(__file__).resolve().parents[2] / "plugins" / "llm-kit" / "lib").resolve()
+LLM_KIT_LIB = (Path(__file__).resolve().parents[2] / "packages" / "katsoft-llm-kit" / "src").resolve()
 SHIPPED_QUESTIONS = (
     Path(__file__).resolve().parents[2] / "plugins" / "task-kit" / "skills" / "task" / "questions"
 )

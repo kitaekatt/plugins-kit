@@ -256,7 +256,7 @@ class TestYamlRoundTrip:
 
     def test_round_trips_through_llm_kit_load_job_file(self, document: dict, tmp_path: Path):
         pytest.importorskip("yaml")
-        llm_kit_lib = REPO_ROOT / "plugins" / "llm-kit" / "lib"
+        llm_kit_lib = REPO_ROOT / "packages" / "katsoft-llm-kit" / "src"
         try:
             import sys
 
@@ -832,7 +832,7 @@ class TestAuditJobLaneModels:
         import sys
 
         for lib in (
-            REPO_ROOT / "plugins" / "llm-kit" / "lib",
+            REPO_ROOT / "packages" / "katsoft-llm-kit" / "src",
             REPO_ROOT / "plugins" / "bootstrap",
         ):
             if str(lib) not in sys.path:

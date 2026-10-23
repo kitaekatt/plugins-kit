@@ -39,7 +39,7 @@ from task_system.validate import validate_ref
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="the fixture links dev/tasks with a real symlink")
 
 SKIP_REEXEC = "_BOOTSTRAP_GUARD_SKIP_REEXEC"
-SKILLS_KIT = LLM_KIT_LIB.parents[1] / "skills-kit"
+SKILLS_KIT = LLM_KIT_LIB.parents[2] / "plugins" / "skills-kit"
 PLAN = "# Plan\n\n```yaml\ntask_items:\n  items: []\n```\n"
 LOG = "# Log\n\n- 2026-10-01: update: created\n"
 

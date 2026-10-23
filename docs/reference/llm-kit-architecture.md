@@ -4,7 +4,7 @@ Status: signed off by the user 2026-10-16 (all 14 decisions).
 
 ## Decision summary
 
-- Create one published plugin, llm-kit, with one release version and one shared library, llm_kit.
+- Create one published plugin, llm-kit, with one release version and one library, llm_kit.
 - Consolidate under the final namespace privately, prove differential parity, then restructure one boundary at a time before consumer migration.
 - Use 16 import components with the exact acyclic edge set below; namespace initializers re-export nothing.
 - Keep completion contracts and capability types below concrete adapters, capability tables, factories, and account probes.
@@ -48,8 +48,8 @@ One release prevents undeclared internal skew, but gives up TanStack's ability t
 ## Proposed source tree
 
 ~~~text
-plugins/llm-kit/
-  lib/llm_kit/
+packages/katsoft-llm-kit/src/
+  llm_kit/
     __init__.py
     schema/
     completion/
@@ -317,13 +317,13 @@ llm-kit requires Python 3.12. Migration raises requires-python in awesome-kit, w
 Implementation also:
 
 - Adds plugins/llm-kit and its generated marketplace entry.
-- Publishes llm_kit through shared_libs and imports bootstrap_lib.
+- Ships llm_kit as the katsoft-llm-kit package, whose one source is packages/katsoft-llm-kit/src/llm_kit; the plugin holds no library source and publishes no shared lib. The plugin imports bootstrap_lib.
 - Adds llm_kit to bootstrap first-party recognition while retaining llm_scripting_kit through coexistence.
 - Keeps the old interrupt validator constant and adds an llm-kit-specific probe.
 - Migrates consumer plugin declarations and shared imports only after parity.
 - Keeps all old marketplace entries through their freeze windows.
 
-An AST guard over plugins/llm-kit/lib/llm_kit uses the exact adjacency set above. It counts eager, local, TYPE_CHECKING, and literal dynamic imports; forbids root re-exports and old-package imports; forbids jobs/execution cross-imports; keeps product DDL and migration loops product-owned; and reports both packages, import mode, and line. Implementation proves the guard by observing a forbidden import fail before removing it and observing the test pass.
+An AST guard over packages/katsoft-llm-kit/src/llm_kit uses the exact adjacency set above. It counts eager, local, TYPE_CHECKING, and literal dynamic imports; forbids root re-exports and old-package imports; forbids jobs/execution cross-imports; keeps product DDL and migration loops product-owned; and reports both packages, import mode, and line. Implementation proves the guard by observing a forbidden import fail before removing it and observing the test pass.
 
 ## Decisions for sign-off
 

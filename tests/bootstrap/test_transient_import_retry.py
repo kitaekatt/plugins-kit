@@ -41,13 +41,16 @@ class TestTransientClassifier:
             ModuleNotFoundError("x", name="skills_kit_lib.audit")
         )
 
-    def test_llm_kit_shared_lib_is_transient(self):
-        # llm_kit is first-party alongside the legacy llm_scripting_kit during
-        # coexistence, so a submodule that has not landed yet self-heals.
-        assert _is_transient_import_crash(
+    def test_llm_kit_is_not_first_party_to_the_engine(self):
+        # llm_kit is the installed katsoft-llm-kit package, imported by plugin
+        # code in plugin venvs and by llm-kit's check in a subprocess, never by
+        # the engine process, so a missing llm_kit module is not a download race.
+        from bootstrap_lib.engine import _FIRST_PARTY_LIBS
+        assert "llm_kit" not in _FIRST_PARTY_LIBS
+        assert not _is_transient_import_crash(
             ModuleNotFoundError("x", name="llm_kit._copy.job_kit.run")
         )
-        assert _is_transient_import_crash(ModuleNotFoundError("x", name="llm_kit"))
+        assert not _is_transient_import_crash(ModuleNotFoundError("x", name="llm_kit"))
 
     def test_llm_kit_lookalike_prefix_is_not_transient(self):
         assert not _is_transient_import_crash(

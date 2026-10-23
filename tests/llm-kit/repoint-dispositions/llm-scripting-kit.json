@@ -331,7 +331,7 @@
         "code-string",
         "import",
         "module-string",
-        "path-plugin-dir"
+        "path-package-src"
       ],
       "collection_count": 36,
       "baseline_failures": []
@@ -365,14 +365,6 @@
         "import"
       ],
       "collection_count": 102,
-      "baseline_failures": []
-    },
-    {
-      "path": "tests/llm-scripting-kit/test_llm_scripting_custom_bootstrap.py",
-      "disposition": "legacy-only",
-      "reason": "Tests plugins/llm-scripting-kit/custom_bootstrap.py (OpenRouter key check, deferred requirements, legacy .env and data-dir migration). llm-kit carries the key check and the deferred-requirement reporting (plugins/llm-kit/custom_bootstrap.py, hooked in its bootstrap.json) and asserts them natively, under a temporary HOME and a fake network, in tests/llm-kit/test_custom_bootstrap.py. It drops the loc-ops .env migration and the pre-rename data-directory move, and seeds no config layer: decision 7 makes the legacy credential and config locations the shared ones, so llm-kit reads them and moves none. The legacy file stays the frozen plugin's own test.",
-      "rewrite_classes": [],
-      "collection_count": 19,
       "baseline_failures": []
     },
     {
@@ -501,7 +493,7 @@
       "rewrite_classes": [
         "code-string",
         "import",
-        "path-plugin-dir"
+        "path-package-src"
       ],
       "collection_count": 12,
       "baseline_failures": []
@@ -514,6 +506,14 @@
         "import"
       ],
       "collection_count": 92,
+      "baseline_failures": []
+    },
+    {
+      "path": "tests/llm-scripting-kit/test_llm_scripting_custom_bootstrap.py",
+      "disposition": "legacy-only",
+      "reason": "Tests plugins/llm-scripting-kit/custom_bootstrap.py (OpenRouter key check, deferred requirements, legacy .env and data-dir migration). llm-kit carries the key check and the deferred-requirement reporting (plugins/llm-kit/custom_bootstrap.py, hooked in its bootstrap.json) and asserts them natively, under a temporary HOME and a fake network, in tests/llm-kit/test_custom_bootstrap.py. It drops the loc-ops .env migration and the pre-rename data-directory move, and seeds no config layer: decision 7 makes the legacy credential and config locations the shared ones, so llm-kit reads them and moves none. The legacy file stays the frozen plugin's own test.",
+      "rewrite_classes": [],
+      "collection_count": 19,
       "baseline_failures": []
     },
     {
@@ -631,8 +631,7 @@
       "reason": "Re-pointed at llm-kit's final module names: import statements, lib/<pkg> path to the llm_kit tree, plugins/<kit> path to plugins/llm-kit, test_text_edits rows; 1 test_text_edits row(s) in repoint-map.json adapt the test to the final layout.",
       "rewrite_classes": [
         "import",
-        "path-package-dir",
-        "path-plugin-dir",
+        "path-package-src",
         "text-edit"
       ],
       "collection_count": 86,
@@ -665,7 +664,8 @@
       "reason": "Re-pointed at llm-kit's final module names: module names inside subprocess/exec code strings, import statements.",
       "rewrite_classes": [
         "code-string",
-        "import"
+        "import",
+        "text-edit"
       ],
       "collection_count": 98,
       "baseline_failures": []

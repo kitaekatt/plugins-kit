@@ -700,7 +700,7 @@ class TestStatusSubprocessProtocol:
         cli.write_text(f'#!/bin/sh\nexec "{sys.executable}" -m llm_kit.cli "$@"\n', encoding="utf-8")
         cli.chmod(0o755)
         monkeypatch.setenv("_BOOTSTRAP_GUARD_SKIP_REEXEC", "1")
-        monkeypatch.setenv("PYTHONPATH", os.pathsep.join([str(PLUGIN / "lib"), *site.getsitepackages()]))
+        monkeypatch.setenv("PYTHONPATH", os.pathsep.join([str(REPO / "packages" / "katsoft-llm-kit" / "src"), *site.getsitepackages()]))
         ctx = _ctx(env)
         cb.bootstrap(ctx)
         assert ctx.failures == [] and len(ctx.deferred) == 1

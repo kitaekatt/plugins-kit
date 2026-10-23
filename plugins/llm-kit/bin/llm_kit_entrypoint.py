@@ -2,12 +2,18 @@
 
 This file has no logic of its own. It delegates to :func:`llm_kit.cli.main`,
 imported from whichever environment the launcher chose: the plugin venv, where
-``llm_kit`` is the installed ``katsoft-llm-kit`` package, or the standalone
-interpreter, where bootstrap's shared-library link provides it. It puts no
-directory of this plugin on ``sys.path``, so the library that runs is the
-installed one and never a copy beside the launcher.
+``llm_kit`` is the installed ``katsoft-llm-kit`` package. It puts no directory
+of this plugin on ``sys.path``, so the library that runs is the installed one
+and never a copy beside the launcher.
 """
 from __future__ import annotations
+
+from bootstrap_guard import reexec_under_plugin_venv
+
+# The launcher prefers the plugin venv; this re-execs into it when a fallback
+# interpreter started the entrypoint and the venv exists, and does nothing
+# otherwise. It runs before the library import below.
+reexec_under_plugin_venv("llm-kit")
 
 
 def _run() -> int:

@@ -34,7 +34,7 @@ from task_system import answer_store, answers_cli, export_cli, questions
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="the fixture links dev/tasks with a real symlink")
 
 SKIP_REEXEC = "_BOOTSTRAP_GUARD_SKIP_REEXEC"
-SKILLS_KIT = LLM_KIT_LIB.parents[1] / "skills-kit"
+SKILLS_KIT = LLM_KIT_LIB.parents[2] / "plugins" / "skills-kit"
 
 
 @pytest.fixture

@@ -25,7 +25,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 PACKAGE_DIR = REPO / "packages" / "katsoft-llm-kit"
-LIB = REPO / "plugins" / "llm-kit" / "lib"
+LIB = PACKAGE_DIR / "src"
 SOURCE_DIR = LIB / "llm_kit"
 CONTRACTS_SRC = REPO / "packages" / "katsoft-contracts" / "src"
 RELEASE_BUILD = REPO / "packages" / "_build" / "release_build.py"
@@ -41,7 +41,7 @@ SYNTHETIC_REGISTRY = (
     f'name = "{DIST}"\n'
     'import = "llm_kit"\n'
     'marker = "llm_kit/_deployment.py"\n'
-    'sources = ["plugins/llm-kit/lib/llm_kit"]\n'
+    'sources = []\n'
     'surface = { json = "plugins/llm-kit/contract/public-surface.json" }\n'
 )
 
@@ -62,31 +62,44 @@ def package_version() -> str:
     return tomllib.loads((PACKAGE_DIR / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
 
 
-def build_wheel(scratch: Path, out_name: str = "out") -> Path:
-    """Build the distribution the way the release machinery does, in `scratch`."""
+def _uv_build(scratch: Path, kind: str, out_name: str):
+    """`uv build --<kind>` over a throwaway copy of the package, the shared
+    hook directory and a synthetic registry, with the release identity set."""
     rb = release_build_module()
-    version = package_version()
     registry = rb.parse_registry(SYNTHETIC_REGISTRY)
     root = scratch / "repo"
     (root / "packages").mkdir(parents=True)
     shutil.copytree(PACKAGE_DIR, root / "packages" / DIST, ignore=_IGNORE)
     shutil.copytree(REPO / "packages" / "_build", root / "packages" / "_build", ignore=_IGNORE)
-    shutil.copytree(SOURCE_DIR, root / "plugins" / "llm-kit" / "lib" / "llm_kit", ignore=_IGNORE)
     (root / "packages" / "registry.toml").write_text(SYNTHETIC_REGISTRY, encoding="utf-8")
-    tag = rb.tag_name(DIST, version)
+    tag = rb.tag_name(DIST, package_version())
     env = dict(os.environ)
     env.update({"SOURCE_DATE_EPOCH": EPOCH, "RELEASE_TAG": tag, "RELEASE_COMMIT": COMMIT,
                 "RELEASE_TAG_URL": rb.tag_url(registry.repository, tag)})
     out = scratch / out_name
     result = subprocess.run(
-        ["uv", "build", "--wheel", "--no-config", "--python", rb.BUILD_PYTHON,
+        ["uv", "build", f"--{kind}", "--no-config", "--python", rb.BUILD_PYTHON,
          "--build-constraint", str(root / "packages" / "_build" / "constraints.txt"),
          "--out-dir", str(out), str(root / "packages" / DIST)],
         capture_output=True, text=True, env=env)
     assert result.returncode == 0, f"uv build failed:\n{result.stdout}\n{result.stderr}"
+    return rb, out
+
+
+def build_wheel(scratch: Path, out_name: str = "out") -> Path:
+    """Build the distribution the way the release machinery does, in `scratch`."""
+    rb, out = _uv_build(scratch, "wheel", out_name)
     wheels = sorted(out.glob("*.whl"))
-    assert [w.name for w in wheels] == [rb.wheel_filename(DIST, version)], wheels
+    assert [w.name for w in wheels] == [rb.wheel_filename(DIST, package_version())], wheels
     return wheels[0]
+
+
+def build_sdist(scratch: Path, out_name: str = "out") -> Path:
+    """Build the source distribution from the same staged copy, in `scratch`."""
+    _rb, out = _uv_build(scratch, "sdist", out_name)
+    archives = sorted(out.glob("*.tar.gz"))
+    assert [a.name for a in archives] == [f"{DIST_INFO_STEM}-{package_version()}.tar.gz"], archives
+    return archives[0]
 
 
 def _session_dir() -> Path:

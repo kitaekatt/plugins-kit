@@ -7,7 +7,7 @@
 # name = "katsoft-llm-kit"                       # distribution; project dir packages/<name>/
 # import = "llm_kit"                             # import package, smoke-tested after upload
 # marker = "llm_kit/_deployment.py"              # wheel path of the hook-written release marker
-# sources = ["plugins/llm-kit/lib/llm_kit"]      # build inputs outside packages/<name>/
+# sources = ["plugins/foo/lib/foo_lib"]          # build inputs outside packages/<name>/ (empty when the source is under src/)
 # surface = { json = "plugins/llm-kit/contract/public-surface.json" }
 #   # or { all = "packages/<name>/src/<pkg>/__init__.py" } for an __all__ list
 schema = 1
@@ -24,5 +24,5 @@ surface = { all = "packages/katsoft-contracts/src/katsoft_contracts/__init__.py"
 name = "katsoft-llm-kit"
 import = "llm_kit"
 marker = "llm_kit/_deployment.py"
-sources = ["plugins/llm-kit/lib/llm_kit"]
+sources = []
 surface = { json = "plugins/llm-kit/contract/public-surface.json" }

@@ -4,10 +4,12 @@ import json
 import os
 import subprocess
 import sys
+from unittest.mock import patch
 
 import pytest
 
 from bootstrap.link_compat import link_tree
+from bootstrap_lib.path_check import render_path_guard
 
 BOOTSTRAP_ROOT = os.path.normpath(
     os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, "plugins", "bootstrap")
@@ -30,12 +32,22 @@ def run_engine(data_dir, plugin_root=BOOTSTRAP_ROOT, home=None):
     if home is not None:
         env["HOME"] = home
         env["USERPROFILE"] = home
-        # Pre-satisfy self_setup.path_entries (~/.local/bin) in the live PATH so
-        # check_path_entry passes (a gated ok) instead of performing+reporting a
-        # PATH add -- which would emit an action line AND mutate .bashrc / the
-        # Windows User PATH registry on every run.
+        # Pre-satisfy self_setup.path_entries (~/.local/bin) in both live and
+        # persistent state so this fixture represents a converged engine pass.
         local_bin = os.path.join(home, ".local", "bin")
         env["PATH"] = local_bin + os.pathsep + env.get("PATH", "")
+        with patch.dict(
+            os.environ,
+            {"HOME": home, "USERPROFILE": home},
+            clear=False,
+        ):
+            guard = render_path_guard("~/.local/bin")
+        rc_names = [".bashrc"]
+        if sys.platform == "darwin":
+            rc_names.extend((".zshrc", ".profile"))
+        for rc_name in rc_names:
+            with open(os.path.join(home, rc_name), "w", encoding="utf-8") as stream:
+                stream.write(guard)
     return subprocess.run(
         [sys.executable, ENGINE_SCRIPT, "--plugin-root", plugin_root, "--data-dir", data_dir],
         capture_output=True,

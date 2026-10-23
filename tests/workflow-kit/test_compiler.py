@@ -420,7 +420,7 @@ import re  # noqa: E402
 
 from wk_testlib import PLUGIN_ROOT  # noqa: E402
 
-_KIT_LIB = PLUGIN_ROOT.parent / "llm-kit" / "lib"
+_KIT_LIB = PLUGIN_ROOT.parent.parent / "packages" / "katsoft-llm-kit" / "src"
 
 
 @pytest.fixture
