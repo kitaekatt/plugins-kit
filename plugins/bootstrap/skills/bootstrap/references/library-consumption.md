@@ -20,9 +20,10 @@ library.
 | 2 | Standalone Python (bootstrap-managed interpreter) | Yes | Same as mode 1 | Same as mode 1 |
 | 3a | Project venv that bootstrap owns (`project_venv`, with `shared_lib_imports` inside it) | Yes, declared | Same as mode 1; the engine re-asserts the link every pass | Same as mode 1 |
 | 3b | Foreign-interpreter project (engine-bundled Python, a venv bootstrap does not own) | Yes, consumer-assembled | Same as mode 1 | Same as mode 1, plus the caveats below |
-| 4 | Off-fleet pip install (git URL, vendored copy) | No | None -- a human re-runs pip | A hand-looked-up commit SHA, not a version |
+| 4a | Off-fleet PyPI install of `katsoft-llm-kit` (`llm_kit`) or `katsoft-contracts` (`katsoft_contracts`) | Yes, no bootstrap involved | A human changes the pin | An exact PyPI version |
+| 4b | Off-fleet pip install of any other shared library (git URL, vendored copy) | No | None -- a human re-runs pip | A hand-looked-up commit SHA, not a version |
 
-Every supported mode (1-3b) ultimately points at the same on-disk source,
+Every bootstrap-delivered mode (1-3b) ultimately points at the same on-disk source,
 `~/.claude/plugins/data/<marketplace>/_shared_libs/<name>/<name>/`, and inherits
 the same refresh trigger: an owner plugin publish re-syncs that one directory,
 and every consumer's path entry -- a `.pth` file in modes 1-3a, whatever the
@@ -273,10 +274,49 @@ State these plainly to anyone adopting this mode:
 
 ## Mode 4 -- Off-fleet pip install
 
-Not supported. Do not point a project's `requirements.txt` or `pyproject.toml`
-at a shared library via a git URL, and do not vendor a standalone copy of one
-into a project's own tree. Three concrete reasons, not a general aversion to
-packaging:
+Two libraries are published to PyPI as versioned wheels, so a project with no
+bootstrap on its machine can install them like any other dependency (4a). Every
+other shared library stays unsupported off-fleet (4b).
+
+### 4a -- `llm_kit` and the contracts modules: supported
+
+- `katsoft-llm-kit` provides the import package `llm_kit`. Its third-party
+  requirements are extras, among them `sdk`, `jobs`, `config` and `pipeline`;
+  it depends on `katsoft-contracts`, which pip resolves.
+- `katsoft-contracts` provides the import package `katsoft_contracts`
+  (`execution_event`, `interrupt_contract`, `model_declaration`). It uses only
+  the standard library. `bootstrap_lib` keeps byte copies of these modules for
+  fleet use; an off-fleet project imports them from `katsoft_contracts`.
+
+Pin an exact version in the project's own `pyproject.toml` or requirements file
+and install into the project's own venv, with no bootstrap pass:
+
+```
+katsoft-llm-kit[sdk]==1.0.0
+katsoft-contracts==1.0.0
+```
+
+The version is a real release, so the three Mode 4b objections do not apply: the
+pin is reproducible, the pin is the update channel (change it when you choose
+to), and the dependency on `katsoft-contracts` is declared in the wheel's
+metadata, where pip reads it. Name only the extras your code paths need.
+
+**Do not combine the PyPI install with a `shared_lib_imports` link for the same
+library in one venv.** The bootstrap `.pth` prepends the shared copy to
+`sys.path` (see mode 3a), so it shadows the installed wheel and the project runs
+the fleet copy while its pin says otherwise. Bootstrap does not remove a
+`.pth` once written, so dropping the library from `shared_lib_imports` later
+does not undo the shadow. Use a fresh venv, or delete the stale `<name>.pth`
+from the venv's site-packages.
+
+### 4b -- every other shared library: not supported
+
+Not supported. `bootstrap_lib` as a whole, and any other library published
+through `shared_libs`, has no PyPI release. Do not point a project's
+`requirements.txt` or `pyproject.toml` at one via a git URL, and do not vendor a
+standalone copy of one into a project's own tree. The same prohibition applies
+to `llm_kit` and the contracts modules: install the PyPI wheels (4a), never a
+git URL or a copy. Three concrete reasons, not a general aversion to packaging:
 
 - **No real version to pin.** A git URL pins a ref, not a version, and a
   marketplace that publishes no `{plugin}--v{version}` release tags gives you
@@ -294,16 +334,18 @@ packaging:
   first-party package it imports, producing an `ImportError` pip's own
   dependency resolution gave no warning about.
 
-If a genuinely detached consumer -- one that must function with no bootstrap
-pass ever having run on its machine -- becomes a real requirement, that is a
-deliberate release-process decision (its own package index entry, its own
-version tags, its own dependency declarations) to be made on its own merits. It
-is not something to improvise by pointing pip at a marketplace's source tree.
+If a genuinely detached consumer of another shared library -- one that must
+function with no bootstrap pass ever having run on its machine -- becomes a real
+requirement, that is a deliberate release-process decision (its own package
+index entry, its own version tags, its own dependency declarations), as the two
+PyPI packages above were made, to be decided on its own merits. It is not
+something to improvise by pointing pip at a marketplace's source tree.
 
 ## Cross-cutting: version declaration is unsupported everywhere
 
-Every mode above delivers whatever version of the owner plugin is installed, and
-nothing else. There is no mode in which a consumer can ask bootstrap for "at
+Every bootstrap-delivered mode (1-3b) delivers whatever version of the owner plugin is
+installed, and nothing else. (Mode 4a pins a PyPI version without bootstrap.) There is
+no mode in which a consumer can ask bootstrap for "at
 least version X" of a shared library the way `plugins[]` entries can ask for
 `min_version` of a PLUGIN -- and even that plugin-level `min_version`
 constraint is honored only for `install: "auto"` entries, not `"manual"` ones

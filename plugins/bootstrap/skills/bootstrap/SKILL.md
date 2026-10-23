@@ -668,8 +668,10 @@ reference_skill:
         Every supported way a consumer can reach a published shared library --
         plugin (shared_lib_imports), the standalone Python, a project venv bootstrap
         owns (project_venv.shared_lib_imports), or a project on its
-        own interpreter -- versus the one unsupported way (off-fleet pip
-        install), and the cross-cutting rule that no mode supports version
+        own interpreter -- plus the off-fleet PyPI install of katsoft-llm-kit
+        and katsoft-contracts (supported with an exact pin, no bootstrap), versus
+        the unsupported off-fleet pip install of any other shared library, and
+        the cross-cutting rule that no bootstrap mode supports version
         declaration.
 ```
 
