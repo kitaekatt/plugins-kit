@@ -45,6 +45,13 @@ class TestDetectSignature:
         text = "The stub is auto-" + GEN.lower() + " by the codegen step.\n"
         assert detect_signature(text) is None
 
+    def test_index_pages_banner(self):
+        head = '<!doctype html>\n<head>\n<!-- index-pages: {"' + GEN.lower() + '_by":"md-domain"} -->\n'
+        assert detect_signature(head) == "index-pages banner"
+
+    def test_index_pages_prose_is_not_a_signature(self):
+        assert detect_signature("<p>The index-pages tool writes these.</p>\n") is None
+
     def test_no_match_returns_none(self):
         assert detect_signature("def f():\n    return 1\n") is None
 

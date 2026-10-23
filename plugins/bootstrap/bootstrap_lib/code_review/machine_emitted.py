@@ -55,6 +55,9 @@ SIGNATURES: tuple[tuple[str, str], ...] = (
         "do-not-edit banner",
         rf"(?m)^[ \t]*{_MARK}[ \t]*[^\n]{{0,60}}?\bDO NOT (?:EDIT|MODIFY)\b",
     ),
+    # databench / md-domain index pages open with a JSON provenance comment:
+    # <!-- index-pages: {"generated_by":"md-domain",...} -->
+    ("index-pages banner", r'(?m)^[ \t]*<!--[ \t]*index-pages:[ \t]*\{"generated_by"'),
     ("Unreal Python stub header", r"(?m)^##### Glue Code #####$"),
     ("protobuf descriptor block", r"(?m)^_sym_db = _symbol_database\.Default\(\)$"),
 )

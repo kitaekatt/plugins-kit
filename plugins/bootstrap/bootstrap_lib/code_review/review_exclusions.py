@@ -71,9 +71,9 @@ def layer_paths(
 def _load(path: Path) -> list[str] | None:
     if not path.exists():
         return None
-    try:
-        import yaml
+    import yaml
 
+    try:
         value = yaml.safe_load(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
         _fail(path, f"cannot load YAML: {exc}")
