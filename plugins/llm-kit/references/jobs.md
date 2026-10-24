@@ -285,6 +285,9 @@ ledger.
 
 ## Cancelling a run
 
+The optional Python [job supervisor](job-supervisor.md) owns local processes across manager restarts.
+It stops the owned tree before ledger cancellation. It does not change the CLI contract below.
+
 `llm-kit jobs cancel <run-id> --reason TEXT` stops the work a run still owes:
 every job that has not ended (`pending`, `running` or `waiting`) becomes
 `cancelled`, a terminal state. `--job ID` cancels only that job.

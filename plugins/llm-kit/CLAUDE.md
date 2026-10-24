@@ -71,11 +71,11 @@ refuses at the call rather than at import. The library source is
 distribution; this plugin holds no library source and publishes no shared lib. A consumer
 venv installs the package with the extras it reaches (`katsoft-llm-kit[<extras>]>=A.B,<N` in
 its `pyproject.toml`). The plugin's own venv does the same: its `pyproject.toml` is a
-non-package project that requires the released `katsoft-llm-kit[<every extra>]>=1.3,<2` and
+non-package project that requires the released `katsoft-llm-kit[<every extra>]>=1.6,<2` and
 `katsoft-contracts>=1.0,<2`, so the extras flow from that distribution and `bootstrap.json`
-names none. The floor is 1.3 because the surface this plugin documents (Codex in package
-mode, the project model file, `models catalog`, protocol 2 of `completion complete`, local
-selection overrides and the neutral user paths) first ships in 1.3.0, and because
+names none. The floor is 1.6 because the documented public job supervisor first ships in
+1.6.0. Codex in package mode, the project model file, `models catalog`, protocol 2 of
+`completion complete`, local selection overrides and the neutral user paths shipped in 1.3.0;
 `custom_bootstrap.py` reads `llm-kit account status --json`, which first shipped in 1.2.0;
 bootstrap holds the venv at the highest released
 version the requirement admits, so a change under `packages/katsoft-llm-kit/src/llm_kit/`

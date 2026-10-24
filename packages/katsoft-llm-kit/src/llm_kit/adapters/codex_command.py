@@ -329,6 +329,7 @@ def build_codex_exec_argv(
     add_dirs: Sequence[PathLike] = (),
     sandbox: str = "workspace-write",
     network: bool = True,
+    native_subagents: Optional[str] = None,
     output_schema: Optional[PathLike] = None,
     json_events: bool = False,
     extra_config: Iterable[str] = (),
@@ -348,6 +349,7 @@ def build_codex_exec_argv(
                                       # -s workspace-write: always; true/false
                                       # per network. Other -s modes: true only
                                       # when network, nothing when false.
+            [-c agents.enabled=false -c features.multi_agent=false -c features.multi_agent_v2=false]
             [-c shell_environment_policy.inherit="none|core"]
             [-c approval_policy="never"]                 # protocol 2 allowlist
             [-m MODEL] [-c model_reasoning_effort=EFFORT] [-c EXTRA]...
@@ -403,6 +405,22 @@ def build_codex_exec_argv(
     argv += ["-s", str(sandbox)]
     if os.name == "nt":
         argv += ["-c", 'windows.sandbox="unelevated"']
+    if not isinstance(network, bool):
+        raise ValueError("network must be a boolean; nothing was dispatched")
+    if native_subagents is not None and native_subagents != "deny":
+        raise ValueError("native_subagents supports only 'deny'; nothing was dispatched")
+    extra_config = tuple(extra_config)
+    required = {}
+    if sandbox == "workspace-write" or network:
+        required["sandbox_workspace_write.network_access"] = str(network).lower()
+    if native_subagents == "deny":
+        required.update({"agents.enabled": "false", "features.multi_agent": "false", "features.multi_agent_v2": "false"})
+    for item in extra_config:
+        key, separator, value = str(item).partition("=")
+        key, value = key.strip(), value.strip()
+        if separator and (key in required and value != required[key] or
+                          key in {name.partition(".")[0] for name in required}):
+            raise ValueError(f"extra_config conflicts with requested control {key!r}; nothing was dispatched")
     if sandbox == "workspace-write":
         # Always explicit: with no pair, codex falls back to the user's
         # config.toml, so a user's network_access=true would re-enable network
@@ -415,6 +433,8 @@ def build_codex_exec_argv(
     elif network:
         # Historical behaviour for network=True under any other mode.
         argv += ["-c", "sandbox_workspace_write.network_access=true"]
+    if native_subagents == "deny":
+        argv += ["-c", "agents.enabled=false", "-c", "features.multi_agent=false", "-c", "features.multi_agent_v2=false"]
     config_values = {
         "shell_environment_policy.inherit": {"none", "core"},
         "approval_policy": {"never"},

@@ -611,13 +611,19 @@ _CODEX_PARAMS = {
     "extras.network": ParamCapability(
         type="boolean",
         default=True,
-        emits="-c sandbox_workspace_write.network_access=true",
+        emits="-c sandbox_workspace_write.network_access=true|false",
         note=(
             "true emits network_access=true; false emits network_access=false "
             "under -s workspace-write (an explicit deny, so the user's "
             "config.toml cannot enable network) and nothing under other "
             "sandbox modes"
         ),
+    ),
+    "extras.native_subagents": ParamCapability(
+        type="string",
+        values=("deny",),
+        emits="-c agents.enabled=false -c features.multi_agent=false -c features.multi_agent_v2=false",
+        note="only deny is supported; other supplied values refuse before dispatch",
     ),
     "extras.output_schema": ParamCapability(
         type="absolute-path", emits="--output-schema"
@@ -670,6 +676,7 @@ CODEX_CAPABILITIES = Capabilities(
             source=REQUEST,
             parameter="extras.network",
             when_value="true",
+            note="true explicitly enables network access in the workspace-write sandbox",
         ),
         ExecutionControl(
             id="network-disable",
@@ -685,6 +692,16 @@ CODEX_CAPABILITIES = Capabilities(
                 "config.toml. Other sandbox modes emit nothing, and the absence "
                 "of a flag is not a control"
             ),
+        ),
+        ExecutionControl(
+            id="native-subagents-deny",
+            emits="-c agents.enabled=false -c features.multi_agent=false -c features.multi_agent_v2=false",
+            effect=DISABLE,
+            subjects=(SUBAGENT_SPAWN,),
+            source=REQUEST,
+            parameter="extras.native_subagents",
+            when_value="deny",
+            note="reports the emitted deny configuration; actual harness behavior requires version-specific proof",
         ),
         ExecutionControl(
             id="windows-sandbox-mode",

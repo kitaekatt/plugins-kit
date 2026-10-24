@@ -134,6 +134,7 @@ CODEX_EXTRA_KEYS = (
     "add_dirs",
     "sandbox",
     "network",
+    "native_subagents",
     "output_schema",
 )
 
@@ -404,6 +405,9 @@ class CodexCliBackend:
         behind.
         """
         opts = options or BackendOptions()
+        native_subagents = (opts.extras or {}).get("native_subagents")
+        if native_subagents is not None and native_subagents != "deny":
+            raise ValueError("extras.native_subagents supports only 'deny'; nothing was dispatched")
         # Before any temp file, argv or runner call: a contract this record
         # does not list (or one sent beside extras.output_schema) is refused
         # here, with nothing spawned.
@@ -604,6 +608,8 @@ class CodexCliBackend:
             applied.append("network-enable")
         if "sandbox_workspace_write.network_access=false" in joined:
             applied.append("network-disable")
+        if all(value in joined for value in ("agents.enabled=false", "features.multi_agent=false", "features.multi_agent_v2=false")):
+            applied.append("native-subagents-deny")
         if 'windows.sandbox="unelevated"' in joined:
             applied.append("windows-sandbox-mode")
         if "--skip-git-repo-check" in joined:

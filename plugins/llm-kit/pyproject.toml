@@ -1,19 +1,19 @@
 [project]
 name = "llm-kit"
-version = "0.11.0"
+version = "0.12.0"
 description = "LLM access, durable agent jobs and batch content pipelines in one library (dev-only consolidation)"
 requires-python = ">=3.12"
 
 # The plugin venv installs the released library as a consumer. Each extra names
 # a capability's third-party packages; the plugin venv enables every extra its
-# bundled commands reach. The floor is 1.3 because the surface the plugin
-# documents (Codex in package mode, the project model file, `models catalog`,
-# protocol 2, the neutral user paths) first ships in 1.3.0; custom_bootstrap.py
+# bundled commands reach. The floor is 1.6 because the documented public job
+# supervisor first ships in 1.6.0. Codex in package mode, the project model file,
+# `models catalog`, protocol 2 and the neutral user paths shipped in 1.3.0; custom_bootstrap.py
 # also reads `llm-kit account status --json`, which first shipped in 1.2.0. bootstrap holds
 # the venv at the highest released version the requirement admits
 # (packages/released.json), so a requirement must keep this exact form.
 dependencies = [
-    "katsoft-llm-kit[config,sdk,local,frontdoor,jobs,pipeline]>=1.5,<2",
+    "katsoft-llm-kit[config,sdk,local,frontdoor,jobs,pipeline]>=1.6,<2",
     "katsoft-contracts>=1.0,<2",
 ]
 

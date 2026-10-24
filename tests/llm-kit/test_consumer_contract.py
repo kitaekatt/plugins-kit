@@ -208,7 +208,7 @@ def test_the_listing_covers_the_pipeline_products():
 # --- the adaptation --------------------------------------------------------
 
 def test_every_entry_is_the_llm_kit_home_of_a_content_pipeline_entry():
-    """The listing is the legacy one rewritten through the repoint map; a drift in either shows here."""
+    """Preserve the legacy listing and explicitly register the additive supervisor surface."""
     gen = repoint.load_generator()
     names = gen.Names(gen.load_map())
     legacy = json.loads(
@@ -222,9 +222,15 @@ def test_every_entry_is_the_llm_kit_home_of_a_content_pipeline_entry():
         except gen.Unmapped:
             skipped.append(e["name"])
     assert skipped == ["content_pipeline.cli.bulk.run_bulk", "content_pipeline.cli.bulk.BulkResult"], skipped
-    assert {e["name"] for e in ENTRIES} == set(expected)
+    supervisor_names = {
+        "llm_kit.jobs.supervisor." + name for name in (
+            "JobProcessSpec", "ProcessHandle", "ProcessIdentity", "ProcessStatus", "SupervisorError",
+            "SupervisorUnsupported", "start", "inspect", "adopt", "cancel",
+        )
+    }
+    assert {e["name"] for e in ENTRIES} == set(expected) | supervisor_names
     for e in ENTRIES:
-        assert e["status"] == expected[e["name"]]["status"], e["name"]
+        assert e["status"] == ("public" if e["name"] in supervisor_names else expected[e["name"]]["status"]), e["name"]
 
 
 # --- the references --------------------------------------------------------

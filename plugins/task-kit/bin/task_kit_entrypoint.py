@@ -18,6 +18,7 @@ Commands:
   JSON document to stdout (``task-export-protocol.md``).
 - ``task-kit answers ...`` runs ``task_system.answers_cli``, the task answers engine (refresh, status, prune),
   under the same one-document rules.
+- ``task-kit manage ...`` serves full input and CAS semantic mutations through ``task_system.manage_cli``.
 - ``task-kit`` with no command runs ``databench --view tasks`` when databench
   is on PATH, and otherwise exits 1 saying databench provides the task view.
 - ``task-kit stop [--force]`` stops a dashboard server an earlier version
@@ -51,7 +52,7 @@ DATABENCH_MISSING_MESSAGE = (
 )
 RETIRED_MESSAGE = (
     "task-kit: the task-kit dashboard is retired; databench provides the task view (run `task-kit` with no "
-    "arguments). Remaining commands: `task-kit export ...`, `task-kit answers ...` and `task-kit stop "
+    "arguments). Remaining commands: `task-kit export ...`, `task-kit answers ...`, `task-kit manage ...` and `task-kit stop "
     "[--force]` (stops a dashboard server an earlier version started)."
 )
 
@@ -95,6 +96,7 @@ def installed_plugin_root(bundle_root: Path) -> Path:
 
 EXPORT_COMMAND = "export"
 ANSWERS_COMMAND = "answers"
+MANAGE_COMMAND = "manage"
 STOP_COMMAND = "stop"
 EXPORT_PROTOCOL = 1  # the highest export protocol; a start-up failure document names it
 EXPORT_INTERNAL_EXIT = 1
@@ -188,6 +190,8 @@ def main() -> int:
         return run_export(root, argv[1:])
     if argv[:1] == [ANSWERS_COMMAND]:
         return run_answers(root, argv[1:])
+    if argv[:1] == [MANAGE_COMMAND]:
+        return _run_document_command(root, MANAGE_COMMAND, "manage_cli", argv[1:])
     if not argv:
         return run_databench()
     if argv[0] == STOP_COMMAND:

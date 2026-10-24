@@ -18,13 +18,48 @@ interrupt contract, model declaration parser) and nothing else. Extras:
 (the OpenRouter HTTP path); `local` brings psutil; `frontdoor` brings
 FastAPI, uvicorn and httpx.
 
+## Supervised local jobs
+
+`llm_kit.jobs.supervisor` adds opt-in local process ownership in version 1.6.
+It requires the `local` extra. The existing job ledger and CLI remain unchanged.
+
+The public functions are `start`, `inspect`, `adopt` and `cancel`.
+`JobProcessSpec` declares the command, working directory, deadline and optional ledger cancellation command.
+`start` returns a `ProcessHandle` after the durable dispatch handshake.
+Handles and status records have JSON-compatible `to_dict()` methods.
+`ProcessHandle.from_dict()` restores a saved handle.
+
+Managers can restart while a detached supervisor retains its job.
+`adopt` inspects a live supervisor or stops a vanished supervisor's remaining processes.
+Cancellation stops the owned tree before the ledger cancellation command runs.
+Survivors and failed ledger cancellation retain the resource lease and report `indeterminate`.
+
+Use one shared `lease_path` for all supervised commands that write the same ledger.
+Ordinary jobs commands do not participate in this opt-in lease.
+Keep run directories private and machine-local. They contain command arguments and explicit environment overrides.
+The supervisor does not supply harness permissions, task policy or acceptance evidence.
+
+POSIX ownership covers recorded descendants and the command's session.
+A descendant that starts a separate session and reparents before observation can escape that boundary.
+Windows uses a kill-on-close Job Object and refuses dispatch if assignment fails.
+These are process lifecycle controls, not a security sandbox.
+
+## Codex execution controls
+
+Job `options.extras` and `BackendOptions.extras` accept `native_subagents: "deny"`.
+The Codex backend emits `agents.enabled=false`, `features.multi_agent=false` and `features.multi_agent_v2=false`.
+Other non-null values refuse before dispatch.
+With `sandbox: "workspace-write"`, `network: false` emits an explicit `sandbox_workspace_write.network_access=false` override.
+This override prevents a user configuration from silently enabling workspace network access.
+Capabilities report these emitted controls. Callers still need version-specific harness evidence for their permission policy.
+
 ## Runtime mode
 
 `llm_kit._runtime.mode()` reports how the library is deployed. This
 distribution is `"package"`: the contracts come from `katsoft-contracts`.
 `llm_kit._runtime.fleet()` reports whether `bootstrap_lib`, the plugin
 marketplace's shared library, imports in the same environment. With it, the
-features that need it (the Codex adapter, claudx propagation, skill context,
+features that need it (claudx propagation, skill context,
 the code-review lane) work and the model registry reads the layered config.
 Without it, features that require the shared library raise
 `UnsupportedInPackageMode`, Codex reachability uses a PATH check, and the model

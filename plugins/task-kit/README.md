@@ -31,10 +31,12 @@ never blocks the session or opens a browser; Databench's `regeneration.enabled` 
 ```
 task-kit               run `databench --view tasks` (exit 1, with a message, when databench is not on PATH)
 task-kit export ...    print the task facts as JSON (the interface databench reads)
+task-kit manage ...    serve full task input and revision-checked semantic mutations
 task-kit stop          stop a dashboard server an earlier task-kit version started (--force: even with jobs running)
 ```
 
 `/task dashboard` in Claude Code runs bare `task-kit`. `task-kit stop` is a transition aid and goes in a later minor.
+The additive manager interface is documented in [task-manage-protocol.md](skills/task/references/task-manage-protocol.md).
 It reads the earlier dashboard's `dashboard/server.json` in task-kit's data directory and signals the process only
 when its PID and creation time match; exit codes: 0 stopped or nothing to stop, 1 error, 2 usage error, 3 task-kit's venv is not provisioned, 5 jobs are
 running, 6 refused inside a dashboard run. The earlier dashboard's runtime data stays where it is; task-kit deletes none of it.

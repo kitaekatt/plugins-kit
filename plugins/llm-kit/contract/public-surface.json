@@ -1,14 +1,55 @@
 {
   "schema": 1,
-  "purpose": "Public names of the llm_kit pipeline products and their lifecycle status. Adapted from content-pipeline-kit's contract: each name is the llm_kit home of the content_pipeline name; removed entries keep the content-pipeline-kit release that removed them. Removed entries for the cli.bulk module are not carried (llm_kit has no module of that name).",
+  "purpose": "Public names of the llm_kit pipeline products and supervised jobs, with their lifecycle status. Pipeline names adapt content-pipeline-kit's contract; removed entries keep the content-pipeline-kit release that removed them. Removed entries for cli.bulk are not carried (llm_kit has no module of that name). Supervised jobs add the package-native surface introduced in 1.6.0.",
   "package": "llm_kit",
   "current_version_file": ".claude-plugin/plugin.json",
   "covers": [
     "llm_kit.pipeline",
     "llm_kit.scaffold",
-    "llm_kit.cli.run"
+    "llm_kit.cli.run",
+    "llm_kit.jobs.supervisor"
   ],
   "entries": [
+    {
+      "name": "llm_kit.jobs.supervisor.JobProcessSpec",
+      "status": "public"
+    },
+    {
+      "name": "llm_kit.jobs.supervisor.ProcessHandle",
+      "status": "public"
+    },
+    {
+      "name": "llm_kit.jobs.supervisor.ProcessIdentity",
+      "status": "public"
+    },
+    {
+      "name": "llm_kit.jobs.supervisor.ProcessStatus",
+      "status": "public"
+    },
+    {
+      "name": "llm_kit.jobs.supervisor.SupervisorError",
+      "status": "public"
+    },
+    {
+      "name": "llm_kit.jobs.supervisor.SupervisorUnsupported",
+      "status": "public"
+    },
+    {
+      "name": "llm_kit.jobs.supervisor.start",
+      "status": "public"
+    },
+    {
+      "name": "llm_kit.jobs.supervisor.inspect",
+      "status": "public"
+    },
+    {
+      "name": "llm_kit.jobs.supervisor.adopt",
+      "status": "public"
+    },
+    {
+      "name": "llm_kit.jobs.supervisor.cancel",
+      "status": "public"
+    },
     {
       "name": "llm_kit.pipeline.runtime.backends.BACKEND_ENV",
       "status": "removed",

@@ -28,6 +28,24 @@
   },
   "test_text_edits": [
     {
+      "file": "tests/llm-scripting-kit/test_text_only_codex.py",
+      "old": "    assert not any(\"network_access\" in part for part in argv)",
+      "new": "    assert \"sandbox_workspace_write.network_access=false\" in argv\n    assert \"sandbox_workspace_write.network_access=true\" not in argv",
+      "reason": "The final builder explicitly overrides enabled user network configuration even in text-only mode."
+    },
+    {
+      "file": "tests/llm-scripting-kit/test_completion_codex_backend.py",
+      "old": "            \"-o\", out_path,\n            \"--skip-git-repo-check\", \"--color\", \"never\", \"-\",",
+      "new": "            \"-o\", out_path,\n            \"--json\",\n            \"--skip-git-repo-check\", \"--color\", \"never\", \"-\",",
+      "reason": "The final Codex backend requests JSON events for usage telemetry; retain the complete argv assertion with that intentional final-only flag."
+    },
+    {
+      "file": "tests/llm-scripting-kit/test_completion_capabilities.py",
+      "old": "    assert not any(\"network_access\" in str(part) for part in argv)\n    ids = {c.id for c in CODEX_CAPABILITIES.execution_controls}\n    assert \"network-disable\" not in ids\n    assert \"network-off\" not in ids",
+      "new": "    assert \"sandbox_workspace_write.network_access=false\" in argv\n    ids = {c.id for c in CODEX_CAPABILITIES.execution_controls}\n    assert \"network-disable\" in ids\n    assert \"network-off\" not in ids",
+      "reason": "The final Codex builder now emits explicit network denial for false, overriding user configuration. Preserve the frozen legacy test but assert the intentionally changed final capability."
+    },
+    {
       "file": "tests/job-kit/test_model.py",
       "old": "from job_kit import SharedLibTooOldError\n",
       "new": "",
