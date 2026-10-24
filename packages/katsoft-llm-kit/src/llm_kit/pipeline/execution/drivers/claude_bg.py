@@ -107,7 +107,7 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
+import shutil  # noqa: F401 -- tests patch shutil.which through this module
 import subprocess
 import textwrap
 import time
@@ -116,6 +116,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
+from llm_kit.adapters.claude_command import (
+    ClaudeExecutableError,
+    resolve_claude_executable,
+)
 from llm_kit.pipeline.execution.adapter import RunAdapter
 from llm_kit.pipeline.execution.controller import record_halt
 from llm_kit.pipeline.execution.model import (
@@ -352,12 +356,21 @@ class ClaudeCli:
     runner: Callable[..., Tuple[str, str, int]] = _default_runner
 
     def resolve_executable(self) -> str:
-        """The configured executable, or the first ``claude`` on ``PATH``.
+        """The configured executable, else ``LLM_KIT_CLAUDE_EXECUTABLE``, else
+        the first ``claude`` on ``PATH``.
 
-        Raises :class:`ClaudeExecutableNotFoundError` when neither is
-        available -- callers must refuse rather than guess (preflight step
+        An explicit ``self.executable`` wins over the variable: it is the
+        caller's own, more specific choice (and a test seam). Raises
+        :class:`ClaudeExecutableNotFoundError` when none is available, and
+        also when the variable is set to something unusable (the message names
+        the variable) -- callers must refuse rather than guess (preflight step
         1)."""
-        exe = self.executable or shutil.which("claude")
+        if self.executable:
+            return self.executable
+        try:
+            exe = resolve_claude_executable()
+        except ClaudeExecutableError as exc:
+            raise ClaudeExecutableNotFoundError(str(exc)) from exc
         if not exe:
             raise ClaudeExecutableNotFoundError(
                 "no `claude` executable configured and none found on PATH"

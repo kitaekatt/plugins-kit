@@ -40,8 +40,7 @@ verb (one endpoint, exit code is the answer). Same code, two surfaces.
 from __future__ import annotations
 
 import json
-import os
-import shutil
+import shutil  # noqa: F401 -- tests patch shutil.which through this module
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -49,6 +48,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from llm_kit.adapters import codex_command
+from llm_kit.adapters.claude_command import resolve_claude_cli
 from llm_kit.adapters.account import EndpointProbe, get_authenticated, probe_endpoint
 from llm_kit.adapters.harness_adapters import resolve_opencode_cli
 
@@ -120,21 +120,6 @@ class Reachability:
 
     def to_json(self) -> Dict[str, Any]:
         return {"status": self.status, "checked": self.checked, "detail": self.detail}
-
-
-def _resolve_cli(name: str) -> Optional[List[str]]:
-    """Resolve ``name`` to a launchable argv prefix, honoring Windows shims.
-
-    The claude check's twin of :func:`llm_kit.adapters.codex_command.resolve_cli`
-    (codex resolves through that module itself) and of
-    :func:`llm_kit.adapters.harness_adapters.resolve_opencode_cli`.
-    """
-    resolved = shutil.which(name)
-    if resolved is None:
-        return None
-    if os.name == "nt" and resolved.lower().endswith((".cmd", ".bat")):
-        return ["cmd", "/c", resolved]
-    return [resolved]
 
 
 def check_transport(
@@ -290,10 +275,13 @@ def check_harness(harness: Optional[str], *, timeout: float = DEFAULT_VERIFY_TIM
             return Reachability(status=STATUS_UNREACHABLE, checked="cli-version", detail="`opencode` not found on PATH")
         return _run_version_probe(list(prefix), label="opencode", timeout=timeout)
     # claude
-    resolved = _resolve_cli("claude")
+    # A misconfigured LLM_KIT_CLAUDE_EXECUTABLE raises ClaudeExecutableError
+    # naming the variable (as detect_codex does for its twin) rather than
+    # reading as "claude is not installed".
+    resolved = resolve_claude_cli()
     if resolved is None:
         return Reachability(status=STATUS_UNREACHABLE, checked="cli-version", detail="`claude` not found on PATH")
-    return _run_version_probe(resolved, label="claude", timeout=timeout)
+    return _run_version_probe(list(resolved), label="claude", timeout=timeout)
 
 
 def _check_codex(*, timeout: float) -> Reachability:

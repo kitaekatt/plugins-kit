@@ -36,7 +36,7 @@ from typing import Any, Callable, Optional, Sequence
 
 import pytest
 
-from final_wording import to_final
+from final_wording import codex_network_json_to_final, to_final
 from test_cli_harness import (  # noqa: F401 -- fixtures
     FakeBackend,
     Outcome,
@@ -201,6 +201,7 @@ def same_json(left: Outcome, right: Outcome) -> Outcome:
     assert left.code == right.code, (left, right)
     assert left.err == right.err, (left.err, right.err)
     a, b = normalize_json_text(left.out, {}), normalize_json_text(right.out, {})
+    a = codex_network_json_to_final(a)  # llm-kit advertises the explicit network-off control
     assert a == b, _first_difference(a, b)
     return left
 

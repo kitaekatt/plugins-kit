@@ -20,10 +20,10 @@
         "scope": null
       },
       "cost": {
-        "class": "subscription",
+        "class": null,
         "estimated_source": null,
         "estimated_usd": null,
-        "reason": "codex on subscription auth: fake subscription",
+        "reason": "codex cost class depends on its authentication, which was not probed",
         "source": null,
         "usd": null
       },

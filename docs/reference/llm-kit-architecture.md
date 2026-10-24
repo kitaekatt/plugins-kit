@@ -109,7 +109,7 @@ Layer 6  cli                -> {schema, completion, registry, adapters, dispatch
                                 pipeline.runtime, pipeline.execution, pipeline.analysis,
                                 frontdoor, scaffold}
 Layer 5  pipeline.execution -> {execution, storage, pipeline.core,
-                                pipeline.artifacts, pipeline.runtime}
+                                pipeline.artifacts, pipeline.runtime, adapters}
 Layer 4  jobs               -> {completion, registry, dispatch, execution, storage}
          pipeline.runtime   -> {completion, registry, dispatch, storage,
                                 pipeline.core, pipeline.artifacts}

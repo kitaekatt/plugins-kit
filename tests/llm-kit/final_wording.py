@@ -105,6 +105,92 @@ def claude_contract_deep(value):
     return value
 
 
+#: llm-kit's codex-cli states network off explicitly (``network_access=false`` under
+#: ``-s workspace-write``, so the user's config.toml cannot enable network) and advertises
+#: that as the ``network-disable`` control. The frozen legacy record advertises no such
+#: control and says false emits nothing. The argv itself is built by the one shared builder,
+#: so only the advertisement differs; see codex_network_to_final.
+CODEX_NETWORK_ENABLE_NOTE_LEGACY = (
+    "there is deliberately no network-disable control: false emits "
+    "NOTHING, and the absence of a flag is not a control"
+)
+CODEX_NETWORK_DISABLE_EMITS_FINAL = "-c sandbox_workspace_write.network_access=false"
+CODEX_NETWORK_DISABLE_NOTE_FINAL = (
+    "emitted only under -s workspace-write, the one mode that reads "
+    "the key; it overrides a network_access=true in the user's "
+    "config.toml. Other sandbox modes emit nothing, and the absence "
+    "of a flag is not a control"
+)
+
+
+def codex_network_to_final(value):
+    """A legacy codex-cli ``Capabilities`` record in llm-kit's network-off form.
+
+    Drops the legacy ``network-enable`` note and inserts the ``network-disable``
+    control after it. Recognised by the legacy note, so it is idempotent and a
+    final record passes through unchanged. The ``extras.network`` parameter note
+    is a text difference, named in ``RENAMES``.
+    """
+    controls = getattr(value, "execution_controls", None)
+    if not (dataclasses.is_dataclass(value) and not isinstance(value, type) and controls):
+        return value
+    out = []
+    changed = False
+    for control in controls:
+        if getattr(control, "id", None) == "network-enable" and control.note == CODEX_NETWORK_ENABLE_NOTE_LEGACY:
+            changed = True
+            out.append(dataclasses.replace(control, note=""))
+            out.append(
+                dataclasses.replace(
+                    control,
+                    id="network-disable",
+                    emits=CODEX_NETWORK_DISABLE_EMITS_FINAL,
+                    effect="deny",
+                    when_value="false",
+                    note=CODEX_NETWORK_DISABLE_NOTE_FINAL,
+                )
+            )
+        else:
+            out.append(control)
+    return dataclasses.replace(value, execution_controls=tuple(out)) if changed else value
+
+
+def codex_network_json_to_final(value):
+    """``value`` (parsed JSON) with every legacy codex ``execution_controls`` list in llm-kit's form.
+
+    The dict twin of :func:`codex_network_to_final`, for a CLI document that carries the
+    serialized records. Recognised by the legacy ``network-enable`` note; idempotent.
+    """
+    if isinstance(value, dict):
+        value = {k: codex_network_json_to_final(v) for k, v in value.items()}
+        controls = value.get("execution_controls")
+        if isinstance(controls, list) and any(
+            isinstance(c, dict) and c.get("id") == "network-enable"
+            and c.get("note") == CODEX_NETWORK_ENABLE_NOTE_LEGACY
+            for c in controls
+        ):
+            out = []
+            for c in controls:
+                if isinstance(c, dict) and c.get("id") == "network-enable" \
+                        and c.get("note") == CODEX_NETWORK_ENABLE_NOTE_LEGACY:
+                    out.append({k: v for k, v in c.items() if k != "note"})
+                    out.append({
+                        **{k: v for k, v in c.items() if k != "note"},
+                        "id": "network-disable",
+                        "emits": CODEX_NETWORK_DISABLE_EMITS_FINAL,
+                        "effect": "deny",
+                        "when_value": "false",
+                        "note": CODEX_NETWORK_DISABLE_NOTE_FINAL,
+                    })
+                else:
+                    out.append(c)
+            value["execution_controls"] = out
+        return value
+    if isinstance(value, list):
+        return [codex_network_json_to_final(v) for v in value]
+    return value
+
+
 RENAMES: tuple[Rename, ...] = (
     Rename(
         "shipped sol entry names the current Codex catalogue id",
@@ -339,6 +425,16 @@ RENAMES: tuple[Rename, ...] = (
         "claude output contract is delivered by --json-schema",
         _LSK + "completion/adapter_capabilities.py", CLAUDE_CONTRACT_EMITS_LEGACY,
         _KIT + "adapters/capabilities.py", CLAUDE_CONTRACT_EMITS_FINAL,
+    ),
+    Rename(
+        "codex extras.network note states the explicit false",
+        _LSK + "completion/adapter_capabilities.py",
+        "emitted ONLY when true; false emits nothing",
+        _KIT + "adapters/capabilities.py",
+        "true emits network_access=true; false emits network_access=false "
+        "under -s workspace-write (an explicit deny, so the user's "
+        "config.toml cannot enable network) and nothing under other "
+        "sandbox modes",
     ),
     Rename(
         "claude text-only note names the settings and memory it drops",

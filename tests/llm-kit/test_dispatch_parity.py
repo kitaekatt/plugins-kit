@@ -54,7 +54,7 @@ from unittest import mock
 
 import pytest
 
-from final_wording import claude_contract_to_final, to_final
+from final_wording import claude_contract_to_final, codex_network_to_final, to_final
 
 _REPO = Path(__file__).resolve().parents[2]
 _LEGACY_LIB = _REPO / "plugins" / "llm-scripting-kit" / "lib"
@@ -163,6 +163,7 @@ def norm(value):
         return _exc(value)
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         value = claude_contract_to_final(value)  # llm-kit delivers a claude contract natively
+        value = codex_network_to_final(value)  # llm-kit advertises the explicit network-off control
         out = {"__type__": type(value).__name__}
         for f in dataclasses.fields(value):
             if f.name in _FINAL_ONLY_FIELD_NAMES:
@@ -2040,7 +2041,7 @@ def test_public_surface_matches_legacy(sides, attr, extra):
 
 # Names a legacy module holds only as the imports its moved code needed.
 _LEGACY_ONLY: dict = {
-    "decl": set(), "reach": set(), "seats": set(), "review": set(), "factory": set(),
+    "decl": set(), "reach": {"_resolve_cli", "os"}, "seats": set(), "review": set(), "factory": set(),
     # stdlib imports only the moved raw readers used
     "usage": {"dataclass", "datetime", "re"},
     "observer": set(),

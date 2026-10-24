@@ -2136,13 +2136,33 @@ _IMPORT_MAP = (
 _VERBATIM = (
     "adapter.py", "controller.py", "deadlines.py", "failure_cache.py", "parallel_graph.py", "protocol.py",
     "scheduler.py", "status.py", "wave.py", "workerpack.py", "drivers/__init__.py", "drivers/inline.py",
-    "drivers/claude_bg.py",
 )
 
+#: Intended divergence from legacy, recorded here (the porting ledger records legacy edits, not final ones).
+#: drivers/claude_bg.py is the legacy code line for line EXCEPT ``ClaudeCli.resolve_executable``, which
+#: resolves the binary through ``llm_kit.adapters.claude_command`` so ``LLM_KIT_CLAUDE_EXECUTABLE`` applies
+#: (customer request G2, 2026-10-23). The explicit ``executable`` still wins. Its body is excluded from the
+#: comparison below; the new behaviour is pinned by tests/llm-kit/test_g2_claude_executable.py.
+_DIVERGED_METHOD = {"drivers/claude_bg.py": ("ClaudeCli", "resolve_executable")}
+_DIVERGED_IMPORTS = {
+    "drivers/claude_bg.py": {("llm_kit.adapters.claude_command", "ClaudeExecutableError", "ClaudeExecutableError"),
+                             ("llm_kit.adapters.claude_command", "resolve_claude_executable", "resolve_claude_executable")},
+}
 
-def _strip(path: Path) -> tuple[str, list[str]]:
-    """The tree of a module without imports and docstrings, plus its normalized imports."""
+
+def _strip(path: Path, skip_method: tuple[str, str] | None = None) -> tuple[str, list[str]]:
+    """The tree of a module without imports and docstrings, plus its normalized imports.
+
+    ``skip_method`` = (class, method) drops that method (a recorded divergence, see ``_DIVERGED_METHOD``).
+    """
     tree = ast.parse(path.read_text(encoding="utf-8"))
+    if skip_method is not None:
+        cls_name, meth_name = skip_method
+        owners = [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef) and n.name == cls_name]
+        assert len(owners) == 1, skip_method
+        kept = [n for n in owners[0].body if getattr(n, "name", None) != meth_name]
+        assert len(kept) == len(owners[0].body) - 1, skip_method
+        owners[0].body = kept
     imports: list[str] = []
 
     class Strip(ast.NodeTransformer):
@@ -2199,6 +2219,20 @@ def _legacy_imports_by_name(path: Path) -> set[tuple[str, str, str]]:
 
 
 class TestVerbatimModules:
+    @pytest.mark.parametrize("relative", sorted(_DIVERGED_METHOD))
+    def test_a_diverged_module_is_the_legacy_code_but_for_its_recorded_method(self, relative):
+        legacy_tree, _ = _strip(_LEGACY_DIR / relative, _DIVERGED_METHOD[relative])
+        final_tree, _ = _strip(_FINAL_DIR / relative, _DIVERGED_METHOD[relative])
+        assert final_tree == legacy_tree
+
+    @pytest.mark.parametrize("relative", sorted(_DIVERGED_IMPORTS))
+    def test_a_diverged_module_adds_only_its_recorded_imports(self, relative):
+        legacy = _legacy_imports_by_name(_LEGACY_DIR / relative)
+        final = _legacy_imports_by_name(_FINAL_DIR / relative)
+        added = {item for item in final - legacy if not item[0].startswith("llm_kit._runtime")}
+        assert added == _DIVERGED_IMPORTS[relative]
+        assert not {item for item in legacy - final if item[0].startswith(("content_pipeline", "llm_scripting_kit"))}
+
     @pytest.mark.parametrize("relative", _VERBATIM)
     def test_the_code_is_the_legacy_code(self, relative):
         legacy_tree, _ = _strip(_LEGACY_DIR / relative)
@@ -2279,7 +2313,9 @@ class TestVerbatimModules:
 class TestImportBoundary:
     _ALLOWED = ("llm_kit.execution", "llm_kit.storage", "llm_kit.pipeline.core", "llm_kit.pipeline.artifacts",
                 "llm_kit.pipeline.runtime", "llm_kit.pipeline.execution",
-                "llm_kit._runtime")
+                "llm_kit._runtime",
+                # the one adapters module the package may import (claude_bg's executable resolution, G2)
+                "llm_kit.adapters.claude_command")
 
     def _imports(self) -> list[tuple[str, int, str]]:
         found = []
@@ -2302,7 +2338,8 @@ class TestImportBoundary:
         forbidden = ("llm_kit.jobs", "llm_kit._copy", "llm_kit.dispatch", "llm_kit.adapters", "llm_kit.completion",
                      "llm_kit.registry", "llm_kit.frontdoor", "llm_kit.cli", "content_pipeline", "job_kit", "llm_scripting_kit")
         stray = [(f, line, mod) for f, line, mod in self._imports()
-                 if any(mod == bad or mod.startswith(bad + ".") for bad in forbidden)]
+                 if mod != "llm_kit.adapters.claude_command"
+                 and any(mod == bad or mod.startswith(bad + ".") for bad in forbidden)]
         assert not stray, stray
 
     def test_jobs_does_not_import_the_package(self):

@@ -503,7 +503,8 @@ CLAUDE_CAPABILITIES = Capabilities(
 # module the capability records do not derive from. Two consequences the
 # records must respect: effort is validated by the backend itself
 # (model_profiles.check_effort, the same validator CodexAdapter uses), and
-# network=False emits nothing at all rather than a deny.
+# network=False emits an explicit network_access=false under workspace-write
+# (so the user's config.toml cannot win) and nothing under other sandbox modes.
 
 #: Codex text-only mode has three parts, because codex's tools come from three
 #: places:
@@ -611,7 +612,12 @@ _CODEX_PARAMS = {
         type="boolean",
         default=True,
         emits="-c sandbox_workspace_write.network_access=true",
-        note="emitted ONLY when true; false emits nothing",
+        note=(
+            "true emits network_access=true; false emits network_access=false "
+            "under -s workspace-write (an explicit deny, so the user's "
+            "config.toml cannot enable network) and nothing under other "
+            "sandbox modes"
+        ),
     ),
     "extras.output_schema": ParamCapability(
         type="absolute-path", emits="--output-schema"
@@ -664,9 +670,20 @@ CODEX_CAPABILITIES = Capabilities(
             source=REQUEST,
             parameter="extras.network",
             when_value="true",
+        ),
+        ExecutionControl(
+            id="network-disable",
+            emits="-c sandbox_workspace_write.network_access=false",
+            effect=DENY,
+            subjects=("network-egress",),
+            source=REQUEST,
+            parameter="extras.network",
+            when_value="false",
             note=(
-                "there is deliberately no network-disable control: false emits "
-                "NOTHING, and the absence of a flag is not a control"
+                "emitted only under -s workspace-write, the one mode that reads "
+                "the key; it overrides a network_access=true in the user's "
+                "config.toml. Other sandbox modes emit nothing, and the absence "
+                "of a flag is not a control"
             ),
         ),
         ExecutionControl(

@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
+import shutil  # noqa: F401 -- tests patch shutil.which through this module
 import socket
 import sys
 import threading
@@ -537,12 +537,18 @@ def _claude_reported_model(envelope: Dict[str, Any]) -> Optional[str]:
 
 
 def _resolve_claude_executable() -> str:
-    """Locate the ``claude`` CLI via ``shutil.which``.
+    """Locate the Claude CLI: ``LLM_KIT_CLAUDE_EXECUTABLE`` when set, else
+    ``claude`` on PATH (:mod:`llm_kit.adapters.claude_command`).
 
     Raises a clear error if claude cannot be found so a missing CLI surfaces as
-    an actionable message rather than a cryptic subprocess failure.
+    an actionable message rather than a cryptic subprocess failure; a bad
+    variable raises :class:`~llm_kit.adapters.claude_command.ClaudeExecutableError`
+    (a ``RuntimeError``) naming it.
     """
-    found = shutil.which("claude")
+    # Imported here so the module keeps its public surface (parity-pinned).
+    from .claude_command import resolve_claude_executable
+
+    found = resolve_claude_executable()
     if found:
         return found
     raise RuntimeError(
@@ -666,7 +672,7 @@ class ClaudeCliBackend:
         diagnostics_dir: Where timeout diagnostics dump. ``None`` disables
             dumping (the raised error still carries inline stdout/stderr tails).
         executable: Explicit path to the ``claude`` binary. ``None`` resolves it
-            via ``shutil.which`` at call time.
+            at call time: ``LLM_KIT_CLAUDE_EXECUTABLE`` when set, else ``claude`` on PATH.
         runner: The subprocess runner -- test seam; production is
             :func:`.claude_runner.run_claude_streaming`.
         text_only: Run with no tools, no MCP servers, no skills, no settings

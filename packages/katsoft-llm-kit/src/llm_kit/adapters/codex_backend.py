@@ -602,6 +602,8 @@ class CodexCliBackend:
             applied.append("sandbox-mode")
         if "sandbox_workspace_write.network_access=true" in joined:
             applied.append("network-enable")
+        if "sandbox_workspace_write.network_access=false" in joined:
+            applied.append("network-disable")
         if 'windows.sandbox="unelevated"' in joined:
             applied.append("windows-sandbox-mode")
         if "--skip-git-repo-check" in joined:

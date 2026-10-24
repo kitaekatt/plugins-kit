@@ -32,6 +32,11 @@ import subprocess
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Tuple
 
+from llm_kit.adapters.claude_command import (
+    CLAUDE_EXECUTABLE_ENV,
+    ClaudeExecutableError,
+    resolve_claude_executable,
+)
 from llm_kit.registry.cost import (
     BILLING_DIVERTING_VARS,
     METERED,
@@ -111,8 +116,18 @@ def claude_auth(
     for name in BILLING_DIVERTING_VARS:
         if env.get(name):
             return HarnessAuth(METERED, f"{name} is set")
+    try:
+        # Unset: the bare name, as always. Set: validated and resolved, so a
+        # bad value is named here rather than surfacing as a FileNotFoundError.
+        executable = (
+            resolve_claude_executable(env) if CLAUDE_EXECUTABLE_ENV in env else "claude"
+        )
+    except ClaudeExecutableError:
+        # Never raises (this probe's contract); the reason names the variable so
+        # the misconfiguration is visible, and the dispatch itself raises.
+        return HarnessAuth(UNKNOWN, f"{CLAUDE_EXECUTABLE_ENV} is set to an unusable value")
     doc, failure = _run_json(
-        ["claude", "auth", "status"], what="claude auth status",
+        [executable, "auth", "status"], what="claude auth status",
         env=env, cwd=None, runner=runner, timeout_s=timeout_s,
     )
     if failure is not None:

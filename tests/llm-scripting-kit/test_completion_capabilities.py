@@ -511,16 +511,15 @@ def test_codex_network_true_emits_the_flag(tmp_path):
 
 
 def test_codex_network_false_emits_nothing(tmp_path):
-    """The load-bearing negative: absence of a flag is NOT a deny control.
+    """network=False under workspace-write emits an explicit false, never the true pair.
 
-    An earlier design advertised a `network-off` control with effect=deny. The
-    code emits nothing at all for network=False, so no such control exists.
+    Without the explicit pair codex falls back to the user's config.toml, where
+    network_access = true would silently win. (The test name predates that.)
     """
     argv = _stable_argv(_codex_argv(tmp_path, extras={"network": False}))
     assert "sandbox_workspace_write.network_access=true" not in argv
-    assert not any("network_access" in str(part) for part in argv)
+    assert "sandbox_workspace_write.network_access=false" in argv
     ids = {c.id for c in CODEX_CAPABILITIES.execution_controls}
-    assert "network-disable" not in ids
     assert "network-off" not in ids
 
 

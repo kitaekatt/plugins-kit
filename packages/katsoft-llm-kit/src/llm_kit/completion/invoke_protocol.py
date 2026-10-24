@@ -469,7 +469,9 @@ def describe_invoke_schema() -> Dict[str, Any]:
             "manifest": "workspace only: {scope: all|watch, watched_paths: [...] when scope is watch}; deletions are not reported",
             "cost": (
                 "{class, reason, usd, source, estimated_usd, estimated_source}; the class and its reason are "
-                "always reported; usd null means unknown, never zero"
+                "always reported, except that a claude or codex harness entry's class is null (the reason says "
+                "the authentication was not probed) unless the request opted in to consent, because only "
+                "the consent layer needs the probe; usd null means unknown, never zero"
             ),
             "consent": (
                 "{opted_in, applied, scope}: whether the request sent the consent field, and whether a "

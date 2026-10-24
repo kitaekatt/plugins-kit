@@ -207,13 +207,24 @@
               "effect": "allow",
               "emits": "-c sandbox_workspace_write.network_access=true",
               "id": "network-enable",
-              "note": "there is deliberately no network-disable control: false emits NOTHING, and the absence of a flag is not a control",
               "parameter": "extras.network",
               "source": "request",
               "subjects": [
                 "network-egress"
               ],
               "when_value": "true"
+            },
+            {
+              "effect": "deny",
+              "emits": "-c sandbox_workspace_write.network_access=false",
+              "id": "network-disable",
+              "note": "emitted only under -s workspace-write, the one mode that reads the key; it overrides a network_access=true in the user's config.toml. Other sandbox modes emit nothing, and the absence of a flag is not a control",
+              "parameter": "extras.network",
+              "source": "request",
+              "subjects": [
+                "network-egress"
+              ],
+              "when_value": "false"
             },
             {
               "effect": "confine",
@@ -278,7 +289,7 @@
               "default": true,
               "emits": "-c sandbox_workspace_write.network_access=true",
               "handling": "mapped",
-              "note": "emitted ONLY when true; false emits nothing",
+              "note": "true emits network_access=true; false emits network_access=false under -s workspace-write (an explicit deny, so the user's config.toml cannot enable network) and nothing under other sandbox modes",
               "type": "boolean"
             },
             "extras.output_schema": {

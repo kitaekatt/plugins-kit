@@ -386,12 +386,13 @@ class TestBuildCodexExecArgv:
         assert argv[-1] == "-"
         assert argv.count("-") == 1
 
-    def test_network_flag_omitted_when_false(self, monkeypatch, tmp_path):
+    def test_network_flag_explicitly_false_when_false(self, monkeypatch, tmp_path):
         monkeypatch.setattr(codex.os, "name", "posix")
         argv = codex.build_codex_exec_argv(
             root=tmp_path, network=False, argv_prefix=("codex",)
         )
         assert "sandbox_workspace_write.network_access=true" not in argv
+        assert "sandbox_workspace_write.network_access=false" in argv
 
     def test_windows_sandbox_key_present_only_on_nt(self, monkeypatch, tmp_path):
         monkeypatch.setattr(codex.os, "name", "nt")

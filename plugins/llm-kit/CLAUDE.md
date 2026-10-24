@@ -427,7 +427,9 @@ endpoints`, whose payload carries a `capabilities` block keyed by adapter family
 plus an `adapter` field on each endpoint. A capability describes what the adapter
 EMITS, never what the provider or CLI does with it: nothing here promises a target
 HONORS a control. Two corollaries, each pinned by tests: **suppressing a flag is
-not a control** (codex emits nothing for `network=False`), and **a value menu is
+not a control** (codex emits `network_access=false` only under `-s workspace-write`, the one mode
+that reads the key, as the `network-disable` control; other sandbox modes emit nothing for
+`network=False`), and **a value menu is
 advertised only where the request-building code validates it**.
 
 **A guarantees requirement admits AND arms; a guarantee needs a live check.**
@@ -1143,9 +1145,12 @@ consent governs caller-selected execution policy. The library makes no LLM calls
 user of the library makes them, and writing code that invokes models needs no consent. Design record:
 `docs/planning/shared-lib-packaging/consent-design.md`.
 
-**Classification is information, always reported.** Every declared entry has a cost class
+**Classification is information, reported with its reason.** Every declared entry has a cost class
 (`llm_kit.registry.cost.classify`): `local`, `subscription` or `metered`, with no aliases. A
 catalog row carries `cost` as `{class, reason}`, and a protocol 2 response carries `cost.reason`.
+A `claude` or `codex` class depends on harness authentication, which costs a CLI probe, so a
+protocol 2 request that did not opt in to consent reports that class as `null`
+(see below).
 Classification fails closed, so an entry that cannot be shown to be `local` or `subscription` is
 `metered`; the name says billing is paid or unverified, never that a charge occurred.
 
@@ -1219,7 +1224,9 @@ and without the layer, nothing is filtered. A caller that opts in prints the pol
 the library never does.
 
 Protocol 2 of `completion complete` (`references/completion-seam-contract.md`) classifies the one
-entry a project selection names (probing harness authentication in the request workspace), reports
+entry a project selection names (for a `claude` or `codex` entry of an opted-in request, probing
+harness authentication in the request workspace; without the opt-in the class is `null` with the
+reason "<harness> cost class depends on its authentication, which was not probed"), reports
 `cost` with its `reason`, and reports `consent` as `{opted_in, applied, scope}`. When the request
 opted in and the effective policy does not allow the class, it refuses with `error.kind` `consent`
 before any workspace scan, argv or runner call, so a refused call spawns nothing; the message names

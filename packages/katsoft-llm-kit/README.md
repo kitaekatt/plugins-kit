@@ -35,12 +35,27 @@ and does not require Claude Code, bootstrap or plugins-kit.
 Do not install this distribution into an environment that also holds a
 path-linked copy of the `llm_kit` source tree.
 
+## CLI executables
+
+The library starts the Claude and Codex command-line tools by name from PATH. Two environment
+variables name a different build, each either a bare command name (looked up on PATH) or an
+absolute path to an executable file:
+
+- `LLM_KIT_CLAUDE_EXECUTABLE` replaces `claude`.
+- `LLM_KIT_CODEX_EXECUTABLE` replaces `codex`.
+
+A value that is empty, is a relative path, or names nothing runnable raises an error naming the
+variable; the library never falls back to PATH in that case. Unset, the tool is `claude` or
+`codex` on PATH.
+
 ## Consent
 
 The library makes no model calls of its own: the code that uses it does, so the library gates
 nothing on a caller's behalf. Every model entry is classified `local`, `subscription` or
-`metered` (paid or unverified billing), and the class and the reason for it are always reported
-(`llm-kit models catalog`, `models describe`, and protocol 2 responses).
+`metered` (paid or unverified billing), and the class and the reason for it are reported
+(`llm-kit models catalog`, `models describe`, and protocol 2 responses). A protocol 2
+request that does not opt in reports a `claude` or `codex` entry's class as `null`, because the
+authentication probe that decides it runs only for an opted-in request.
 
 The optional consent layer applies a policy you configure only when you
 opt in, and you may build your own policy instead. To opt in, pass `--consent [--consent-scope NAME]` to

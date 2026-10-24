@@ -250,7 +250,7 @@ def test_the_shipped_openrouter_endpoint_declares_the_style():
 
 def test_claude_completion_result_and_estimated_cost(world, capsys):
     allow()
-    code, doc, err = call(world, capsys, selection="chat")
+    code, doc, err = call(world, capsys, selection="chat", consent=True)  # opted in: the class is probed and classified
     assert code == 0, (doc, err)
     resolved = doc["resolved"]
     assert resolved["adapter"] == "claude-cli" and resolved["requested_model"] == "claude-sonnet-5-5"
@@ -279,7 +279,7 @@ def test_claude_without_a_single_reported_model_is_not_verified(world, capsys):
 
 def test_codex_completion_arms_text_only_and_reports_no_served_model(world, capsys):
     allow()
-    code, doc, err = call(world, capsys, selection="draft.generate.primary")
+    code, doc, err = call(world, capsys, selection="draft.generate.primary", consent=True)  # opted in: probed
     assert code == 0, (doc, err)
     resolved = doc["resolved"]
     assert resolved["adapter"] == "codex-cli" and resolved["requested_model"] == "gpt-6-luna"
@@ -554,18 +554,27 @@ def test_expect_files_must_be_relative_and_beneath_the_directory(world, capsys, 
 
 
 @pytest.mark.parametrize(
-    "selection,cost_class", [("art", "metered"), ("chat", "subscription"), ("draft.generate.primary", "subscription")]
+    "selection,cost_class,reason",
+    [
+        ("art", "metered", "no registry entry: billing undeclared"),
+        ("chat", None, "claude cost class depends on its authentication, which was not probed"),
+        ("draft.generate.primary", None, "codex cost class depends on its authentication, which was not probed"),
+    ],
 )
-def test_a_request_without_the_consent_field_is_not_refused_for_its_cost_class(world, capsys, selection, cost_class):
+def test_a_request_without_the_consent_field_is_not_refused_for_its_cost_class(
+    world, capsys, selection, cost_class, reason
+):
     """No consent file and no `consent` field: the optional layer does not apply, so the call dispatches.
 
-    Red on revert: restore a refusal for requests that did not opt in and the runner is never called.
+    A harness entry's class depends on a CLI auth probe that only the consent layer needs, so it is
+    reported unprobed (null) instead. Red on revert: restore a refusal for requests that did not opt
+    in and the runner is never called.
     """
     code, doc, err = call(world, capsys, selection=selection)
     assert code == 0, (doc, err)
-    assert doc["cost"]["class"] == cost_class
+    assert doc["cost"]["class"] == cost_class and doc["cost"]["reason"] == reason
     assert doc["consent"]["opted_in"] is False and doc["consent"]["applied"] is False
-    assert world.runner_calls >= 1  # a harness entry also runs an auth probe through the spied runner
+    assert world.runner_calls >= 1
 
 
 def test_consent_is_per_cost_class(world, capsys):
@@ -671,7 +680,7 @@ def test_request_schema_describes_either_protocol(capsys):
 def test_a_classified_halt_exits_3_with_the_halt_object(world, capsys):
     allow()
     world.claude_raw = json.dumps({"result": "You've hit your limit", "api_error_status": 429, "is_error": True})
-    code, doc, err = call(world, capsys, selection="chat")
+    code, doc, err = call(world, capsys, selection="chat", consent=True)
     assert code == 3 and err is None
     assert doc["status"] == "failed" and doc["error"]["code"] == "rate_limit"
     assert doc["halt"] == {"kind": "rate_limit"}

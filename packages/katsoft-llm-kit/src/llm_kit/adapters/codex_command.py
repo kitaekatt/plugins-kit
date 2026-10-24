@@ -344,7 +344,10 @@ def build_codex_exec_argv(
 
         <prefix> exec [--ignore-user-config] -s <sandbox>
             -c windows.sandbox="unelevated"                 # Windows only
-            -c sandbox_workspace_write.network_access=true  # when network
+            -c sandbox_workspace_write.network_access=true|false
+                                      # -s workspace-write: always; true/false
+                                      # per network. Other -s modes: true only
+                                      # when network, nothing when false.
             [-c shell_environment_policy.inherit="none|core"]
             [-c approval_policy="never"]                 # protocol 2 allowlist
             [-m MODEL] [-c model_reasoning_effort=EFFORT] [-c EXTRA]...
@@ -400,7 +403,17 @@ def build_codex_exec_argv(
     argv += ["-s", str(sandbox)]
     if os.name == "nt":
         argv += ["-c", 'windows.sandbox="unelevated"']
-    if network:
+    if sandbox == "workspace-write":
+        # Always explicit: with no pair, codex falls back to the user's
+        # config.toml, so a user's network_access=true would re-enable network
+        # for a request that asked for it off. Other sandbox modes never read
+        # this key (it lives in the workspace-write table), so a false is not sent.
+        argv += [
+            "-c",
+            "sandbox_workspace_write.network_access=%s" % ("true" if network else "false"),
+        ]
+    elif network:
+        # Historical behaviour for network=True under any other mode.
         argv += ["-c", "sandbox_workspace_write.network_access=true"]
     config_values = {
         "shell_environment_policy.inherit": {"none", "core"},

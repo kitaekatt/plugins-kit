@@ -50,7 +50,8 @@ and 2 when the contract cannot be read.
 ## Cost classes and consent
 
 Every declared model entry has a cost class, reported with its reason whether or not any
-consent layer is in use. Classification fails closed: what cannot be shown to be `local` or
+consent layer is in use. A protocol 2 completion request that does not opt in to consent reports
+a `claude` or `codex` entry's class as `null` (its authentication was not probed). Classification fails closed: what cannot be shown to be `local` or
 `subscription` is `metered`, which states that billing is paid or could not be verified, not
 that a charge occurred.
 

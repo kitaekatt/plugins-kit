@@ -30,9 +30,11 @@ and the adapter capability tests assert every one of them. No fake seam can esta
 control, so nothing here claims it. Two corollaries, each got wrong
 once and pinned by tests:
 
-- **Suppressing a flag is not a control.** codex emits nothing at all for
-  `network=False`; the absence of a flag is not a deny, and no such control is
-  advertised.
+- **Suppressing a flag is not a control.** Under `-s workspace-write`, codex emits
+  `-c sandbox_workspace_write.network_access=false` for `network=False` (the
+  `network-disable` control, so the user's `config.toml` cannot enable network).
+  Other sandbox modes never read that key and emit nothing for `network=False`;
+  the absence of a flag is not a deny, and no control is advertised for them.
 - **A value menu is advertised only where the request-building code validates
   it, and an effort menu is a property of the exact model.** A single validator,
   `llm_kit.registry.model_profiles.check_effort`, holds an effort to the measured
@@ -403,8 +405,8 @@ and consent (only when
 the request opted in with `consent`: the entry's cost class must be allowed by the effective
 consent policy, and a refusal names the class, the scope and the `llm-kit consent set` command;
 an unreadable or malformed consent file is a `configuration` refusal in that case only). A request that
-sends no `consent` field does not opt in and is never refused for its cost class; only an opted-in
-request is checked. A refusal exits 4
+sends no `consent` field (or `consent: false`) does not opt in, is never refused for its cost
+class, and does not run the harness authentication probe; only an opted-in request is checked. A refusal exits 4
 with `{"protocol": 2, "error": {"kind", "message"}}` on stderr; `kind` is one of
 `protocol`, `project-file`, `selection`, `effort`, `mode`, `path`, `contract`,
 `consent` and `configuration`. A call that ran exits 0 when completed, 1 when failed
@@ -412,8 +414,10 @@ and 3 when it ended in a classified halt, with the result document on stdout: `s
 `mode`, the `selection`, a `resolved` block that separates `requested_model` from
 `reported_model` and sets `model_verified` only when the two agree, the `effort` block
 (`requested`, `sent`, `source`), `output`, `usage`, `cost` (`class`, `reason`, authoritative USD and
-a separate estimate; null means unknown; the class and its reason are reported whether or not
-the request opted in to consent), `consent` (`{opted_in, applied, scope}`: whether the request
+a separate estimate; null means unknown; the reason is always reported, and the class is too
+except that a `claude` or `codex` entry's class is null, with the reason "<harness> cost class
+depends on its authentication, which was not probed", when the request did not opt in to
+consent, because only the consent layer needs the authentication probe), `consent` (`{opted_in, applied, scope}`: whether the request
 sent the field, whether a consent policy was applied to the call, and the scope named) and,
 for `workspace`, the `files` written.
 

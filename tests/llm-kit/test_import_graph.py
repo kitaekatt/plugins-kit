@@ -64,7 +64,7 @@ ALLOWED: dict[str, frozenset[str]] = {
     }),
     "pipeline.execution": frozenset({
         "execution", "storage", "pipeline.core", "pipeline.artifacts",
-        "pipeline.runtime",
+        "pipeline.runtime", "adapters",
     }),
     "jobs": frozenset({"completion", "registry", "dispatch", "execution", "storage"}),
     "pipeline.runtime": frozenset({

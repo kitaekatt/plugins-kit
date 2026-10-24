@@ -18,10 +18,13 @@ spawned:
 4. build the backend and refuse a mode its adapter does not honor
    (:func:`~llm_kit.completion.capabilities.require_call_mode`);
 5. confine ``working_dir`` and refuse a contract the adapter cannot deliver;
-6. classify the cost of the entry (always, and always reported with its reason)
-   and, when the request opted in to the optional consent layer (``consent``),
-   refuse it unless that policy allows its class -- BEFORE any scan, argv or
-   runner call;
+6. classify the cost of the entry (always reported with its reason) and, when
+   the request opted in to the optional consent layer (``consent``), refuse it
+   unless that policy allows its class -- BEFORE any scan, argv or runner call.
+   A claude or codex entry's class depends on the CLI's authentication, learned
+   by a probe that costs seconds, so only an opted-in request probes; without
+   the opt-in the class is reported as ``null`` with an "not probed" reason
+   (as ``models catalog`` does without ``--probe-auth``);
 7. for ``workspace``, take the selected filesystem snapshot; run the call; take it again.
 
 The cost class comes from :func:`llm_kit.registry.cost.classify`, the rule the
@@ -97,6 +100,13 @@ from llm_kit.registry.models import (
 OUTCOME_COMPLETED = "completed"
 OUTCOME_FAILED = "failed"
 OUTCOME_HALTED = "halted"
+
+#: Harnesses whose cost class depends on how the CLI is authenticated (learned by probing it).
+_AUTH_DEPENDENT_HARNESSES = ("claude", "codex")
+
+#: The cost reason of a request that did not opt in to consent, so the auth was not probed;
+#: the same wording `models catalog` reports without `--probe-auth`.
+UNPROBED_REASON = "{harness} cost class depends on its authentication, which was not probed"
 
 HarnessProbe = Callable[[str, Path], Optional[HarnessAuth]]
 
@@ -377,24 +387,31 @@ def invoke(
     # 6. consent --------------------------------------------------------------
     entries = discover_model_entries(project_root=str(root))
     entry = entries.get(row["endpoint"])
-    auth: Optional[Dict[str, HarnessAuth]] = None
-    harness = (getattr(entry, "harness", None) or "").lower() if entry is not None else ""
-    if entry is not None and harness in ("claude", "codex"):
-        probed = (harness_probe or _probe_harness)(harness, workdir or root)
-        auth = {harness: probed} if probed is not None else {}
-    verdict = classify(entry, entries=entries, harness_auth=auth)
-    cost_class = verdict.cost_class
-    if cost_class not in COST_CLASSES:  # classify's contract; a new class must be handled, not allowed
-        raise InvokeRefusal(KIND_CONSENT, f"unrecognised cost class {cost_class!r}")
-    load_policy = policy_loader or consent_store.policy
     opted_in = request.consent is not None
+    harness = (getattr(entry, "harness", None) or "").lower() if entry is not None else ""
+    cost_class: Optional[str]
+    if harness in _AUTH_DEPENDENT_HARNESSES and not opted_in:
+        # Only the consent layer needs the answer, and asking the CLI costs seconds:
+        # report the class as unprobed (null), as `models catalog` does without --probe-auth.
+        cost_class = None
+        cost_reason = UNPROBED_REASON.format(harness=harness)
+    else:
+        auth: Optional[Dict[str, HarnessAuth]] = None
+        if harness in _AUTH_DEPENDENT_HARNESSES:
+            probed = (harness_probe or _probe_harness)(harness, workdir or root)
+            auth = {harness: probed} if probed is not None else {}
+        verdict = classify(entry, entries=entries, harness_auth=auth)
+        cost_class, cost_reason = verdict.cost_class, verdict.reason
+        if cost_class not in COST_CLASSES:  # classify's contract; a new class must be handled, not allowed
+            raise InvokeRefusal(KIND_CONSENT, f"unrecognised cost class {cost_class!r}")
+    load_policy = policy_loader or consent_store.policy
     consent_report: Dict[str, Any] = {
         "opted_in": opted_in,
         "applied": opted_in,
         "scope": request.consent.scope if request.consent is not None else None,
     }
     if request.consent is not None:
-        _refuse_unless_allowed(load_policy, request.consent.scope, cost_class, verdict.reason, row["endpoint"])
+        _refuse_unless_allowed(load_policy, request.consent.scope, cost_class, cost_reason, row["endpoint"])
 
     # arm the controls a plain completion relies on (no file writes, no shell, no subagents)
     if request.mode != MODE_WORKSPACE and record is not None:
@@ -468,7 +485,7 @@ def invoke(
     }
     cost = cost_block(
         cost_class,
-        reason=verdict.reason,
+        reason=cost_reason,
         usd=getattr(response, "reported_cost_usd", None),
         usd_source=getattr(response, "reported_cost_source", None),
         estimated_usd=getattr(response, "estimated_cost_usd", None),
