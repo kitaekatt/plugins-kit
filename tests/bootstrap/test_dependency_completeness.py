@@ -34,6 +34,7 @@ Deliberate exclusions:
 import ast
 import re
 import sys
+from importlib import metadata
 from pathlib import Path
 
 import pytest
@@ -329,20 +330,36 @@ def _extras_of(req):
     return {_norm(e) for e in m.group(1).split(",") if e.strip()}
 
 
-# First-party distributions whose extras carry third-party requirements. A
-# consumer that declares ``katsoft-llm-kit[sdk]`` has its openai need met
-# through the extra, because the library's source is linked or installed
-# without its own pins (plugins/CLAUDE.md, "The source is shared; third-party
-# dependencies are not"). The extras are read from the distribution's own
-# pyproject, so the check cannot disagree with what pip would install.
-_PACKAGE_PYPROJECTS = {
-    "katsoft-llm-kit": _REPO_ROOT / "packages" / "katsoft-llm-kit" / "pyproject.toml",
-}
+# Released first-party packages are outside this repository. Their installed
+# metadata states which dependencies each selected extra makes available.
+_PACKAGE_DISTRIBUTIONS = {"katsoft-llm-kit"}
 
 
 def _package_extra_dists(dist, extras, pyprojects=None):
     """Distribution names the declared ``extras`` of first-party ``dist`` install."""
-    path = (pyprojects or _PACKAGE_PYPROJECTS).get(dist)
+    if pyprojects is None:
+        if dist not in _PACKAGE_DISTRIBUTIONS or not extras:
+            return set()
+        from packaging.requirements import Requirement
+
+        try:
+            installed = metadata.distribution(dist)
+        except metadata.PackageNotFoundError as exc:
+            raise RuntimeError(
+                f"{dist} metadata is required for dependency verification; "
+                "sync the project's declared dev dependencies"
+            ) from exc
+        available = {_norm(name) for name in installed.metadata.get_all("Provides-Extra", [])}
+        unknown = sorted(extras - available)
+        if unknown:
+            raise AssertionError(f"{dist} declares no extra named {unknown} in installed metadata")
+        requirements = [Requirement(text) for text in installed.requires or []]
+        return {_norm(requirement.name) for requirement in requirements
+                if requirement.marker is None or any(
+                    requirement.marker.evaluate({"extra": extra}) for extra in extras)}
+
+    # Explicit synthetic pyprojects remain the unit-test injection seam.
+    path = pyprojects.get(dist)
     if path is None or not extras:
         return set()
     data = _load_toml(path)
@@ -412,7 +429,7 @@ def test_first_party_map_is_sane():
     # Sanity guard so a refactor that breaks package discovery is caught.
     assert "bootstrap_lib" in _FIRST_PARTY
     assert "llm_scripting_kit" in _FIRST_PARTY
-    # llm_kit is the katsoft-llm-kit package (packages/), not plugin source: a plugin
+    # llm_kit is an installed katsoft-llm-kit package, not plugin source: a plugin
     # that imports it declares that distribution (_IMPORT_TO_DIST).
     assert "llm_kit" not in _FIRST_PARTY
 
@@ -500,3 +517,33 @@ def test_declared_package_extras_count_as_declared_third_party_needs(tmp_path: P
     # A misspelled extra is an error, not a silently empty declaration.
     with pytest.raises(AssertionError, match="no extra named"):
         declare("katsoft-llm-kit[sdkk]>=1.1,<2")
+
+
+def test_installed_package_extras_follow_metadata_markers(monkeypatch):
+    from email.message import Message
+    from types import SimpleNamespace
+
+    info = Message()
+    info["Provides-Extra"] = "sdk"
+    info["Provides-Extra"] = "config"
+    installed = SimpleNamespace(metadata=info, requires=[
+        "katsoft-contracts>=1.0,<2",
+        'openai>=1.0; extra == "sdk"',
+        'pyyaml>=6.0; extra == "config"',
+        'windows-only; extra == "sdk" and sys_platform == "not-a-real-platform"',
+    ])
+    monkeypatch.setattr(metadata, "distribution", lambda dist: installed)
+    assert _package_extra_dists("katsoft-llm-kit", {"sdk"}) == {"katsoft-contracts", "openai"}
+    assert _package_extra_dists("katsoft-llm-kit", {"config"}) == {"katsoft-contracts", "pyyaml"}
+    with pytest.raises(AssertionError, match="no extra named"):
+        _package_extra_dists("katsoft-llm-kit", {"typo"})
+
+
+def test_missing_installed_package_metadata_fails_clearly(monkeypatch):
+    def absent(dist):
+        raise metadata.PackageNotFoundError(dist)
+
+    monkeypatch.setattr(metadata, "distribution", absent)
+    with pytest.raises(RuntimeError, match="katsoft-llm-kit metadata is required"):
+        _package_extra_dists("katsoft-llm-kit", {"sdk"})
+    assert _package_extra_dists("katsoft-llm-kit", {"sdk"}, {}) == set()

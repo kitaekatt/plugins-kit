@@ -68,9 +68,8 @@ path; third-party packages arrive as extras (`config` and `jobs` and `pipeline`
 need PyYAML, `sdk` the OpenAI SDK, `local` psutil, `frontdoor` FastAPI, Uvicorn
 and httpx) and are imported at the call site, so a missing requested capability
 refuses at the call rather than at import. The library source and source tests
-belong to [katsoft-libs](https://github.com/kitaekatt/katsoft-libs), at
-`packages/katsoft-llm-kit/src/llm_kit/` in that repository. Change library behavior
-there. This plugin holds no library source and publishes no shared lib. A consumer
+belong to the [katsoft-libs source tree](https://github.com/kitaekatt/katsoft-libs/tree/dev/packages/katsoft-llm-kit/src/llm_kit).
+Change library behavior there. This plugin holds no library source and publishes no shared lib. A consumer
 venv installs the package with the extras it reaches (`katsoft-llm-kit[<extras>]>=A.B,<N` in
 its `pyproject.toml`). The plugin's own venv does the same: its `pyproject.toml` is a
 non-package project that requires the released `katsoft-llm-kit[<every extra>]>=1.7,<2` and

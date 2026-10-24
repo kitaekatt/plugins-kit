@@ -8,6 +8,7 @@ byte-identical to the canonical, so the copies cannot silently drift.
 """
 
 import filecmp
+import importlib.metadata
 import importlib.util
 import os
 import subprocess
@@ -18,22 +19,22 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CANON = _REPO_ROOT / "plugins" / "bootstrap" / "bootstrap_lib" / "bootstrap_guard.py"
+_KIT_GUARD = Path(
+    importlib.metadata.distribution("katsoft-llm-kit").locate_file("llm_kit/bootstrap_guard.py")
+)
 
 
 def _vendored_copies():
-    """Every bootstrap_guard.py under plugins/ and packages/ except the canonical
-    and any that live inside a virtualenv / site-packages / cache dir. packages/
-    is searched because the llm_kit source (and its guard copy) lives in
-    packages/katsoft-llm-kit/src."""
+    """Plugin guard copies and the installed library's guard, except the canonical."""
     skip = {".venv", "site-packages", "__pycache__", "node_modules"}
     out = []
-    for root in ("plugins", "packages"):
-        for p in _REPO_ROOT.glob(f"{root}/**/bootstrap_guard.py"):
-            if p.resolve() == _CANON.resolve():
-                continue
-            if any(part in skip for part in p.parts):
-                continue
-            out.append(p)
+    for p in _REPO_ROOT.glob("plugins/**/bootstrap_guard.py"):
+        if p.resolve() == _CANON.resolve():
+            continue
+        if any(part in skip for part in p.parts):
+            continue
+        out.append(p)
+    out.append(_KIT_GUARD)
     return out
 
 
@@ -134,13 +135,7 @@ class TestVendoredCopies:
         assert vendored in _vendored_copies()
 
     def test_llm_kit_package_copy_present(self):
-        # The llm_kit guard copy lives in the katsoft-llm-kit package source,
-        # outside plugins/; assert the glob reaches it so a narrowed glob cannot
-        # silently drop it from the drift check.
-        vendored = (
-            _REPO_ROOT / "packages" / "katsoft-llm-kit" / "src" / "llm_kit"
-            / "bootstrap_guard.py"
-        )
+        vendored = _KIT_GUARD
         assert vendored.is_file(), f"missing vendored copy: {vendored}"
         assert vendored in _vendored_copies()
 
@@ -148,7 +143,9 @@ class TestVendoredCopies:
         diffs = []
         for vendored in _vendored_copies():
             if not filecmp.cmp(_CANON, vendored, shallow=False):
-                diffs.append(str(vendored.relative_to(_REPO_ROOT)))
+                diffs.append(str(vendored.relative_to(_REPO_ROOT))
+                             if vendored.is_relative_to(_REPO_ROOT)
+                             else "katsoft-llm-kit: llm_kit/bootstrap_guard.py")
         assert not diffs, f"vendored bootstrap_guard.py diverged from canonical: {diffs}"
 
 
