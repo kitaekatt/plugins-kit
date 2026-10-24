@@ -126,6 +126,13 @@ apart. In claude's mode the argv carries neither `--allowedTools` nor
 `--permission-mode bypassPermissions`, which is why `permission-bypass` is
 advertised with `source: request` and `when_value: "false"`.
 
+When only `subagent-spawn` needs arming, `arm_call` first uses an advertised
+named-tool deny control. It retains the caller's existing policy and appends
+only missing canonical `Task` and `Agent` names. This keeps ordinary Claude
+tools available. An explicitly text-only backend stays text-only. Broad write
+or shell guarantees retain text-only selection. The mode-only compatibility
+helper `arm_requirements` is unchanged; dispatching callers use `arm_call`.
+
 The deny control is the adapter's one CONDITIONAL control, and the asymmetry
 with `allowed-tools` beside it is deliberate. `--allowedTools` is emitted on
 every call, passing `""` when the caller named no tools, because an empty

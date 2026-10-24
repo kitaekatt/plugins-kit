@@ -278,7 +278,7 @@
     {
       "path": "tests/job-kit/test_runner.py",
       "disposition": "rewrite",
-      "reason": "Re-pointed at llm-kit's final module names: skips injected on declared-difference tests, import statements; 3 declared difference(s) below.",
+      "reason": "Re-pointed at llm-kit's final module names: skips injected on declared-difference tests, import statements; 4 declared difference(s) below.",
       "rewrite_classes": [
         "declared-skip",
         "import"
@@ -297,6 +297,10 @@
         "job-kit/test_runner.py::test_runner_omits_temperature_when_job_does_not_set_one": {
           "mirror_status": "skipped",
           "reason": "The legacy test pins a job's default max_tokens to 4096. llm-kit leaves a job's max_tokens unset when the job names none, so an openrouter.ai job is not capped (BackendOptions.max_tokens is None). Pinned by tests/llm-kit/test_max_tokens_finish_reason.py::test_a_job_that_names_no_max_tokens_carries_none_and_a_named_one_is_kept."
+        },
+        "job-kit/test_runner.py::test_unmapped_deny_floor_does_not_arm_the_codex_sandbox": {
+          "mirror_status": "skipped",
+          "reason": "The legacy runner ignores an opaque WebFetch deny floor on Codex. llm-kit 1.7.1 requires a literal disallowed-tools controller for opaque or scoped clauses and refuses an incapable adapter before dispatch. The no-dispatch refusal is pinned by tests/llm-kit/test_targeted_deny_floor.py::test_scoped_and_opaque_floor_refuses_other_harness_before_call."
         }
       }
     },

@@ -125,6 +125,40 @@ DENY_TOOL_NAMES = {
 }
 
 
+def _disallowed_tool_clauses(value: str) -> tuple[str, ...]:
+    """Split a literal deny floor only outside balanced argument filters.
+
+    Clauses are classification inputs, not a rewritten policy. Callers must
+    forward the original value to the literal deny channel unchanged.
+    """
+    clauses: list[str] = []
+    start = 0
+    depth = 0
+    closed = False
+    for index, character in enumerate(value):
+        if depth == 0 and (character.isspace() or character == ","):
+            if index > start:
+                clauses.append(value[start:index])
+            start = index + 1
+            closed = False
+        elif closed:
+            raise ValueError("Malformed scoped deny floor clause after closing parenthesis")
+        elif character == "(":
+            if depth == 0 and index == start:
+                raise ValueError("Scoped deny floor clause needs a tool name")
+            depth += 1
+        elif character == ")":
+            if depth == 0:
+                raise ValueError("Unbalanced scoped deny floor clause")
+            depth -= 1
+            closed = depth == 0
+    if depth:
+        raise ValueError("Unbalanced scoped deny floor clause")
+    if start < len(value):
+        clauses.append(value[start:])
+    return tuple(clauses)
+
+
 def subjects_for_disallowed_tools(disallowed_tools):
     """The canonical subjects a claude-shaped deny list is asking to withhold.
 

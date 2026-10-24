@@ -311,9 +311,15 @@ def _verify_lease(handle: ProcessHandle, spec: JobProcessSpec) -> None:
 def _spawn_options(*, detached: bool) -> dict[str, Any]:
     if os.name == "posix":
         return {"start_new_session": True} if detached else {}
+    # CREATE_NO_WINDOW, never DETACHED_PROCESS. A DETACHED_PROCESS child has no
+    # console, so every console program it starts (the venv python.exe launcher,
+    # the job's own command) is allocated a new, visible console window. The two
+    # flags are mutually exclusive, and CREATE_NO_WINDOW alone already gives the
+    # child its own hidden console independent of the parent's. The process group
+    # keeps a Ctrl-C delivered to the parent from reaching a detached child.
     flags = subprocess.CREATE_NO_WINDOW
     if detached:
-        flags |= subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        flags |= subprocess.CREATE_NEW_PROCESS_GROUP
     return {"creationflags": flags}
 
 

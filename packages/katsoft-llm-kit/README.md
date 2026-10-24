@@ -53,6 +53,18 @@ With `sandbox: "workspace-write"`, `network: false` emits an explicit `sandbox_w
 This override prevents a user configuration from silently enabling workspace network access.
 Capabilities report these emitted controls. Callers still need version-specific harness evidence for their permission policy.
 
+## Scoped job denials
+
+From version 1.7.1, a Claude job can deny `Agent,Task` without disabling its ordinary tools.
+Broad write or shell denial requirements still select text-only mode.
+A scoped rule such as `Bash(git push --force*)` keeps its original argument filter.
+Scoped rules and unknown tool names require a literal `disallowed-tools` control and matching response provenance.
+Adapters without that control are refused before dispatch.
+Filters must have balanced parentheses. Separators apply only outside filters.
+Mixed floors retain their whole-tool guarantees: `Write,Bash(git push *)` still requires filesystem-write denial.
+The existing OpenCode permission mapping is unchanged.
+These records describe emitted controls; verify the actual harness behavior for your policy.
+
 ## Runtime mode
 
 `llm_kit._runtime.mode()` reports how the library is deployed. This

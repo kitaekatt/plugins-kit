@@ -275,6 +275,8 @@ _FINAL_ONLY_NAMES = frozenset(
 
 _SKIP_NAMES = {
     *_FINAL_ONLY_NAMES,
+    # Private implementation helpers for the 1.7.1 targeted-floor fix.
+    "_disallowed_tool_clauses", "_with_denied_names", "_SUBAGENT_SPAWN",
     "annotations",
     "__builtins__",
     "__cached__",
@@ -939,14 +941,37 @@ def test_arm_call_and_requirements_parity():
     def scenario(S):
         out = []
         options = [S.types.BackendOptions(), S.types.BackendOptions(disallowed_tools="Bash, Edit")]
+        def comparable_call(backend, opt, req, rec):
+            armed = S.requirements.arm_call(backend, opt, req, rec)
+            raw = armed.options.disallowed_tools
+            if raw and "(" not in raw:
+                # Deliberate difference: final arming preserves the raw prefix;
+                # compare whole-tool meaning here. Scoped bytes are pinned in
+                # test_targeted_deny_floor.py, without this normalization.
+                armed = dataclasses.replace(armed, options=dataclasses.replace(
+                    armed.options, disallowed_tools=" ".join(raw.replace(",", " ").split())))
+            return armed
         for name, rec in records(S).items():
             for bi, backend in enumerate(backends):
                 for ri, req in enumerate(reqs):
                     tag = f"{name}/b{bi}/r{ri}"
                     out.append((f"{tag}/req", outcome(S.requirements.arm_requirements, backend, req, rec)))
                     for oi, opt in enumerate(options):
-                        out.append((f"{tag}/o{oi}/call", outcome(S.requirements.arm_call, backend, opt, req, rec)))
-                        out.append((f"{tag}/o{oi}/json", outcome(S.requirements.arm_call, backend, opt, req, rec.to_json())))
+                        if name == "claude-cli" and req == {"denies": ["subagent-spawn"]} and not getattr(backend, "text_only", False):
+                            # Deliberate 1.7.1 behavior: child-only denial uses
+                            # named tools instead of disabling all task tools.
+                            # Broad guarantees and arm_requirements stay in
+                            # the unchanged differential above and below.
+                            if S.label == "final":
+                                for record in (rec, rec.to_json()):
+                                    armed = S.requirements.arm_call(backend, opt, req, record)
+                                    assert armed.backend is backend
+                                    assert armed.controls == ("disallowed-tools",)
+                                    prefix = opt.disallowed_tools or ""
+                                    assert armed.options.disallowed_tools == prefix + (" " if prefix else "") + "Task Agent"
+                            continue
+                        out.append((f"{tag}/o{oi}/call", outcome(comparable_call, backend, opt, req, rec)))
+                        out.append((f"{tag}/o{oi}/json", outcome(comparable_call, backend, opt, req, rec.to_json())))
         out.append(("no-record", outcome(S.requirements.arm_call, _Unarmable(), S.types.BackendOptions(), {"guarantees": ["shell-exec"]})))
         out.append(("armed-call", outcome(S.requirements.ArmedCall, 1, 2)))
         return out

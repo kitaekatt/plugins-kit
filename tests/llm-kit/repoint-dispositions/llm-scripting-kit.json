@@ -794,9 +794,10 @@
     {
       "path": "tests/llm-scripting-kit/test_text_only_arming.py",
       "disposition": "rewrite",
-      "reason": "Re-pointed at llm-kit's final module names: import statements.",
+      "reason": "Re-pointed at llm-kit's final module names: import statements, test_text_edits rows; 1 test_text_edits row(s) in repoint-map.json adapt the test to the final layout.",
       "rewrite_classes": [
-        "import"
+        "import",
+        "text-edit"
       ],
       "collection_count": 34,
       "baseline_failures": []

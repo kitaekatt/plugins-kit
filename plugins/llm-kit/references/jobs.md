@@ -113,6 +113,16 @@ jobs:
 - **A tool deny floor.** The job-file-level `disallowed_tools` applies to every
   job in the run. Harness endpoints are agent sessions, not plain completions;
   the floor is how a run declares what they may not do.
+  Whole tool names retain their canonical guarantees. Broad write or shell
+  denial still arms text-only mode. Native-child denial alone uses a narrow
+  named-tool control when available, so Claude retains its ordinary tools.
+  Scoped clauses such as `Bash(git push --force*)` and unknown tool names
+  require the literal `disallowed-tools` control before dispatch. The response
+  must report that control applied. Other adapters are refused for these clauses.
+  The runner forwards the entire floor unchanged. It splits classification
+  clauses only outside balanced parentheses and refuses malformed scoped syntax.
+  A mixed floor keeps its whole-tool guarantees: `Write,Bash(git push *)`
+  still requires filesystem-write denial.
 
 When `--store` is omitted, the default store path is CWD-relative:
 `.local-data/plugins-kit/job-kit/runs.sqlite3` under the current working

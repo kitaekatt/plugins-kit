@@ -55,6 +55,22 @@ def test_worker_cold_start_does_not_shadow_stdlib_select(tmp_path: Path) -> None
     assert "usage:" in result.stdout
 
 
+@pytest.mark.skipif(os.name != "nt", reason="console windows are a Windows concept")
+@pytest.mark.parametrize("detached", [False, True])
+def test_spawned_console_programs_get_no_visible_window(detached: bool) -> None:
+    # A grandchild started by a spawned supervisor process must not be given a
+    # visible console: under DETACHED_PROCESS each one opened a terminal window.
+    probe = (
+        "import ctypes; hwnd = ctypes.windll.kernel32.GetConsoleWindow(); "
+        "print(int(bool(hwnd and ctypes.windll.user32.IsWindowVisible(hwnd))))"
+    )
+    parent = f"import subprocess, sys; sys.exit(subprocess.call([sys.executable, '-c', {probe!r}]))"
+    result = subprocess.run([sys.executable, "-c", parent], capture_output=True, text=True, timeout=30,
+                            **supervisor._spawn_options(detached=detached))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "0"
+
+
 def test_spec_and_handle_json_roundtrip_and_immutable_environment(tmp_path: Path) -> None:
     environment = {"TEST_VALUE": "initial"}
     value = spec(tmp_path, "pass", env=environment)

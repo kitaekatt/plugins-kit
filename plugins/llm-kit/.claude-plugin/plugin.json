@@ -1,6 +1,6 @@
 {
   "name": "llm-kit",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "description": "LLM access, durable agent jobs and batch content pipelines in one library. Consolidation of llm-scripting-kit, job-kit and content-pipeline-kit.",
   "author": {
     "name": "Christina"

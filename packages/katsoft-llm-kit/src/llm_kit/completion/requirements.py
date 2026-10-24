@@ -32,9 +32,11 @@ from typing import Any, Optional, Union
 
 from .capabilities import (
     DENY_TOOL_NAMES,
+    SUBAGENT_SPAWN as _SUBAGENT_SPAWN,
     TEXT_ONLY_MODE,
     TEXT_ONLY_PARAMETER,
     Capabilities,
+    _disallowed_tool_clauses,
 )
 
 _DENYING = {"deny", "confine"}
@@ -342,6 +344,16 @@ class ArmedCall:
     controls: tuple = ()
 
 
+def _with_denied_names(options: Any, names: Sequence[str]) -> Any:
+    """Append missing canonical names while retaining the complete raw policy."""
+    existing = str(getattr(options, "disallowed_tools", None) or "")
+    whole = {clause for clause in _disallowed_tool_clauses(existing) if "(" not in clause}
+    missing = [name for name in dict.fromkeys(names) if name not in whole]
+    suffix = " ".join(missing)
+    value = existing + (" " if existing and suffix else "") + suffix
+    return dataclasses.replace(options, disallowed_tools=value)
+
+
 def arm_call(
     backend: Any,
     options: Any,
@@ -353,7 +365,8 @@ def arm_call(
     For each required subject the adapter does not deny unarmed (structurally
     or through a FIXED control):
 
-    - when the record's ``text-only-mode`` control denies all of them, the
+    - for only native-child denial, a named-tool deny keeps ordinary tools;
+    - otherwise, when ``text-only-mode`` denies all of them, the
       backend is switched to text-only mode (``backend.text_only``);
     - otherwise each subject is armed through a ``disallowed_tools`` control
       that denies it, by adding that subject's :data:`DENY_TOOL_NAMES` to
@@ -379,6 +392,14 @@ def arm_call(
     remaining = _unarmed_subjects(advertised, subjects)
     if not remaining:
         return ArmedCall(backend, options)
+    if remaining == {_SUBAGENT_SPAWN} and not getattr(backend, "text_only", False):
+        control = next((control for control in _sequence(advertised.get("execution_controls"))
+                        if isinstance(control, Mapping) and control.get("source") == "request"
+                        and control.get("effect") in _DENYING
+                        and control.get("parameter") == "disallowed_tools"
+                        and _SUBAGENT_SPAWN in _sequence(control.get("subjects"))), None)
+        if control is not None:
+            return ArmedCall(backend, _with_denied_names(options, DENY_TOOL_NAMES[_SUBAGENT_SPAWN]), (str(control["id"]),))
     if _text_only_control(advertised, remaining) is not None:
         return ArmedCall(_with_text_only(backend), options, (TEXT_ONLY_MODE,))
     names = []
@@ -404,11 +425,9 @@ def arm_call(
         names.extend(DENY_TOOL_NAMES[subject])
         if control.get("id") not in controls:
             controls.append(str(control.get("id")))
-    existing = str(getattr(options, "disallowed_tools", None) or "").replace(",", " ").split()
-    merged = list(dict.fromkeys([*existing, *names]))
     return ArmedCall(
         backend,
-        dataclasses.replace(options, disallowed_tools=" ".join(merged)),
+        _with_denied_names(options, names),
         tuple(controls),
     )
 

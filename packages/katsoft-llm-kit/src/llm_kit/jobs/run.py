@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Callable, Collection, Iterator, Mapping, Optional, Sequence
 
 from llm_kit import _runtime
-from llm_kit.completion.capabilities import Capabilities, subjects_for_disallowed_tools
+from llm_kit.completion.capabilities import Capabilities, _disallowed_tool_clauses, subjects_for_disallowed_tools
 from llm_kit.completion.halt import (
     AgentTimeoutError,
     HALT_AUTH,
@@ -657,25 +657,45 @@ def _string_option(
     return value
 
 
-def _requirements_with_subjects(
-    requirements: Mapping[str, object], subjects: Collection[str]
+def _requirements_with_names(
+    requirements: Mapping[str, object], subjects: Collection[str], key: str = "guarantees"
 ) -> dict[str, object]:
     """Add required deny effects to one requirements mapping."""
     result = dict(requirements)
-    existing = result.get("guarantees")
+    existing = result.get(key)
     if isinstance(existing, Mapping):
         merged = dict(existing)
         merged.update({subject: True for subject in sorted(subjects)})
-        result["guarantees"] = merged
+        result[key] = merged
     elif isinstance(existing, str):
-        result["guarantees"] = tuple(sorted({existing, *subjects}))
+        result[key] = tuple(sorted({existing, *subjects}))
     elif isinstance(existing, Sequence) and not isinstance(
         existing, (str, bytes, bytearray)
     ):
-        result["guarantees"] = tuple(sorted({*existing, *subjects}))
+        result[key] = tuple(sorted({*existing, *subjects}))
     else:
-        result["guarantees"] = tuple(sorted(subjects))
+        result[key] = tuple(sorted(subjects))
     return result
+
+
+def _floor_policy(run_floor: str) -> tuple[frozenset[str], bool]:
+    """Whole tools need canonical denial; scoped or opaque tools need literal delivery."""
+    subjects: set[str] = set()
+    literal = False
+    for clause in _disallowed_tool_clauses(run_floor):
+        mapped = subjects_for_disallowed_tools(clause) if "(" not in clause else frozenset()
+        subjects.update(mapped)
+        literal = literal or not mapped
+    return frozenset(subjects), literal
+
+
+def _literal_floor_admission(records: Mapping[str, Capabilities]) -> dict[str, Capabilities]:
+    """Expose the literal control to selection only when the request can arm it."""
+    return {name: replace(record, execution_controls=tuple(
+        control for control in record.execution_controls
+        if control.id != "disallowed-tools" or (control.source == "request"
+           and control.parameter == "disallowed_tools" and control.effect == "deny")))
+        for name, record in records.items()}
 
 
 def _require_floor_subjects(job: Job, run_floor: str) -> Job:
@@ -698,14 +718,17 @@ def _require_floor_subjects(job: Job, run_floor: str) -> Job:
     subagent-spawn as well as writes; run_job's arm_call arms that mode before
     the call, so the denial is applied, not merely advertised.
     """
-    subjects = subjects_for_disallowed_tools(run_floor)
-    if not subjects:
+    subjects, literal = _floor_policy(run_floor)
+    if not subjects and not literal:
         return job
+    def requirements(base: Mapping[str, object]) -> dict[str, object]:
+        result = _requirements_with_names(base, subjects) if subjects else dict(base)
+        if literal:
+            result = _requirements_with_names(result, {"disallowed-tools"}, "execution_controls")
+        return result
     if job.uses_model_sidecars:
         model_requirements = {
-            model_id: _requirements_with_subjects(
-                job.effective_requirements(model_id), subjects
-            )
+            model_id: requirements(job.effective_requirements(model_id))
             for model_id in job.models
         }
         # The effective maps now contain the job-level keys. Clear their
@@ -717,7 +740,7 @@ def _require_floor_subjects(job: Job, run_floor: str) -> Job:
         )
     return replace(
         job,
-        requirements=_requirements_with_subjects(job.requirements, subjects),
+        requirements=requirements(job.requirements),
     )
 
 
@@ -1032,6 +1055,8 @@ def _run_job_attempt(
     selection_job = (
         _require_floor_subjects(job, run_floor) if run_floor is not None else job
     )
+    if run_floor is not None and _floor_policy(run_floor)[1]:
+        advertised = _literal_floor_admission(advertised)
     # An attempt whose halt was waited out and retried did not halt the endpoint.
     waited_out = store.waited_out_attempt_numbers(run_id, job.id)
     same_job_halts = {
@@ -1264,9 +1289,12 @@ def _run_job_attempt(
             ),
         )
         raise
-    if armed_call.controls and attempt.status == COMPLETED:
+    required_controls = list(armed_call.controls)
+    if run_floor is not None and _floor_policy(run_floor)[1]:
+        required_controls.append("disallowed-tools")
+    if required_controls and attempt.status == COMPLETED:
         applied = set(attempt.execution_controls_applied or ())
-        missing = [c for c in armed_call.controls if c not in applied]
+        missing = sorted(set(required_controls) - applied)
         if missing:
             attempt = replace(
                 attempt,
