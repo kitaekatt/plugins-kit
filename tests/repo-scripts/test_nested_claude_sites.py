@@ -13,7 +13,13 @@ excluded; tracked or untracked-and-unignored, so a new file is seen before it is
 committed):
 
 - WHICH: a call to ``which`` or ``_resolve_cli`` whose first argument is the
-  string ``"claude"`` (the executable is being resolved).
+  string ``"claude"``, or any call to ``resolve_claude_executable`` /
+  ``resolve_claude_cli`` (the executable is being resolved; the last two are
+  ``llm_kit.adapters.claude_command``, which resolves ``LLM_KIT_CLAUDE_EXECUTABLE``
+  and so passes no literal ``"claude"`` at its call sites; counted only in a
+  file that imports from ``claude_command``, because bootstrap's
+  ``marketplace_lifecycle.resolve_claude_cli`` shares the name and is a probe
+  for `claude plugin ...` management commands).
 - LIST: a list literal that does not begin with a string constant and holds one
   of ``"-p"``, ``"--print"``, ``"--bg"``, ``"respawn"`` (an argv is being built).
 - RESPAWN: a call passing the string ``"respawn"`` positionally.
@@ -42,6 +48,7 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _LIST_TOKENS = frozenset({"-p", "--print", "--bg", "respawn"})
+_CLAUDE_RESOLVERS = frozenset({"resolve_claude_executable", "resolve_claude_cli"})
 _CLAUDX_MODULE = "bootstrap_lib.claudx"
 
 _DRIVER = "plugins/content-pipeline-kit/lib/content_pipeline/execution/drivers/claude_bg.py"
@@ -115,12 +122,32 @@ SITES.update({
     if _final_path(path) != path and (_REPO_ROOT / _final_path(path)).is_file()
 })
 
+# Final modules whose resolution changed shape: the executable is resolved through
+# llm_kit.adapters.claude_command (LLM_KIT_CLAUDE_EXECUTABLE), so the legacy anchors
+# no longer occur there. The remaining final entries (_resolve_claude_executable,
+# ClaudeCli.resolve_executable) keep their legacy `def` anchors.
+_FINAL_REACHABILITY = _final_path(_REACHABILITY)
+_FINAL_HARNESS_AUTH = "packages/katsoft-llm-kit/src/llm_kit/adapters/harness_auth.py"
+if (_REPO_ROOT / _FINAL_REACHABILITY).is_file():
+    SITES[(_FINAL_REACHABILITY, "check_harness", "WHICH")] = (
+        "exempt", "resolve_claude_cli()",
+        "runs `claude --version`, which starts no session",
+    )
+SITES[(_FINAL_HARNESS_AUTH, "claude_auth", "WHICH")] = (
+    "exempt", "resolve_claude_executable(env)",
+    "runs `claude auth status`, which starts no session",
+)
+
 SITE_TABLE = SITES
 
 
 def scan(source: str, relpath: str):
     """Return ``[(qualname, rule, lineno)]`` and ``{qualname: function node}``."""
     tree = ast.parse(source, filename=relpath)
+    uses_claude_command = any(
+        isinstance(n, ast.ImportFrom) and (n.module or "").split(".")[-1] == "claude_command"
+        for n in ast.walk(tree)
+    )
     found = []
     functions = {}
     stack = []
@@ -144,7 +171,7 @@ def scan(source: str, relpath: str):
             func = node.func
             name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
             args = node.args
-            if (
+            if (uses_claude_command and name in _CLAUDE_RESOLVERS) or (
                 name in ("which", "_resolve_cli")
                 and args
                 and isinstance(args[0], ast.Constant)
@@ -337,3 +364,20 @@ def test_a_new_respawn_call_is_flagged():
 def test_a_non_claude_list_is_not_a_site():
     source = "def run():\n    return ['git', '-p', 'x']\n"
     assert verdict("plugins/new-kit/lib/new_kit/git.py", source) == []
+
+
+def test_a_new_claude_command_resolution_is_flagged():
+    source = (
+        "from llm_kit.adapters.claude_command import resolve_claude_executable\n\n"
+        "def find():\n    return resolve_claude_executable()\n"
+    )
+    problems = verdict("packages/new/src/new/find.py", source)
+    assert problems and "unclassified" in problems[0]
+
+
+def test_a_same_named_resolver_outside_claude_command_is_not_a_site():
+    source = (
+        "from .marketplace_lifecycle import resolve_claude_cli\n\n"
+        "def probe():\n    return resolve_claude_cli()\n"
+    )
+    assert verdict("plugins/new-kit/lib/new_kit/probe.py", source) == []

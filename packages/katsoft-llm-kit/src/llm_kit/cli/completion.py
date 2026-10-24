@@ -111,7 +111,7 @@ _COMPLETE_CALL_FLAGS = (
 #: The flag surface's own defaults, applied in _request_from_flags rather than by
 #: argparse. Keeping them here makes "unset" observable, which is what the
 #: conflict check above needs. ``None`` means no temperature field is sent.
-_FLAG_DEFAULTS = {"max_tokens": 4096, "temperature": None, "system": "", "cheap": False}
+_FLAG_DEFAULTS = {"max_tokens": None, "temperature": None, "system": "", "cheap": False}
 
 
 def _request_from_flags(args: argparse.Namespace) -> "tuple[str, str, Any, BackendOptions]":

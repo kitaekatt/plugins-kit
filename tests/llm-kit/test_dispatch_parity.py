@@ -54,7 +54,7 @@ from unittest import mock
 
 import pytest
 
-from final_wording import claude_contract_to_final, codex_network_to_final, to_final
+from final_wording import claude_contract_to_final, codex_network_to_final, max_tokens_default_to_final, to_final
 
 _REPO = Path(__file__).resolve().parents[2]
 _LEGACY_LIB = _REPO / "plugins" / "llm-scripting-kit" / "lib"
@@ -164,6 +164,7 @@ def norm(value):
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         value = claude_contract_to_final(value)  # llm-kit delivers a claude contract natively
         value = codex_network_to_final(value)  # llm-kit advertises the explicit network-off control
+        value = max_tokens_default_to_final(value)  # llm-kit sends no output cap to openrouter.ai by default
         out = {"__type__": type(value).__name__}
         for f in dataclasses.fields(value):
             if f.name in _FINAL_ONLY_FIELD_NAMES:

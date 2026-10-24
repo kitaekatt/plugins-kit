@@ -573,7 +573,14 @@ class TestJobLedgerHandover:
             _REPO / "plugins" / "job-kit" / "lib" / "job_kit" / "store.py",
             _REPO / "plugins" / "job-kit" / "lib" / "job_kit" / "run.py",
         ]
-        scanned += sorted((_REPO / "packages" / "katsoft-llm-kit" / "src" / "llm_kit" / "jobs").glob("*.py"))
+        # The supervisor modules lock a supervised run's own lease and owner files (jobs/supervisor.py
+        # _lock), never the job ledger. This test pins the ledger store (store, run, ledger readers), so
+        # the supervisor modules are out of its scope.
+        scanned += sorted(
+            path
+            for path in (_REPO / "packages" / "katsoft-llm-kit" / "src" / "llm_kit" / "jobs").glob("*.py")
+            if "supervisor" not in path.name
+        )
         assert len(scanned) >= 4
         for path in scanned:
             hit = forbidden.search(path.read_text(encoding="utf-8"))

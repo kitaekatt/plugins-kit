@@ -74,7 +74,14 @@ from unittest import mock
 import pytest
 
 from test_cli_harness import shipped_openrouter_without_style  # noqa: F401 -- fixture
-from final_wording import claude_contract_to_final, codex_network_to_final, to_final
+from final_wording import (
+    claude_contract_to_final,
+    codex_extra_keys_to_final,
+    codex_network_to_final,
+    codex_params_to_final,
+    max_tokens_default_to_final,
+    to_final,
+)
 
 _REPO = Path(__file__).resolve().parents[2]
 _LEGACY_LIB = _REPO / "plugins" / "llm-scripting-kit" / "lib"
@@ -152,6 +159,8 @@ _FINAL_ONLY_CLASS_FIELDS = {"EndpointEntry": frozenset({"billing_owner", "endpoi
 _FINAL_ONLY_CLASS_PARAMS = {
     "EndpointEntry": (", billing_owner: 'Optional[str]' = None", ", endpoint: 'Optional[str]' = None"),
 }
+# Declared difference (cap for openrouter.ai): the final OpenRouterBackend resolves its default cap per endpoint.
+_FINAL_ONLY_METHODS = {"OpenRouterBackend": frozenset({"_default_max_tokens"})}
 _CALL_MODES_PARAM = ", call_modes: 'Tuple[str, ...]' = ('completion',)"
 # The final LLMResponse also carries ``reasoning_tokens`` (the reasoning share of ``output_tokens``,
 # filled by the codex transport from its --json usage events); the frozen legacy one has no such field.
@@ -203,6 +212,7 @@ def norm(value):
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         value = claude_contract_to_final(value)  # llm-kit delivers a claude contract natively
         value = codex_network_to_final(value)  # llm-kit advertises the explicit network-off control
+        value = max_tokens_default_to_final(value)  # llm-kit sends no output cap to openrouter.ai by default
         out = {"__type__": type(value).__name__}
         skipped = _FINAL_ONLY_CLASS_FIELDS.get(type(value).__name__, frozenset())
         for f in dataclasses.fields(value):
@@ -212,9 +222,12 @@ def norm(value):
             out[f.name] = "<masked>" if f.name in _MASKED_FIELDS else norm(item)
         return out
     if isinstance(value, Mapping):
+        value = codex_params_to_final(value)  # the codex parameter table in llm-kit's form
         return ("map", type(value).__name__, [(norm(k), norm(v)) for k, v in value.items()])
     if isinstance(value, (list, tuple)):
-        return (type(value).__name__, _drop_setting_sources([norm(v) for v in value]))
+        items = _drop_setting_sources([norm(v) for v in value])
+        # llm-kit's codex backend also accepts extras.native_subagents (final_wording)
+        return (type(value).__name__, codex_extra_keys_to_final(items))
     if isinstance(value, (set, frozenset)):
         return (type(value).__name__, sorted((norm(v) for v in value), key=repr))
     if isinstance(value, Path):
@@ -408,6 +421,8 @@ _FN_ADDR = re.compile(r"<function (\w+) at 0x[0-9a-fA-F]+>")
 
 def _sig(fn, owner: str = "") -> str:
     text = _without_final_only_params(_SIG_PREFIX.sub("X.", str(inspect.signature(fn))))
+    # Declared difference (final_wording.max_tokens_default_to_final): max_tokens is unset by default.
+    text = text.replace("max_tokens: 'int' = 4096", "max_tokens: 'Optional[int]' = None")
     for param in _FINAL_ONLY_CLASS_PARAMS.get(owner, ()):
         text = text.replace(param, "")
     # Deliberate: codex_backend names Budget through registry.conserve.
@@ -419,6 +434,13 @@ def _simple(value) -> bool:
     return isinstance(
         value, (str, int, float, bool, bytes, tuple, frozenset, set, list, dict, Path, type(None))
     )
+
+
+def _max_tokens_field(owner, field):
+    """``BackendOptions.max_tokens`` in llm-kit's form: ``Optional[int]``, unset by default (declared)."""
+    if owner.__name__ == "BackendOptions" and field[0] == "max_tokens":
+        return ("max_tokens", "Optional[int]", True, None)
+    return field
 
 
 def shape(value):
@@ -436,17 +458,22 @@ def shape(value):
             params = value.__dataclass_params__
             out["dataclass"] = (params.frozen, params.eq, params.order)
             out["fields"] = [
-                (
-                    f.name,
-                    _SIG_PREFIX.sub("X.", str(f.type)),
-                    f.init,
-                    f.default if f.default is not dataclasses.MISSING and _simple(f.default) else "<d>",
+                _max_tokens_field(value, field)
+                for field in (
+                    (
+                        f.name,
+                        _SIG_PREFIX.sub("X.", str(f.type)),
+                        f.init,
+                        f.default if f.default is not dataclasses.MISSING and _simple(f.default) else "<d>",
+                    )
+                    for f in dataclasses.fields(value)
+                    if f.name not in _FINAL_ONLY_FIELDS and f.name not in class_skipped
                 )
-                for f in dataclasses.fields(value)
-                if f.name not in _FINAL_ONLY_FIELDS and f.name not in class_skipped
             ]
         for key, item in vars(value).items():
             if key.startswith("__") and key.endswith("__") and key not in ("__init__", "__call__"):
+                continue
+            if key in _FINAL_ONLY_METHODS.get(value.__name__, ()):
                 continue
             if dataclasses.is_dataclass(value) and (key in _FINAL_ONLY_FIELDS or key in class_skipped):
                 continue
@@ -457,6 +484,8 @@ def shape(value):
             elif isinstance(item, property):
                 out["methods"][key] = "<property>"
             elif _simple(item):
+                if value.__name__ == "BackendOptions" and key == "max_tokens" and item == 4096:
+                    item = None  # declared: unset by default (final_wording.max_tokens_default_to_final)
                 out["attrs"][key] = norm(item)
         return out
     if inspect.isfunction(value):
@@ -501,8 +530,8 @@ _SURFACE_CASES = [
     # Final-only: the Claude effort check (check_effort over the harness-wide menu) and the
     # estimated-cost labels / reported-model reader that fill LLMResponse's final-only fields.
     ("backends", (), ("CLAUDE_EFFORT_ORDER", "CLAUDE_HARNESS", "ESTIMATE_SOURCE_CLAUDE_CLI",
-                      "ESTIMATE_SOURCE_USAGE_COST", "_claude_reported_model", "_untrusted_native_cost",
-                      "check_effort")),
+                      "ESTIMATE_SOURCE_USAGE_COST", "NON_OPENROUTER_DEFAULT_MAX_TOKENS", "ROUTE_OPENROUTER",
+                      "_claude_reported_model", "_untrusted_native_cost", "check_effort", "route_of_base_url")),
     # The final backend delegates to llm_kit.adapters.codex_command directly, so
     # the legacy probe constant, probe function and its signature import are gone.
     ("codex", ("IGNORE_USER_CONFIG_BOOTSTRAP", "_codex_argv_builder", "codex_import_failure", "inspect",
@@ -1061,9 +1090,15 @@ def test_openrouter_request_building(par, named_registry):
                 "options": client.options,
             }
 
-        opts = S.types.BackendOptions
-        run("plain")
-        run("no_system", system="")
+        # Declared difference (final_wording.max_tokens_default_to_final): llm-kit sends no cap to an
+        # openrouter.ai endpoint when the caller names none, the legacy always sent 4096. The scenarios
+        # therefore name the cap, and the unset default is pinned by test_max_tokens_finish_reason.
+        def opts(**kw):
+            kw.setdefault("max_tokens", 4096)
+            return S.types.BackendOptions(**kw)
+
+        run("plain", options=opts())
+        run("no_system", system="", options=opts())
         run("cache_prefix", options=opts(user_cache_prefix="PRE", temperature=0.2, timeout_s=30,
                                          max_tokens=99, client_id="cid"))
         run("client_id_blank", options=opts(client_id=""))
@@ -1078,19 +1113,19 @@ def test_openrouter_request_building(par, named_registry):
         run("effort_gpu_opt_out", options=opts(effort="high", extras={"reasoning_effort": None}),
             endpoint="gpu")
         run("unknown_endpoint", options=opts(effort="high"), endpoint="no-such")
-        run("reasoning", _chat_response("answer", reasoning="because"))
-        run("empty_stop", _chat_response("", finish="stop"))
-        run("empty_length", _chat_response("", finish="length"))
-        run("empty_length_reasoning", _chat_response("", finish="length", reasoning="hmm"))
-        run("no_usage", _chat_response(usage=None))
+        run("reasoning", _chat_response("answer", reasoning="because"), options=opts())
+        run("empty_stop", _chat_response("", finish="stop"), options=opts())
+        run("empty_length", _chat_response("", finish="length"), options=opts())
+        run("empty_length_reasoning", _chat_response("", finish="length", reasoning="hmm"), options=opts())
+        run("no_usage", _chat_response(usage=None), options=opts())
         run("cache_hit_attr", _chat_response(usage=types.SimpleNamespace(
             prompt_tokens=5, completion_tokens=2,
-            prompt_tokens_details=types.SimpleNamespace(cached_tokens=3))))
+            prompt_tokens_details=types.SimpleNamespace(cached_tokens=3))), options=opts())
         run("cache_hit_deepseek", _chat_response(usage=types.SimpleNamespace(
-            prompt_tokens=5, completion_tokens=2, prompt_cache_hit_tokens=2)))
+            prompt_tokens=5, completion_tokens=2, prompt_cache_hit_tokens=2)), options=opts())
         cost = types.SimpleNamespace(prompt_tokens=5, completion_tokens=2, cost=0.5)
-        run("cost_untrusted", _chat_response(usage=cost), endpoint="plain")
-        run("cost_trusted", _chat_response(usage=cost), endpoint="trusted")
+        run("cost_untrusted", _chat_response(usage=cost), endpoint="plain", options=opts())
+        run("cost_trusted", _chat_response(usage=cost), endpoint="trusted", options=opts())
         run("cost_trusted_unmetered", _chat_response(usage=types.SimpleNamespace(
             prompt_tokens=5, completion_tokens=2, cost=0.0, cost_source="registry-unmetered")),
             endpoint="trusted")
@@ -1108,8 +1143,8 @@ def test_openrouter_request_building(par, named_registry):
         run("skill_context", options=opts(skill_context=_skill(S)))
         run("skill_context_bad_digest", options=opts(skill_context=_skill(S, digest="0" * 64)))
         run("skill_context_wrong_type", options=opts(skill_context="not a context"))
-        run("raises", raises=RuntimeError("boom 429"))
-        run("alias_model", model="no-such-alias")
+        run("raises", raises=RuntimeError("boom 429"), options=opts())
+        run("alias_model", model="no-such-alias", options=opts())
         return out
 
     result = par(scenario)
@@ -1186,13 +1221,14 @@ def test_openrouter_lazy_client_build(par, monkeypatch, named_registry):
         fake_client.calls.clear()
         out = {}
         backend = S.backends.OpenRouterBackend()
-        out["first"] = outcome(backend.complete, "s", "u", model="vendor/model")
-        out["second"] = outcome(backend.complete, "s", "u", model="vendor/model")
+        capped = S.types.BackendOptions(max_tokens=4096)  # declared: llm-kit's unset default sends no cap
+        out["first"] = outcome(backend.complete, "s", "u", model="vendor/model", options=capped)
+        out["second"] = outcome(backend.complete, "s", "u", model="vendor/model", options=capped)
         out["reused"] = backend.client is fake_client
         out["built"] = list(built)
         built.clear()
         keyed = S.backends.OpenRouterBackend(endpoint="local")
-        out["keyed"] = outcome(keyed.complete, "s", "u", model="vendor/model")
+        out["keyed"] = outcome(keyed.complete, "s", "u", model="vendor/model", options=capped)
         out["keyed_built"] = list(built)
         out["calls"] = list(fake_client.calls)
         return out

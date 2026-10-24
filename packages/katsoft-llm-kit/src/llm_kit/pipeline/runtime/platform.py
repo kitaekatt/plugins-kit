@@ -273,6 +273,15 @@ class BackendOptions:
     The remaining fields are transport-specific and documented as ignored by
     transports that do not honor them (documented, not silent):
 
+    - ``max_tokens`` -- output cap. ``None`` (the default) names none, and the
+      backend then supplies its own: a transport wrapper carries the selected
+      model's configured ``max_output_tokens`` (the project model file row for
+      the wrapper's endpoint and the call's model, else that row's
+      ``request_defaults.extras.max_tokens``), else sends NO cap to openrouter.ai
+      (the provider's own limit for the model applies) and 4096 to any other
+      OpenAI-compatible endpoint. An explicit positive integer is sent exactly
+      as given, is never clamped and beats the configured value. See
+      :func:`call_llm` for the spend reservation when no cap is sent.
     - ``temperature`` -- optional sampling control. ``None`` lets the
       server/model choose its mode-aware default; an explicit value is sent.
     - ``timeout_s`` -- per-call wall-clock cap. ``None`` uses the backend
@@ -302,7 +311,7 @@ class BackendOptions:
       carries a matching, structurally valid report.
     """
 
-    max_tokens: int = 4096
+    max_tokens: Optional[int] = None
     temperature: Optional[float] = None
     timeout_s: Optional[float] = None
     cache_salt: int = 0
@@ -318,7 +327,17 @@ class BackendOptions:
 
 @runtime_checkable
 class LLMBackend(Protocol):
-    """A transport that runs one completion and classifies its failures."""
+    """A transport that runs one completion and classifies its failures.
+
+    A backend MAY also expose ``output_cap_for(model) -> Optional[int]`` (duck-typed
+    through ``getattr``, so it is not part of the protocol): the output cap it carries
+    for ``model`` when the caller names none -- the model's configured
+    ``max_output_tokens``, or the finite cap its endpoint always gets. ``None`` means
+    the backend sends NO cap, so the provider's own limit for the model applies. The
+    cap :func:`call_llm` resolves this way is the one the cache key, the attempt
+    observer and the spend reservation see. A backend without the method gets no
+    resolution and a reservation of :data:`UNDECLARED_RESERVATION_OUTPUT_TOKENS`.
+    """
 
     name: str  # audit provider label, e.g. "openrouter" / "claude-cli" / "mock"
 
@@ -1231,6 +1250,37 @@ def build_cache_key(
     return hashing.content_hash(payload, length=hashing.FULL_DIGEST_LENGTH)
 
 
+def _backend_output_cap(backend: Any, model: str) -> "tuple[bool, Optional[int]]":
+    """``(declared, cap)``: whether ``backend`` states an output cap for ``model``, and which.
+
+    ``declared`` is False for a backend without ``output_cap_for`` (see
+    :class:`LLMBackend`); ``cap`` is then None. A declared None is a backend that sends
+    no cap: the provider's own limit for the model applies.
+    """
+    hook = getattr(backend, "output_cap_for", None)
+    if not callable(hook):
+        return False, None
+    cap = hook(model)
+    if cap is not None and (isinstance(cap, bool) or not isinstance(cap, int) or cap < 1):
+        raise ConfigurationError(
+            f"{getattr(backend, 'name', type(backend).__name__)} backend output_cap_for({model!r}) "
+            f"returned {cap!r}; expected a positive integer or None"
+        )
+    return True, cap
+
+
+def _with_backend_output_cap(backend: Any, model: str, options: BackendOptions) -> BackendOptions:
+    """``options`` with the backend's cap for ``model`` when the caller named none.
+
+    An explicit ``options.max_tokens`` is returned untouched: the caller's value always wins
+    and is never clamped. Idempotent, so a key computed from already-resolved options matches.
+    """
+    if options.max_tokens is not None:
+        return options
+    _declared, cap = _backend_output_cap(backend, model)
+    return options if cap is None else replace(options, max_tokens=cap)
+
+
 def _cache_key_for(
     backend: LLMBackend,
     system: str,
@@ -1245,6 +1295,7 @@ def _cache_key_for(
     :func:`call_llm` and :func:`submit_validated` (its deferred contract
     storage) use it, so the two can never key one call differently.
     """
+    options = _with_backend_output_cap(backend, model, options)
     effective_options = getattr(backend, "effective_options", None)
     key_opts = effective_options(options) if callable(effective_options) else options
     return build_cache_key(
@@ -1534,14 +1585,54 @@ class SpendGuard(Protocol):
         ...  # pragma: no cover -- Protocol
 
 
+#: Output tokens a reservation prices for a call whose cap is unset and whose backend states
+#: nothing about its wire behaviour (no ``output_cap_for``): the figure the pipeline sent as the
+#: default cap before the cap became optional. A backend that DECLARES it sends no cap is never
+#: priced with this number; it needs a configured cap or a pricing ``context_window``.
+UNDECLARED_RESERVATION_OUTPUT_TOKENS = 4096
+
+
+def _unset_cap_reservation_tokens(
+    *, model: str, pricing: Mapping[str, Any], declared: bool
+) -> int:
+    """Output tokens to reserve for a call that carries no cap.
+
+    A backend that did not declare its cap behaviour keeps the pre-existing default
+    (:data:`UNDECLARED_RESERVATION_OUTPUT_TOKENS`). A backend that declared it sends no cap
+    can emit up to the model's context window and no more, so the bound is the pricing
+    entry's optional ``context_window`` (tokens). Without one there is no sound bound, and the
+    call is refused rather than priced with an invented number.
+    """
+    if not declared:
+        return UNDECLARED_RESERVATION_OUTPUT_TOKENS
+    entry = pricing.get(model)
+    if entry is None:
+        return 0  # estimate_cost raises the unknown-model KeyError next
+    window = entry.get("context_window") if isinstance(entry, Mapping) else None
+    if window is None:
+        raise ValueError(
+            f"call_llm(spend=...) cannot size a reservation for {model!r}: the call carries no "
+            "max_tokens, so the provider's own output limit applies and a reservation must cover "
+            "what it may bill. Set options.max_tokens, set max_output_tokens on the model's row in "
+            "the project model file, add context_window (tokens) to the model's pricing entry, or "
+            "pass spend_reserve_usd= to set the amount directly."
+        )
+    if isinstance(window, bool) or not isinstance(window, int) or window < 1:
+        raise ValueError(
+            f"pricing[{model!r}]['context_window'] must be a positive integer, not {window!r}"
+        )
+    return window
+
+
 def _spend_reservation_usd(
     *,
     model: str,
     system: str,
     user: str,
     pricing: Optional[Mapping[str, Any]],
-    max_output_tokens: int,
+    max_output_tokens: Optional[int],
     explicit: Optional[float],
+    cap_declared: bool = False,
 ) -> float:
     """Worst-case USD ONE attempt may bill, for use as its reservation.
 
@@ -1549,7 +1640,9 @@ def _spend_reservation_usd(
     Otherwise the amount is priced from the request's estimated input tokens
     plus the FULL ``max_output_tokens`` the attempt is allowed to emit -- not
     an expected length, because a reservation must cover what the provider may
-    actually charge. An unknown model raises :class:`KeyError` from
+    actually charge. With ``max_output_tokens`` None (no cap is carried) the
+    figure comes from :func:`_unset_cap_reservation_tokens`; the number is only
+    priced, never sent. An unknown model raises :class:`KeyError` from
     :func:`estimate_cost`, by the same rule that applies everywhere else on
     the pricing path.
 
@@ -1569,6 +1662,10 @@ def _spend_reservation_usd(
             "call_llm(spend=...) cannot size a reservation: pass pricing= so the "
             "attempt can be priced, or spend_reserve_usd= to set the amount "
             "directly. Reserving 0 would be admitted by any cap and then billed."
+        )
+    if max_output_tokens is None:
+        max_output_tokens = _unset_cap_reservation_tokens(
+            model=model, pricing=pricing, declared=cap_declared
         )
     return estimate_cost(
         model,
@@ -1688,6 +1785,17 @@ def call_llm(
     ``ValueError`` raised before any provider call -- reserving 0 would be
     admitted by any cap and then billed.
 
+    The output cap the call carries is resolved first: the caller's
+    ``options.max_tokens``, else the backend's cap for ``model`` (a transport
+    wrapper's configured ``max_output_tokens``; see :class:`LLMBackend`), else
+    none. When none is carried the reservation still covers the worst case,
+    and the figure is only priced, never sent as ``max_tokens``: a backend that
+    declared it sends no cap (openrouter.ai) is priced at the pricing entry's
+    optional ``context_window`` -- a model cannot emit more than its context
+    window -- and the call is refused with a ``ValueError`` naming the
+    remedies when the entry has none; a backend that declared nothing keeps
+    :data:`UNDECLARED_RESERVATION_OUTPUT_TOKENS`.
+
     With ``spend=None`` nothing in this function reads a ledger, including
     ``spend_ledger_from_env()``: a cap must be passed in deliberately, never
     materialize mid-run out of an inherited environment variable. The
@@ -1695,7 +1803,13 @@ def call_llm(
     a call made WITHOUT ``spend=`` bills the provider with no ledger row, and
     nothing inside the ledger can see it.
     """
+    # The cap the call carries: the caller's, else the backend's for this model (a configured
+    # max_output_tokens), else none. Resolved ONCE here so the cache key, the attempt observer,
+    # the reservation and the backend all see the same value.
+    cap_declared, _backend_cap = _backend_output_cap(backend, model)
     opts = options or BackendOptions()
+    if opts.max_tokens is None and _backend_cap is not None:
+        opts = replace(opts, max_tokens=_backend_cap)
 
     # The cost THIS attempt is known to have billed, or None while it is
     # unreadable. Reset at the top of every iteration and read by the single
@@ -1767,6 +1881,7 @@ def call_llm(
             pricing=pricing,
             max_output_tokens=opts.max_tokens,
             explicit=spend_reserve_usd,
+            cap_declared=cap_declared,
         )
 
     if input_budgets is not None:
@@ -1804,6 +1919,7 @@ def call_llm(
             pricing=pricing,
             max_output_tokens=opts.max_tokens,
             explicit=spend_reserve_usd,
+            cap_declared=cap_declared,
         )
         if opts.timeout_s is not None:
             # A lease exists only when a deadline is known. With timeout_s None

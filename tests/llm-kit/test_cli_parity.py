@@ -36,7 +36,7 @@ from typing import Any, Callable, Optional, Sequence
 
 import pytest
 
-from final_wording import codex_network_json_to_final, to_final
+from final_wording import codex_network_json_to_final, max_tokens_deep, to_final
 from test_cli_harness import (  # noqa: F401 -- fixtures
     FakeBackend,
     Outcome,
@@ -202,6 +202,7 @@ def same_json(left: Outcome, right: Outcome) -> Outcome:
     assert left.err == right.err, (left.err, right.err)
     a, b = normalize_json_text(left.out, {}), normalize_json_text(right.out, {})
     a = codex_network_json_to_final(a)  # llm-kit advertises the explicit network-off control
+    a = max_tokens_deep(a)  # llm-kit's openrouter max_tokens default is unset (final_wording)
     assert a == b, _first_difference(a, b)
     return left
 
@@ -502,6 +503,8 @@ class TestCompletion:
 
     def test_request_schema_prints_the_accepted_shape(self, sides, capsys, monkeypatch, home):
         left, right = both(sides, "completion", "request-schema", capsys=capsys, monkeypatch=monkeypatch)
+        # Declared difference: max_tokens is Optional[int] (unset by default) in llm-kit, int in the legacy.
+        left = Outcome(left.code, left.out.replace('"max_tokens": "int"', '"max_tokens": "Optional[int]"'), left.err)
         out = same(left, right)
         assert out.code == 0 and json.loads(out.out)
 

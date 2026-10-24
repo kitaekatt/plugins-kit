@@ -25,6 +25,10 @@ probing a provider or reading any user cache:
   key, ``{effective, default, source}`` (``source`` is ``default`` or
   ``override``); ``local`` names that file. Read ``resolved_selections`` for
   what a call should use.
+- ``max_output_tokens`` is the row's declared output cap, present only when the row
+  declares one. It is the cap a protocol 2 call to a transport row carries when the
+  request names no ``max_tokens``; a harness row (claude, codex) may declare it, and a
+  note says it is not applied there. A row without it sends no cap to openrouter.ai.
 - ``modes`` come from the adapter family's advertisement, passed in by the
   caller (the registry cannot import adapters).
 - ``cost`` is ``{class, reason}``: the registry classification, always reported
@@ -167,6 +171,13 @@ def build_catalog(
             "modes": list(modes_by_adapter[adapter]),
             "cost": _cost(info, entry, endpoints.entries(), harness_auth),
         }
+        if "max_output_tokens" in row:
+            item["max_output_tokens"] = row["max_output_tokens"]
+            if info.kind == HARNESS_KIND:
+                notes.append(
+                    f"{row['id']}: max_output_tokens is declared but {info.harness} accepts no output "
+                    "cap, so it is not applied; the harness keeps its native behavior"
+                )
         if "request_defaults" in row:
             item["request_defaults"] = row["request_defaults"]
         rows.append(item)

@@ -44,6 +44,7 @@ from __future__ import annotations
 import os
 import stat
 import time
+import types
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional
@@ -346,6 +347,22 @@ def invoke(
 
     # 5. options, working directory, contract, effort delivery -----------------
     adapter_extras = {key: value for key, value in row_extras.items() if key != "codex_config"}
+    # The output cap of a transport call: the request's max_tokens, else the row's typed
+    # max_output_tokens, else the row's request_defaults.extras.max_tokens, else none (the
+    # provider's own limit applies). The extras key is taken out of the extras either way: left
+    # in, it would ride as a top-level body field and override every higher step on the wire.
+    # A harness (claude, codex) takes no cap, so its extras and options are left as they were.
+    transport_cap = record is None or "max_tokens" in record.params
+    row_cap: Optional[int] = None
+    if transport_cap:
+        extras_cap = adapter_extras.pop("max_tokens", None)
+        if extras_cap is not None and (isinstance(extras_cap, bool) or not isinstance(extras_cap, int) or extras_cap < 1):
+            raise InvokeRefusal(
+                KIND_CONFIGURATION,
+                f"row {row_id!r} (model {row['model']!r}) request_defaults.extras.max_tokens must be a "
+                f"positive integer, not {extras_cap!r}",
+            )
+        row_cap = row.get("max_output_tokens", extras_cap)
     if effective_codex_config:
         adapter_extras["__llm_kit_codex_config"] = effective_codex_config
     options = BackendOptions(
@@ -356,6 +373,8 @@ def invoke(
     )
     if request.max_tokens is not None:
         options = replace(options, max_tokens=request.max_tokens)
+    elif row_cap is not None:
+        options = replace(options, max_tokens=row_cap)
     if request.timeout_s is not None:
         options = replace(options, timeout_s=request.timeout_s)
     workdir: Optional[Path] = None
@@ -444,12 +463,14 @@ def invoke(
     failure: Optional[Dict[str, Any]] = None
     halt_info: Optional[Dict[str, Any]] = None
     halted = False
+    raised: Optional[BaseException] = None
     try:
         response = backend.complete(request.system, request.prompt, model=selection.model, options=options)
     except OutputContractViolation as exc:
         response = exc.response
         failure = _error_from_response(exc.response, str(exc))
     except Exception as exc:  # noqa: BLE001 -- transports raise heterogeneous types
+        raised = exc
         halt = backend.classify_halt(exc)
         halted = bool(halt)
         code = "timeout" if isinstance(exc, AgentTimeoutError) else (halt or "execution")
@@ -472,6 +493,16 @@ def invoke(
                     "code": CODE_EXPECTED_FILES_MISSING,
                     "message": "expected file(s) are not regular files in working_dir: " + ", ".join(missing),
                 }
+
+    # The provider's own stop token, kept on every failure that happened AFTER it answered, so a
+    # caller can tell a truncated answer ("length") from a malformed one ("stop") without the
+    # discarded response. A raised EmptyCompletionError carries the same reason and its billed tokens.
+    finish_reason = getattr(response, "finish_reason", None) if response is not None else getattr(raised, "finish_reason", None)
+    if failure is not None and finish_reason is not None:
+        failure["finish_reason"] = str(finish_reason)
+    usage_source: Any = response
+    if response is None and getattr(raised, "output_tokens", 0):
+        usage_source = types.SimpleNamespace(output_tokens=int(raised.output_tokens))
 
     reported_model = getattr(response, "reported_model", None) if response is not None else None
     requested_model = row["model"]
@@ -511,7 +542,7 @@ def invoke(
             resolved=resolved,
             output=output,
             files=files,
-            usage=usage_block(response, wall_ms),
+            usage=usage_block(usage_source, wall_ms),
             cost=cost,
             consent=consent_report,
             error=failure,

@@ -496,12 +496,19 @@
     {
       "path": "tests/content-pipeline-kit/test_llm_attempt_observer.py",
       "disposition": "rewrite",
-      "reason": "Re-pointed at llm-kit's final module names: import statements.",
+      "reason": "Re-pointed at llm-kit's final module names: skips injected on declared-difference tests, import statements; 1 declared difference(s) below.",
       "rewrite_classes": [
+        "declared-skip",
         "import"
       ],
       "collection_count": 15,
-      "baseline_failures": []
+      "baseline_failures": [],
+      "declared_differences": {
+        "content-pipeline-kit/test_llm_attempt_observer.py::test_on_attempt_sees_retry_prompt_and_salt": {
+          "mirror_status": "skipped",
+          "reason": "The legacy test pins CallAttempt.max_tokens to the 4096 default. In llm-kit an attempt records the cap the call carries, which is None for a backend that names none. Pinned by tests/llm-kit/test_pipeline_cap.py::test_the_attempt_observer_sees_the_resolved_cap."
+        }
+      }
     },
     {
       "path": "tests/content-pipeline-kit/test_llm_backends.py",
@@ -999,15 +1006,30 @@
     {
       "path": "tests/content-pipeline-kit/test_review_fix_d_cache_key.py",
       "disposition": "rewrite",
-      "reason": "Re-pointed at llm-kit's final module names: import statements, module-name strings, plugins/<kit> path to plugins/llm-kit, prose mentions left unchanged.",
+      "reason": "Re-pointed at llm-kit's final module names: skips injected on declared-difference tests, import statements, module-name strings, plugins/<kit> path to plugins/llm-kit, prose mentions left unchanged; 3 declared difference(s) below.",
       "rewrite_classes": [
+        "declared-skip",
         "import",
         "module-string",
         "path-package-src",
         "prose-kept"
       ],
       "collection_count": 55,
-      "baseline_failures": []
+      "baseline_failures": [],
+      "declared_differences": {
+        "content-pipeline-kit/test_review_fix_d_cache_key.py::test_cache_key_isolates_no_contract_text_only_and_schema_modes": {
+          "mirror_status": "skipped",
+          "reason": "The legacy test pins the default-options cache key, which hashes max_tokens=4096. In llm-kit the pipeline BackendOptions.max_tokens is None when unset (an openrouter.ai call then sends no cap), so the default-options key differs; the keys of a ModelEndpointBackend entry off openrouter.ai are unchanged because its effective options carry the 4096 it sends. Pinned by tests/llm-kit/test_pipeline_cap.py::test_the_default_options_key_is_distinct_from_an_explicit_4096_and_stable."
+        },
+        "content-pipeline-kit/test_review_fix_d_cache_key.py::test_deadline_and_client_id_do_not_move_the_pinned_digest": {
+          "mirror_status": "skipped",
+          "reason": "The legacy test pins the default-options cache key, which hashes max_tokens=4096. In llm-kit the pipeline BackendOptions.max_tokens is None when unset (an openrouter.ai call then sends no cap), so the default-options key differs; the keys of a ModelEndpointBackend entry off openrouter.ai are unchanged because its effective options carry the 4096 it sends. Pinned by tests/llm-kit/test_pipeline_cap.py::test_the_default_options_key_is_distinct_from_an_explicit_4096_and_stable."
+        },
+        "content-pipeline-kit/test_review_fix_d_cache_key.py::test_minimal_key_matches_the_pinned_digest": {
+          "mirror_status": "skipped",
+          "reason": "The legacy test pins the default-options cache key, which hashes max_tokens=4096. In llm-kit the pipeline BackendOptions.max_tokens is None when unset (an openrouter.ai call then sends no cap), so the default-options key differs; the keys of a ModelEndpointBackend entry off openrouter.ai are unchanged because its effective options carry the 4096 it sends. Pinned by tests/llm-kit/test_pipeline_cap.py::test_the_default_options_key_is_distinct_from_an_explicit_4096_and_stable."
+        }
+      }
     },
     {
       "path": "tests/content-pipeline-kit/test_review_fix_d_routing.py",

@@ -207,6 +207,7 @@
               "effect": "allow",
               "emits": "-c sandbox_workspace_write.network_access=true",
               "id": "network-enable",
+              "note": "true explicitly enables network access in the workspace-write sandbox",
               "parameter": "extras.network",
               "source": "request",
               "subjects": [
@@ -225,6 +226,18 @@
                 "network-egress"
               ],
               "when_value": "false"
+            },
+            {
+              "effect": "disable",
+              "emits": "-c agents.enabled=false -c features.multi_agent=false -c features.multi_agent_v2=false",
+              "id": "native-subagents-deny",
+              "note": "reports the emitted deny configuration; actual harness behavior requires version-specific proof",
+              "parameter": "extras.native_subagents",
+              "source": "request",
+              "subjects": [
+                "subagent-spawn"
+              ],
+              "when_value": "deny"
             },
             {
               "effect": "confine",
@@ -285,9 +298,18 @@
               "handling": "mapped",
               "type": "absolute-path-list"
             },
+            "extras.native_subagents": {
+              "emits": "-c agents.enabled=false -c features.multi_agent=false -c features.multi_agent_v2=false",
+              "handling": "mapped",
+              "note": "only deny is supported; other supplied values refuse before dispatch",
+              "type": "string",
+              "values": [
+                "deny"
+              ]
+            },
             "extras.network": {
               "default": true,
-              "emits": "-c sandbox_workspace_write.network_access=true",
+              "emits": "-c sandbox_workspace_write.network_access=true|false",
               "handling": "mapped",
               "note": "true emits network_access=true; false emits network_access=false under -s workspace-write (an explicit deny, so the user's config.toml cannot enable network) and nothing under other sandbox modes",
               "type": "boolean"
@@ -577,9 +599,9 @@
               "type": "integer"
             },
             "max_tokens": {
-              "default": 4096,
               "emits": "max_tokens",
               "handling": "mapped",
+              "note": "unset: omitted for an openrouter.ai endpoint, so the provider's own limit for the model applies; any other OpenAI-compatible endpoint is sent 4096",
               "type": "integer"
             },
             "output_contract": {

@@ -290,6 +290,13 @@ class BackendOptions:
     and documented as ignored by transports that do not honor them (documented,
     not silent):
 
+    - ``max_tokens`` -- output cap. ``None`` (the default) sends NO cap, so the
+      provider's own limit for the model applies; the library imposes none. An
+      explicit positive integer is sent exactly as given and is never clamped.
+      Reasoning tokens usually count against it, so a reasoning model needs room
+      for both. Only the OpenAI-compatible transport sends it; the Claude and
+      Codex CLI transports expose no such control and ignore it.
+
     - ``timeout_s`` -- per-call wall-clock cap. ``None`` uses the backend
       default.
     - ``max_retries`` -- OpenAI-compatible transport only: SDK-level automatic
@@ -349,7 +356,7 @@ class BackendOptions:
       unchanged. See :mod:`.skill_context`.
     """
 
-    max_tokens: int = 4096
+    max_tokens: Optional[int] = None
     temperature: Optional[float] = None
     timeout_s: Optional[float] = None
     max_retries: Optional[int] = None

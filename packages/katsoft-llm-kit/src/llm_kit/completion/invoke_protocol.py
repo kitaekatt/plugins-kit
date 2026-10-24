@@ -30,7 +30,13 @@ of ``selection`` or ``model``):
 ``codex_config`` closed Codex configuration object with two allowlisted keys
 ``output_schema`` a JSON Schema the answer must satisfy (validated-result policy)
 ``effort``       explicit effort, or ``null`` to send none; absent means the selection's
-``max_tokens``   output token cap, a positive integer
+``max_tokens``   output token cap, a positive integer; sent exactly as given and never
+                 clamped. Absent, a transport row uses its catalogue ``max_output_tokens``,
+                 else its ``request_defaults.extras.max_tokens``, else no cap is sent to
+                 openrouter.ai (the provider's own limit for the model applies; another
+                 OpenAI-compatible endpoint is sent 4096). The Claude and Codex CLI
+                 transports expose no such control and ignore it. Reasoning tokens
+                 usually count against it, so a reasoning model needs room for both
 ``timeout_s``    per-call wall-clock cap in seconds, a positive number
 ``consent``      opt in to the optional consent layer (``llm-kit consent``): omitted or
                  ``false`` = the layer is not used; ``true`` = the global policy;
@@ -47,7 +53,13 @@ spawned, so retrying the same bytes cannot help, and the CLI reports it with the
 protocol exit code. ``kind`` says what to fix.
 
 Result: see :func:`result_document`. A call that ran and failed is a result with
-``status: "failed"``, never a refusal.
+``status: "failed"``, never a refusal. When the provider answered before the failure
+(an ``output-contract-violation``, a workspace failure after the call, an empty answer
+that used its whole budget), ``error.finish_reason`` is the provider's own stop token,
+verbatim (``"length"`` = the output cap ended the answer, ``"stop"`` = the model ended
+it), and ``usage`` carries the tokens it reported; ``output.text`` holds the (possibly
+truncated) answer. The key is absent when no finish reason is known (a transport with
+no equivalent, or a failure before any answer). ``error.code`` is unchanged by it.
 """
 from __future__ import annotations
 
@@ -454,7 +466,12 @@ def describe_invoke_schema() -> Dict[str, Any]:
             "codex_config": "optional closed object: shell_environment_policy.inherit=none|core; approval_policy=never",
             "output_schema": "JSON Schema object in the supported subset, optional",
             "effort": "string or null, optional; absent means the selection's effort, null sends none",
-            "max_tokens": "integer >= 1, optional",
+            "max_tokens": (
+                "integer >= 1, optional; sent exactly as given. Absent: the row's max_output_tokens, else "
+                "its request_defaults.extras.max_tokens, else no cap to openrouter.ai (the provider's limit "
+                "applies; other OpenAI-compatible endpoints are sent 4096). The Claude and Codex CLI "
+                "transports ignore it"
+            ),
             "timeout_s": "number > 0, optional",
             "consent": (
                 "optional; omitted or false = the optional consent layer is not used, true = the global "
@@ -476,6 +493,11 @@ def describe_invoke_schema() -> Dict[str, Any]:
             "consent": (
                 "{opted_in, applied, scope}: whether the request sent the consent field, and whether a "
                 "consent policy was applied to the call"
+            ),
+            "error": (
+                "failed only: {code, message}, plus finish_reason (the provider's stop token, verbatim, "
+                "e.g. length or stop) when the provider answered before the failure; absent otherwise. "
+                "usage carries the tokens the provider reported, output.text the answer it gave"
             ),
         },
         "exit_codes": {

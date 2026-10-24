@@ -141,13 +141,20 @@
     {
       "path": "tests/llm-scripting-kit/test_completion_backends.py",
       "disposition": "rewrite",
-      "reason": "Re-pointed at llm-kit's final module names: import statements, module-name strings.",
+      "reason": "Re-pointed at llm-kit's final module names: skips injected on declared-difference tests, import statements, module-name strings; 1 declared difference(s) below.",
       "rewrite_classes": [
+        "declared-skip",
         "import",
         "module-string"
       ],
       "collection_count": 68,
-      "baseline_failures": []
+      "baseline_failures": [],
+      "declared_differences": {
+        "llm-scripting-kit/test_completion_backends.py::TestOpenRouterBackend::test_reasoning_truncation_is_not_returned_as_empty_success": {
+          "mirror_status": "skipped",
+          "reason": "The legacy test calls OpenRouterBackend with default options and expects 'exhausted max_tokens=4096'. llm-kit sends no cap to an openrouter.ai endpoint when none is named, so the message says the provider's output limit was exhausted (no max_tokens sent). Pinned by tests/llm-kit/test_max_tokens_finish_reason.py::test_an_openrouter_call_with_no_cap_anywhere_sends_no_max_tokens and the message by test_an_empty_answer_that_exhausted_the_budget_carries_finish_reason_and_tokens."
+        }
+      }
     },
     {
       "path": "tests/llm-scripting-kit/test_completion_capabilities.py",
@@ -391,12 +398,19 @@
     {
       "path": "tests/llm-scripting-kit/test_completion_truthful_results.py",
       "disposition": "rewrite",
-      "reason": "Re-pointed at llm-kit's final module names: import statements.",
+      "reason": "Re-pointed at llm-kit's final module names: skips injected on declared-difference tests, import statements; 1 declared difference(s) below.",
       "rewrite_classes": [
+        "declared-skip",
         "import"
       ],
       "collection_count": 49,
-      "baseline_failures": []
+      "baseline_failures": [],
+      "declared_differences": {
+        "llm-scripting-kit/test_completion_truthful_results.py::test_caller_set_params_reports_only_what_differs_from_the_default": {
+          "mirror_status": "skipped",
+          "reason": "The legacy test says BackendOptions(max_tokens=4096) is indistinguishable from the default. In llm-kit the default is None, so an explicit 4096 is a caller-set param. Pinned by tests/llm-kit/test_max_tokens_finish_reason.py::test_the_library_default_is_no_cap."
+        }
+      }
     },
     {
       "path": "tests/llm-scripting-kit/test_contract_json_repair.py",
@@ -549,12 +563,19 @@
     {
       "path": "tests/llm-scripting-kit/test_llm_scripting_cli.py",
       "disposition": "rewrite",
-      "reason": "Re-pointed at llm-kit's final module names: import statements.",
+      "reason": "Re-pointed at llm-kit's final module names: skips injected on declared-difference tests, import statements; 1 declared difference(s) below.",
       "rewrite_classes": [
+        "declared-skip",
         "import"
       ],
       "collection_count": 92,
-      "baseline_failures": []
+      "baseline_failures": [],
+      "declared_differences": {
+        "llm-scripting-kit/test_llm_scripting_cli.py::test_the_flag_surface_leaves_temperature_unset": {
+          "mirror_status": "skipped",
+          "reason": "The legacy test pins the flag surface's max_tokens default to 4096. llm-kit's flag surface leaves max_tokens unset (BackendOptions.max_tokens is None) so an openrouter.ai call is not capped. Pinned by tests/llm-kit/test_max_tokens_finish_reason.py::test_the_library_default_is_no_cap."
+        }
+      }
     },
     {
       "path": "tests/llm-scripting-kit/test_llm_scripting_custom_bootstrap.py",

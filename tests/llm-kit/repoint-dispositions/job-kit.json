@@ -278,12 +278,27 @@
     {
       "path": "tests/job-kit/test_runner.py",
       "disposition": "rewrite",
-      "reason": "Re-pointed at llm-kit's final module names: import statements.",
+      "reason": "Re-pointed at llm-kit's final module names: skips injected on declared-difference tests, import statements; 3 declared difference(s) below.",
       "rewrite_classes": [
+        "declared-skip",
         "import"
       ],
       "collection_count": 75,
-      "baseline_failures": []
+      "baseline_failures": [],
+      "declared_differences": {
+        "job-kit/test_runner.py::test_mixed_sidecars_fail_over_without_leaking_transport_options[models0-transport-harness]": {
+          "mirror_status": "skipped",
+          "reason": "The legacy test pins a job's default max_tokens to 4096. llm-kit leaves a job's max_tokens unset when the job names none, so an openrouter.ai job is not capped (BackendOptions.max_tokens is None). Pinned by tests/llm-kit/test_max_tokens_finish_reason.py::test_a_job_that_names_no_max_tokens_carries_none_and_a_named_one_is_kept."
+        },
+        "job-kit/test_runner.py::test_mixed_sidecars_fail_over_without_leaking_transport_options[models1-harness-transport]": {
+          "mirror_status": "skipped",
+          "reason": "The legacy test pins a job's default max_tokens to 4096. llm-kit leaves a job's max_tokens unset when the job names none, so an openrouter.ai job is not capped (BackendOptions.max_tokens is None). Pinned by tests/llm-kit/test_max_tokens_finish_reason.py::test_a_job_that_names_no_max_tokens_carries_none_and_a_named_one_is_kept."
+        },
+        "job-kit/test_runner.py::test_runner_omits_temperature_when_job_does_not_set_one": {
+          "mirror_status": "skipped",
+          "reason": "The legacy test pins a job's default max_tokens to 4096. llm-kit leaves a job's max_tokens unset when the job names none, so an openrouter.ai job is not capped (BackendOptions.max_tokens is None). Pinned by tests/llm-kit/test_max_tokens_finish_reason.py::test_a_job_that_names_no_max_tokens_carries_none_and_a_named_one_is_kept."
+        }
+      }
     },
     {
       "path": "tests/job-kit/test_select.py",

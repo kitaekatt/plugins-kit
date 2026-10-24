@@ -123,9 +123,10 @@ directory.
 A job's optional `options` mapping carries `allowed_tools`,
 `disallowed_tools`, `effort`, `system_prompt_mode`, `max_tokens`, `temperature`
 and `extras` through to the completion seam. `max_tokens` must be at least 1
-and `temperature` must be in the range 0 to 2. If omitted, they default to 4096
-and temperature is unset, so the endpoint/model default applies; set it per job
-to override. `effort` overrides the reasoning effort the endpoint registry entry
+and `temperature` must be in the range 0 to 2. If omitted, both are unset: no
+output cap is chosen by the job, so the transport's own rule applies (see
+`completion-seam-contract.md`, "Output cap"), and the endpoint/model default
+applies to temperature; set either per job to override. `effort` overrides the reasoning effort the endpoint registry entry
 carries: effort is a property of the ENDPOINT, so a job that needs more
 deliberation than its endpoint's default says so here, and leaving it unset
 emits exactly the argv an existing job file always did. The value must be one the
@@ -158,7 +159,7 @@ model_requirements:
   transport: {params: [max_tokens, temperature]}
 model_options:
   harness: {}
-  transport: {max_tokens: 4096, temperature: 0.2}
+  transport: {max_tokens: 8192, temperature: 0.2}
 ```
 
 Each non-empty sidecar must name every declared id exactly once and no other

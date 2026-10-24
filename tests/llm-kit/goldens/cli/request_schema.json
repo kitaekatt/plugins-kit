@@ -25,7 +25,7 @@
         "effort": "Optional[str]",
         "extras": "Mapping[str, Any]",
         "max_retries": "Optional[int]",
-        "max_tokens": "int",
+        "max_tokens": "Optional[int]",
         "output_contract": "Optional[OutputContract]",
         "skill_context": "skill selection object, optional: {skills: [{path: string, level?: 'catalog'|'full', declared_resources?: boolean, resources?: [string]}], token_budget: integer > 0, format_version?: string}; materialized by bootstrap_lib.skill_material against the CLI working directory before any endpoint is resolved",
         "system_prompt_mode": "str",

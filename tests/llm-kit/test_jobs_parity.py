@@ -65,7 +65,7 @@ from typing import Any, Callable, Mapping, Optional
 
 import pytest
 
-from final_wording import claude_contract_deep, floors_in_text_to_final, to_final
+from final_wording import claude_contract_deep, floors_in_text_to_final, max_tokens_deep, max_tokens_default_to_final, to_final
 
 _REPO = Path(__file__).resolve().parents[2]
 _LEGACY_PATHS = [
@@ -291,6 +291,8 @@ def render_events(store: Any, run_id: str) -> list[str]:
 def _in_final_wording(value: Any) -> Any:
     """``value`` with every string passed through ``final_wording.to_final``."""
     value = claude_contract_deep(value)
+    if isinstance(value, dict):
+        value = max_tokens_default_to_final(value)  # declared: the openrouter max_tokens default is unset
     if isinstance(value, str):
         return to_final(value)
     if isinstance(value, dict):
@@ -361,6 +363,10 @@ class Transport:
             key: getattr(options, key, None)
             for key in ("allowed_tools", "disallowed_tools", "max_tokens", "temperature", "effort", "system_prompt_mode")
         }
+        if self.side.name == "legacy" and summary["max_tokens"] == 4096:
+            # Declared difference (final_wording.max_tokens_default_to_final): a job that names no
+            # max_tokens carries the legacy default 4096 and llm-kit's unset default (None).
+            summary["max_tokens"] = None
         self.calls.append((system, user, model, summary))
         if self.before_call is not None:
             self.before_call(user)
@@ -2071,7 +2077,9 @@ def _seam_select(side: Any, base: Path, spec: Mapping[str, Any]) -> dict:
                 "effort": selection.effort,
                 "capabilities": (
                     None if selection.capabilities is None
-                    else json.loads(json.dumps(selection.capabilities.to_json(), sort_keys=True, default=str))
+                    else max_tokens_deep(  # declared: llm-kit's openrouter max_tokens default is unset
+                        json.loads(json.dumps(selection.capabilities.to_json(), sort_keys=True, default=str))
+                    )
                 ),
                 "readings": [dict(r) for r in readings],
             }

@@ -81,7 +81,11 @@ but several details differ deliberately.
    ``BackendOptions``. This library folds all per-call knobs onto
    ``BackendOptions`` so the ``LLMBackend`` protocol signature is uniform; the
    behavioral effect (temperature / max-tokens flow to the provider and into the
-   cache key) is unchanged. Temperature is optional: ``None`` inherits the
+   cache key) is unchanged. ``max_tokens`` is optional too: ``None`` names no
+   cap, and a transport wrapper then carries the selected model's configured
+   ``max_output_tokens`` (project model file), else none on openrouter.ai and
+   4096 elsewhere (``call_llm`` documents the spend reservation for an
+   uncapped call). Temperature is optional: ``None`` inherits the
    server/model default and an explicit value is sent. The
    ``llm_scripting_kit.completion`` seam this layer now delegates its transport
    to shares this folded shape, so the adapter passes options across the

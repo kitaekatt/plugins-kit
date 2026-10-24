@@ -11,6 +11,8 @@ project's own repository):
         model: gpt-6-luna        # the exact wire model for that endpoint
         efforts: [low, high]     # optional; a menu-ordered subset of the library menu
                                  # (efforts: [] declares NO effort for the row)
+        max_output_tokens: 65536 # optional; positive integer, the output cap this model's
+                                 # calls carry when the call names none (see below)
         request_defaults:        # optional; only ``extras`` (a JSON mapping)
           extras: {provider: {sort: latency}}
     selections:                  # opaque consumer keys -> {model, effort}
@@ -28,6 +30,15 @@ effort and a request for it refuses any effort. ``null`` effort means "omit"; th
 disable value accepted only where the library menu lists it. Nothing here
 translates ``off`` or any other word.
 
+``max_output_tokens`` is the project's configured output cap for that model. A
+protocol 2 call to a transport (OpenAI-compatible) row uses it when the request
+names no ``max_tokens``; an explicit request ``max_tokens`` always wins, and the
+row's ``request_defaults.extras.max_tokens`` is the next fallback. A row that
+declares neither sends no cap to openrouter.ai, so the provider's own limit for the
+model applies. The claude and codex harnesses expose no output-cap control: a harness
+row may declare the field, and it is not applied (the catalogue says so in its notes).
+Nothing clamps the value to a model limit; the library ships no per-model limit table.
+
 This module is harness-independent: standard library plus PyYAML (the ``config``
 extra), no ``bootstrap_lib``, no plugin path, no home-directory convention of
 its own. Parsing, strict validation, canonical rendering, hashing and the
@@ -35,7 +46,7 @@ atomic save all live here; the CLI (``llm-kit models project``) is a thin shell.
 
 Canonical form (what ``write`` stores and ``render_yaml`` returns): UTF-8, LF,
 two-space indentation, one final newline, catalogue order preserved, row fields
-in the fixed order id/label/endpoint/model/efforts/request_defaults, every
+in the fixed order id/label/endpoint/model/efforts/max_output_tokens/request_defaults, every
 free-form mapping (``selections``, ``extras``) sorted by key. Comments are not
 round-tripped. The digest of a file is the SHA-256 of its bytes as stored.
 
@@ -58,7 +69,6 @@ import os
 import re
 import stat
 import uuid
-from urllib.parse import urlsplit
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping, Optional
@@ -68,8 +78,8 @@ from .model_profiles import (
     MENU_ENDPOINT_STYLE,
     MENU_EXACT_MODEL,
     MENU_NONE,
-    ROUTE_OPENROUTER,
     exact_effort_menu,
+    route_of_base_url,
 )
 
 SCHEMA = "llm-kit.project-models/v1"
@@ -93,7 +103,7 @@ SOURCE_OVERRIDE = "override"
 
 _TOP_KEYS = ("version", "catalog", "selections")
 _LOCAL_TOP_KEYS = ("version", "selections")
-_ROW_KEYS = ("id", "label", "endpoint", "model", "efforts", "request_defaults")
+_ROW_KEYS = ("id", "label", "endpoint", "model", "efforts", "max_output_tokens", "request_defaults")
 _ROW_REQUIRED = ("id", "label", "endpoint", "model")
 _SELECTION_KEYS = ("model", "effort")
 _DEFAULTS_KEYS = ("extras",)
@@ -186,12 +196,7 @@ def library_effort_menu(endpoint: EndpointInfo, model: str) -> "tuple[str, ...]"
 
 def _route_of(base_url: Optional[str]) -> Optional[str]:
     """``openrouter`` when ``base_url`` is on openrouter.ai, else None."""
-    if not isinstance(base_url, str):
-        return None
-    host = (urlsplit(base_url).hostname or "").lower()
-    if host == "openrouter.ai" or host.endswith(".openrouter.ai"):
-        return ROUTE_OPENROUTER
-    return None
+    return route_of_base_url(base_url)
 
 
 class _Endpoints:
@@ -429,6 +434,15 @@ def _request_defaults(value: Any, where: str) -> dict:
     return out
 
 
+def _max_output_tokens(value: Any, where: str, row_id: str, model: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise _invalid(
+            where,
+            f"must be a positive integer, not {value!r} (row {row_id!r}, model {model!r})",
+        )
+    return value
+
+
 def _efforts(value: Any, where: str, menu: "tuple[str, ...]", endpoint: str, model: str) -> list[str]:
     if not isinstance(value, (list, tuple)):
         raise _invalid(where, f"must be a list, not {value!r} (an empty list declares no effort)")
@@ -491,6 +505,10 @@ def _validate_catalog(
         if "efforts" in row:
             efforts = _efforts(row["efforts"], f"{where}.efforts", menu, endpoint, model)
             out["efforts"] = efforts
+        if "max_output_tokens" in row:
+            out["max_output_tokens"] = _max_output_tokens(
+                row["max_output_tokens"], f"{where}.max_output_tokens", row_id, model
+            )
         if "request_defaults" in row:
             out["request_defaults"] = _request_defaults(
                 row["request_defaults"], f"{where}.request_defaults"

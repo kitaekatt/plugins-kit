@@ -60,7 +60,7 @@ from unittest import mock
 
 import pytest
 
-from final_wording import floors_in_text_to_final, to_final
+from final_wording import floors_in_text_to_final, max_tokens_default_to_final, to_final
 
 _REPO = Path(__file__).resolve().parents[2]
 _LSK_LIB = _REPO / "plugins" / "llm-scripting-kit" / "lib"
@@ -144,7 +144,9 @@ _MASKED_FIELDS = frozenset({
     "as_of", "swept_at", "resolved_at", "since", "presented_at", "at",
 })
 # Fields one side's wrapper has and the other does not (named, pinned below).
-_FINAL_ONLY_FIELDS = frozenset({"factory"})
+# ``factory``: the final wrappers take an optional factory. ``_cap_endpoint``: the final
+# transport wrappers cache the endpoint they resolve their default output cap from.
+_FINAL_ONLY_FIELDS = frozenset({"factory", "_cap_endpoint"})
 _ID_RE = re.compile(r"\b[0-9a-f]{32}\b")
 _TS_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:\+00:00|Z)?")
 
@@ -167,6 +169,7 @@ def norm(value):
     if isinstance(value, enum.Enum):
         return ("enum", type(value).__name__, norm(value.value))
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        value = max_tokens_default_to_final(value)  # declared: the pipeline's output cap is unset by default
         out = {"__type__": type(value).__name__}
         for f in dataclasses.fields(value):
             if f.name in _FINAL_ONLY_FIELDS:
@@ -489,9 +492,13 @@ def test_call_llm_cache_roundtrip(par):
         p = ctx.side.platform
         cache = ctx.work / "cache"
         backend = ctx.side.backends.MockBackend(responses=["first", "second"])
-        a = p.call_llm(backend, "s", "u", model="m", cache_dir=cache, pricing=PRICING)
-        b = p.call_llm(backend, "s", "u", model="m", cache_dir=cache, pricing=PRICING)
-        c = p.call_llm(backend, "s", "u2", model="m", cache_dir=cache, pricing=PRICING)
+        # Declared difference: the final default output cap is unset, so a default-options key
+        # differs from the legacy one that hashed 4096 (tests/llm-kit/test_pipeline_cap.py pins it).
+        # An explicit 4096 keys identically on both sides, which is what is compared here.
+        opts = p.BackendOptions(max_tokens=4096)
+        a = p.call_llm(backend, "s", "u", model="m", options=opts, cache_dir=cache, pricing=PRICING)
+        b = p.call_llm(backend, "s", "u", model="m", options=opts, cache_dir=cache, pricing=PRICING)
+        c = p.call_llm(backend, "s", "u2", model="m", options=opts, cache_dir=cache, pricing=PRICING)
         return a, b, c, len(backend.calls), _tree_text(cache)
 
     res = par(sc)
@@ -813,8 +820,9 @@ def test_contract_seam_frontier(sides):
 def test_cache_key_and_response_cache_agree(par):
     def sc(ctx):
         p = ctx.side.platform
+        # An explicit 4096: the default is unset in the final (see test_call_llm_cache_roundtrip).
         key = p.build_cache_key(
-            backend="mock", model="m", system="s", user="u", options=p.BackendOptions()
+            backend="mock", model="m", system="s", user="u", options=p.BackendOptions(max_tokens=4096)
         )
         cache = p.ResponseCache(ctx.work / "rc")
         stored = cache.store(key, _resp(ctx.side, "payload"))
@@ -2180,7 +2188,10 @@ def test_default_factory_refuses_a_reasoning_truncation_like_legacy(par):
     def sc(ctx):
         client = _FakeClient(content="", finish_reason="length")
         backend = ctx.side.backends.OpenRouterBackend(client=client)
-        return backend.complete("s", "u", model="test/slug")
+        # Explicit: with no cap named the final sends none, and the message says so instead of
+        # naming max_tokens=4096 (pinned in tests/llm-kit/test_pipeline_cap.py).
+        options = ctx.side.platform.BackendOptions(max_tokens=4096)
+        return backend.complete("s", "u", model="test/slug", options=options)
 
     expect_raise(par(sc), "RuntimeError", "finish_reason=length")
 

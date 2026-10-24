@@ -766,9 +766,20 @@ Six things to get right when composing one:
    verbatim and can admit `max_attempts * (retries + 1)` of them.
 2. **Pass `pricing=` or `spend_reserve_usd=`.** `spend=` with neither is a
    `ValueError` before any provider call. Priced automatically, the reservation
-   covers the request plus the full `options.max_tokens`, because a reservation
-   has to cover what the attempt may actually bill. A cache hit returns before
-   the attempt loop, so it reserves nothing and writes no row.
+   covers the request plus the full output cap the call carries, because a
+   reservation has to cover what the attempt may actually bill. The cap is
+   `options.max_tokens` (`None` = unset), else the transport wrapper's cap for
+   the model: the project model file row matching (endpoint, model), by
+   `max_output_tokens`, then `request_defaults.extras.max_tokens`, then none on
+   openrouter.ai and 4096 elsewhere (full statement: `completion-seam-contract.md`,
+   "Output cap"; rows that disagree for one (endpoint, model) raise
+   `ConfigurationError`). A transport call with no cap is priced at
+   `pricing[model]["context_window"]` (priced only, never sent as `max_tokens`);
+   without that key it is refused with a `ValueError` naming four remedies:
+   `options.max_tokens`, a row `max_output_tokens`, a pricing `context_window`,
+   or `spend_reserve_usd`. A backend without the cap hook (mock, CLI) reserves
+   4096. A cache hit returns before the attempt loop, so it reserves nothing and
+   writes no row.
 3. **Wrap the call site, not the loop body, in `spend_stop`.** It is a context
    manager (not a probe-taking function like `preflight_check`), and it
    translates exactly `SpendCapExceeded` and `SpendLedgerHalted`.

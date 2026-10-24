@@ -510,7 +510,8 @@ resp = backend.complete("system prompt", "user prompt", model="claude-opus-4-8")
 print(resp.text, resp.input_tokens, resp.output_tokens)
 ```
 
-`BackendOptions` carries per-call knobs (`max_tokens`, `temperature`,
+`BackendOptions` carries per-call knobs (`max_tokens`, where `None` means
+unset and the output-cap rule in `completion-seam-contract.md` applies; `temperature`,
 `timeout_s`, `effort`, `allowed_tools`, `user_cache_prefix`, ...); transports
 ignore the ones they do not understand. An unset `temperature` is omitted from
 OpenAI-compatible requests so the server/model can choose its mode-aware

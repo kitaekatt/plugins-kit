@@ -71,9 +71,9 @@ refuses at the call rather than at import. The library source is
 distribution; this plugin holds no library source and publishes no shared lib. A consumer
 venv installs the package with the extras it reaches (`katsoft-llm-kit[<extras>]>=A.B,<N` in
 its `pyproject.toml`). The plugin's own venv does the same: its `pyproject.toml` is a
-non-package project that requires the released `katsoft-llm-kit[<every extra>]>=1.6,<2` and
+non-package project that requires the released `katsoft-llm-kit[<every extra>]>=1.7,<2` and
 `katsoft-contracts>=1.0,<2`, so the extras flow from that distribution and `bootstrap.json`
-names none. The floor is 1.6 because the documented public job supervisor first ships in
+names none. The floor is 1.7 because the per-model output-cap surface first ships in 1.7.0; the job supervisor first shipped in
 1.6.0. Codex in package mode, the project model file, `models catalog`, protocol 2 of
 `completion complete`, local selection overrides and the neutral user paths shipped in 1.3.0;
 `custom_bootstrap.py` reads `llm-kit account status --json`, which first shipped in 1.2.0;
@@ -400,7 +400,8 @@ believes it is clean will get burned:
   `system_prompt_mode` are claude-cli-only; `effort` reaches claude-cli, codex and
   opencode, and reaches OpenRouter only on a transport entry that resolves an
   `effort_style`; `cwd` reaches the three CLI backends and not OpenRouter, which is
-  why `cwd` is not a core param of this seam. `temperature` and `max_tokens` are
+  why `cwd` is not a core param of this seam. `temperature` and `max_tokens` (default unset;
+  cap rule: `references/completion-seam-contract.md`, "Output cap") are
   accepted and then dropped by all CLI backends -- dropped and REPORTED, not
   ignored. `skill_context` is read by all four and delivered by OpenRouter alone,
   as the leading block of its system message; the three CLI backends refuse it

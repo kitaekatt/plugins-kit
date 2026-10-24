@@ -788,14 +788,14 @@ def _backend_options(
     # deliberation than its endpoint's default says so here; unset keeps the
     # registry value, so an existing job file emits the same argv.
     effort = _string_option(effective, "effort", None)
-    max_tokens_value = effective.get("max_tokens", 4096)
+    max_tokens_value = effective.get("max_tokens")
     temperature_value = effective.get("temperature")
     extras = dict(extras_value)
 
     return BackendOptions(
         timeout_s=float(timeout_s),
         cwd=working_directory,
-        max_tokens=int(max_tokens_value),
+        max_tokens=int(max_tokens_value) if max_tokens_value is not None else None,
         temperature=(
             float(temperature_value) if temperature_value is not None else None
         ),

@@ -48,6 +48,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Iterable, Optional
+from urllib.parse import urlsplit
 
 from .effort import HarnessAdapterError
 
@@ -57,6 +58,16 @@ ROUTE_CODEX = "codex"
 ROUTE_CLAUDE = "claude"
 ROUTE_OPENROUTER = "openrouter"
 ROUTES = (ROUTE_CODEX, ROUTE_CLAUDE, ROUTE_OPENROUTER)
+
+
+def route_of_base_url(base_url: Optional[str]) -> Optional[str]:
+    """``openrouter`` when ``base_url`` is on openrouter.ai, else None."""
+    if not isinstance(base_url, str):
+        return None
+    host = (urlsplit(base_url).hostname or "").lower()
+    if host == "openrouter.ai" or host.endswith(".openrouter.ai"):
+        return ROUTE_OPENROUTER
+    return None
 
 #: Every effort token a menu may carry, low to high. A profile is validated
 #: against this scale when the module is imported, so a typo fails loudly there.

@@ -108,6 +108,17 @@ llm-kit consent show [--scope NAME] [--json]
 llm-kit consent set [--scope NAME] --local|--subscription|--metered on|off
 ```
 
+## Output cap
+
+A model row of the project model file (`.llm-kit/models.yaml`) may declare `max_output_tokens`
+(a positive integer; `llm-kit models catalog` shows it). A protocol 2 call to an OpenAI-compatible
+row sends, in order: the request's `max_tokens`, the row's `max_output_tokens`, the row's
+`request_defaults.extras.max_tokens`, then on openrouter.ai no cap (the model's full allowance)
+and on other endpoints 4096. Explicit values are never clamped. When a call fails after the
+provider answered, the protocol 2 `error.finish_reason` is the provider's raw stop string;
+`"length"` means the cap ended the answer. Full statement: `completion-seam-contract.md` in the
+plugin references.
+
 ## Source
 
 The source lives in the plugins-kit repository (`packages/katsoft-llm-kit/src/llm_kit`).

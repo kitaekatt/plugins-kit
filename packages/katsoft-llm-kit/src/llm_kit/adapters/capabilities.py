@@ -154,7 +154,13 @@ _OPENCODE_CONTRACT_EMITS = "stdin schema instruction"
 
 _OPENROUTER_PARAMS = {
     "max_tokens": ParamCapability(
-        type="integer", default=4096, emits="max_tokens"
+        type="integer",
+        default=None,
+        emits="max_tokens",
+        note=(
+            "unset: omitted for an openrouter.ai endpoint, so the provider's own limit for the model "
+            "applies; any other OpenAI-compatible endpoint is sent 4096"
+        ),
     ),
     "temperature": ParamCapability(
         type="number",

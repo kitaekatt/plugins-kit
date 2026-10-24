@@ -67,6 +67,12 @@ from llm_kit.dispatch.pipeline_backends import (
 from llm_kit.pipeline.runtime import platform
 from llm_kit.pipeline.runtime.platform import BackendOptions, LLMResponse, valid_reported_cost
 
+#: The cap an OpenAI-compatible endpoint that is NOT openrouter.ai receives when nothing names
+#: one: a local or self-hosted server's own default is unknown. The same number, with the same
+#: meaning, as ``llm_kit.adapters.backends.NON_OPENROUTER_DEFAULT_MAX_TOKENS``, which this layer
+#: may not import (the signed import graph); a test pins the two equal.
+NON_OPENROUTER_DEFAULT_MAX_TOKENS = 4096
+
 _UNSET = object()
 """Distinguishes "not looked up yet" from a looked-up None (see
 :meth:`ModelEndpointBackend._entry_reasoning_effort`)."""
@@ -116,6 +122,137 @@ def _is_harness_refusal(exc: BaseException) -> bool:
     Other registry failures retain the existing probe-friendly fallback.
     """
     return "is a harness entry" in str(exc)
+
+
+# ---------------------------------------------------------------------------
+# The model's configured output cap (project model file) -- transport wrappers only
+# ---------------------------------------------------------------------------
+
+#: ``{file path: (sha256 of the stored bytes, validated catalogue rows)}``. A project model file
+#: is read from disk on every cap lookup (one stat and one read of a small file, so an edit is
+#: honoured by the next call) and re-parsed and re-validated only when its bytes change.
+_PROJECT_ROWS: Dict[str, "tuple[str, list]"] = {}
+_PROJECT_ROWS_LOCK = threading.Lock()
+
+
+def _project_catalog_rows(project_root: Optional[Path]) -> list:
+    """The validated catalogue rows of the project model file, or ``[]`` when there is none.
+
+    ``project_root`` is the wrapper's, else the working directory (the file's default
+    location, ``.llm-kit/models.yaml``). An absent file is not an error: the file is optional.
+    A present file that does not validate, or that cannot be read, raises
+    ``llm_kit.registry.project_models.ProjectModelsError`` -- the same refusal
+    ``llm-kit models project show`` gives -- never a silent fall back to no configured cap.
+    """
+    import hashlib  # noqa: PLC0415
+
+    from llm_kit.registry import project_models  # noqa: PLC0415
+
+    root = str(project_root) if project_root is not None else None
+    project_file = project_models.resolve_project_file(root)
+    try:
+        data = project_file.path.read_bytes()
+    except FileNotFoundError:
+        return []
+    key = str(project_file.path)
+    digest = hashlib.sha256(data).hexdigest()
+    with _PROJECT_ROWS_LOCK:
+        cached = _PROJECT_ROWS.get(key)
+    if cached is not None and cached[0] == digest:
+        return cached[1]
+    rows = list(project_models.read_project_models(project_root=root).document["catalog"])
+    with _PROJECT_ROWS_LOCK:
+        _PROJECT_ROWS[key] = (digest, rows)
+    return rows
+
+
+def _row_output_cap(project_root: Optional[Path], endpoint: str, model: str) -> Optional[int]:
+    """The output cap the project model file configures for ``model`` on ``endpoint``.
+
+    The pipeline selects a model by endpoint and model id, not by row, so the rows matching
+    that pair answer. The precedence is the one protocol 2 applies to a selected row: a row's
+    ``max_output_tokens`` beats a row's ``request_defaults.extras.max_tokens``; None when no
+    matching row declares either. Two matching rows declaring different values of the same kind
+    are ambiguous and refuse, naming the rows, rather than choosing one.
+    """
+    matching = [
+        row
+        for row in _project_catalog_rows(project_root)
+        if row["endpoint"] == endpoint and row["model"] == model
+    ]
+    typed = {row["id"]: row["max_output_tokens"] for row in matching if "max_output_tokens" in row}
+    bridged: Dict[str, Any] = {}
+    for row in matching:
+        extras = (row.get("request_defaults") or {}).get("extras") or {}
+        if "max_tokens" in extras:
+            value = extras["max_tokens"]
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise platform.ConfigurationError(
+                    f"project model file row {row['id']!r} (endpoint {endpoint!r}, model {model!r}) "
+                    f"request_defaults.extras.max_tokens must be a positive integer, not {value!r}"
+                )
+            bridged[row["id"]] = value
+    for kind, found in (("max_output_tokens", typed), ("request_defaults.extras.max_tokens", bridged)):
+        if len(set(found.values())) > 1:
+            raise platform.ConfigurationError(
+                f"project model file rows {sorted(found)} all select endpoint {endpoint!r} model "
+                f"{model!r} but declare different {kind} values {sorted(set(found.values()))}; "
+                "the pipeline selects a model, not a row, so declare one value"
+            )
+        if found:
+            return next(iter(found.values()))
+    return None
+
+
+def _cap_endpoint(wrapper: Any, endpoint: Optional[str]) -> "tuple[str, bool]":
+    """``(resolved endpoint name, is openrouter.ai)`` for a transport wrapper, cached on it.
+
+    An endpoint that cannot be resolved is not known to be openrouter.ai: it yields
+    ``("", False)``, which keeps the finite cap and looks up no row (the call itself reports
+    the resolution failure).
+    """
+    from llm_kit.registry.model_profiles import ROUTE_OPENROUTER, route_of_base_url  # noqa: PLC0415
+    from llm_kit.registry.models import EndpointResolveError, resolve_endpoint  # noqa: PLC0415
+
+    resolved = wrapper._cap_endpoint
+    if resolved is None:
+        try:
+            ep = resolve_endpoint(
+                endpoint,
+                project_root=str(wrapper.project_root) if wrapper.project_root is not None else None,
+            )
+            resolved = (str(ep["name"]), route_of_base_url(ep.get("base_url")) == ROUTE_OPENROUTER)
+        except EndpointResolveError:
+            resolved = ("", False)
+        wrapper._cap_endpoint = resolved
+    return resolved
+
+
+def _endpoint_default_cap(wrapper: Any, endpoint: Optional[str]) -> Optional[int]:
+    """The cap an endpoint carries when nothing names one: None on openrouter.ai, else 4096.
+
+    No model is involved: this is the endpoint-wide default the delegate applies, and the part
+    of the cap a cache key can state without knowing the model.
+    """
+    _name, is_openrouter = _cap_endpoint(wrapper, endpoint)
+    return None if is_openrouter else NON_OPENROUTER_DEFAULT_MAX_TOKENS
+
+
+def _transport_output_cap(
+    wrapper: Any, endpoint: Optional[str], model: str
+) -> Optional[int]:
+    """The output cap a transport wrapper carries for ``model`` when the caller names none.
+
+    The configured row cap (see :func:`_row_output_cap`), else the endpoint's default (see
+    :func:`_endpoint_default_cap`): None on openrouter.ai -- the provider's own limit for the
+    model applies -- and :data:`NON_OPENROUTER_DEFAULT_MAX_TOKENS` on any other endpoint.
+    """
+    name, _is_openrouter = _cap_endpoint(wrapper, endpoint)
+    if name:
+        row_cap = _row_output_cap(wrapper.project_root, name, model)
+        if row_cap is not None:
+            return row_cap
+    return _endpoint_default_cap(wrapper, endpoint)
 
 
 def _lazy_build_note() -> None:
@@ -322,6 +459,10 @@ class _LazyDelegate:
         default_factory=threading.Lock, init=False, repr=False, compare=False
     )
 
+    def _with_default_cap(self, opts: BackendOptions, model: str) -> BackendOptions:
+        """``opts`` unchanged: only the transport wrappers carry a default output cap."""
+        return opts
+
     def _build(self, spec: BackendSpec, factory: Optional[BackendFactory]) -> Any:
         """Return the cached delegate, building it from ``spec`` at most once.
 
@@ -345,7 +486,7 @@ class _LazyDelegate:
         model: str,
         options: Optional[BackendOptions] = None,
     ) -> LLMResponse:
-        opts = options or BackendOptions()
+        opts = self._with_default_cap(options or BackendOptions(), model)
         return _complete_through(self._backend, system, user, model=model, opts=opts)
 
     def classify_halt(self, exc: BaseException) -> Optional[str]:
@@ -378,6 +519,22 @@ class OpenRouterBackend(_LazyDelegate):
     client: Any = None
     factory: Optional[BackendFactory] = field(default=None, repr=False, compare=False)
     name: str = field(default="openrouter", init=False)
+    _cap_endpoint: Any = field(default=None, init=False, repr=False, compare=False)
+
+    def output_cap_for(self, model: str) -> Optional[int]:
+        """The output cap this endpoint carries for ``model`` when the caller names none.
+
+        The model's configured ``max_output_tokens`` (project model file), else None on
+        openrouter.ai -- no cap is sent, so the provider's own limit for the model applies --
+        and 4096 on any other endpoint. Reads configuration only: it builds no delegate.
+        """
+        return _transport_output_cap(self, self.endpoint, model)
+
+    def _with_default_cap(self, opts: BackendOptions, model: str) -> BackendOptions:
+        if opts.max_tokens is not None:
+            return opts
+        cap = self.output_cap_for(model)
+        return opts if cap is None else replace(opts, max_tokens=cap)
 
     def _backend(self) -> Any:
         return self._build(
@@ -584,6 +741,22 @@ class ModelEndpointBackend(_LazyDelegate):
     factory: Optional[BackendFactory] = field(default=None, repr=False, compare=False)
     name: str = field(default="model-endpoint", init=False)
     _effort: Any = field(default=_UNSET, init=False, repr=False, compare=False)
+    _cap_endpoint: Any = field(default=None, init=False, repr=False, compare=False)
+
+    def output_cap_for(self, model: str) -> Optional[int]:
+        """The output cap this registry entry carries for ``model`` when the caller names none.
+
+        As :meth:`OpenRouterBackend.output_cap_for`, for the selected registry entry: the
+        configured ``max_output_tokens`` of the project model file row naming this entry and
+        model, else None when the entry is an openrouter.ai endpoint, else 4096.
+        """
+        return _transport_output_cap(self, self._entry_id(), model)
+
+    def _with_default_cap(self, opts: BackendOptions, model: str) -> BackendOptions:
+        if opts.max_tokens is not None:
+            return opts
+        cap = self.output_cap_for(model)
+        return opts if cap is None else replace(opts, max_tokens=cap)
 
     # `name` is CONSTANT across entries, deliberately. The on-disk cache key is
     # (backend name, model id, ...) and two entries serve different model ids,
@@ -750,6 +923,14 @@ class ModelEndpointBackend(_LazyDelegate):
         body is unchanged. The key therefore changes exactly where the wire
         does.
 
+        ``max_tokens`` is resolved the same way: when the caller named none it
+        becomes the endpoint's default (4096, or None for an openrouter.ai
+        entry, which sends no cap), so the key states the cap that reaches the
+        provider and an entry that is not on openrouter.ai keeps the key
+        earlier releases computed. A model's configured ``max_output_tokens``
+        needs the model, which this method is not given; :func:`call_llm`
+        resolves it into the options first.
+
         Precedence, highest first (``llm_kit.registry.effort.plan_effort``):
 
         1. the caller's ``extras`` name an effort, top-level
@@ -770,6 +951,10 @@ class ModelEndpointBackend(_LazyDelegate):
         ``extras["reasoning_effort"]`` whatever the entry's style.
         """
         opts = options or BackendOptions()
+        if opts.max_tokens is None:
+            # The endpoint-wide default the delegate applies. A configured per-model cap is not
+            # known here (no model): call_llm resolves it into the options before asking.
+            opts = replace(opts, max_tokens=_endpoint_default_cap(self, self._entry_id()))
         seam = _effort_seam()
         if seam is None:
             return self._legacy_effective_options(opts)
@@ -792,7 +977,7 @@ class ModelEndpointBackend(_LazyDelegate):
         the caller's ``extras`` unchanged, and places the effort itself; see
         :meth:`effective_options` for the precedence it applies.
         """
-        opts = options or BackendOptions()
+        opts = self._with_default_cap(options or BackendOptions(), model)
         if _effort_seam() is None:
             sent = self._legacy_effective_options(opts)
         else:

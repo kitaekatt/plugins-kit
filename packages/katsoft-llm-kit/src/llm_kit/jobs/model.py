@@ -55,8 +55,11 @@ run each attempt in a detached worktree instead of its declared directory.
 
 The optional job ``options`` mapping accepts ``allowed_tools``,
 ``disallowed_tools``, ``effort``, ``system_prompt_mode``, ``max_tokens``,
-``temperature`` and ``extras``. ``max_tokens`` defaults to 4096 and
-``temperature`` is unset by default, so the endpoint/model default applies;
+``temperature`` and ``extras``. ``max_tokens`` is unset by default (an
+openrouter.ai job then sends no cap, so the provider's limit for the model
+applies; another OpenAI-compatible endpoint is sent 4096; the Claude and Codex
+CLIs ignore it) and ``temperature`` is unset by default, so the endpoint/model
+default applies;
 set it per job to override. ``effort`` is unset by default, which keeps whatever
 the endpoint registry entry carries. The top-level
 ``disallowed_tools`` job-file key sets a deny floor for every job in the run.

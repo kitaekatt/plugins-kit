@@ -78,10 +78,16 @@ from llm_kit.completion.types import (
     valid_reported_cost,
 )
 from llm_kit.registry.effort import CLAUDE_EFFORT_ORDER, CLAUDE_HARNESS
-from llm_kit.registry.model_profiles import check_effort
+from llm_kit.registry.model_profiles import ROUTE_OPENROUTER, check_effort, route_of_base_url
 
 #: ``LLMResponse.estimated_cost_source`` labels. The label says which field of
 #: which transport the figure came from, and that it is an estimate.
+#: The output cap an OpenAI-compatible endpoint that is NOT openrouter.ai receives when the
+#: caller names none. A local or self-hosted server's own default is unknown and varies by
+#: server, so the library keeps sending a finite cap there. openrouter.ai gets none: the
+#: provider's own limit for the model applies (see ``_default_max_tokens``).
+NON_OPENROUTER_DEFAULT_MAX_TOKENS = 4096
+
 ESTIMATE_SOURCE_USAGE_COST = "openrouter.usage.cost"
 ESTIMATE_SOURCE_CLAUDE_CLI = "claude-cli.total_cost_usd"
 
@@ -185,6 +191,18 @@ class OpenRouterBackend:
                 self._resolved_cache = self._UNRESOLVED
         cached = self._resolved_cache
         return None if cached is self._UNRESOLVED else cached
+
+    def _default_max_tokens(self) -> Optional[int]:
+        """The cap for a call that names none: None on openrouter.ai, a finite cap elsewhere.
+
+        An endpoint that cannot be resolved is not known to be openrouter.ai, so it keeps the
+        finite cap.
+        """
+        resolved = self._resolved()
+        base_url = resolved.get("base_url") if resolved else None
+        if route_of_base_url(base_url) == ROUTE_OPENROUTER:
+            return None
+        return NON_OPENROUTER_DEFAULT_MAX_TOKENS
 
     def endpoint_profile(self) -> EndpointProfile:
         """This endpoint's profile (resolves the endpoint on first use)."""
@@ -378,8 +396,14 @@ class OpenRouterBackend:
                 {"role": "system", "content": system_content},
                 {"role": "user", "content": user_content},
             ],
-            "max_tokens": opts.max_tokens,
         }
+        # An explicit cap is sent exactly as given. With none, openrouter.ai gets NO max_tokens:
+        # the provider's own limit for the model applies, and a cap that is sent would also narrow
+        # OpenRouter's provider routing to endpoints able to return that many tokens, so the
+        # library never invents one. Any other OpenAI-compatible endpoint keeps a finite cap.
+        cap = opts.max_tokens if opts.max_tokens is not None else self._default_max_tokens()
+        if cap is not None:
+            create_kwargs["max_tokens"] = cap
         # OpenAI `user`: the caller's id, else a process identity so a front
         # door's access log can attribute the call. An EMPTY client_id omits
         # the field entirely -- a caller may not want a hostname sent upstream.
@@ -458,9 +482,13 @@ class OpenRouterBackend:
             reasoning_note = (
                 " after generating reasoning content" if reasoning else ""
             )
+            sent_cap = create_kwargs.get("max_tokens")
+            allowance = (
+                f"max_tokens={sent_cap}" if sent_cap is not None else "the provider's output limit (no max_tokens sent)"
+            )
             raise EmptyCompletionError(
-                f"OpenAI-compatible completion exhausted max_tokens="
-                f"{opts.max_tokens}{reasoning_note} before producing final "
+                f"OpenAI-compatible completion exhausted {allowance}"
+                f"{reasoning_note} before producing final "
                 "content (finish_reason=length); raise max_tokens",
                 reasoning=reasoning,
                 finish_reason=finish_reason,

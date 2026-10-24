@@ -28,7 +28,7 @@ from pathlib import Path
 
 import pytest
 
-from final_wording import to_final
+from final_wording import max_tokens_default_to_final, to_final
 
 _REPO = Path(__file__).resolve().parents[2]
 _LEGACY_LIB = _REPO / "plugins" / "llm-scripting-kit" / "lib"
@@ -111,6 +111,9 @@ def legacy_wording():
         _LEGACY_ACTIVE[0] = False
 
 
+_MAX_TOKENS_TYPE_TEXT = {"int": "Optional[int]", "<class 'int'>": "typing.Optional[int]"}
+
+
 def norm(value, depth: int = 0):
     if depth > 25:
         raise AssertionError("normalization depth exceeded")
@@ -132,6 +135,8 @@ def norm(value, depth: int = 0):
     if isinstance(value, type):
         return ("type", value.__name__)
     if dataclasses.is_dataclass(value):
+        if _LEGACY_ACTIVE[0]:
+            value = max_tokens_default_to_final(value, params=False)  # declared: llm-kit's output cap is unset by default
         return (
             "dc",
             type(value).__name__,
@@ -142,6 +147,9 @@ def norm(value, depth: int = 0):
             },
         )
     if isinstance(value, Mapping):
+        if _LEGACY_ACTIVE[0] and value.get("max_tokens") in _MAX_TOKENS_TYPE_TEXT:
+            # declared: the option type of max_tokens is Optional[int] in llm-kit
+            value = {**value, "max_tokens": _MAX_TOKENS_TYPE_TEXT[value["max_tokens"]]}
         return ("map", type(value).__name__, {k: norm(v, d) for k, v in value.items()})
     if isinstance(value, (list, tuple)):
         return ("seq", type(value).__name__, [norm(v, d) for v in value])
@@ -330,7 +338,10 @@ def _without_final_only(document: dict) -> dict:
 
 def _sig(fn) -> str:
     try:
-        return _without_final_only_params(str(inspect.signature(fn)))
+        # Declared difference: BackendOptions.max_tokens is unset by default (final_wording).
+        return _without_final_only_params(str(inspect.signature(fn))).replace(
+            "max_tokens: 'int' = 4096", "max_tokens: 'Optional[int]' = None"
+        )
     except (TypeError, ValueError):
         return "nosig"
 
@@ -378,6 +389,15 @@ def describe(obj):
                     if f.name not in _FINAL_ONLY_FIELDS
                 ],
             }
+        if obj.__name__ == "BackendOptions":
+            # Declared difference (final_wording.max_tokens_default_to_final): max_tokens is
+            # Optional[int] = None in llm-kit, int = 4096 in the frozen legacy record.
+            info["attrs"]["max_tokens"] = ("val", None)
+            info["dataclass"]["fields"] = [
+                ("max_tokens", "Optional[int]", None, None, True, True, True, None)
+                if field[0] == "max_tokens" else field
+                for field in info["dataclass"]["fields"]
+            ]
         return ("class", info)
     if inspect.isroutine(obj):
         if not _is_project(obj):

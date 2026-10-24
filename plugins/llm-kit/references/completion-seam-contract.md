@@ -386,7 +386,7 @@ names a `selection` key or a catalogue row `model` of the project model file
 The row carries the endpoint, the exact wire model and the narrowed effort menu. Its
 keys are `project_root`, `file`, `selection` or `model` (exactly one), `prompt`,
 `system`, `mode`, `working_dir`, `expect_files`, `output_schema`, `effort` (absent
-means the selection's; `null` sends none), `max_tokens`, `timeout_s` and `consent`; an
+means the selection's; `null` sends none), `max_tokens` (see "Output cap" below), `timeout_s` and `consent`; an
 unknown key is refused. `consent` opts in to the optional consent layer: omitted or `false`
 means the layer is not used, `true` applies the global policy, and `{"scope": "<name>"}`
 applies that scope's restrictions over the global policy. The name must be a non-empty
@@ -410,7 +410,9 @@ class, and does not run the harness authentication probe; only an opted-in reque
 with `{"protocol": 2, "error": {"kind", "message"}}` on stderr; `kind` is one of
 `protocol`, `project-file`, `selection`, `effort`, `mode`, `path`, `contract`,
 `consent` and `configuration`. A call that ran exits 0 when completed, 1 when failed
-and 3 when it ended in a classified halt, with the result document on stdout: `status`,
+and 3 when it ended in a classified halt, with the result document on stdout (a failed
+result carries `error: {code, message}` and, when the provider answered before the failure,
+`error.finish_reason`; see "Output cap"): `status`,
 `mode`, the `selection`, a `resolved` block that separates `requested_model` from
 `reported_model` and sets `model_verified` only when the two agree, the `effort` block
 (`requested`, `sent`, `source`), `output`, `usage`, `cost` (`class`, `reason`, authoritative USD and
@@ -420,6 +422,28 @@ depends on its authentication, which was not probed", when the request did not o
 consent, because only the consent layer needs the authentication probe), `consent` (`{opted_in, applied, scope}`: whether the request
 sent the field, whether a consent policy was applied to the call, and the scope named) and,
 for `workspace`, the `files` written.
+
+**Output cap (protocol 2, transport rows).** A catalogue row of the project model file may
+declare `max_output_tokens`, a positive integer shown in `models catalog`. The cap a transport
+call sends is the first of: (1) the request's `max_tokens`; (2) the row's `max_output_tokens`;
+(3) the row's `request_defaults.extras.max_tokens`; (4) on openrouter.ai, no `max_tokens` at all,
+so the provider's own limit for the model applies; on any other OpenAI-compatible endpoint,
+4096. An explicit value is sent exactly as given and is never clamped; the library ships no
+per-model limit table. The `extras.max_tokens` form is an interim bridge that stays supported.
+It is removed from the request body so that an explicit or typed value wins, and a value that is
+not a positive integer is refused. Prefer the typed field for rows that declare it. A `claude` or `codex`
+row may declare `max_output_tokens`, but it is not applied: those harnesses expose no output-cap
+control. `BackendOptions.max_tokens` is optional (`None` = unset), and jobs and the protocol 1
+CLI leave it unset by default. The content-pipeline runtime follows the same precedence
+through its transport wrappers, which match the project model file row on (endpoint, model)
+and raise `ConfigurationError` when rows disagree; spend-reservation sizing for an uncapped
+call is in `skills/content-pipeline-domain/references/building-a-pipeline.md`, "The
+cross-process spend cap".
+
+**Telling truncation from a clean stop.** A failed result's `error` object carries
+`finish_reason`, the provider's raw stop string, only when the provider answered; it is absent
+otherwise. `usage.output_tokens` carries the tokens reported. `error.code` is unchanged, so a
+caller detects truncation by `error.finish_reason == "length"`.
 
 **A protocol error is not an endpoint error, and the exit codes say so.**
 `EXIT_PROTOCOL` (4) means the request could not be understood and no call was
