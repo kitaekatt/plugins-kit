@@ -1231,6 +1231,19 @@ claude_md:
           for every plugin is a venv INTERPRETER, not a script."
       origin: "2026-10-01 -- measured while finding that agent-typed commands in skills and references used ${CLAUDE_PLUGIN_ROOT}; the complementary correction to the Plugin System 'Variable expansion' bullet."
       added: "2026-10-01"
+    - id: windows_spawn_no_detached_process
+      keywords: [DETACHED_PROCESS, CREATE_NO_WINDOW, creationflags, console window, popup, terminal window spam, OpenConsole, background process, detached spawn, Windows]
+      summary: "On Windows, detach a background child with CREATE_NO_WINDOW (plus CREATE_NEW_PROCESS_GROUP), never DETACHED_PROCESS. A DETACHED_PROCESS child has no console, so every console program it starts gets a new VISIBLE console window."
+      detail: |
+        The two flags are mutually exclusive; combining them leaves DETACHED_PROCESS in
+        effect. CREATE_NO_WINDOW gives the child its own hidden console, which is already
+        independent of the parent's, so detachment intent is kept. Rationale and
+        measurement: plugins/bootstrap/bootstrap_lib/harvest.py (the comment above its
+        creationflags). Guard for llm_kit.jobs.supervisor._spawn_options:
+        tests/llm-kit/test_job_supervisor.py::test_spawned_console_programs_get_no_visible_window,
+        which asserts a grandchild has no visible console window.
+      origin: "2026-10-24 -- llm_kit.jobs.supervisor spawned with DETACHED_PROCESS and a test run opened dozens of terminal windows (the venv python.exe launcher of each grandchild); bootstrap's harvest had hit the same trap earlier. Fixed in katsoft-llm-kit 1.7.1."
+      added: "2026-10-24"
   conventions:
     - rule: Commit and push to dev freely without asking; only a PUBLISH (dev -> master) needs the user. Do not coordinate around other agent sessions' concurrent work.
       keywords: [commit freely, push freely, no permission, dev branch, only publishes gated, other agents, concurrent sessions, shared tree, git commit -- paths]
