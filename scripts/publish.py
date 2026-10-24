@@ -7,15 +7,16 @@ the intent and points here; the steps live in code so the two cannot drift.
 "Publish" means all four of these, and a publish that stops early is not a
 publish -- it is a state where users see something other than what you meant:
 
-  1. Version bump (yours) + regenerate the derived marketplace.json.
+  1. Regenerate marketplace.json from the reviewed plugin manifests.
   2. Push dev.
   3. Fast-forward master and push it. master is the cache source, so nothing
-     reaches a user until this lands. A bump without a merge ships nothing; a
-     merge without a bump doesn't change the cache key, so consumers never
-     refetch.
+     reaches a user until this lands. Plugin content changes require version
+     bumps so consumers refetch their caches.
+  4. Verify the published manifests and derived artifacts.
 
-Contract: you commit your code and the version bump on `dev`; this script owns
-everything derived from them and every git step after them.
+Contract: commit reviewed changes and required plugin version bumps on `dev`.
+This script owns derived artifacts and every Git step after that commit.
+Imported consumer target changes can ship without individual plugin bumps.
 
 Three fixed identities, each resolved once and passed explicitly:
 
@@ -23,21 +24,20 @@ Three fixed identities, each resolved once and passed explicitly:
     preflight read is `git show P:<path>`, never the working tree.
   - B: P plus the regenerated derived artifacts, committed in a PRIVATE index
     (commit_derived). Nothing is ever amended; B is P when nothing changed.
-  - F: the commit master receives -- B, or the last package-ledger commit.
-    F may differ from P only in the publish-owned paths (marketplace.json,
-    packages/released.json). The projection, the fast-forward and verify()
-    all take F; no branch name is read once F is fixed.
+  - F: the final source commit used for publication -- B.
+    F may differ from P only in .claude-plugin/marketplace.json, the sole
+    publish-owned path. The imported target artifact is already committed in P.
+    The projection, the fast-forward and verify() all take F as input.
+    No branch name is read once F is fixed.
 
 dev moves only through advance_dev(): a fast-forward-only push of the new
 commit, then the local ref and the publish-owned paths' copies when nothing
 else differs.
 
-Packages: when packages/registry.toml registers a distribution whose version
-has no entry in packages/released.json, the same run tags it, waits for the
-release workflow, verifies the PyPI wheel against a rebuild of the tag, and
-records it on dev BEFORE the projection, so master never exposes a plugin
-ahead of a package it needs. Mechanics: scripts/_packages.py; procedure and
-states: docs/reference/package-release.md.
+Libraries are released independently in katsoft-libs. Publication validates
+shipping plugins against data/package-targets.json, a generated consumer target
+artifact imported after library release verification. It never builds or uploads
+packages. Target changes can ship without bumping individual consumer plugins.
 
 Why a script rather than a checklist -- the footguns it removes:
 
@@ -89,18 +89,17 @@ escapable pre-commit hooks):
     what it does NOT change (a dev-only plugin still never reaches the
     marketplace listing, so it stays uninstallable).
   - a plugin that does not declare the bootstrap dependency.
-  - no published plugin bumped at all (unless a package release is pending,
-    or dev records a package release master's ledger lacks), AND any
+  - no published plugin bumped and no imported consumer targets changed, AND any
     published plugin whose files changed in the range without a bump (the
     cache keys on version, so those files would ship under a version
     consumers already hold and never refetch).
-  - the package policy in _packages.plan(): --only while a package release
-    is pending, a dependency cycle or unsatisfiable first-party requirement,
-    a listed public name removed without a major bump, and a pending release
-    whose workflow is not on master.
+  - consumer target validation in _packages.plan(): a shipping katsoft-*
+    requirement outside the restricted form, a missing imported target, or
+    requirements on one distribution with no admitted target in common.
   - a pyproject.toml version disagreeing with its plugin.json.
 
-The last two exist as pre-commit hooks too, but those are skippable with
+Plugin version and pyproject consistency checks also run as pre-commit hooks.
+Those hooks are skippable with
 --no-verify (and PLUGINS_KIT_SKIP_BUMP_CHECK=1, whose documented purpose is
 legitimate dev-branch commits between publish checkpoints). Skipping them on dev
 is sanctioned; shipping the result is not, so publish re-runs them from the same
@@ -114,9 +113,9 @@ from the projected tree held in a temporary Git index, so master's
 marketplace.json lists the held-back plugins at the versions master
 actually carries. Nothing on dev is regenerated or committed (B is P): the
 held-back plugins' listing entries on dev catch up at the next bare publish.
---only is refused while a package release is pending, because a partial
-release could expose a plugin ahead of the package it needs. Two things a
-partial release deliberately does NOT do:
+Consumer target validation judges only the plugins the partial release ships.
+Library release state does not control --only. Two things a partial release
+deliberately does NOT do:
 
   - It does not advance `Published-From:`. The held-back plugins' commits stay
     in the range so the next full publish still sees them; the projection
@@ -129,7 +128,7 @@ partial release deliberately does NOT do:
 
 Usage:
   python scripts/publish.py                   # preflight, publish, verify
-  python scripts/publish.py --check           # preflight + verify only; no writes, no pushes
+  python scripts/publish.py --check           # preflight only; no writes, no pushes
   python scripts/publish.py --only awesome-kit  # partial release of one plugin
 """
 from __future__ import annotations
@@ -195,11 +194,6 @@ def _pk():
 
 def package_repo() -> "_packages.Repo":
     return _pk().Repo(REPO_ROOT, REMOTE)
-
-
-def package_services() -> "_packages.Services":
-    """Everything a package release does off this machine. Tests replace it."""
-    return _pk().Services.real(REPO_ROOT)
 
 
 # --- shell -----------------------------------------------------------------
@@ -1769,13 +1763,8 @@ def main(argv: list[str]) -> int:
             print("  already current (nothing to commit)" if base == flight.p
                   else f"  committed derived artifacts as {base[:9]} on {flight.p[:9]}")
 
-        if plan.release_set:
-            print("\nreleasing packages:")
-            final = _pk().Release(package_repo(), plan, base,
-                                      package_services()).run()
-        else:
-            advance_dev(base)
-            final = base
+        advance_dev(base)
+        final = base
         _require_final_is_p_plus_owned(flight.p, final)
 
         print("\npublishing:")

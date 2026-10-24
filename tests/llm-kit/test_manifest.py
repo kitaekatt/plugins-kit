@@ -24,7 +24,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 PLUGIN = REPO / "plugins" / "llm-kit"
-LIB = REPO / "packages" / "katsoft-llm-kit" / "src" / "llm_kit"
+import llm_kit
+LIB = Path(llm_kit.__file__).resolve().parent
 MANIFEST = json.loads((PLUGIN / "bootstrap.json").read_text(encoding="utf-8"))
 PLUGIN_JSON = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
 _SEMVER = re.compile(r"^\d+\.\d+\.\d+$")

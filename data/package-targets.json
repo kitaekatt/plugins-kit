@@ -1,0 +1,19 @@
+{
+  "packages": {
+    "katsoft-contracts": {
+      "1.0.1": {
+        "version": "1.0.1"
+      }
+    },
+    "katsoft-llm-kit": {
+      "1.7.2": {
+        "version": "1.7.2"
+      }
+    }
+  },
+  "schema": 1,
+  "source": {
+    "commit": "0644756a4e8baac3d76f1e93a4bb34f9c71945be",
+    "repository": "https://github.com/kitaekatt/katsoft-libs"
+  }
+}

@@ -12,13 +12,14 @@ import json
 import tomllib
 from pathlib import Path
 
-from bootstrap_lib.venv_check import parse_restricted_requirement
+from bootstrap_lib.venv_check import parse_restricted_requirement, validate_package_target_document
 
 _REPO = Path(__file__).resolve().parents[2]
 _PLUGIN = _REPO / "plugins" / "git-kit"
 _PYPROJECT = tomllib.loads((_PLUGIN / "pyproject.toml").read_text(encoding="utf-8"))
 _MANIFEST = json.loads((_PLUGIN / "bootstrap.json").read_text(encoding="utf-8"))
-_RELEASED = json.loads((_REPO / "packages" / "released.json").read_text(encoding="utf-8"))
+_RELEASED = validate_package_target_document(json.loads(
+    (_REPO / "data" / "package-targets.json").read_text(encoding="utf-8")))
 
 
 def _requirements() -> list[str]:
@@ -57,7 +58,7 @@ def test_every_released_package_requirement_is_in_the_restricted_form() -> None:
         parsed = parse_restricted_requirement(text)
         assert parsed is not None, text
         name, minimum, exclusive_major = parsed
-        assert name in _RELEASED, f"{name} is not in packages/released.json"
+        assert name in _RELEASED, f"{name} is not in data/package-targets.json"
         assert any(
             minimum <= _version(release) < (exclusive_major,)
             for release in _RELEASED[name]

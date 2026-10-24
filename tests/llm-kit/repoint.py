@@ -172,7 +172,10 @@ def _reverse_names() -> list[tuple[str, str]]:
 def _reverse_path_overrides() -> list[tuple[str, str]]:
     """(final path, legacy path) for the map's path overrides (made-up paths a test uses as data)."""
     mapping = json.loads((REPO / "tests" / "llm-kit" / "repoint-map.json").read_text(encoding="utf-8"))
-    return [(row["to"], legacy) for legacy, row in mapping.get("path_overrides", {}).items()]
+    library = load_generator().LLM_KIT_LIB.as_posix()
+    return [(target, legacy)
+            for legacy, row in mapping.get("path_overrides", {}).items()
+            for target in {row["to"], row["to"].replace("packages/katsoft-llm-kit/src", library)}]
 
 
 def to_legacy_names(text: str) -> str:

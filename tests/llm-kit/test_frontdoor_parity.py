@@ -40,7 +40,7 @@ import pytest
 
 _REPO = Path(__file__).resolve().parents[2]
 _LEGACY_LIB = _REPO / "plugins" / "llm-scripting-kit" / "lib"
-_FINAL_LIB = _REPO / "packages" / "katsoft-llm-kit" / "src"
+_FINAL_LIB = __import__("pathlib").Path(__import__("llm_kit").__file__).resolve().parent.parent
 
 try:
     import fastapi  # noqa: F401

@@ -764,8 +764,7 @@ def console_entries(tree: Tree) -> list[ConsoleEntry]:
 def package_console_scripts(tree: Tree, plugin: str) -> dict[str, str]:
     """Console scripts the plugin's venv installs from first-party packages it requires.
 
-    Maps script name -> ``<distribution>: <target>``. Reads the plugin's pyproject from
-    ``tree`` and each required ``katsoft-*`` distribution's pyproject from ``packages/``.
+    Maps script name -> ``<distribution>: <target>`` using installed package metadata.
     """
     pyproject = f"plugins/{plugin}/pyproject.toml"
     if not tree.has(pyproject):
@@ -775,12 +774,10 @@ def package_console_scripts(tree: Tree, plugin: str) -> dict[str, str]:
         name = re.split(r"[\[<>=!~;\s]", requirement.strip(), maxsplit=1)[0].lower().replace("_", "-")
         if not name.startswith("katsoft-"):
             continue
-        source = _REPO_ROOT / "packages" / name / "pyproject.toml"
-        if not source.is_file():
-            continue
-        for script, target in (tomllib.loads(source.read_text(encoding="utf-8"))
-                               .get("project", {}).get("scripts") or {}).items():
-            out[script] = f"{name}: {target}"
+        from importlib.metadata import distribution
+        for entry in distribution(name).entry_points:
+            if entry.group == "console_scripts":
+                out[entry.name] = f"{name}: {entry.value}"
     return out
 
 
@@ -1229,7 +1226,6 @@ EXEMPT: list[Exempt] = [
         "The plugin venv path is",
         "provisions (~/.claude/plugins/data/plugins-kit/skills-kit/.venv)"),
     *_p("plugins/*bootstrap_guard.py", _GUARD_DOC, "`~/.claude/plugins/data/<marketplace>/<plugin>/bootstrap.log`"),
-    *_p("packages/*bootstrap_guard.py", _GUARD_DOC, "`~/.claude/plugins/data/<marketplace>/<plugin>/bootstrap.log`"),
     *_p("plugins/bootstrap-stuck-fix/README.md", _BOOTSTRAP_DOCS, "tail ~/.claude/plugins/data/plugins-kit/bootstrap/bootstrap.log"),
     *_p("plugins/bootstrap/README.md", _BOOTSTRAP_DOCS, "~/.claude/plugins/data/plugins-kit/<plugin>/bootstrap.log"),
     *_p("plugins/bootstrap/skills/bootstrap/SKILL.md", _BOOTSTRAP_DOCS,

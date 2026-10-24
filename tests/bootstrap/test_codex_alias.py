@@ -9,6 +9,7 @@ so import state cannot leak between them.
 from __future__ import annotations
 
 import ast
+import importlib.metadata
 import json
 import subprocess
 import sys
@@ -17,7 +18,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 BOOTSTRAP = REPO / "plugins" / "bootstrap"
-KIT_SRC = REPO / "packages" / "katsoft-llm-kit" / "src"
+KIT_SRC = Path(importlib.metadata.distribution("katsoft-llm-kit").locate_file(""))
 ALIAS_SOURCE = BOOTSTRAP / "bootstrap_lib" / "codex.py"
 TARGET = "llm_kit.adapters.codex_command"
 

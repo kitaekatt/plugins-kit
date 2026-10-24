@@ -61,14 +61,15 @@ add code:
   `llm_kit.dispatch.pipeline_backends.ConfiguredBackendFactory` into jobs and
   the pipeline runtime. No other component builds a concrete adapter from argv.
 
-The plugin is one release unit: every component ships at one version, so there
-is no internal version skew to probe. The library is stdlib-only on its base
+The library is one release unit: every library component ships at one version.
+The plugin has its own independent version and consumes the released package.
+The library is stdlib-only on its base
 path; third-party packages arrive as extras (`config` and `jobs` and `pipeline`
 need PyYAML, `sdk` the OpenAI SDK, `local` psutil, `frontdoor` FastAPI, Uvicorn
 and httpx) and are imported at the call site, so a missing requested capability
-refuses at the call rather than at import. The library source is
-`packages/katsoft-llm-kit/src/llm_kit/`, the one source of the `katsoft-llm-kit`
-distribution; this plugin holds no library source and publishes no shared lib. A consumer
+refuses at the call rather than at import. The library source and source tests
+belong to the [katsoft-libs source tree](https://github.com/kitaekatt/katsoft-libs/tree/dev/packages/katsoft-llm-kit/src/llm_kit).
+Change library behavior there. This plugin holds no library source and publishes no shared lib. A consumer
 venv installs the package with the extras it reaches (`katsoft-llm-kit[<extras>]>=A.B,<N` in
 its `pyproject.toml`). The plugin's own venv does the same: its `pyproject.toml` is a
 non-package project that requires the released `katsoft-llm-kit[<every extra>]>=1.7,<2` and
@@ -77,9 +78,10 @@ names none. The floor is 1.7 because the per-model output-cap surface first ship
 1.6.0. Codex in package mode, the project model file, `models catalog`, protocol 2 of
 `completion complete`, local selection overrides and the neutral user paths shipped in 1.3.0;
 `custom_bootstrap.py` reads `llm-kit account status --json`, which first shipped in 1.2.0;
-bootstrap holds the venv at the highest released
-version the requirement admits, so a change under `packages/katsoft-llm-kit/src/llm_kit/`
-reaches the plugin's venv only through a `katsoft-llm-kit` release.
+bootstrap holds the venv at the highest imported released target the requirement
+admits. Targets come from the marketplace's `data/package-targets.json`, imported
+from a verified katsoft-libs ledger commit. A library change reaches this venv
+after its PyPI release and the target artifact's marketplace publication.
 
 `bootstrap_lib` is a shared library with its own owner. The library reaches it
 lazily (skill material, claudx propagation, the code-review lane). Codex command
@@ -94,10 +96,10 @@ llm-kit's own venv.
 ## Runtime mode: source tree or installed package
 
 The same `llm_kit` source runs in two deployments, told apart by
-`llm_kit/_deployment.py`: the source tree under `packages/katsoft-llm-kit/src/` (`MODE =
-"legacy"`, what the repo tests import), and the
-`katsoft-llm-kit` wheel (`MODE = "package"`, written at build time, depending on
-`katsoft-contracts`), which is what the plugin's own venv and every consumer venv install.
+`llm_kit/_deployment.py`: the source tree in katsoft-libs (`MODE = "source"`,
+tested there), and the `katsoft-llm-kit` wheel (`MODE = "package"`, written at
+build time, depending on `katsoft-contracts`). This repository's maintainer
+environment, the plugin's venv and consumer venvs install the released wheel.
 `bootstrap_lib` reaches
 the plugin's venv through `shared_lib_imports`, which is what `fleet()` tests.
 `llm_kit._runtime.mode()` decides once per process and raises
@@ -1266,7 +1268,8 @@ each group's module documents its own.
   prints no document or names an unknown state raises, and the engine reports the script as
   FAILED. It writes no credential or config file and migrates nothing.
   `tests/llm-kit/test_custom_bootstrap.py` covers the script and
-  `tests/llm-kit/test_account_status_json.py` the document.
+  [the library account-status test](https://github.com/kitaekatt/katsoft-libs/blob/dev/tests/llm-kit/test_account_status_json.py)
+  covers the document.
 - **Consumer contract.** `contract/public-surface.json` lists the public names of the pipeline
   products and `scripts/check_consumer_contract.py` reports deprecated and removed names in a
   consumer's source (invocation: `README.md`).

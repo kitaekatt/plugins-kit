@@ -4616,7 +4616,7 @@ def _process_venv_def(venv_def, data_dir, plugin_root, prefix, label, action_ent
     sync commands and diagnostics are quiet entries. A successful remediation
     emits one short action summary, and a failure emits one short display label.
 
-    `released_ledger` is the path of the marketplace's packages/released.json;
+    `released_ledger` is the path of the marketplace's data/package-targets.json;
     only the per-plugin manifest venv passes it (see `_released_ledger_path`).
     """
     from .venv_check import ensure_venv
@@ -6310,25 +6310,25 @@ def _phase_path_entries(ctx):
 def _released_ledger_path(marketplace, plugin_root):
     """Path of the released-package ledger a plugin's venv is held to, or None.
 
-    The ledger is ``packages/released.json`` in the plugin's own marketplace
+    The ledger is ``data/package-targets.json`` in the plugin's own marketplace
     clone (the location Claude Code records in known_marketplaces.json, else
     ``~/.claude/plugins/marketplaces/<marketplace>``). The clone is refreshed
     before any plugin check in a pass, so a release published since the last
     pass is visible in the same pass. Under ``CLAUDE_BOOTSTRAP_DATA_ROOT`` (a
     claudx session) the plugin runs from a working tree, and the ledger is that
-    tree's ``packages/released.json`` -- the installed clone would describe
+    tree's ``data/package-targets.json`` -- the installed clone would describe
     releases, not the code under test. The path need not exist: a marketplace
     with no ledger registers no package (``venv_check.load_released_ledger``).
     """
     if os.environ.get("CLAUDE_BOOTSTRAP_DATA_ROOT"):
         return os.path.normpath(
-            os.path.join(plugin_root, "..", "..", "packages", "released.json"))
+            os.path.join(plugin_root, "..", "..", "data", "package-targets.json"))
     from .marketplace_lifecycle import marketplace_install_location
     clone = marketplace_install_location(marketplace) if marketplace else ""
     if not clone and marketplace:
         clone = os.path.join(
             os.path.expanduser("~"), ".claude", "plugins", "marketplaces", marketplace)
-    return os.path.join(clone, "packages", "released.json") if clone else None
+    return os.path.join(clone, "data", "package-targets.json") if clone else None
 
 
 def _phase_venv(ctx):

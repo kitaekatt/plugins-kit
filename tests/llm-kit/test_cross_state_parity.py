@@ -578,7 +578,7 @@ class TestJobLedgerHandover:
         # the supervisor modules are out of its scope.
         scanned += sorted(
             path
-            for path in (_REPO / "packages" / "katsoft-llm-kit" / "src" / "llm_kit" / "jobs").glob("*.py")
+            for path in (__import__("pathlib").Path(__import__("llm_kit").__file__).resolve().parent / "jobs").glob("*.py")
             if "supervisor" not in path.name
         )
         assert len(scanned) >= 4

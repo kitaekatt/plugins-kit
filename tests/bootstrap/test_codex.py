@@ -1,7 +1,7 @@
 """Tests for Codex CLI detection and command building.
 
 The behavior under test lives in ``llm_kit.adapters.codex_command`` (the
-katsoft-llm-kit package), loaded here from its source file by path so this suite
+katsoft-llm-kit package), loaded here from its installed file by path so this suite
 does not put the package on ``sys.path``: bootstrap's own interpreter never
 imports it. The refusal and argv tests target that canonical module.
 ``bootstrap_lib.codex`` is only an alias of it (tests/bootstrap/test_codex_alias.py),
@@ -19,6 +19,7 @@ Windows sandbox key are the load-bearing parts, and a spot check would not
 catch a reordering that moves stdin `-` off the end.
 """
 
+import importlib.metadata
 import importlib.util
 import subprocess
 import sys
@@ -29,8 +30,8 @@ import pytest
 from bootstrap_lib import codex_detection
 
 CANONICAL_SOURCE = (
-    Path(__file__).resolve().parents[2]
-    / "packages" / "katsoft-llm-kit" / "src" / "llm_kit" / "adapters" / "codex_command.py"
+    importlib.metadata.distribution("katsoft-llm-kit")
+    .locate_file("llm_kit/adapters/codex_command.py")
 )
 
 

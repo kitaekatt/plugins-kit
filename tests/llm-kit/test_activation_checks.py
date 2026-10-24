@@ -75,7 +75,8 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 LLM_KIT = REPO / "plugins" / "llm-kit"
-LIB = REPO / "packages" / "katsoft-llm-kit" / "src" / "llm_kit"
+import llm_kit
+LIB = Path(llm_kit.__file__).resolve().parent
 
 # Spelled as fragments so that this file does not match the scan for old
 # qualified references (tests/llm-kit/ is exempt from it, but keep it honest).

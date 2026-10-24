@@ -348,7 +348,7 @@ def _project_content_hash(
 # ---------------------------------------------------------------------------
 #
 # A plugin that declares a first-party package registered in the marketplace's
-# ``packages/released.json`` ledger (for example ``katsoft-llm-kit``) gets the
+# ``data/package-targets.json`` ledger (for example ``katsoft-llm-kit``) gets the
 # highest released version its requirement admits, with no plugin release. The
 # requirement is the only input the plugin authors, and it is restricted to one
 # form so this stdlib-only code can read it exactly:
@@ -397,8 +397,30 @@ def parse_restricted_requirement(text: str) -> Optional[Tuple[str, Tuple[int, in
     return (match.group("name"), _release_tuple(match.group("lo")), int(match.group("hi")))
 
 
+def validate_package_target_document(data: object) -> Dict[str, Dict[str, dict]]:
+    """Validate the generated projection; bootstrap does not contact the ledger owner."""
+    if not isinstance(data, dict) or type(data.get("schema")) is not int or data["schema"] != 1:
+        raise ValueError("package targets require schema 1")
+    source = data.get("source")
+    if not isinstance(source, dict) or not isinstance(source.get("repository"), str) or not re.fullmatch(r"[0-9a-f]{40}", str(source.get("commit", ""))):
+        raise ValueError("package targets require source repository and full commit provenance")
+    packages = data.get("packages")
+    if not isinstance(packages, dict) or not packages:
+        raise ValueError("package targets require a nonempty packages mapping")
+    for dist, versions in packages.items():
+        if not isinstance(dist, str) or normalize_dist(dist) != dist or not isinstance(versions, dict) or not versions:
+            raise ValueError("package targets must map normalized distribution names to versions")
+        majors = set()
+        for version, entry in versions.items():
+            parsed = _release_tuple(version)
+            if parsed is None or not isinstance(entry, dict) or entry.get("version") != version:
+                raise ValueError(f"invalid package target {dist} {version}")
+            majors.add(parsed[0])
+    return packages
+
+
 def load_released_ledger(path: str) -> Tuple[Optional[Dict[str, Dict[str, dict]]], Optional[str]]:
-    """``(ledger, error)`` for ``packages/released.json``.
+    """``(ledger, error)`` for ``data/package-targets.json``.
 
     An absent file is ``(None, None)``: nothing is registered, so no package
     target exists. A file that is present but unreadable, not JSON, or not
@@ -411,14 +433,10 @@ def load_released_ledger(path: str) -> Tuple[Optional[Dict[str, Dict[str, dict]]
         return None, None
     except (OSError, ValueError) as exc:
         return None, f"released-package ledger {path} is unreadable: {exc}"
-    if not isinstance(data, dict) or not all(
-        isinstance(versions, dict) and all(isinstance(e, dict) for e in versions.values())
-        for versions in data.values()
-    ):
-        return None, (
-            f"released-package ledger {path} must map distribution -> version -> entry"
-        )
-    return data, None
+    try:
+        return validate_package_target_document(data), None
+    except ValueError as exc:
+        return None, f"released-package ledger {path} is invalid: {exc}"
 
 
 def package_targets(
@@ -585,7 +603,7 @@ def ensure_venv(
         always_sync: Run ``uv sync`` even when the check already passes
             (self-setup keeps the engine venv current every session; a no-op
             sync is ~100ms).
-        released_ledger: Path to the marketplace's ``packages/released.json``.
+        released_ledger: Path to the marketplace's ``data/package-targets.json``.
             When given, each registered package the project requires is held
             at its ledger target (``package_targets``): the targets join the
             stamp hash, a venv whose installed version differs is synced with

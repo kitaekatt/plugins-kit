@@ -493,16 +493,16 @@ constraint, no reinstall anywhere. The cost is the other side of that same
 coin: consumers cannot pin, so a breaking change to a linked lib reaches all of
 them at once.
 
-`llm_kit` and `katsoft_contracts` are the exception: they are the released
-`katsoft-llm-kit` and `katsoft-contracts` packages (`packages/`; `llm_kit`'s
-source is `packages/katsoft-llm-kit/src/llm_kit/`), llm-kit publishes no shared
-lib (existing `_shared_libs/llm_kit` trees stay frozen), and a
-consumer installs them into its own venv from a requirement of the exact form
-`katsoft-llm-kit[<extras>]>=A.B,<N` in its `pyproject.toml`. Bootstrap holds the
-venv at the highest released version the requirement admits
-(`packages/released.json`, bootstrap 0.160.0) and revokes a link the manifest
-does not declare, so a package consumer pins its range and needs no import
-probe.
+`llm_kit` and `katsoft_contracts` are the exception: their released distributions
+are owned by [katsoft-libs](https://github.com/kitaekatt/katsoft-libs).
+llm-kit publishes no shared lib (existing `_shared_libs/llm_kit` trees stay
+frozen). A consumer installs them into its own venv from a requirement of the
+form `katsoft-llm-kit[<extras>]>=A.B[.C],<N` in its `pyproject.toml`.
+Bootstrap holds the venv at the highest imported target the range admits,
+using the marketplace's generated `data/package-targets.json` offline.
+The library release ledger remains in katsoft-libs; the import procedure is
+`docs/reference/package-release.md`. Bootstrap also revokes undeclared links,
+so a package consumer needs no import probe.
 
 Publish ordering: bootstrap must ship before or with a consumer that needs a
 newer `bootstrap_lib` symbol or the 0.160.0 package handling (every consumer of
@@ -808,11 +808,12 @@ copies: `git-kit/scripts`, `p4-kit/scripts`, `skills-kit/scripts`,
 `unreal-kit/lib`, `hue-kit/scripts`, `job-kit/lib`,
 `task-kit/skills/task/scripts`,
 `awesome-kit/skills/orchestrate/scripts`,
-`llm-scripting-kit/lib/llm_scripting_kit`, `llm-kit/bin`, `packages/katsoft-llm-kit/src/llm_kit`, `workflow-kit/scripts`,
+`llm-scripting-kit/lib/llm_scripting_kit`, `llm-kit/bin`, `workflow-kit/scripts`,
 `pdf-kit/skills/html-pdf/scripts`.
 
-**The test globs `plugins/**/bootstrap_guard.py` and `packages/**/bootstrap_guard.py`, so it is the authority on that
-list and this prose is not.** Sync by running the glob, never by working through
+**The test globs `plugins/**/bootstrap_guard.py`, so it is the authority on that
+list and this prose is not.** Library copies are maintained in katsoft-libs.
+Sync by running the glob, never by working through
 the names above: two copies (`hue-kit`, `awesome-kit/skills/orchestrate`) were
 added without the list being updated, so an edit propagated by hand to the five
 documented copies left both stale and only the test caught it.

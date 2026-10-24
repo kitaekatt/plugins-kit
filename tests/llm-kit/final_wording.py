@@ -23,7 +23,8 @@ from typing import NamedTuple
 _LSK = "plugins/llm-scripting-kit/lib/llm_scripting_kit/"
 _JOB = "plugins/job-kit/lib/job_kit/"
 _CPK = "plugins/content-pipeline-kit/lib/content_pipeline/"
-_KIT = "packages/katsoft-llm-kit/src/llm_kit/"
+from pathlib import Path
+_KIT = str(Path(__import__("llm_kit").__file__).resolve().parent) + "/"
 
 
 class Rename(NamedTuple):

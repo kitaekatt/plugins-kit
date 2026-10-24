@@ -62,7 +62,7 @@ from final_wording import floor_to_final
 _REPO = Path(__file__).resolve().parents[2]
 _CPK_LIB = _REPO / "plugins" / "content-pipeline-kit" / "lib"
 _LSK_LIB = _REPO / "plugins" / "llm-scripting-kit" / "lib"
-_LIB = _REPO / "packages" / "katsoft-llm-kit" / "src"
+_LIB = __import__("pathlib").Path(__import__("llm_kit").__file__).resolve().parent.parent
 _FINAL_DIR = _LIB / "llm_kit" / "pipeline" / "execution"
 _LEGACY_DIR = _CPK_LIB / "content_pipeline" / "execution"
 _FIXTURES = Path(__file__).resolve().parent / "fixtures" / "pipeline_schema"

@@ -7,8 +7,9 @@ published and unchanged, and llm-kit never imports them).
 
 ## Library
 
-The library source lives in `packages/katsoft-llm-kit/src/llm_kit/` (with
-`llm_kit/bootstrap_guard.py`), not in this plugin: the plugin's own venv installs the
+The library source and source tests live in
+[katsoft-libs](https://github.com/kitaekatt/katsoft-libs), under
+`packages/katsoft-llm-kit/src/llm_kit/`. This plugin's own venv installs the
 released `katsoft-llm-kit` distribution (see `pyproject.toml`). The
 sub-packages are `completion`, `adapters`, `dispatch`, `registry`, `schema`,
 `storage`, `execution`, `jobs`, `pipeline` (`core`, `artifacts`, `runtime`,

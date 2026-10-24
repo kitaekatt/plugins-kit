@@ -868,7 +868,11 @@ def test_run_workspace_that_cannot_be_snapshotted_ends_the_run(par):
     ok(par(scenario))
 
 
-def test_run_observer_events_and_support_errors(par):
+def test_run_observer_events_and_support_errors(par, monkeypatch):
+    # Compare the retained legacy bootstrap failure contract. Package-mode
+    # independence has separate installed-wheel coverage in katsoft-libs.
+    from llm_kit import _runtime
+    monkeypatch.setattr(_runtime, "_MODE", "legacy")
     def scenario(ctx):
         s = ctx.side
         _quota(ctx)

@@ -100,43 +100,7 @@ SITES = {
 }
 
 
-# llm-kit carries every legacy site in its final modules (the repoint map's module
-# table names where each legacy module lives), so each legacy entry is classified
-# again under its final path. A legacy module missing from the map leaves its final
-# file's sites unclassified, which the inventory test below reports. llm-kit is a
-# dev-only plugin whose source master does not carry, so an entry exists only where
-# the final file does.
-_REPOINT_MAP = json.loads((_REPO_ROOT / "tests" / "llm-kit" / "repoint-map.json").read_text(encoding="utf-8"))
-
-
-def _final_path(relpath: str) -> str:
-    row = _REPOINT_MAP["modules"].get(relpath)
-    if row is not None and row["kind"] == "module":
-        return "packages/katsoft-llm-kit/src/" + row["final"].replace(".", "/") + ".py"
-    return relpath
-
-
-SITES.update({
-    (_final_path(path), qualname, rule): entry
-    for (path, qualname, rule), entry in list(SITES.items())
-    if _final_path(path) != path and (_REPO_ROOT / _final_path(path)).is_file()
-})
-
-# Final modules whose resolution changed shape: the executable is resolved through
-# llm_kit.adapters.claude_command (LLM_KIT_CLAUDE_EXECUTABLE), so the legacy anchors
-# no longer occur there. The remaining final entries (_resolve_claude_executable,
-# ClaudeCli.resolve_executable) keep their legacy `def` anchors.
-_FINAL_REACHABILITY = _final_path(_REACHABILITY)
-_FINAL_HARNESS_AUTH = "packages/katsoft-llm-kit/src/llm_kit/adapters/harness_auth.py"
-if (_REPO_ROOT / _FINAL_REACHABILITY).is_file():
-    SITES[(_FINAL_REACHABILITY, "check_harness", "WHICH")] = (
-        "exempt", "resolve_claude_cli()",
-        "runs `claude --version`, which starts no session",
-    )
-SITES[(_FINAL_HARNESS_AUTH, "claude_auth", "WHICH")] = (
-    "exempt", "resolve_claude_executable(env)",
-    "runs `claude auth status`, which starts no session",
-)
+# Library source is audited in katsoft-libs; this inventory owns plugins only.
 
 SITE_TABLE = SITES
 

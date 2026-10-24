@@ -32,7 +32,7 @@ from final_wording import max_tokens_default_to_final, to_final
 
 _REPO = Path(__file__).resolve().parents[2]
 _LEGACY_LIB = _REPO / "plugins" / "llm-scripting-kit" / "lib"
-_FINAL_LIB = _REPO / "packages" / "katsoft-llm-kit" / "src"
+_FINAL_LIB = __import__("pathlib").Path(__import__("llm_kit").__file__).resolve().parent.parent
 
 COMPLETION_MODULES = (
     "capabilities",
@@ -444,7 +444,24 @@ def test_module_surface_parity(name):
         legacy = module_surface(LEGACY.modules[name])
     assert sorted(final) == sorted(legacy)
     for key in legacy:
-        assert final[key] == legacy[key], f"{name}.{key}"
+        if name in {"capabilities", "requirements"} and key == "DENY_TOOL_NAMES":
+            # Published 1.7.2 adds the two remaining native child-agent tools.
+            # Pin that sole table difference; every other subject stays equal.
+            old_denies = dict(LEGACY.modules[name].DENY_TOOL_NAMES)
+            new_denies = dict(FINAL.modules[name].DENY_TOOL_NAMES)
+            assert old_denies.pop("subagent-spawn") == ("Task", "Agent")
+            assert new_denies.pop("subagent-spawn") == ("Task", "Agent", "Workflow", "SendMessage")
+            assert new_denies == old_denies
+        elif name == "capabilities" and key == "_TOOL_SUBJECTS":
+            old_subjects = dict(LEGACY.capabilities._TOOL_SUBJECTS)
+            new_subjects = dict(FINAL.capabilities._TOOL_SUBJECTS)
+            assert old_subjects.keys() == new_subjects.keys()
+            assert all(type(new_subjects[subject]) is type(old_subjects[subject]) for subject in old_subjects)
+            assert old_subjects.pop("subagent-spawn") == frozenset({"task", "agent", "subagent"})
+            assert new_subjects.pop("subagent-spawn") == frozenset({"task", "agent", "subagent", "workflow", "sendmessage"})
+            assert new_subjects == old_subjects
+        else:
+            assert final[key] == legacy[key], f"{name}.{key}"
     # Not vacuous: real modules, with real content.
     assert len(legacy) >= 2
 
@@ -944,6 +961,16 @@ def test_arm_call_and_requirements_parity():
         def comparable_call(backend, opt, req, rec):
             armed = S.requirements.arm_call(backend, opt, req, rec)
             raw = armed.options.disallowed_tools
+            if name == "opencode-cli" and "subagent-spawn" in S.requirements.required_guarantees(req):
+                # The published 1.7.2 shared deny vector also feeds OpenCode.
+                # Pin each exact suffix, then compare all remaining fields
+                # and tool bytes through the unchanged differential.
+                suffix = "Task Agent" + (" Workflow SendMessage" if S.label == "final" else "")
+                assert raw.endswith(suffix)
+                if S.label == "final":
+                    raw = raw.removesuffix(" Workflow SendMessage")
+                    armed = dataclasses.replace(armed, options=dataclasses.replace(
+                        armed.options, disallowed_tools=raw))
             if raw and "(" not in raw:
                 # Deliberate difference: final arming preserves the raw prefix;
                 # compare whole-tool meaning here. Scoped bytes are pinned in
@@ -959,7 +986,8 @@ def test_arm_call_and_requirements_parity():
                     for oi, opt in enumerate(options):
                         if name == "claude-cli" and req == {"denies": ["subagent-spawn"]} and not getattr(backend, "text_only", False):
                             # Deliberate 1.7.1 behavior: child-only denial uses
-                            # named tools instead of disabling all task tools.
+                            # named tools instead of disabling all task tools;
+                            # 1.7.2 also denies Workflow and SendMessage.
                             # Broad guarantees and arm_requirements stay in
                             # the unchanged differential above and below.
                             if S.label == "final":
@@ -968,7 +996,7 @@ def test_arm_call_and_requirements_parity():
                                     assert armed.backend is backend
                                     assert armed.controls == ("disallowed-tools",)
                                     prefix = opt.disallowed_tools or ""
-                                    assert armed.options.disallowed_tools == prefix + (" " if prefix else "") + "Task Agent"
+                                    assert armed.options.disallowed_tools == prefix + (" " if prefix else "") + "Task Agent Workflow SendMessage"
                             continue
                         out.append((f"{tag}/o{oi}/call", outcome(comparable_call, backend, opt, req, rec)))
                         out.append((f"{tag}/o{oi}/json", outcome(comparable_call, backend, opt, req, rec.to_json())))
@@ -1323,6 +1351,16 @@ _VARIANTS = [
 ]
 
 
+@pytest.fixture
+def legacy_skill_probe_branch(monkeypatch) -> None:
+    # These two tests compare the retained legacy bootstrap failure contract.
+    # Package identity/availability have standalone library runtime coverage;
+    # the real-library probe below also exercises actual package-mode fleet.
+    from llm_kit import _runtime
+    monkeypatch.setattr(_runtime, "_MODE", "legacy")
+
+
+@pytest.mark.usefixtures("legacy_skill_probe_branch")
 @pytest.mark.parametrize("variant", _VARIANTS)
 def test_skill_material_probe_parity(monkeypatch, variant, tmp_path):
     mod = _install_fake_lib(monkeypatch, variant)
@@ -1361,7 +1399,12 @@ def test_skill_material_probe_parity(monkeypatch, variant, tmp_path):
         assert "too-old" in states
 
 
-def test_skill_material_real_library_parity():
+def test_skill_material_real_library_parity(monkeypatch):
+    from llm_kit import _runtime
+    assert _runtime.mode() == "package"
+    # Re-probe real availability instead of inheriting an earlier poisoned or
+    # successful bootstrap import from another test in this worker.
+    monkeypatch.setattr(_runtime, "_FLEET", None)
     """Whatever bootstrap_lib this interpreter has, both sides answer alike."""
     def scenario(S):
         sc = S.skill_context
@@ -1494,6 +1537,7 @@ _PAYLOADS = [
 ]
 
 
+@pytest.mark.usefixtures("legacy_skill_probe_branch")
 @pytest.mark.parametrize("variant", ["absent", "good"])
 def test_request_protocol_parity(monkeypatch, variant):
     _install_fake_lib(monkeypatch, variant)

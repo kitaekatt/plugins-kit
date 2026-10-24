@@ -44,7 +44,7 @@ from typing import Iterable, Mapping, Optional
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
-PACKAGE_ROOT = REPO / "packages" / "katsoft-llm-kit" / "src" / "llm_kit"
+PACKAGE_ROOT = Path(__import__("llm_kit").__file__).resolve().parent
 MAP_PATH = REPO / "tests" / "llm-kit" / "repoint-map.json"
 ARCHITECTURE = REPO / "docs" / "reference" / "llm-kit-architecture.md"
 

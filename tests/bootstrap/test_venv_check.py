@@ -759,6 +759,7 @@ def _ledger(path, **dists):
     import json
     data = {d: {v: {"version": v} for v in versions} for d, versions in dists.items()}
     path.parent.mkdir(parents=True, exist_ok=True)
+    data = {"schema": 1, "source": {"repository": "https://example.test/libraries", "commit": "a" * 40}, "packages": data}
     path.write_text(json.dumps(data), encoding="utf-8")
     return str(path)
 
@@ -807,10 +808,10 @@ class TestRestrictedRequirementForm:
     def test_targets_are_the_highest_admitted_release(self, tmp_path):
         project = _project(tmp_path, f"{_LLM}[sdk]>=1.1,<2", "openai>=1.0")
         ledger = _ledger(tmp_path / "m" / "released.json",
-                         **{_LLM: ["1.0.0", "1.1.0", "1.4.2", "1.10.0", "2.0.0", "1.5.0rc1"]})
+                         **{_LLM: ["1.0.0", "1.1.0", "1.4.2", "1.10.0", "2.0.0"]})
         targets, errors = package_targets(str(project), ledger)
         assert errors == []
-        assert targets == [(_LLM, "1.10.0")]   # numeric order; 2.0.0 and the rc excluded
+        assert targets == [(_LLM, "1.10.0")]   # numeric order; 2.0.0 excluded
 
     def test_extras_requirements_count_only_when_the_extra_is_installed(self, tmp_path):
         project = _project(tmp_path, "openai>=1.0",
@@ -847,7 +848,7 @@ class TestRestrictedRequirementForm:
         bad.write_text("{not json", encoding="utf-8")
         assert load_released_ledger(str(bad))[1].startswith("released-package ledger")
         bad.write_text('{"d": {"1.0.0": "not an entry"}}', encoding="utf-8")
-        assert "distribution -> version -> entry" in load_released_ledger(str(bad))[1]
+        assert "schema 1" in load_released_ledger(str(bad))[1]
         project = _project(tmp_path, f"{_LLM}>=1.1,<2")
         assert package_targets(str(project), str(bad))[1]
 
@@ -873,7 +874,7 @@ class TestEnsureVenvReleasedTargets:
         """
         from bootstrap_lib.result import Result
         project = _project(tmp_path, requirement)
-        ledger = _ledger(tmp_path / "mkt" / "packages" / "released.json", **{_LLM: list(versions)})
+        ledger = _ledger(tmp_path / "mkt" / "data" / "package-targets.json", **{_LLM: list(versions)})
         venv_path = str(tmp_path / "data" / ".venv")
         os.makedirs(venv_path)
         monkeypatch.setattr(
@@ -957,7 +958,7 @@ class TestEnsureVenvReleasedTargets:
         _install(venv_path, _LLM, "1.2.0")
         _venv_sync_stamp_path(venv_path).write_text(
             _project_content_hash(str(project), [(_LLM, "1.2.0")]))
-        _ledger(tmp_path / "mkt" / "packages" / "released.json",
+        _ledger(tmp_path / "mkt" / "data" / "package-targets.json",
                 **{_LLM: ["1.1.0", "1.2.0", "1.3.0"]})
 
         result, _entries = ensure_venv(str(project), venv_path, released_ledger=ledger)
@@ -1178,7 +1179,7 @@ class TestPhaseVenvLedgerPlumbing:
             failures: list = []
 
         engine._phase_venv(Ctx())
-        assert seen["ledger"] == str(tmp_path / "clones" / "plugins-kit" / "packages" / "released.json")
+        assert seen["ledger"] == str(tmp_path / "clones" / "plugins-kit" / "data" / "package-targets.json")
 
     def test_redirected_pass_reads_the_working_tree_ledger(self, tmp_path, monkeypatch):
         from bootstrap_lib import engine
@@ -1186,7 +1187,7 @@ class TestPhaseVenvLedgerPlumbing:
         monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(tmp_path / "redirected"))
         plugin_root = tmp_path / "repo" / "plugins" / "git-kit"
         assert engine._released_ledger_path("plugins-kit", str(plugin_root)) == str(
-            tmp_path / "repo" / "packages" / "released.json")
+            tmp_path / "repo" / "data" / "package-targets.json")
 
     def test_layered_manifest_venv_is_not_held_to_a_ledger(self, tmp_path, monkeypatch):
         from bootstrap_lib import engine

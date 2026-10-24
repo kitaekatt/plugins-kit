@@ -237,15 +237,13 @@ writes, marketplace clone refreshes, `claude plugin install/update`,
 delivery path. A green run means "my plugin works", never "my plugin ships
 correctly".
 
-`claudx` loads plugin CODE from the working copy but installs a package registered in
-`packages/registry.toml` into plugin venvs from PyPI, so working-tree edits to its
-library source are not loaded. The launcher compares each registered package's build
-inputs (`Entry.inputs()` in `scripts/_packages.py`, tracked edits and untracked files)
-against the commit of its newest `packages/released.json` entry, and prints a stderr
-note, "plugin venvs use <dist> <version> from PyPI; working-tree changes to it are not
-loaded", for each one that differs. It is a warning only; the session does not build a
-local wheel. Guard: `tests/repo-scripts/test_claude_plugin_test_env.py`
-(`TestDriftedPackages`).
+`claudx` loads plugin code from this working copy and library code from
+released PyPI packages. The library source and source tests belong to
+[katsoft-libs](https://github.com/kitaekatt/katsoft-libs).
+There is no library source drift scan or local wheel build in the launcher.
+Run source checks in the library repository and plugin integration checks here.
+The marketplace's generated `data/package-targets.json` supplies offline release
+targets; [package-release.md](package-release.md) documents their import.
 
 ## A MOVING victim is a leak, not a flake
 

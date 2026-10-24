@@ -1022,6 +1022,9 @@ def test_default_declaration_loads_config_and_honors_patched_probe(L, F, home, t
 
 
 def test_model_declaration_probe_parity(L, F, monkeypatch):
+    # Exercise the retained legacy bootstrap compatibility branch explicitly.
+    from llm_kit import _runtime
+    monkeypatch.setattr(_runtime, "_MODE", "legacy")
     # linked and current: the same validator module object
     assert F.declaration_syntax._model_declaration() is L.declaration._model_declaration()
     assert F.declaration_syntax._MODEL_DECLARATION_BOOTSTRAP == L.declaration._MODEL_DECLARATION_BOOTSTRAP
