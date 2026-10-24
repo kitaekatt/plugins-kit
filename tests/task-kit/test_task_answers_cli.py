@@ -26,7 +26,7 @@ import pytest
 from dashboard_support import ENTRYPOINT, clean_env
 from git_remote_support import clone, git, make_remote, remote_files, write
 from test_task_answer_engine import (  # noqa: F401 -- fixtures
-    CONFIG, LLM_KIT_LIB, ME, NOW, TASK_YAML, FakeRun, NeverRun, World, isolated_git, llm, new_answer, world,
+    CONFIG, ME, NOW, TASK_YAML, FakeRun, NeverRun, World, isolated_git, llm, new_answer, world,
 )
 
 from task_system import answer_store, answers_cli, export_cli, questions
@@ -34,7 +34,7 @@ from task_system import answer_store, answers_cli, export_cli, questions
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="the fixture links dev/tasks with a real symlink")
 
 SKIP_REEXEC = "_BOOTSTRAP_GUARD_SKIP_REEXEC"
-SKILLS_KIT = LLM_KIT_LIB.parents[2] / "plugins" / "skills-kit"
+SKILLS_KIT = Path(__file__).resolve().parents[2] / "plugins" / "skills-kit"
 
 
 @pytest.fixture

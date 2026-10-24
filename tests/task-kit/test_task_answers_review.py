@@ -29,7 +29,7 @@ import yaml
 from dashboard_support import ENTRYPOINT, TASK_CLI, clean_env
 from git_remote_support import clone, git, make_remote, remote_files, write
 from test_task_answer_engine import (  # noqa: F401 -- fixtures
-    CONFIG, LLM_KIT_LIB, ME, NOW, ORIENTATION, FakeRun, NeverRun, isolated_git, llm, single_question_catalog,
+    CONFIG, ME, NOW, ORIENTATION, FakeRun, NeverRun, isolated_git, llm, single_question_catalog,
 )
 
 from task_system import answer_store, listing, review_html, state_ops, summary_ops
@@ -39,7 +39,7 @@ from task_system.validate import validate_ref
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="the fixture links dev/tasks with a real symlink")
 
 SKIP_REEXEC = "_BOOTSTRAP_GUARD_SKIP_REEXEC"
-SKILLS_KIT = LLM_KIT_LIB.parents[2] / "plugins" / "skills-kit"
+SKILLS_KIT = Path(__file__).resolve().parents[2] / "plugins" / "skills-kit"
 PLAN = "# Plan\n\n```yaml\ntask_items:\n  items: []\n```\n"
 LOG = "# Log\n\n- 2026-10-01: update: created\n"
 

@@ -7,8 +7,11 @@ is added here too so this suite stays self-contained.
 """
 
 import importlib
+import importlib.abc
+import importlib.machinery
 import os
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -62,30 +65,43 @@ def symlinked_root(tmp_path: Path) -> tuple[Path, Path]:
     return project_root, link_target
 
 
-_LLM_KIT_LIB = (_REPO_ROOT / "packages" / "katsoft-llm-kit" / "src").resolve()
-
-
 def _is_llm_kit_module(name: str) -> bool:
     return name == "llm_kit" or name.startswith("llm_kit.")
 
 
-@pytest.fixture(autouse=True)
-def llm_kit_is_absent_unless_a_test_adds_it():
-    """Every task-kit test starts with ``llm_kit`` unimportable, whatever ran before it on the worker.
+class _AbsentInstalledLlmKit(importlib.abc.MetaPathFinder):
+    """Hide the installed library while allowing a test's explicit synthetic path."""
 
-    llm-kit is an OPTIONAL edge of task-kit (the review verb's summary repair), and the tests assert what it reports when the
-    package is absent. Another suite's conftest (``tests/llm-kit/conftest.py``) puts
-    ``packages/katsoft-llm-kit/src`` on ``sys.path`` while pytest collects, and any test may leave ``llm_kit``
-    modules in ``sys.modules``; both are process-global, so under a full run (collection loads every
-    conftest in every xdist worker) the "absent" probes found the real package. A test that wants
-    llm-kit adds the library itself (``monkeypatch.syspath_prepend``) and purges what it imported;
-    this fixture hides the rest for the test and puts back exactly what it found.
+    def __init__(self, initial_path: list[str]) -> None:
+        self.initial_path = set(initial_path)
+
+    def find_spec(
+        self, fullname: str, path: object = None, target: object = None
+    ) -> importlib.machinery.ModuleSpec | None:
+        if fullname != "llm_kit":
+            return None
+        synthetic_paths = [entry for entry in sys.path if entry not in self.initial_path]
+        spec = importlib.machinery.PathFinder.find_spec(fullname, synthetic_paths)
+        if spec is not None:
+            return spec
+        raise ModuleNotFoundError("No module named 'llm_kit'", name="llm_kit")
+
+
+@pytest.fixture(autouse=True)
+def llm_kit_is_absent_unless_a_test_adds_it(request: pytest.FixtureRequest) -> Iterator[None]:
+    """Default to an absent library even when the project venv installs it.
+
+    The explicit ``llm`` fixture opts into the installed package. Other tests
+    can still supply fake modules or prepend a synthetic package directory.
+    Clear prior imports and restore the worker's import state after each test.
     """
     saved_path = list(sys.path)
+    saved_meta_path = list(sys.meta_path)
     hidden = {name: module for name, module in sys.modules.items() if _is_llm_kit_module(name)}
-    sys.path[:] = [entry for entry in saved_path if not (entry and Path(entry).resolve() == _LLM_KIT_LIB)]
     for name in hidden:
         del sys.modules[name]
+    if "llm" not in request.fixturenames:
+        sys.meta_path.insert(0, _AbsentInstalledLlmKit(saved_path))
     importlib.invalidate_caches()
     try:
         yield
@@ -94,4 +110,5 @@ def llm_kit_is_absent_unless_a_test_adds_it():
             del sys.modules[name]
         sys.modules.update(hidden)
         sys.path[:] = saved_path
+        sys.meta_path[:] = saved_meta_path
         importlib.invalidate_caches()

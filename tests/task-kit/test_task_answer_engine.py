@@ -38,7 +38,6 @@ from task_system.answers_types import Answerer
 from task_system.discovery import read_task_block
 from task_system.machine import Machine
 
-LLM_KIT_LIB = (Path(__file__).resolve().parents[2] / "packages" / "katsoft-llm-kit" / "src").resolve()
 SHIPPED_QUESTIONS = (
     Path(__file__).resolve().parents[2] / "plugins" / "task-kit" / "skills" / "task" / "questions"
 )
@@ -57,9 +56,8 @@ def isolated_git(monkeypatch, tmp_path):
 
 
 @pytest.fixture
-def llm(monkeypatch):
-    """The real llm-kit library on sys.path for this test (the autouse conftest fixture hides it otherwise)."""
-    monkeypatch.syspath_prepend(str(LLM_KIT_LIB))
+def llm() -> SimpleNamespace:
+    """Opt this test into the installed library; other tests default to absence."""
     from llm_kit.dispatch import declaration  # noqa: PLC0415
 
     return SimpleNamespace(declaration=declaration)
