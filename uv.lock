@@ -276,21 +276,21 @@ wheels = [
 
 [[package]]
 name = "katsoft-contracts"
-version = "1.0.0"
+version = "1.0.1"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1e/56/2404a14753e1c2541fed4233d458622330aa0672d9e179f33f6ca4653608/katsoft_contracts-1.0.0-py3-none-any.whl", hash = "sha256:ead596c8d60159303295b52fec81a4e71d4567de698d84818acc81a2a79808fd", size = 22147, upload-time = "2026-10-22T20:08:37.255Z" },
+    { url = "https://files.pythonhosted.org/packages/de/eb/25f994eb122340201796d4067a778b7788f0ecb06082b9588acb0734a656/katsoft_contracts-1.0.1-py3-none-any.whl", hash = "sha256:ab3055e69c0168bc5fe9a39dab1891160559dd56f5c615ebf872dc943af9a953", size = 22162, upload-time = "2026-10-24T03:46:25.18Z" },
 ]
 
 [[package]]
 name = "katsoft-llm-kit"
-version = "1.7.1"
+version = "1.7.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "katsoft-contracts" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ee/02/fb8da4ff516cdde234fe70b0c8af0844ab2f099e20973099ccf623980280/katsoft_llm_kit-1.7.1-py3-none-any.whl", hash = "sha256:e5cf3c740b3d4b180a3aeb9299f64e5e16ae894ed0ec3c055a1719b3b4aaedaf", size = 876854, upload-time = "2026-10-24T02:36:05.883Z" },
+    { url = "https://files.pythonhosted.org/packages/e4/b4/043c3e4709fa19799a5e580cc700be33e2cbcd69c61ef919f57ce027828f/katsoft_llm_kit-1.7.2-py3-none-any.whl", hash = "sha256:6dd2f7ccdba7e68eb3c3c40d93c64776b4894c3fe5c189f43e76ade3c0b185fa", size = 877490, upload-time = "2026-10-24T03:47:33.002Z" },
 ]
 
 [package.optional-dependencies]
