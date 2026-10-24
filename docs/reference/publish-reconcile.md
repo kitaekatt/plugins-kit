@@ -10,11 +10,11 @@ flow itself.
 ## Publishing changes
 
 The plugin cache syncs from the remote repository's default branch, not the
-local working copy. Develop on the `dev` branch; merge to `master` only when
-releasing a version bump. `master` is the cache source, so this branch policy
+local working copy. Develop on `dev` and publish releases to `master`.
+Plugin content changes require version bumps. `master` is the cache source, so this branch policy
 prevents same-version divergence between the cache and the working copy.
 
-**How.** Commit the code and version bump on `dev`, then:
+**How.** Commit the reviewed changes and required plugin version bumps on `dev`, then:
 
 ```bash
 uv run python scripts/publish.py            # preflight, publish, verify
@@ -28,12 +28,10 @@ steps; the script exists because two of them are easy to get wrong in ways
 that fail silently (a merge that publishes a dev-only plugin, or derived data
 that lands outside the release commit).
 
-**Definition.** "Publish" means **all** of: version bump + regenerated
-`marketplace.json` inside the release commit, `dev` pushed, and the release
-landed on `master`. Anything less is not a publish
--- a bump without the master merge, a bare `git push`, or a master merge without
-a bump each leaves consumers on the release in their cache. `publish.py` refuses
-each of these rather than half-shipping.
+**Definition.** A publish regenerates `marketplace.json`, pushes `dev`, projects
+the release onto `master`, and verifies the resulting tree.
+A version bump or a bare `git push` to `dev` does not publish a release.
+Consumer target updates follow the [package rules](#packages).
 
 **Publication completeness is conditional on the manifest.** A plugin whose
 manifest has `published: true` (or no `published` key) is complete when it is
@@ -81,8 +79,8 @@ reasons. Three things differ from a bare publish, each on purpose:
   per-plugin bump gate still judges their files. (Stamping `Published-From:`
   would drop them from the range and let an unbumped change ship later under
   a version consumers already hold -- gotcha 3.)
-- **The gates judge only what ships.** A bump is required on a named plugin
-  (a bump elsewhere is not this release's bump); a held-back plugin changed
+- **The gates judge only what ships.** Each named plugin with changed files
+  requires a version bump. A held-back plugin changed
   without a bump does not block; uncommitted work INSIDE a held-back plugin
   does not block, for the same reason dev-only work never did. Uncommitted
   work anywhere else still refuses.
@@ -110,23 +108,32 @@ bare publish.
 
 ### Packages
 
-A publish also releases the Python distributions registered in
-`packages/registry.toml` whose version has no entry in
-`packages/released.json`. Each is tagged, built and uploaded by
-`.github/workflows/release-packages.yml`, verified against a rebuild of its
-tag, and recorded in `packages/released.json` on dev BEFORE the projection, so
-master never carries a plugin ahead of a package it needs. While a package
-release is pending, `--only` is refused and the publish stops (exit 1) until
-the release is recorded; re-running `publish.py` resumes from the observed
-state. Procedure, states and commands:
+[katsoft-libs](https://github.com/kitaekatt/katsoft-libs) owns library releases
+and the authoritative release ledger. This publisher validates committed
+consumer targets. It does not build libraries, create package tags or upload
+packages to PyPI.
+
+`data/package-targets.json` contains the consumer targets imported from verified
+library releases. The preflight refuses a shipping first-party requirement
+without an imported target in its declared range. `--only` applies this same
+validation to the plugins it ships.
+
+A consumer target change can justify a marketplace publish without individual
+consumer plugin bumps. The import procedure and target rules live in
 [package-release.md](package-release.md).
 
-Three identities make this safe in a shared tree: P (dev after the clean-tree
-gate; every preflight read is at P), B (P plus the regenerated
-`marketplace.json`, committed in a private index -- never an amend), and F
-(B or the last ledger commit), which may differ from P only in
-`marketplace.json` and `packages/released.json` and is what the projection,
-the fast-forward and verification use.
+Three fixed commits keep the shared-tree publish deterministic:
+
+- **P** is `dev` after the clean-tree gate. Every preflight read uses P.
+- **B** is P plus the regenerated `.claude-plugin/marketplace.json`, committed
+  in a private index. B equals P when that file is already current.
+- **F** equals B. It is the final source commit used for the projection,
+  fast-forward and verification.
+
+Only `.claude-plugin/marketplace.json` can differ between P and F.
+The imported consumer target artifact must already be committed in P.
+For a partial release, B and F equal P. The projection regenerates its own
+marketplace listing without changing `dev`.
 
 ### Commit-scoped generated-data checks
 
