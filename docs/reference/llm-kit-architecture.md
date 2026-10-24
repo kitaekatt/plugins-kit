@@ -2,6 +2,12 @@
 
 Status: signed off by the user 2026-10-16 (all 14 decisions).
 
+Source ownership: the library tree and source tests described below now live in
+[katsoft-libs](https://github.com/kitaekatt/katsoft-libs). Paths under
+`packages/katsoft-llm-kit/` refer to that repository. This marketplace retains
+the plugin adapter and integration tests and consumes released PyPI wheels.
+Library and plugin releases have independent versions.
+
 ## Decision summary
 
 - Create one published plugin, llm-kit, with one release version and one library, llm_kit.

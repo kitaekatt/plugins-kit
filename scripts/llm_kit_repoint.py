@@ -66,7 +66,7 @@ REPO = Path(__file__).resolve().parents[1]
 MAP_PATH = REPO / "tests" / "llm-kit" / "repoint-map.json"
 DISPOSITIONS_DIR = REPO / "tests" / "llm-kit" / "repoint-dispositions"
 PORTING_LEDGER = REPO / "tests" / "llm-kit" / "porting-ledger.json"
-LLM_KIT_LIB = REPO / "packages" / "katsoft-llm-kit" / "src"
+LLM_KIT_LIB = Path(__import__("llm_kit").__file__).resolve().parent.parent
 MIRROR_ROOT = REPO / "tmp"
 FACADE_PKG = "legacy_names"
 GUARD_MODULE = "llm_kit.bootstrap_guard"
@@ -698,6 +698,11 @@ def rewrite_test_source(data: bytes, relpath: str, mapping: Mapping,
     text, worded = apply_wording_edits(text, relpath, mapping)
     if worded:
         classes.add("wording-edit")
+    # Preserve named rewrites in their original syntax, then project package
+    # source paths to the installed distribution for this consumer checkout.
+    pattern = r"(?P<q>[\"'])packages(?P=q)(?P<s>\s*(?:/|,)\s*)[\"']katsoft-llm-kit[\"']\s*(?:/|,)\s*[\"']src[\"']"
+    text = re.sub(pattern, lambda _m: repr(LLM_KIT_LIB.as_posix()), text)
+    text = text.replace("packages/katsoft-llm-kit/src", LLM_KIT_LIB.as_posix())
     return text.encode("utf-8"), sorted(classes)
 
 
@@ -780,6 +785,12 @@ _MIRROR = {mirror!r}
 _LEGACY_LIBS = {libs}
 _LEGACY_PLUGINS = {plugins}
 _LEGACY_TOPS = frozenset({tops})
+
+# This dedicated frozen-legacy mirror exercises the compatibility branch of
+# the installed library. Main plugin integrations and katsoft-libs wheel
+# closure retain package mode and test the actual deployment identity.
+from llm_kit import _runtime
+_runtime._MODE = "legacy"
 
 
 def _norm(path):

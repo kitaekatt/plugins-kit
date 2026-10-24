@@ -233,10 +233,10 @@ def test_slash_paths_map_a_module_file_to_its_final_file(gen):
         "D = 'plugins/job-kit/lib/job_kit/sub/__init__.py'\n"
     ))
     assert text == (
-        "A = 'packages/katsoft-llm-kit/src/llm_kit/final/thing.py'\n"
-        "B = 'packages/katsoft-llm-kit/src'\n"
-        "C = 'packages/katsoft-llm-kit/src/llm_kit'\n"
-        "D = 'packages/katsoft-llm-kit/src/llm_kit/final/sub/__init__.py'\n"
+        f"A = '{gen.LLM_KIT_LIB.as_posix()}/llm_kit/final/thing.py'\n"
+        f"B = '{gen.LLM_KIT_LIB.as_posix()}'\n"
+        f"C = '{gen.LLM_KIT_LIB.as_posix()}/llm_kit'\n"
+        f"D = '{gen.LLM_KIT_LIB.as_posix()}/llm_kit/final/sub/__init__.py'\n"
     )
     assert classes == ["path-string", "prose-kept"] and bad == []
 
@@ -265,9 +265,9 @@ def test_plugin_lib_segments_point_at_the_package_source(gen):
     ))
     assert text == (
         "from pathlib import Path\n"
-        "P = Path('r') / 'packages' / 'katsoft-llm-kit' / 'src' / 'llm_kit' / 'store.py'\n"
-        "Q = Path('r') / 'packages' / 'katsoft-llm-kit' / 'src'\n"
-        "R = Path(plugin) / '..' / '..' / 'packages' / 'katsoft-llm-kit' / 'src' / 'llm_kit'\n"
+        f"P = Path('r') / {str(gen.LLM_KIT_LIB)!r} / 'llm_kit' / 'store.py'\n"
+        f"Q = Path('r') / {str(gen.LLM_KIT_LIB)!r}\n"
+        f"R = Path(plugin) / '..' / '..' / {str(gen.LLM_KIT_LIB)!r} / 'llm_kit'\n"
     )
     assert "path-package-src" in classes and bad == []
 

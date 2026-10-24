@@ -23,21 +23,19 @@ Three fixed identities, each resolved once and passed explicitly:
     preflight read is `git show P:<path>`, never the working tree.
   - B: P plus the regenerated derived artifacts, committed in a PRIVATE index
     (commit_derived). Nothing is ever amended; B is P when nothing changed.
-  - F: the commit master receives -- B, or the last package-ledger commit.
+  - F: the commit master receives -- B.
     F may differ from P only in the publish-owned paths (marketplace.json,
-    packages/released.json). The projection, the fast-forward and verify()
+    data/package-targets.json). The projection, the fast-forward and verify()
     all take F; no branch name is read once F is fixed.
 
 dev moves only through advance_dev(): a fast-forward-only push of the new
 commit, then the local ref and the publish-owned paths' copies when nothing
 else differs.
 
-Packages: when packages/registry.toml registers a distribution whose version
-has no entry in packages/released.json, the same run tags it, waits for the
-release workflow, verifies the PyPI wheel against a rebuild of the tag, and
-records it on dev BEFORE the projection, so master never exposes a plugin
-ahead of a package it needs. Mechanics: scripts/_packages.py; procedure and
-states: docs/reference/package-release.md.
+Libraries are released independently in katsoft-libs. Publication validates
+shipping plugins against data/package-targets.json, a generated consumer target
+artifact imported after library release verification. It never builds or uploads
+packages. Target changes can ship without bumping individual consumer plugins.
 
 Why a script rather than a checklist -- the footguns it removes:
 
@@ -195,11 +193,6 @@ def _pk():
 
 def package_repo() -> "_packages.Repo":
     return _pk().Repo(REPO_ROOT, REMOTE)
-
-
-def package_services() -> "_packages.Services":
-    """Everything a package release does off this machine. Tests replace it."""
-    return _pk().Services.real(REPO_ROOT)
 
 
 # --- shell -----------------------------------------------------------------
@@ -1769,13 +1762,8 @@ def main(argv: list[str]) -> int:
             print("  already current (nothing to commit)" if base == flight.p
                   else f"  committed derived artifacts as {base[:9]} on {flight.p[:9]}")
 
-        if plan.release_set:
-            print("\nreleasing packages:")
-            final = _pk().Release(package_repo(), plan, base,
-                                      package_services()).run()
-        else:
-            advance_dev(base)
-            final = base
+        advance_dev(base)
+        final = base
         _require_final_is_p_plus_owned(flight.p, final)
 
         print("\npublishing:")

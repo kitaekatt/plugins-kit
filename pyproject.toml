@@ -15,10 +15,9 @@ dev = [
     "markdown-it-py",
     "psutil>=6.0",
     "packaging>=24.0",
-    # The consumer requirement the plugins declare, resolved from the index.
-    # No path source: packages/ distributions refuse to build without a release
-    # identity (packages/_build/hatch_build.py), so an editable install fails.
+    # Integration tests use the same released libraries as plugin venvs.
     "katsoft-contracts>=1.0,<2",
+    "katsoft-llm-kit[config,sdk,local,frontdoor,jobs,pipeline]>=1.7,<2",
 ]
 
 [tool.pytest.ini_options]

@@ -573,7 +573,8 @@ The `claude-cli` backend needs the `claude` executable on PATH, and the
 provisioned via the `bootstrap` dependency (which declares `claude` as a tool);
 OpenCode is a caller-provided CLI.
 `LLM_KIT_CLAUDE_EXECUTABLE` and `LLM_KIT_CODEX_EXECUTABLE` name a different `claude` or
-`codex` build (documented in `packages/katsoft-llm-kit/README.md`, "CLI executables").
+`codex` build (documented in the library's
+[CLI executables guide](https://github.com/kitaekatt/katsoft-libs/blob/dev/packages/katsoft-llm-kit/README.md#cli-executables)).
 
 ### Capability requirements
 

@@ -32,7 +32,7 @@ REPO = repoint.REPO
 SUITES = repoint.SUITES
 MAP = GEN.load_map()
 LEDGERS = {suite: repoint.load_ledger(suite) for suite in SUITES}
-FINAL_LIB = REPO / "packages" / "katsoft-llm-kit" / "src" / "llm_kit"
+FINAL_LIB = Path(__import__("llm_kit").__file__).resolve().parent
 
 
 def _legacy_test_files(suite: str) -> list[str]:
@@ -253,7 +253,7 @@ def _child(code: str, tmp_path: Path, extra_env=None) -> subprocess.CompletedPro
     (site / "sitecustomize.py").write_text(GEN.render_sitecustomize(MAP), encoding="utf-8")
     env = dict(os.environ)
     env.update({
-        "PYTHONPATH": os.pathsep.join([str(site), str(REPO / "packages/katsoft-llm-kit/src"),
+        "PYTHONPATH": os.pathsep.join([str(site), str(Path(__import__("llm_kit").__file__).resolve().parent.parent),
                                        str(REPO / "plugins/bootstrap")]),
         "_BOOTSTRAP_GUARD_SKIP_REEXEC": "1",
         "PYTHONNOUSERSITE": "1",
@@ -335,7 +335,7 @@ def test_the_alias_tree_imports_without_a_legacy_package(tmp_path):
         "print('ok')\n"
     )
     result = _child(code, tmp_path, {"PYTHONPATH": os.pathsep.join([
-        str(tmp_path / "site"), str(REPO / "tmp"), str(REPO / "packages/katsoft-llm-kit/src"),
+        str(tmp_path / "site"), str(REPO / "tmp"), str(Path(__import__("llm_kit").__file__).resolve().parent.parent),
         str(REPO / "plugins/bootstrap")])})
     assert result.returncode == 0, result.stderr[-2000:]
     assert result.stdout.strip() == "ok"

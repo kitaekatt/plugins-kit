@@ -38,7 +38,8 @@ from test_registrations import LEGACY, interpreter_violations
 
 REPO = Path(__file__).resolve().parents[2]
 PLUGIN = REPO / "plugins" / "llm-kit"
-LIB = REPO / "packages" / "katsoft-llm-kit" / "src"
+import llm_kit
+LIB = Path(llm_kit.__file__).resolve().parent.parent
 REFERENCES = PLUGIN / "references"
 CLAUDE_MD = PLUGIN / "CLAUDE.md"
 README = PLUGIN / "README.md"
@@ -566,7 +567,8 @@ class TestCheckersCanFail:
         assert path_problems("see `references/no-such-doc.md`", PLUGIN)
         assert path_problems("see [x](no-such-doc.md)", REFERENCES)
         assert path_problems("run `no_such_script.py`", PLUGIN)
-        assert not path_problems("see `packages/katsoft-llm-kit/src/llm_kit/completion/halt.py` and [y](jobs.md)", REFERENCES)
+        assert not module_problems("`llm_kit.completion.halt`")
+        assert not path_problems("see [y](jobs.md)", REFERENCES)
         assert not path_problems("see `README.md` and `~/.claude/x.py`", PLUGIN)
 
     def test_a_missing_module_or_symbol_is_reported(self) -> None:

@@ -38,7 +38,8 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 PLUGIN = REPO / "plugins" / "llm-kit"
-LIB_SRC = REPO / "packages" / "katsoft-llm-kit" / "src"
+import llm_kit
+LIB_SRC = Path(llm_kit.__file__).resolve().parent.parent
 IS_WINDOWS = os.name == "nt"
 STANDALONE_REL = Path(".local") / "share" / "python-standalone"
 _SCRUBBED = (
@@ -370,6 +371,8 @@ class TestShimShape:
         assert "import sys" not in entry and ".insert(" not in entry and "Path(" not in entry
         # The console script is the katsoft-llm-kit distribution's; the plugin project installs nothing.
         assert "[project.scripts]" not in (PLUGIN / "pyproject.toml").read_text(encoding="ascii")
-        assert 'llm-kit = "llm_kit.cli:main"' in (REPO / "packages" / "katsoft-llm-kit" / "pyproject.toml").read_text(encoding="ascii")
+        from importlib.metadata import distribution
+        scripts = {ep.name: ep.value for ep in distribution("katsoft-llm-kit").entry_points if ep.group == "console_scripts"}
+        assert scripts["llm-kit"] == "llm_kit.cli:main"
         for shim in ("llm-kit", "llm-kit.cmd"):
             assert "llm_kit_entrypoint.py" in (PLUGIN / "bin" / shim).read_text(encoding="ascii")

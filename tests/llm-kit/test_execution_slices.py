@@ -266,3 +266,11 @@ class TestImporterSeam:
         probe.import_package("some_package", ImportError, lambda f: f.kind, "1.0.0")
         assert probe.import_module("some.module", ImportError, lambda f: f.kind, "1.0.0") is not None
         assert calls == ["some_package", "some.module"]
+
+
+@pytest.fixture(autouse=True)
+def _compatibility_probe_branch(monkeypatch):
+    # Slices compare the legacy bootstrap compatibility path; installed package
+    # independence is asserted by test_execution_parity and katsoft-libs closure.
+    from llm_kit import _runtime
+    monkeypatch.setattr(_runtime, "_MODE", "legacy")

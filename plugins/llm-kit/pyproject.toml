@@ -1,6 +1,6 @@
 [project]
 name = "llm-kit"
-version = "0.13.1"
+version = "0.13.2"
 description = "LLM access, durable agent jobs and batch content pipelines in one library (dev-only consolidation)"
 requires-python = ">=3.12"
 

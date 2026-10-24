@@ -29,6 +29,7 @@ from __future__ import annotations
 import dataclasses
 import enum
 import importlib
+import importlib.util
 import json
 import os
 import sqlite3
@@ -48,7 +49,7 @@ LEGACY_PATHS = (
     REPO / "plugins" / "bootstrap",
 )
 FINAL_PATHS = (
-    REPO / "packages" / "katsoft-llm-kit" / "src",
+    Path(importlib.util.find_spec("llm_kit").origin).resolve().parent.parent,
     REPO / "plugins" / "bootstrap",
 )
 LEGACY_ROOTS = ("job_kit", "content_pipeline", "llm_scripting_kit")

@@ -74,7 +74,7 @@ _LEGACY_PATHS = [
 ]
 _LEGACY_ROOTS = ("job_kit", "llm_scripting_kit", "bootstrap_guard")
 _FIXTURES = Path(__file__).resolve().parent / "fixtures" / "job_schema"
-_LIB = _REPO / "packages" / "katsoft-llm-kit" / "src"
+_LIB = __import__("pathlib").Path(__import__("llm_kit").__file__).resolve().parent.parent
 
 _JOB_MODULES = ("model", "run", "select", "store", "workspace", "events", "interrupts")
 

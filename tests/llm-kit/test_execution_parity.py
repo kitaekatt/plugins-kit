@@ -607,6 +607,18 @@ def apply_validator_environment(mp, tmp_path, name: str) -> None:
         install(mp, _LSK_VALIDATOR, fake)
 
 
+@pytest.fixture(autouse=True)
+def _compatibility_probe_branch(request, monkeypatch):
+    # These probes retain the legacy bootstrap failure contract. Package-mode
+    # independence is covered explicitly below and in katsoft-libs wheel closure.
+    compatibility = {"TestEventProbe", "TestContractProbe", "TestSchemaValidatorProbe",
+                     "TestProbeCauses", "TestDocumentedDivergences", "TestEnvironmentsReachRefusals",
+                     "TestInterruptAdapters", "TestValidatorErrorMapping"}
+    if request.cls is not None and request.cls.__name__ in compatibility:
+        from llm_kit import _runtime
+        monkeypatch.setattr(_runtime, "_MODE", "legacy")
+
+
 # ---------------------------------------------------------------------------
 # Probes: execution event
 # ---------------------------------------------------------------------------
@@ -1474,7 +1486,7 @@ def test_llm_kit_and_legacy_validators_agree_under_the_contract(legacy):
 
 
 def test_execution_package_names_no_legacy_module():
-    package = Path(__file__).resolve().parents[2] / "packages" / "katsoft-llm-kit" / "src" / "llm_kit" / "execution"
+    package = Path(__import__("llm_kit").__file__).resolve().parent / "execution"
     text = "\n".join(path.read_text(encoding="utf-8") for path in package.glob("*.py"))
     for forbidden in ("_copy", "job_kit", "content_pipeline", "from llm_scripting_kit", "import llm_scripting_kit"):
         assert forbidden not in text, forbidden
@@ -1484,7 +1496,7 @@ def test_execution_package_names_no_legacy_module():
 
 
 def test_every_execution_module_is_ascii():
-    package = Path(__file__).resolve().parents[2] / "packages" / "katsoft-llm-kit" / "src" / "llm_kit" / "execution"
+    package = Path(__import__("llm_kit").__file__).resolve().parent / "execution"
     for path in package.glob("*.py"):
         path.read_text(encoding="ascii")
 
@@ -1539,3 +1551,11 @@ class TestEnvironmentsReachRefusals:
         passing = {"real", "intact", "subsets-tuple"}
         assert {e for e, r in job.items() if r[0] == "module"} == passing
         assert {e for e, r in cpk.items() if r[0] == "module"} == passing
+
+
+def test_installed_package_event_contract_works_without_bootstrap(legacy, monkeypatch):
+    from llm_kit import _runtime
+    from katsoft_contracts import execution_event
+    monkeypatch.setattr(_runtime, "_MODE", "package")
+    monkeypatch.setitem(sys.modules, "bootstrap_lib", None)
+    assert event_probe.probe_execution_event(job_event_spec(legacy)) is execution_event

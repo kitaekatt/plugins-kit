@@ -44,9 +44,8 @@ from pathlib import Path
 
 import pytest
 
-import repoint
 
-REPO = repoint.REPO
+REPO = Path(__file__).resolve().parents[2]
 PLUGIN = REPO / "plugins" / "llm-kit"
 SCRIPT = PLUGIN / "custom_bootstrap.py"
 
@@ -700,7 +699,7 @@ class TestStatusSubprocessProtocol:
         cli.write_text(f'#!/bin/sh\nexec "{sys.executable}" -m llm_kit.cli "$@"\n', encoding="utf-8")
         cli.chmod(0o755)
         monkeypatch.setenv("_BOOTSTRAP_GUARD_SKIP_REEXEC", "1")
-        monkeypatch.setenv("PYTHONPATH", os.pathsep.join([str(REPO / "packages" / "katsoft-llm-kit" / "src"), *site.getsitepackages()]))
+        monkeypatch.setenv("PYTHONPATH", os.pathsep.join([str(Path(__import__("llm_kit").__file__).resolve().parent.parent), *site.getsitepackages()]))
         ctx = _ctx(env)
         cb.bootstrap(ctx)
         assert ctx.failures == [] and len(ctx.deferred) == 1
