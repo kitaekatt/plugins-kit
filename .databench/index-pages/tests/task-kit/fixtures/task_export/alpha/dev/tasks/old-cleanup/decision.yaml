@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "tests/task-kit/fixtures/task_export/alpha/dev/tasks/old-cleanup",
+  "decision": "none",
+  "source_sha": "070cfc49bea3b75b4c55ff08384d073108c567ee",
+  "input_sha256": "491c2e192d330c362b39c7450e645ba0ecad236223ace4aa373c084e02c7d91a",
+  "input_shape_sha256": "5da05a6024f8c90b32724118884ff0961ef088bfd793c435b3543132e5a4e563",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

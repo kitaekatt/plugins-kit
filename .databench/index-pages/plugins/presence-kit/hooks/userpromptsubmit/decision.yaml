@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/presence-kit/hooks/userpromptsubmit",
+  "decision": "none",
+  "source_sha": "0f417c976d982521891395135fda309042789b2b",
+  "input_sha256": "c91de0ab2622e5944be0e9cb0e36fa1f63e6c6a1e3429c21118f481f217635ff",
+  "input_shape_sha256": "62e8e8160719fecef9c2a6f3f9a96c74d3819a996b9ce5c9cdadccde6ad5c54f",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

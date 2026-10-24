@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/presence-kit/skills/recap/references",
+  "decision": "none",
+  "source_sha": "2cab2b57a0f608eea2afd39d1116493be2412964",
+  "input_sha256": "b885c818a55b115ec1c603afb6eec93dd674b2bbf0829464afa5c4883afec6de",
+  "input_shape_sha256": "d34eb0d10c81727c51b1d783773c192ffe5e0801f4087f8e8f05f0281afda512",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- index-pages: {"generated_by":"md-domain","source_sha":"3b9194392e67ccacfcdb26076794435a89f13e8f","directory":"docs/planning/task-kit-dashboard","kind":"page"} -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>The planning documents for the task-kit dashboard: architecture design, databench integration plan, and iterative detail-view mockups.</title>
+<link rel="stylesheet" href="../../../.databench/index-pages.css">
+</head>
+<body>
+<nav data-index-pages-chrome="nav"><ul><li><a href="../index.html"><span class="hh-nav-label">planning</span> <span class="hh-nav-identity">Design and planning documents for the plugins-kit project: implementation plans, migration plans, design proposals, decision records, and status documents for its subsystems.</span></a></li><li><a href="../../../plugins/task-kit"><span class="hh-nav-label">task-kit</span> <span class="hh-nav-identity">The task-kit plugin: the task CLI, the task system, and the dashboard code these plans describe.</span></a></li></ul></nav>
+<main>
+<h1>The planning documents for the task-kit dashboard: architecture design, databench integration plan, and iterative detail-view mockups.</h1>
+<p class="hh-orientation">This is the planning body for the task-kit dashboard, and it reads as a design-review-prototype cycle rather than a pile of loose notes. A spine design carries the load-bearing decisions; a cross-check review rules on it; a dated plan records where the direction moved after the 2026-10-22 rulings; and a stack of HTML mockups, run through several rounds, is where the actual screen gets argued out. Each file names the one it answers, so you can trace any verdict back to the design or ruling it reacts to. Nothing here is code: the folder holds design, review, and mockup only.</p><section><h2>Where to start</h2><p>Open <a href="architecture.md">docs/planning/task-kit-dashboard/architecture.md</a> first: its ten load-bearing decisions shape every other document here. To see where the direction moved, follow it into <a href="databench-integration-plan.md">docs/planning/task-kit-dashboard/databench-integration-plan.md</a>, which supersedes the design&#x27;s first decision.</p></section><section><h2>Routes</h2><ul><li><strong>Design, then its verdict</strong><ol><li><a href="architecture.md">docs/planning/task-kit-dashboard/architecture.md</a> -- read the design and its ten load-bearing decisions.</li><li><a href="architecture-review.md">docs/planning/task-kit-dashboard/architecture-review.md</a> -- the cross-check that returns REVISE with four blocking defects.</li></ol></li><li><strong>The cutover: review, then the staged plan</strong><ol><li><a href="databench-integration-review.md">docs/planning/task-kit-dashboard/databench-integration-review.md</a> -- the read-only review that maps where task-kit and databench overlap and poses the host decision.</li><li><a href="databench-integration-plan.md">docs/planning/task-kit-dashboard/databench-integration-plan.md</a> -- the plan that records the 2026-10-22 rulings and stages the move as M1 to M7.</li></ol></li><li><strong>The detail view: pitch, concepts, rounds</strong><ol><li><a href="detail-view/index.html">docs/planning/task-kit-dashboard/detail-view/index.html</a> -- the pitch for the four task-detail concepts and the data each needs.</li><li><a href="detail-view/a-views.html">docs/planning/task-kit-dashboard/detail-view/a-views.html</a>, <a href="detail-view/b-brief.html">docs/planning/task-kit-dashboard/detail-view/b-brief.html</a>, <a href="detail-view/c-situation.html">docs/planning/task-kit-dashboard/detail-view/c-situation.html</a>, <a href="detail-view/d-timeline.html">docs/planning/task-kit-dashboard/detail-view/d-timeline.html</a> -- the four first-round options side by side.</li><li><a href="detail-view/round2/a-answer-board.html">docs/planning/task-kit-dashboard/detail-view/round2/a-answer-board.html</a> -- round 2&#x27;s answer board; rounds 3 to 5 keep refining it.</li></ol></li></ul></section><section><h2>The dashboard design</h2><ul><li><a href="architecture.md">docs/planning/task-kit-dashboard/architecture.md</a> -- the machine-wide dashboard design: process model, loopback HTTP security, runtime state, and the ten load-bearing decisions.</li><li><a href="architecture-review.md">docs/planning/task-kit-dashboard/architecture-review.md</a> -- the cross-check of that design. Verdict REVISE with four blocking defects; read it before building on the design.</li></ul></section><section><h2>The databench cutover</h2><ul><li><a href="databench-integration-review.md">docs/planning/task-kit-dashboard/databench-integration-review.md</a> -- the 2026-10-21 review: where task-kit and databench overlap, the dependency direction, and the host decision to make.</li><li><a href="databench-integration-plan.md">docs/planning/task-kit-dashboard/databench-integration-plan.md</a> -- the 2026-10-22 plan that moves the manager into a databench tasks module, staged M1 to M7. The most current statement of direction.</li></ul></section><section><h2>Feature plans</h2><ul><li><a href="working-sessions-plan.md">docs/planning/task-kit-dashboard/working-sessions-plan.md</a> -- how a Claude Code session registers as working a task and proves its process is alive. Units U0 to U6 landed; publication pending.</li><li><a href="summary-on-commit-plan.md">docs/planning/task-kit-dashboard/summary-on-commit-plan.md</a> -- the questions-and-answers design that computes each task&#x27;s orientation summary, cheapest-capable-answerer first.</li></ul></section><section><h2>The UI mockups</h2><ul><li><a href="prototype-a-stage-map.html">docs/planning/task-kit-dashboard/prototype-a-stage-map.html</a> -- the approved Prototype A: the dashboard&#x27;s whole screen, from the task list to each item&#x27;s stage map.</li><li><a href="detail-view/index.html">docs/planning/task-kit-dashboard/detail-view/index.html</a> -- the pitch for the four task-detail concepts: each idea, its trade-offs, and the data it needs.</li><li>First-round concepts -- <a href="detail-view/a-views.html">docs/planning/task-kit-dashboard/detail-view/a-views.html</a>, <a href="detail-view/b-brief.html">docs/planning/task-kit-dashboard/detail-view/b-brief.html</a>, <a href="detail-view/c-situation.html">docs/planning/task-kit-dashboard/detail-view/c-situation.html</a>, <a href="detail-view/d-timeline.html">docs/planning/task-kit-dashboard/detail-view/d-timeline.html</a> -- the four options: separate views, a one-page brief, a situation card, and a timeline.</li><li><a href="detail-view/round2/a-answer-board.html">docs/planning/task-kit-dashboard/detail-view/round2/a-answer-board.html</a> -- round 2&#x27;s answer board. Rounds 3 to 5 continue the iteration; the later rounds keep print-ready PDF exports beside the HTML.</li></ul></section>
+</main>
+<script>
+if (window.parent !== window) {
+  window.parent.postMessage({
+    type: "index-pages:announce",
+    version: 1,
+    directory: "docs/planning/task-kit-dashboard",
+    file: "index.html",
+    kind: "page",
+    source_sha: "3b9194392e67ccacfcdb26076794435a89f13e8f"
+  }, "*");
+  document.addEventListener("click", function (event) {
+    if (event.defaultPrevented || event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    var el = event.target;
+    while (el && el.nodeName !== "A") el = el.parentNode;
+    if (!el) return;
+    var href = el.getAttribute("href");
+    if (!href) return;
+    if (href.charAt(0) === "#" || href.charAt(0) === "/") return;
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
+    var target = href.split("#")[0].split("?")[0];
+    if (!target) return;
+    if (/(^|\/)index-page(\.[^/]+)?\.html$/.test(target)) return;
+    var parts = "docs/planning/task-kit-dashboard".split("/");
+    if (parts.length === 1 && parts[0] === ".") parts = [];
+    var segs = target.split("/");
+    for (var i = 0; i < segs.length; i++) {
+      if (segs[i] === "" || segs[i] === ".") continue;
+      if (segs[i] === "..") { parts.pop(); continue; }
+      parts.push(segs[i]);
+    }
+    event.preventDefault();
+    window.parent.postMessage({
+      type: "index-pages:navigate",
+      version: 1,
+      path: parts.join("/")
+    }, "*");
+  });
+}
+</script>
+</body>
+</html>

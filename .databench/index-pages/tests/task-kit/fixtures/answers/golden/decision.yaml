@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "tests/task-kit/fixtures/answers/golden",
+  "decision": "none",
+  "source_sha": "490ee13a3f8f1a22ea3d3a7454f89ebcda8f2882",
+  "input_sha256": "00450444673345a9a58f3a8d81c1f9b62dcc7b051326f28a289972a20ef24784",
+  "input_shape_sha256": "9f8627b31a0d197c46b01da0bb24ef029071a75aa22700799e3d831c8d85a2e0",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

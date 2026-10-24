@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "tests/task-kit/fixtures/task_export/alpha-two/dev/tasks/later-idea",
+  "decision": "none",
+  "source_sha": "070cfc49bea3b75b4c55ff08384d073108c567ee",
+  "input_sha256": "3f34f5ec4af3ddea62d5705eb1c2d894acd8666764aa31fa8beee39662b12852",
+  "input_shape_sha256": "f258613223e9cf5d2d84b315a37b82b7d43967284b1fae36a976b66b30205f37",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

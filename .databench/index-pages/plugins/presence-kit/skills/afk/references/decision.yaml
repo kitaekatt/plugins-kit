@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/presence-kit/skills/afk/references",
+  "decision": "none",
+  "source_sha": "884f38ccb889117c7742fbb597f23db0c123fccb",
+  "input_sha256": "9e2e1d5016841a5b42869e7c627ccb52275b4c79ebfa7b8c5a2a3611b1b5a03d",
+  "input_shape_sha256": "3e98dd46052f5085fbe6eb798b7273bc490fd18656fd14963ebe008d05f239d2",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

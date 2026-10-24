@@ -2,12 +2,12 @@
   "schema_version": 1,
   "directory": "tests/llm-kit",
   "decision": "page",
-  "source_sha": "a157bc275e56fc92001fee5b2345fa534593871d",
-  "generation_spec_sha256": "d40323919c23e31cc9c5afe305627667e78bca3c257330f0fc0b3a9b1c826ade",
-  "input_sha256": "200a970d929b037eb200eb1441c0a31858b1589c3cce5512119ebcea0b64df84",
-  "input_shape_sha256": "8a96d95d8abbe5b03c96aa751d3ff5c43736ae848c6d9ef81445bee665489c46",
+  "source_sha": "c8712b21df627254cda7faa3d394bb2dcf0799fe",
+  "generation_spec_sha256": "8573606e5f3b827eff1eb29578efe854f3b917c38f7e9b9539ce898c925d9fa1",
+  "input_sha256": "5bc0cef2471b1dd119864779aeb97d3d8aba5de27578849a4aeb05e2df0f4906",
+  "input_shape_sha256": "6fea10af9366e29a059147e88459aa0255d9e4f15d0d0063e3d6f6071dc2042a",
   "dirty": false,
-  "identity": "Tests that verify llm-kit behavioral parity with the legacy plugins and validate the repoint map, disposition ledgers, and schema fixtures.",
+  "identity": "Tests that verify llm-kit replaces the legacy plugins with differential parity, cross-state compatibility, and migration activation checks.",
   "instructions": "",
   "references": []
 }

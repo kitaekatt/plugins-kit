@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/task-kit/hooks",
+  "decision": "none",
+  "source_sha": "0a6a0a9e5012b3aa332549f4a334f7aac4d7a388",
+  "input_sha256": "a75f09e6940dc55dd778cdc5ad95dac293137bbe2aca1dd8908e46025194aac2",
+  "input_shape_sha256": "0133b5ac295d7543302d0a200a48d0ff645d7ba6450030de64627b8bbee82bc9",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

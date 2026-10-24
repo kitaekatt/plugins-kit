@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "tests/task-kit/fixtures/task_export/alpha/dev/tasks/wait-on-review",
+  "decision": "none",
+  "source_sha": "070cfc49bea3b75b4c55ff08384d073108c567ee",
+  "input_sha256": "6bd81d83a0d3daada0226b350486ffaad47e96efccbe7236360a0489ba033e20",
+  "input_shape_sha256": "cd0b0819a5a0c5ba06585835c5fdc28bbc23c3a5e30d66508d77ad45c944c006",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

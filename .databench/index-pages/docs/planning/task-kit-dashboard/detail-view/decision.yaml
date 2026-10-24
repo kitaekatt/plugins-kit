@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "docs/planning/task-kit-dashboard/detail-view",
+  "decision": "none",
+  "source_sha": "de9c0212cc3875606b807084871df76784ec159f",
+  "input_sha256": "d2e54ea978be1309cd2a38bfb97a6d4bd8e9e19530ee62421ebae635c7fdf47c",
+  "input_shape_sha256": "4b0ee5f8c7ff77454b96829ddc00b2c61178bdd8d75ea4f36266d6528be6e4d3",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

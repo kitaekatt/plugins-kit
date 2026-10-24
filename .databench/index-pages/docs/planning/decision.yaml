@@ -1,12 +1,13 @@
 {
   "schema_version": 1,
   "directory": "docs/planning",
-  "decision": "none",
-  "source_sha": "dbcd10d27c7365ce0f89c9885056d1c73764b882",
-  "input_sha256": "5f6a46a0a83d36e36b7e80090b905f02fb9fdb0cd0de96843debe70af64a7363",
-  "input_shape_sha256": "48ffaf7e65334481fafeecf7fa8de4e4446cba8e7550d176bb6b2ed7995fa9c2",
+  "decision": "page",
+  "source_sha": "7e893931e0179968e1c3bba4f1b1f828d4362c8e",
+  "generation_spec_sha256": "8573606e5f3b827eff1eb29578efe854f3b917c38f7e9b9539ce898c925d9fa1",
+  "input_sha256": "a8960b733672c12ba52d8acdc9a0e476075dbb0bf0beb2777aae0a11c769d8ae",
+  "input_shape_sha256": "0272bf4ba54526ec2b6fa16199cf78331d306da85e2d8333cc2dbf1354bf0583",
   "dirty": false,
-  "identity": "",
+  "identity": "Design and planning documents for the plugins-kit project: implementation plans, migration plans, design proposals, decision records, and status documents for its subsystems.",
   "instructions": "",
   "references": []
 }

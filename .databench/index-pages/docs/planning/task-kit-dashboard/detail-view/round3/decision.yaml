@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "docs/planning/task-kit-dashboard/detail-view/round3",
+  "decision": "none",
+  "source_sha": "33284f64b5d7c23214c73354c105b90ea11fd8f7",
+  "input_sha256": "badedfcf9d2cee6d2e8bc36591c2d32a7777957e88336e210ed563bbf08a7b3f",
+  "input_shape_sha256": "4181f863938fc4f5d9bd0290668c4bd9b960ffdb77ea17f57220a42a37e9fd62",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

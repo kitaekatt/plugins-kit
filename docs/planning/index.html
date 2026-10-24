@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- index-pages: {"generated_by":"md-domain","source_sha":"7e893931e0179968e1c3bba4f1b1f828d4362c8e","directory":"docs/planning","kind":"page"} -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Design and planning documents for the plugins-kit project: implementation plans, migration plans, design proposals, decision records, and status documents for its subsystems.</title>
+<link rel="stylesheet" href="../../.databench/index-pages.css">
+</head>
+<body>
+<nav data-index-pages-chrome="nav"><ul><li><a href="md-domain-coverage-lane/index.html"><span class="hh-nav-label">md-domain-coverage-lane</span> <span class="hh-nav-identity">Planning documents that design, measure, and validate md-domain CLAUDE.md coverage and generation.</span></a></li><li><a href="task-kit-dashboard/index.html"><span class="hh-nav-label">task-kit-dashboard</span> <span class="hh-nav-identity">The planning documents for the task-kit dashboard: architecture design, databench integration plan, and iterative detail-view mockups.</span></a></li></ul></nav>
+<main>
+<h1>Design and planning documents for the plugins-kit project: implementation plans, migration plans, design proposals, decision records, and status documents for its subsystems.</h1>
+<p class="hh-orientation">This is where plugins-kit keeps its design and planning material: the documents that work out a subsystem&#x27;s shape, sequence its build, record where a change landed, and hold the evidence behind a decision. It is organized one directory per subsystem, and inside each the files split by job: a design record, an implementation or migration plan, a status or milestone list, or supporting evidence. Nothing here ships into a plugin cache; it is maintainer-facing and points at the shipped documentation and source it describes.</p><section><h2>Where to start</h2><p>Open <a href="plugin-improvements.md">docs/planning/plugin-improvements.md</a> first: it is the cross-subsystem staging list of open deficiencies, each with its problem and a candidate fix, and it marks the resolved ones. For a specific subsystem, go straight to that subsystem&#x27;s directory.</p></section><section><h2>Routes</h2><ul><li><strong>Consolidate the LLM libraries</strong><ol><li><a href="llm-kit/implementation-plan.md">docs/planning/llm-kit/implementation-plan.md</a> Build llm-kit increment by increment from the legacy plugins, gated on the signed architecture.</li><li><a href="llm-kit/migration-plan.md">docs/planning/llm-kit/migration-plan.md</a> Then migrate each consumer to llm_kit and freeze the legacy providers ahead of deletion.</li></ol></li><li><strong>Follow a bootstrap tooling change</strong><ol><li><a href="bootstrap/path-reachability-check.md">docs/planning/bootstrap/path-reachability-check.md</a> The design that makes an on-disk, off-PATH tool count as installed.</li><li><a href="bootstrap/path-reachability-STATUS.md">docs/planning/bootstrap/path-reachability-STATUS.md</a> The status and publish-resume checklist for the merged, smoke-tested work.</li></ol></li></ul></section><section><h2>Open work staging</h2><ul><li><a href="plugin-improvements.md">docs/planning/plugin-improvements.md</a> Cross-subsystem staging list of candidate deficiencies in the LLM and content-pipeline libraries; each item names the problem and a fix, some marked resolved.</li></ul></section><section><h2>Design records</h2><ul><li><a href="adapters/adapter-design.md">docs/planning/adapters/adapter-design.md</a> Design record for the md-audit adapter and its EVIDENCE PACK; admitted for one model-task pair, with measurement tables and a deliberately carried defect.</li><li><a href="bootstrap/path-reachability-check.md">docs/planning/bootstrap/path-reachability-check.md</a> Design: treat an on-disk, off-PATH tool as installed and auto-link its directory to PATH.</li><li><a href="bootstrap/stable-channel-design.md">docs/planning/bootstrap/stable-channel-design.md</a> Unimplemented design proposal: bootstrap as sole updater with a per-plugin stable channel and a publish-time ledger.</li><li><a href="bootstrap/tool-resolution-redesign.md">docs/planning/bootstrap/tool-resolution-redesign.md</a> Design: record absolute tool paths at bootstrap and resolve by file existence; the session-env half is superseded.</li><li><a href="quota-resilient-dispatch/declaration-format-design.md">docs/planning/quota-resilient-dispatch/declaration-format-design.md</a> Design: one model-declaration format across providers, with the routing layers, core ids, and validation.</li></ul></section><section><h2>Build and migration plans</h2><ul><li><a href="llm-kit/implementation-plan.md">docs/planning/llm-kit/implementation-plan.md</a> Sequenced build of llm-kit from the legacy plugins, increment by increment, gated on the signed architecture.</li><li><a href="llm-kit/migration-plan.md">docs/planning/llm-kit/migration-plan.md</a> Approved plan to migrate each consumer to llm_kit, then freeze and later delete the legacy providers.</li><li><a href="llm-kit/cost-class-consent-plan.md">docs/planning/llm-kit/cost-class-consent-plan.md</a> Cost classes and per-machine consent plan for llm-kit; superseded by the consent design in shared-lib-packaging.</li><li><a href="content-pipeline-kit/session-recipients-plan.md">docs/planning/content-pipeline-kit/session-recipients-plan.md</a> Plan of record for adding Claude background-session and Workflow execution to content-pipeline-kit.</li></ul></section><section><h2>Status and ledgers</h2><ul><li><a href="bootstrap/MILESTONES.md">docs/planning/bootstrap/MILESTONES.md</a> Bootstrap plugin milestones 1-6 with deliverables, tests, and the capability-audit gap report, all gaps implemented.</li><li><a href="bootstrap/path-reachability-STATUS.md">docs/planning/bootstrap/path-reachability-STATUS.md</a> Status and publish-resume checklist for the PATH-reachability work, smoke-tested and committed to dev.</li><li><a href="orchestrate/deferred-evidence-experiments.md">docs/planning/orchestrate/deferred-evidence-experiments.md</a> Retained ledger of the seven orchestrate evidence gaps, all kept, each naming the evidence that would close it.</li><li><a href="awesome-kit-task-system/diagram-deliverables-tracker.md">docs/planning/awesome-kit-task-system/diagram-deliverables-tracker.md</a> Per-diagram tracker for the task-system diagram set; all five approved, next artifact is the task.yaml schema.</li></ul></section><section><h2>Supporting evidence</h2><ul><li><a href="awesome-kit-task-system/prior-systems-exploration.md">docs/planning/awesome-kit-task-system/prior-systems-exploration.md</a> Exploration of the prior tasks-kit vs issues-kit plugins; the foundation for the new, simpler task system.</li><li><a href="awesome-kit-task-system/task-items-evidence.md">docs/planning/awesome-kit-task-system/task-items-evidence.md</a> Maintainer-only evidence archive: mined real task folders and the homeassistant worked example behind the items design.</li><li><a href="plugin-library-extractions/inventory.md">docs/planning/plugin-library-extractions/inventory.md</a> Read-only survey of plugin-library extraction candidates into general katsoft-* libraries, dated 2026-10-23.</li></ul></section><section><h2>Decision records</h2><ul><li><a href="awesome-kit-task-system/task-system-design-decisions.md">docs/planning/awesome-kit-task-system/task-system-design-decisions.md</a> Maintainer-only decision and status record for the awesome-kit task system: the weighed options and dated resolutions.</li></ul></section><section><h2>Other subsystems</h2><p>secrets-kit, shared-lib-packaging, and skills-kit each carry their own design and plan documents (including the consent design that supersedes the llm-kit cost-class plan); open the directory to read them.</p></section>
+</main>
+<script>
+if (window.parent !== window) {
+  window.parent.postMessage({
+    type: "index-pages:announce",
+    version: 1,
+    directory: "docs/planning",
+    file: "index.html",
+    kind: "page",
+    source_sha: "7e893931e0179968e1c3bba4f1b1f828d4362c8e"
+  }, "*");
+  document.addEventListener("click", function (event) {
+    if (event.defaultPrevented || event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    var el = event.target;
+    while (el && el.nodeName !== "A") el = el.parentNode;
+    if (!el) return;
+    var href = el.getAttribute("href");
+    if (!href) return;
+    if (href.charAt(0) === "#" || href.charAt(0) === "/") return;
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
+    var target = href.split("#")[0].split("?")[0];
+    if (!target) return;
+    if (/(^|\/)index-page(\.[^/]+)?\.html$/.test(target)) return;
+    var parts = "docs/planning".split("/");
+    if (parts.length === 1 && parts[0] === ".") parts = [];
+    var segs = target.split("/");
+    for (var i = 0; i < segs.length; i++) {
+      if (segs[i] === "" || segs[i] === ".") continue;
+      if (segs[i] === "..") { parts.pop(); continue; }
+      parts.push(segs[i]);
+    }
+    event.preventDefault();
+    window.parent.postMessage({
+      type: "index-pages:navigate",
+      version: 1,
+      path: parts.join("/")
+    }, "*");
+  });
+}
+</script>
+</body>
+</html>
