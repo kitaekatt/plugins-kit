@@ -30,8 +30,8 @@
     {
       "file": "tests/llm-scripting-kit/test_text_only_arming.py",
       "old": "    armed = arm_call(backend, options, {\"guarantees\": [subject]})\n    assert armed.backend is not backend and armed.backend.text_only is True\n",
-      "new": "    armed = arm_call(backend, options, {\"guarantees\": [subject]})\n    if subject == SUBAGENT_SPAWN and backend.name == \"claude-cli\":\n        assert armed.backend is backend and backend.text_only is False\n        assert armed.options.disallowed_tools == \"Task Agent\"\n        assert armed.controls == (\"disallowed-tools\",)\n        return\n    assert armed.backend is not backend and armed.backend.text_only is True\n",
-      "reason": "llm-kit 1.7.1 preserves ordinary Claude tools for native-child-only denial. Adapt only this one expected result; all six parametrized cases still run, and broad Claude/Codex text-only assertions remain unchanged. Final argv and raw-policy preservation are independently pinned by test_targeted_deny_floor.py."
+      "new": "    armed = arm_call(backend, options, {\"guarantees\": [subject]})\n    if subject == SUBAGENT_SPAWN and backend.name == \"claude-cli\":\n        assert armed.backend is backend and backend.text_only is False\n        assert armed.options.disallowed_tools == \"Task Agent Workflow SendMessage\"\n        assert armed.controls == (\"disallowed-tools\",)\n        return\n    assert armed.backend is not backend and armed.backend.text_only is True\n",
+      "reason": "llm-kit preserves ordinary Claude tools for native-child-only denial and denies Workflow/SendMessage agent creation/resumption measured on Claude Code 2.1.310. Adapt only this one expected result; all six parametrized cases still run, and broad Claude/Codex text-only assertions remain unchanged. Final argv and raw-policy preservation are independently pinned by katsoft-libs test_targeted_deny_floor.py."
     },
     {
       "file": "tests/job-kit/test_model.py",
