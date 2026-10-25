@@ -29,6 +29,7 @@
     "plugins/skills-kit": "5f8583f6eb6fbc80ac549098a8796be2dbe4aa6e73826056d13ddd86b55b6d10",
     "plugins/workflow-kit": "2f35049ad363dac580d8bbc4c6f8faaa9915fb08c9ea8d062657fd620d034740",
     "tests/llm-kit": "96db9d0068cb3d23fbd66419050271cd2e6e32b73f80a9c74b0cf51ad216482e",
+    "tests/secrets-kit": "bc90dea27ffe85664f6d0ed00cc6798f57d715745f0a8c401877231b703af7e7",
     "scripts": "29bd3c7b5f4e570662508e3c66e47e5f1a0dd5f7ddecfe3c4b36bc66b146a0e0"
   }
 }
