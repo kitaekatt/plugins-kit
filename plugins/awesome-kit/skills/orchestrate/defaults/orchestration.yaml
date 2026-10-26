@@ -556,6 +556,12 @@ backends:
       `--add-dir` voids the ENTIRE writable set -- writes inside the root
       fail too.
 
+      On Windows, resolve `-C` and every `--add-dir` to their on-disk case
+      before replacing the command's placeholders. Use Python's
+      `Path(value).expanduser().resolve(strict=True)` for existing directories.
+      Absolute paths alone do not correct casing. `scripts/dispatch.py`
+      already resolves these paths; raw launch callers must do the same.
+
       Launch backgrounded THROUGH THE HARNESS's own background mechanism
       (Claude Code: the Bash tool's `run_in_background`), and add NO shell
       backgrounding of your own -- no `nohup`, no trailing `&`. Doing both
@@ -575,6 +581,11 @@ backends:
       Flag catalog, and the `-s danger-full-access` escape hatch:
       references/codex-dispatch.md.
     gotchas:
+      - >-
+        On Windows, a `-C` spelling that differs from its on-disk case can
+        trigger the unelevated sandbox's split writable root set refusal.
+        Canonicalize `-C` and every `--add-dir` before launch. See
+        references/codex-dispatch.md, Windows path casing, for evidence and limits.
       - >-
         There is no approval channel: `codex exec` rejects `-a`, so a
         sandbox-forbidden action is AUTO-DENIED, never escalated. The turn

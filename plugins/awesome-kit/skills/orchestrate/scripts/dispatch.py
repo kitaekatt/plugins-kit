@@ -117,6 +117,8 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _absolute(path: Path) -> Path:
+    # resolve() also restores existing components' on-disk case on Windows.
+    # absolute() preserves caller casing, which can break writable roots.
     return path.expanduser().resolve()
 
 

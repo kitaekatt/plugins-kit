@@ -46,6 +46,36 @@ the root itself. The measured 2x2:
 And pass `-C` explicitly rather than relying on the process cwd: a `cd` inside a
 backgrounded Bash call does not persist.
 
+## Windows path casing
+
+Before a raw launch on Windows, canonicalize `-C` and every `--add-dir` to
+their on-disk case. Absolute paths alone are insufficient. A case mismatch in
+`-C` caused the unelevated sandbox to reject shell commands with:
+
+    windows unelevated restricted-token sandbox cannot enforce split writable root sets directly; refusing to run unsandboxed
+
+This was observed on codex-cli 0.161.0-alpha.2 with no `--add-dir`. The same
+directory with its on-disk case worked. Do not infer that every split-root
+error has this cause. The `--add-dir` and `-o` case matrix remains untested.
+
+Use Python's `Path(value).expanduser().resolve(strict=True)` for each existing
+root before constructing argv. Require each resolved root to be a directory.
+Pass the resolved strings to the shared builder. Lowercasing paths or using
+`absolute()` does not restore on-disk case. Do not derive launch paths directly
+from an environment variable whose spelling can differ from disk.
+
+`scripts/dispatch.py` already resolves `--cwd` and every `--add-dir` this way
+(without `strict=True`, with a separate cwd directory check). Its cache keys
+also use the resolved paths. Prefer that entry point when possible.
+
+The rendered command contains placeholders, so its caller must resolve actual
+paths before substitution. `CodexAdapter` and the shared command builder check
+that paths are absolute; they do not restore their on-disk case. Their source
+is maintained in katsoft-libs. Other callers must apply the same normalization.
+For `-o`, resolve its existing parent and append the new filename; the output
+file need not exist. This is consistent path handling, not a confirmed remedy
+for an output-path casing bug.
+
 ## The one invocation
 
 The backend record's one-line command is:
