@@ -8,7 +8,7 @@
     "plugins/skills-kit/skills/md-domain/scripts": "e82070c836bed0fadb0a57bf5b854f9021ed3eefdd32f3275ae34fdc2367364a",
     "plugins/unreal-kit/skills/fix-up-redirectors/scripts": "b52b0ce51f6de48e4e956d38950bcfae3706e788a0781a2a2a6eef963d34bda9",
     "plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/comments": "5827be4558f31b34178408511a5fc483d465ca6d70400924477cba39883762f6",
-    "plugins/awesome-kit/skills/orchestrate": "77f1bc2e185e84463415da60c30a588a074f4fa0218b2a3ea6f7a1639852c37b",
+    "plugins/awesome-kit/skills/orchestrate": "f71cd7656db563f14d42b937cb771ad58c213f22f3562d7d6a6d92512bd5fae2",
     "plugins/git-kit/skills/git-code-review": "a77c65517b4997db3199bf6e16b3a0f786e77dcb7e0104dfd3b6435684816ff0",
     "plugins/llm-scripting-kit/lib/llm_scripting_kit": "cc5e2df8aed629dbb6c9ab70ce4650fc4278b38d68b04902bebfacaa6084be7b",
     "plugins/secrets-kit/lib/secrets_kit": "3845b1bfbfbb7f693f21cb1b098431918aaf3b7435cd11b37e834104d7907afb",
