@@ -62,8 +62,10 @@ WAITING_LAST = "Waiting on the job"
 
 # L(...) texts
 R_TEXT = "the user is back; invoke `presence-kit:recap return {pid}`."
-C_TEXT = "add a waiter agent; the terminal shows idle."
-W_TEXT = "end with `Waiting on <what>`."
+C_TEXT = "add a waiter agent; the terminal shows idle. Counted as running non-agent work: {counted}."
+W_TEXT = "end with `Waiting on <what>`. Counted as owned work: {counted}."
+SHELL_COUNTED = "t1 (shell, running): job"
+AGENT_COUNTED = "t2 (subagent, running): agent"
 E_AFK_TEXT = "invoke `presence-kit:recap afk-ending {pid}`."
 
 
@@ -71,12 +73,12 @@ def line_R(pid=PID):
     return L("recap-on-return", pid, R_TEXT.format(pid=pid))
 
 
-def line_C(pid=PID):
-    return L("waiting-guard", pid, C_TEXT)
+def line_C(pid=PID, counted=SHELL_COUNTED):
+    return L("waiting-guard", pid, C_TEXT.format(counted=counted))
 
 
-def line_W(pid=PID):
-    return L("waiting-guard", pid, W_TEXT)
+def line_W(pid=PID, counted=SHELL_COUNTED):
+    return L("waiting-guard", pid, W_TEXT.format(counted=counted))
 
 
 def line_E(pid=PID):
@@ -704,20 +706,20 @@ def test_row4_afk_without_afk_since_fails_loudly(s):
 
 # ======================================================================== row 5
 
-@pytest.mark.parametrize("task", [
-    SHELL,
-    {"type": "monitor", "status": "running"},
-    {"type": "mcp", "status": "running"},
-    {"type": "cloud-session", "status": "running"},
-    {"status": "running"},
-    {"type": 3, "status": "running"},
-    {},
+@pytest.mark.parametrize("task,counted", [
+    (SHELL, SHELL_COUNTED),
+    ({"type": "monitor", "status": "running"}, "? (monitor, running): no description"),
+    ({"type": "mcp", "status": "running"}, "? (mcp, running): no description"),
+    ({"type": "cloud-session", "status": "running"}, "? (cloud-session, running): no description"),
+    ({"status": "running"}, "? (?, running): no description"),
+    ({"type": 3, "status": "running"}, "? (3, running): no description"),
+    ({}, "? (?, no status): no description"),
 ])
-def test_row5_a_nonagent_task_alone_holds_c(s, task):
+def test_row5_a_nonagent_task_alone_holds_c(s, task, counted):
     s.entry(PID, "sdk", NOW)
     decision = s.stop(tasks=[task], last=WAITING_LAST)
     assert decision.held == ("C",)
-    assert decision.nudge == line_C()
+    assert decision.nudge == line_C(counted=counted)
 
 
 @pytest.mark.parametrize("tasks", [
@@ -770,7 +772,7 @@ def test_row6_last_nonempty_line_must_be_waiting_on_something(s, last, holds):
     decision = s.stop(tasks=[AGENT], last=last)
     assert decision.held == (("W",) if holds else ())
     if holds:
-        assert decision.nudge == line_W()
+        assert decision.nudge == line_W(counted=AGENT_COUNTED)
 
 
 def test_row6_owned_through_session_crons_only(s):
@@ -1044,7 +1046,7 @@ def test_unknown_turn_origin_does_not_return_an_afk_user_but_rows_5_to_9_run(s):
     assert decision.system_message == N3
 
 
-@pytest.mark.parametrize("status", ["completed", "failed", "killed", "stopped", "never-seen-before", None, 7])
+@pytest.mark.parametrize("status", ["stopped", "paused", "pending", "never-seen-before", None, 7])
 def test_unobserved_background_task_status_counts_as_running(s, status):
     s.go_afk()
     s.entry(PID, "sdk", NOW)
@@ -1111,6 +1113,110 @@ def test_a_user_armed_monitor_still_counts(s):
 def test_only_a_monitor_with_the_marker_text_is_harness_armed(s, task):
     s.entry(PID, "sdk", NOW)
     assert s.stop(tasks=[task], last=WAITING_LAST).held == ("C",)
+
+
+# ============================================================ finished tasks
+
+FINISHED_SHELL = {"id": "s9", "type": "shell", "status": "completed", "description": "build", "command": "make"}
+KILLED_AGENT = {"id": "a9", "type": "subagent", "status": "killed", "description": "explore the tree"}
+FAILED_AGENT = {"id": "a8", "type": "subagent", "status": "failed", "description": "review"}
+DONE_WORKFLOW = {"id": "w9", "type": "workflow", "status": "completed", "name": "wf", "description": "wf"}
+RESUME_MONITOR = {
+    "id": "m9",
+    "type": "monitor",
+    "status": "running",
+    "description": "live updates for artifact https://claude.ai/artifact/x (re-armed on session resume)",
+}
+
+
+def test_reported_shape_finished_work_and_a_live_artifact_monitor_hold_nothing(s):
+    # The reported Stop payload: a completed shell, a killed subagent, a completed
+    # workflow and a re-armed artifact monitor are all listed; none is owned work.
+    s.entry(PID, "sdk", NOW)
+    tasks = [FINISHED_SHELL, KILLED_AGENT, DONE_WORKFLOW, RESUME_MONITOR]
+    assert s.stop(tasks=tasks, last="DONE").held == ()
+
+
+def test_reported_shape_leaves_e_as_with_no_tasks(s):
+    s.go_afk()
+    s.entry(PID, "sdk", NOW)
+    tasks = [FINISHED_SHELL, KILLED_AGENT, DONE_WORKFLOW, RESUME_MONITOR]
+    assert s.stop(tasks=tasks, last="DONE").held == ("E",)
+
+
+@pytest.mark.parametrize("finished", [KILLED_AGENT, FAILED_AGENT, DONE_WORKFLOW])
+def test_a_finished_agent_does_not_cover_a_running_shell(s, finished):
+    s.entry(PID, "sdk", NOW)
+    decision = s.stop(tasks=[SHELL, finished], last=WAITING_LAST)
+    assert decision.held == ("C",)
+    assert decision.nudge == line_C()  # names the shell task, not the finished agent
+    assert "t1" in decision.nudge and finished["id"] not in decision.nudge
+
+
+def test_a_running_agent_still_covers_a_running_shell_beside_a_finished_one(s):
+    s.entry(PID, "sdk", NOW)
+    assert s.stop(tasks=[SHELL, AGENT, KILLED_AGENT], last=WAITING_LAST).held == ()
+
+
+def test_the_nudge_names_every_counted_task_and_not_the_finished_ones(s):
+    s.entry(PID, "sdk", NOW)
+    other = {"id": "t5", "type": "monitor", "status": "paused", "description": "tail the log"}
+    decision = s.stop(tasks=[SHELL, FINISHED_SHELL, other], last="DONE")
+    counted = "t1 (shell, running): job; t5 (monitor, paused): tail the log"
+    assert decision.held == ("C", "W")
+    assert decision.nudge == "\n".join([line_C(counted=counted), line_W(counted=counted)])
+    assert "s9" not in decision.nudge
+
+
+def test_a_running_shell_with_missing_status_still_counts_and_is_named(s):
+    s.entry(PID, "sdk", NOW)
+    task = {"id": "t7", "type": "shell", "description": "poll"}
+    decision = s.stop(tasks=[task, FINISHED_SHELL], last=WAITING_LAST)
+    assert decision.held == ("C",)
+    assert decision.nudge == line_C(counted="t7 (shell, no status): poll")
+
+
+def test_the_description_is_cut_to_80_characters_one_line_and_ascii(s):
+    s.entry(PID, "sdk", NOW)
+    task = {
+        "id": "t8",
+        "type": "shell",
+        "status": "running",
+        "description": "line one\n" + "x" * 200 + " caf\u00e9",
+    }
+    decision = s.stop(tasks=[task], last=WAITING_LAST)
+    expected = "line one " + "x" * 68 + "..."
+    assert len(expected) == 80
+    assert decision.nudge == line_C(counted=f"t8 (shell, running): {expected}")
+    assert decision.nudge.isascii() and "\n" not in decision.nudge
+
+
+def test_w_for_session_crons_counts_them(s):
+    s.entry(PID, "sdk", NOW)
+    decision = s.stop(tasks=[FINISHED_SHELL], crons=[{"id": "c1"}, {"id": "c2"}], last="DONE")
+    assert decision.held == ("W",)
+    assert decision.nudge == line_W(counted="2 session crons")
+
+
+# Every armed-via variant the harness appends to an Artifact live subscription.
+@pytest.mark.parametrize("armed_via", [
+    "auto-armed on publish",
+    "attached via /artifacts",
+    "watch requested",
+    "resume requested",
+    "re-armed on session resume",
+    "presence while editing via MCP",
+    "watch requested; auto-replies enabled",
+])
+def test_every_artifact_monitor_variant_is_exempt(s, armed_via):
+    s.entry(PID, "sdk", NOW)
+    monitor = {
+        "id": "m1",
+        "type": "monitor",
+        "status": "running",
+        "description": f"live updates for artifact https://claude.ai/artifact/x ({armed_via})",
+    }
+    assert s.stop(tasks=[monitor], last="DONE").held == ()
 
 
 # ================================================================ output shapes

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Presence: how it works</title>
-<!-- presence.md sha256: d86ca958e04e917492ef83b7da52f660d28a6145b0f33255587d48d9c7f0e0ff -->
+<!-- presence.md sha256: 6501181aa24cda86d6c57679b098328b447980fd8a1220ab4ee59443e02b9aea -->
 <style>
   :root {
     --bg: #f6f7f9; --card: #ffffff; --ink: #1d2330; --muted: #5d6677; --line: #e2e6ec;
@@ -192,7 +192,7 @@
 
 <section>
   <h2>Waiting on background work</h2>
-  <p class="sub">The same in every mode (<code>waiting-guard</code>). The stop hook reads the list of running background tasks. A task the harness armed itself, such as the live-updates monitor that an Artifact publish adds, does not count as your work.</p>
+  <p class="sub">The same in every mode (<code>waiting-guard</code>). The stop hook reads the list of background tasks. A finished task, and the live-updates monitor the harness adds for an Artifact, do not count as your work. The nudge lists the tasks it counted.</p>
   <div class="waits">
     <div class="wcard"><b>An agent or workflow is running</b><p>Nothing extra needed. The terminal shows working by itself.</p>
       <div class="flow"><span class="chip">Agent</span><span class="op">&rarr;</span><span class="chip">Terminal shows working</span></div></div>
