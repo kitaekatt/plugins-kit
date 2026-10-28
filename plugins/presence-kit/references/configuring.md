@@ -140,8 +140,8 @@ when a departure word sets you afk (P3); everything else it says is read-only.
 | P5 | Claude | `config` | presence behavior is unavailable because its configuration is invalid; apply no presence-kit rule this turn. |
 | S1 | you (Stop hook) | `config` | same as P4 |
 | R | Claude, Stop nudge | `recap-on-return` | the user is back; invoke `presence-kit:recap return <prompt id>`. |
-| C | Claude, Stop nudge | `waiting-guard` | add a waiter agent; the terminal shows idle. |
-| W | Claude, Stop nudge | `waiting-guard` | end with `Waiting on <what>`. |
+| C | Claude, Stop nudge | `waiting-guard` | add a waiter agent; the terminal shows idle. Counted as running non-agent work: `<id> (<type>, <status>): <description>` per task. |
+| W | Claude, Stop nudge | `waiting-guard` | end with `Waiting on <what>`. Counted as owned work: `<id> (<type>, <status>): <description>` per task, then the session cron count. |
 | E (autonomous) | Claude, Stop nudge | `ending-recap` | autonomous: if `<goal>` is done, invoke `presence-kit:recap autonomous-done <prompt id>`, else keep working. |
 | E (afk) | Claude, Stop nudge | `ending-recap` | invoke `presence-kit:recap afk-ending <prompt id>`. |
 | N1 | you, once per session | `afk-on-quiet,recap-on-return` | skipped quiet-afk and return detection: the transcript has no user entry for this prompt yet. |
@@ -151,11 +151,18 @@ when a departure word sets you afk (P3); everything else it says is read-only.
 | N5 | you, once per session | `waiting-guard,ending-recap` | skipped owned-work checks: the Stop payload's session_crons is missing. (or: ... is not a list.) |
 | S6 | you | the condition's id | unresolved after 3 nudges: `<label>`. Labels: `return recap not run`; `no waiter agent covering the job`; ``turn did not end with `Waiting on <what>` ``; `no ending recap or goal check`. |
 
-Owned work, for C, W and E, is every listed background task and every session
-cron, except a task the harness armed itself: a `monitor` task whose description
-contains `(auto-armed on publish)`, which the harness lists after an Artifact
-publish. The agent did not arm it and cannot usefully stop it, so it holds no C
-or W and does not block E. A monitor with any other description counts.
+Owned work, for C, W and E, is every listed background task that has not
+finished and every session cron. Two kinds of listed task are not owned work.
+A task whose `status` is `completed`, `failed` or `killed` is finished: the
+harness keeps listing it until it notifies and evicts it, and a finished agent
+does not cover a running job either. A `monitor` task whose description starts
+with `live updates for artifact ` is an Artifact live subscription the harness
+armed (on publish, on attach, on resume or on a watch request); the agent
+cannot usefully stop it. Any other status counts, including `paused`,
+`pending`, a missing status and an unrecognized one, and a monitor with any
+other description counts. The C and W nudges list the tasks they counted
+(description cut to about 80 characters), so a wrongly counted task can be
+named.
 
 The Stop hook nudges at most three times per prompt, with every unmet
 condition in one nudge. After the third, it lets the turn end, shows S6, and

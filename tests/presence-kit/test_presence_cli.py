@@ -512,8 +512,9 @@ def run_stop(world, payload, attended="1", **kw):
     return world.run("stop", stdin=json.dumps(payload), CLAUDE_CODE_SESSION_ATTENDED=attended, **kw)
 
 
-C_LINE = "add a waiter agent; the terminal shows idle."
-W_LINE = "end with `Waiting on <what>`."
+A103 = "b0sln3cn0 (shell, running): Run sleep 120 in background"
+C_LINE = f"add a waiter agent; the terminal shows idle. Counted as running non-agent work: {A103}."
+W_LINE = f"end with `Waiting on <what>`. Counted as owned work: {A103}."
 
 
 def test_stop_nudge_end_to_end(world):

@@ -342,9 +342,11 @@ S1_CONFIG_SYSTEM = P4_CONFIG_SYSTEM
 R_IDS = "recap-on-return"
 R_RETURN = "the user is back; invoke `presence-kit:recap return {pid}`."
 C_IDS = "waiting-guard"
-C_WAITER = "add a waiter agent; the terminal shows idle."
+# {counted}: the owned work the Stop hook counted, built by presence_stop.counted_work
+# (one `<id> (<type>, <status>): <description>` per task), so a false positive is visible.
+C_WAITER = "add a waiter agent; the terminal shows idle. Counted as running non-agent work: {counted}."
 W_IDS = "waiting-guard"
-W_WAITING = "end with `Waiting on <what>`."
+W_WAITING = "end with `Waiting on <what>`. Counted as owned work: {counted}."
 E_IDS = "ending-recap"
 E_AUTONOMOUS = (
     "autonomous: if {goal} is done, invoke `presence-kit:recap autonomous-done {pid}`, "

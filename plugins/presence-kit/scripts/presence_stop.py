@@ -1,7 +1,8 @@
 """presence-kit Stop-hook evaluation (rows 2-9; row 1 is config_error_decision).
 
 Stdlib only; sibling imports. Contract: dev/tasks/presence-kit/contracts.md
-sections 1, 5, 6, 7 and 11. `evaluate` makes ONE presence_state.update call per
+sections 1, 5, 6, 7 and 11. Owned work (C, W, E) is every listed task that has not
+finished, except an Artifact live-update monitor, plus every session cron. `evaluate` makes ONE presence_state.update call per
 stop, so rows 3-4 (which write presence) and rows 5-9 (which read it, D8) see one
 consistent document. It returns a StopDecision; presence.py prints it.
 
@@ -23,17 +24,26 @@ import presence_transcript as pt
 
 NUDGE_BUDGET = 3
 
-# design.md Stop row 5 / contracts.md section 11 item 2: these types are agent work
-# (they show "working" by themselves); every other type is non-agent.
+# These types are agent work (they show "working" by themselves); every other type
+# is non-agent and needs a waiter agent.
 AGENT_TYPES = ("subagent", "workflow")
 ENDING_RECAPS = ("afk-ending", "autonomous-done")
-# After an Artifact publish the harness lists a monitor task for the rest of the
-# session that the agent did not arm and cannot usefully stop. Observed Stop payload
-# (21 Oct 2026): {"id": "si7wbhhk1", "type": "monitor", "status": "running",
-# "description": "live updates for artifact https://claude.ai/artifact/<id>
-# (auto-armed on publish)"}. Such a task is not owned work (C, W, E).
-HARNESS_ARMED_MONITOR_TYPE = "monitor"
-HARNESS_ARMED_MARKER = "(auto-armed on publish)"
+# The Stop payload lists every task in the harness registry, finished ones included,
+# until the harness notifies and evicts them. A task in one of these statuses is not
+# running, so it is not owned work. Any other status (pending, running, paused, missing,
+# unrecognized) counts: a false positive shows in the nudge, a silent miss would not.
+TERMINAL_STATUSES = ("completed", "failed", "killed")
+# The harness lists a monitor task for every Artifact live subscription, which the
+# agent did not arm and cannot usefully stop. Observed Stop payload (21 Oct 2026):
+# {"id": "si7wbhhk1", "type": "monitor", "status": "running", "description":
+# "live updates for artifact https://claude.ai/artifact/<id> (auto-armed on publish)"}.
+# The text after the URL names how the subscription was armed ("auto-armed on
+# publish", "attached via /artifacts", "watch requested", "resume requested",
+# "re-armed on session resume", "presence while editing via MCP", "watch requested;
+# auto-replies ..."), so every such monitor is matched by its prefix.
+ARTIFACT_MONITOR_TYPE = "monitor"
+ARTIFACT_MONITOR_PREFIX = "live updates for artifact "
+DESCRIPTION_LIMIT = 80
 _WAITING = re.compile(r"Waiting on \S")
 
 # Held-condition codes in nudge order, with the behavior id that owns each.
@@ -110,27 +120,61 @@ def _is_agent(task: dict) -> bool:
     return isinstance(task_type, str) and task_type in AGENT_TYPES
 
 
-def _is_harness_armed(task: dict) -> bool:
-    """A task the harness armed itself (see HARNESS_ARMED_MARKER), not the agent."""
+def _is_artifact_monitor(task: dict) -> bool:
+    """An Artifact live-update subscription the harness armed, not the agent."""
     description = task.get("description")
     return (
-        task.get("type") == HARNESS_ARMED_MONITOR_TYPE
+        task.get("type") == ARTIFACT_MONITOR_TYPE
         and isinstance(description, str)
-        and HARNESS_ARMED_MARKER in description
+        and description.startswith(ARTIFACT_MONITOR_PREFIX)
     )
 
 
+def _is_finished(task: dict) -> bool:
+    status = task.get("status")
+    return isinstance(status, str) and status in TERMINAL_STATUSES
+
+
 def _owned_tasks(tasks: list[dict] | None) -> list[dict] | None:
-    """The listed tasks without the harness-armed ones; None stays None."""
+    """The listed tasks that are owned running work: finished tasks and Artifact
+    live-update monitors are dropped; None stays None."""
     if tasks is None:
         return None
-    return [task for task in tasks if not _is_harness_armed(task)]
+    return [task for task in tasks if not _is_finished(task) and not _is_artifact_monitor(task)]
 
 
 def _needs_waiter(tasks: list[dict]) -> bool:
-    """C: a non-agent task is listed and no agent task is. Every listed task counts as
-    running whatever its `status` says (contracts.md section 11 item 2)."""
+    """C: an owned non-agent task is listed and no owned agent task is. `tasks` is
+    already filtered by `_owned_tasks`, so a finished agent covers nothing."""
     return bool(tasks) and not any(_is_agent(task) for task in tasks)
+
+
+def _ascii(value: Any, fallback: str) -> str:
+    """`value` as one-line ASCII text; `fallback` when it is not a non-empty string or number."""
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        return fallback
+    text = " ".join(str(value).split()).encode("ascii", "replace").decode("ascii")
+    return text or fallback
+
+
+def describe_task(task: dict) -> str:
+    """`<id> (<type>, <status>): <description>`, description cut to DESCRIPTION_LIMIT."""
+    description = _ascii(task.get("description"), "no description")
+    if len(description) > DESCRIPTION_LIMIT:
+        description = description[: DESCRIPTION_LIMIT - 3] + "..."
+    return (
+        f"{_ascii(task.get('id'), '?')} "
+        f"({_ascii(task.get('type'), '?')}, {_ascii(task.get('status'), 'no status')}): "
+        f"{description}"
+    )
+
+
+def counted_work(tasks: list[dict] | None, crons: list | None) -> str:
+    """The owned work a C or W nudge counted: one entry per task, then the cron count."""
+    parts = [describe_task(task) for task in tasks or []]
+    if crons:
+        parts.append(f"{len(crons)} session cron{'s' if len(crons) != 1 else ''}")
+    return "; ".join(parts) or "none"
 
 
 def _ends_with_waiting(last_message: str | None) -> bool:
@@ -220,7 +264,8 @@ def _held_codes(
 ) -> list[str]:
     """Rows 5-7 over the document AFTER rows 3-4 (D8); codes in R, C, W, E order.
 
-    Harness-armed tasks are dropped first: they are not owned work for C, W or E."""
+    Finished tasks and Artifact live-update monitors are dropped first: they are not
+    owned work for C, W or E."""
     tasks = _owned_tasks(tasks)
     recaps = doc["recaps"]
     waiting_guard = cfg.enabled("waiting-guard")
@@ -245,13 +290,13 @@ def _held_codes(
     return [code for code, held in (("R", r), ("C", c), ("W", w), ("E", e)) if held]
 
 
-def _nudge_line(code: str, doc: dict, pid: str) -> str:
+def _nudge_line(code: str, doc: dict, pid: str, counted: dict[str, str]) -> str:
     if code == "R":
         text = pc.R_RETURN.format(pid=pid)
     elif code == "C":
-        text = pc.C_WAITER
+        text = pc.C_WAITER.format(counted=counted["C"])
     elif code == "W":
-        text = pc.W_WAITING
+        text = pc.W_WAITING.format(counted=counted["W"])
     elif doc["goal"] is not None:
         text = pc.E_AUTONOMOUS.format(goal=doc["goal"], pid=pid)
     else:
@@ -259,14 +304,17 @@ def _nudge_line(code: str, doc: dict, pid: str) -> str:
     return pc.line(_CODE_IDS[code], pid, text)
 
 
-def _budget(doc: dict, pid: str, held: list[str]) -> tuple[str | None, list[str]]:
-    """Rows 8-9. Returns (nudge, exhaustion lines)."""
+def _budget(
+    doc: dict, pid: str, held: list[str], counted: dict[str, str]
+) -> tuple[str | None, list[str]]:
+    """Rows 8-9. `counted` maps C and W to the owned work each counted.
+    Returns (nudge, exhaustion lines)."""
     if not held:
         doc["greeted"] = doc["recaps"].get(pid) in ENDING_RECAPS
         return None, []
     if doc["nudges"].get(pid, 0) < NUDGE_BUDGET:
         ps.bump_nudge(doc, pid)
-        return "\n".join(_nudge_line(code, doc, pid) for code in held), []
+        return "\n".join(_nudge_line(code, doc, pid, counted) for code in held), []
     lines = []
     for code in held:
         ids = _CODE_IDS[code]
@@ -309,7 +357,9 @@ def evaluate(payload: dict, cfg: pc.Config, env: Mapping[str, str], now: datetim
         _quiet_afk(doc, cfg, now, entry, human)
         _user_returned(doc, cfg, pid, entry, state_file)
         held = _held_codes(doc, cfg, pid, tasks, crons, last_message)
-        nudge, exhaustion = _budget(doc, pid, held)
+        owned = _owned_tasks(tasks)
+        counted = {"C": counted_work(owned, None), "W": counted_work(owned, crons)}
+        nudge, exhaustion = _budget(doc, pid, held, counted)
         ps.prune(doc)
         messages.extend(exhaustion)
         out.append(StopDecision(nudge, "\n".join(messages) or None, tuple(held)))
