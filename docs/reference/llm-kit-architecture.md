@@ -8,6 +8,8 @@ Source ownership: the library tree and source tests described below now live in
 the plugin adapter and integration tests and consumes released PyPI wheels.
 Library and plugin releases have independent versions.
 
+Legacy deletion: the llm-scripting-kit, content-pipeline-kit and job-kit plugins were deleted from this repository at the user's direction (migration plan section 7). This document is the design record of the consolidation; passages describing coexistence with, copying from, or freezing those plugins describe the migration period, not the present layout.
+
 ## Decision summary
 
 - Create one published plugin, llm-kit, with one release version and one library, llm_kit.

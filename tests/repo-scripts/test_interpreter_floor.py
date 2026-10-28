@@ -57,7 +57,7 @@ def _llm_kit_is_tracked() -> bool:
 def test_the_caller_set_is_the_known_one():
     """A consistency check on the detector: a new caller must be seen."""
     known = {
-        "awesome-kit", "cache-kit", "content-pipeline-kit", "git-kit", "hue-kit",
+        "awesome-kit", "cache-kit", "git-kit", "hue-kit",
         "p4-kit", "presence-kit", "skills-kit", "task-kit", "unreal-kit",
     }
     if _llm_kit_is_tracked():

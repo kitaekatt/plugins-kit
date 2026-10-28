@@ -1,1 +1,0 @@
-{"input":{"approved":true},"interrupt_id":"1","kind":"approval","outcome":"answered","payload":{"action":"push release tag"},"resolved_at":"2030-03-17T17:46:40Z","schema":"job-kit.interrupt-resolution/v1"}

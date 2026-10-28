@@ -46,7 +46,7 @@ All downloads are over HTTPS from official upstream release pages:
 
 ## Network use by other plugins
 
-- **llm-scripting-kit** -- only when you configure an API key: for an
+- **llm-kit** -- only when you configure an API key: for an
   OpenRouter endpoint it validates the key against `GET /auth/key` at
   `openrouter.ai` (other endpoints use a `GET /models` probe, or skip when
   `account_check: none`) and caches a hash of the validation result locally. No

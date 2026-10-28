@@ -253,11 +253,9 @@ def test_the_shipped_policy_resolves_every_routing_entry():
         / "plugins/awesome-kit/skills/orchestrate/defaults/orchestration.yaml"
     )
     policy = yaml.safe_load(policy_path.read_text(encoding="utf-8"))
-    registry = (
-        Path(__file__).resolve().parents[2]
-        / "plugins/llm-scripting-kit/lib/llm_scripting_kit/default_config.yaml"
-    )
-    entries = yaml.safe_load(registry.read_text(encoding="utf-8"))["endpoints"]
+    from llm_kit.registry.models import DEFAULT_MODEL_CONFIG
+
+    entries = DEFAULT_MODEL_CONFIG["endpoints"]
     probes = _CHECKER.collect_probes(policy, policy_path, model_entries=entries)
     unresolved = [
         (probe.where, probe.extra) for probe in probes

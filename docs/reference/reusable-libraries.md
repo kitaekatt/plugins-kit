@@ -20,25 +20,15 @@ Harness layers may add optional native ergonomics, automation, richer presentati
 
 **More:** [`plugins/bootstrap/README.md`](../../plugins/bootstrap/README.md), [`plugins/bootstrap/bootstrap_lib/`](../../plugins/bootstrap/bootstrap_lib/), and the bootstrap skill's [`engine-internals.md`](../../plugins/bootstrap/skills/bootstrap/references/engine-internals.md).
 
-## `llm_scripting_kit`
+## `llm_kit`
 
-**Capability:** Resolve named models and endpoints, API keys, and OpenAI-compatible clients; probe endpoint/account health; invoke completion-shaped work across HTTP, Claude, Codex, and OpenCode backends; classify persistent halt conditions; and adapt configured harness endpoints.
+**Capability:** LLM access (named models and endpoints, API keys, OpenAI-compatible clients, endpoint/account health, completion-shaped work across HTTP, Claude, Codex and OpenCode backends, persistent-halt classification), durable agent jobs, and project-independent building blocks for LLM-in-the-loop batch content pipelines (stores, freshness, validation, model calls and accounting, stages, durable execution state, delivery, audit, human review round trips, CLI scaffolding, and a VCS seam).
 
-**Use when:** A script or pipeline needs model selection and invocation without binding its own configuration, credentials, or transport layer.
+**Use when:** A script or pipeline needs model selection and invocation, durable supervised agent jobs, or reusable batch-content seams, without binding its own configuration, credentials, transport or monolithic pipeline.
 
-**Entry points:** The supported root exports are declared in `llm_scripting_kit.__all__`, including `get_api_key`, `make_openai_client`, `resolve_endpoint`, `resolve_model`, registry resolution, harness adapters, backend types, and halt classification. `llm_scripting_kit.completion` declares the completion seam and backend factory in its own `__all__`.
+**Entry points:** The library is the released `katsoft-llm-kit` package (source in katsoft-libs). Import from the relevant subpackage, such as `llm_kit.completion`, `llm_kit.registry`, `llm_kit.adapters`, `llm_kit.dispatch`, `llm_kit.jobs`, or `llm_kit.pipeline`; each declares its own public surface, and `plugins/llm-kit/contract/public-surface.json` lists the public pipeline names.
 
-**More:** [`plugins/llm-scripting-kit/README.md`](../../plugins/llm-scripting-kit/README.md), [`llm_scripting_kit/__init__.py`](../../plugins/llm-scripting-kit/lib/llm_scripting_kit/__init__.py), and [`completion/__init__.py`](../../plugins/llm-scripting-kit/lib/llm_scripting_kit/completion/__init__.py).
-
-## `content_pipeline`
-
-**Capability:** Project-independent building blocks for LLM-in-the-loop batch content systems: attributed stores, content-hash freshness, validation, context providers, model calls and accounting, pipeline stages, durable execution state, delivery, audit, human review round trips, CLI scaffolding, and a VCS seam.
-
-**Use when:** A project processes many authored units through generation, validation, review, and delivery and needs reusable seams rather than a monolithic project-specific pipeline.
-
-**Entry points:** The package root intentionally re-exports nothing. Import from the relevant subpackage, such as `content_pipeline.store`, `freshness`, `validate`, `providers`, `llm`, `pipeline`, `execution`, `deliver`, `audit`, `roundtrip`, `cli`, or `vcs`. Each subpackage `__init__.py` identifies its advertised surface and dependency boundary; use direct module imports where that file specifies them.
-
-**More:** [`content_pipeline/__init__.py`](../../plugins/content-pipeline-kit/lib/content_pipeline/__init__.py) and the subpackage documentation under [`content_pipeline/`](../../plugins/content-pipeline-kit/lib/content_pipeline/).
+**More:** [`plugins/llm-kit/README.md`](../../plugins/llm-kit/README.md), [`plugins/llm-kit/CLAUDE.md`](../../plugins/llm-kit/CLAUDE.md), and [`llm-kit-architecture.md`](llm-kit-architecture.md).
 
 ## `p4kit_vcs`
 

@@ -51,7 +51,7 @@ review; recall alone cannot see that.
 
 ## Arms
 
-- An llm-scripting-kit endpoint id (e.g. `qwen38-5090-harness`) runs through
+- An llm-kit endpoint id (e.g. `qwen38-5090-harness`) runs through
   `plugins/git-kit/scripts/run_review_lane.py`.
 - An Agent-tool alias (`sonnet`, `opus`) CANNOT run through that script -- it
   exits 2 on an alias by design. The harness emits a ready-to-send prompt file

@@ -212,8 +212,8 @@ keyword list and the refusal rule are in `references/completion-seam-contract.md
 schema file, checks it with `check_schema`, reads UTF-8 stdin to EOF and prints
 one protocol-1 result object. It never resolves an endpoint, reads a registry or
 calls a network. The CLI owns only argument, stream, exit-code and serialization
-handling; repair decisions and schema support stay in `json_repair.py` and
-`json_schema.py`. Never loosen the one-fit rule: a repaired document is applied
+handling; repair decisions and schema support stay in `llm_kit.schema.json_repair` and
+`llm_kit.schema.json_schema`. Never loosen the one-fit rule: a repaired document is applied
 only when exactly one fits the schema.
 
 ## `llm_kit.registry`: declarations, credentials, configuration

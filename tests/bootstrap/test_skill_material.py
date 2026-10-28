@@ -30,16 +30,9 @@ MODULE_PATH = Path(sm.__file__)
 REPO_ROOT = MODULE_PATH.parents[3]
 REPO_SKILLS = sorted(REPO_ROOT.glob("plugins/*/skills/*/SKILL.md"))
 
-# Skill names that intentionally exist in two plugins: (name, legacy plugin,
-# llm-kit). llm-kit carryover during the legacy freeze; remove an entry when
-# the legacy plugin is deleted.
-EXPECTED_DUPLICATE_SKILLS = frozenset({
-    ("background-pipeline", "content-pipeline-kit", "llm-kit"),
-    ("content-pipeline-domain", "content-pipeline-kit", "llm-kit"),
-    ("execute-work-unit", "content-pipeline-kit", "llm-kit"),
-    ("workflow-pipeline", "content-pipeline-kit", "llm-kit"),
-    ("openrouter-account", "llm-scripting-kit", "llm-kit"),
-})
+# Skill names that intentionally exist in two plugins: (name, first plugin,
+# second plugin). None are expected.
+EXPECTED_DUPLICATE_SKILLS: frozenset = frozenset()
 
 BIG = 1_000_000
 

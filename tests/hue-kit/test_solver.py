@@ -104,9 +104,8 @@ class TestDeterministicTies:
     def _env(self, seed):
         env = dict(os.environ)
         env["PYTHONHASHSEED"] = str(seed)
-        # job-kit's suite sets the skip variable process-wide
-        # (tests/job-kit/conftest.py) to block ITS OWN scripts' re-exec during
-        # ITS tests; a real subprocess launched here is not a re-exec and must
+        # a suite that sets the skip variable process-wide (as tests/llm-kit/conftest.py
+        # does) blocks its own scripts' re-exec; a real subprocess launched here is not a re-exec and must
         # not inherit that opt-out, or scene-layers.py runs under the bare venv
         # (no requests/yaml) instead of the hue-kit plugin venv.
         env.pop("_BOOTSTRAP_GUARD_VENV_REEXEC", None)

@@ -1195,11 +1195,6 @@ _USER_STATE = (
     "user state, intentionally on the production path: the statusline is installed once per user into "
     "settings.json and its synced script lives under the canonical data root"
 )
-_HUMAN_CONTRACT = (
-    "the human CLI contract: llm_scripting_kit.constants.CLI_COMMAND is the stable path a person types, pinned "
-    "by tests/llm-scripting-kit/test_cli_command_contract.py; agent-facing text uses cli_command(), which "
-    "returns the redirect-aware form under claudx"
-)
 _GUARD_DOC = (
     "the docstring of the vendored bootstrap_guard.py, which names the production log location; its code "
     "resolves the data root through CLAUDE_BOOTSTRAP_DATA_ROOT (data_dir), so the text is a description"
@@ -1239,12 +1234,6 @@ EXEMPT: list[Exempt] = [
     *_p("plugins/claude-ui-kit/skills/statusline/SKILL.md", _USER_STATE,
         "(equivalently the plugin's `~/.claude/plugins/data/plugins-kit/claude-ui-kit/bootstrap.log`)",
         "(or the plugin's bootstrap.log)"),
-    *_p("plugins/llm-scripting-kit/README.md", _HUMAN_CONTRACT,
-        "~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.venv/bin/llm-scripting-kit",
-        "(Windows: ~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.venv/Scripts/llm-scripting-kit.exe)"),
-    *_p("plugins/llm-scripting-kit/lib/llm_scripting_kit/constants.py", _HUMAN_CONTRACT, "CLI_COMMAND ="),
-    *_p("plugins/llm-scripting-kit/skills/openrouter-account/SKILL.md", _RECORD_PROSE,
-        "~/.claude/plugins/data/plugins-kit/llm-scripting-kit/deferred_requirements.json"),
     *_p("plugins/unreal-kit/skills/ue-python-api/SKILL.md", _RECORD_PROSE,
         "~/.claude/plugins/data/plugins-kit/unreal-kit/deferred_requirements.json"),
     *_p("plugins/unreal-kit/skills/ue-python-api/references/script-bootstrap.md",
@@ -1263,14 +1252,6 @@ EXEMPT: list[Exempt] = [
     Exempt("P", "plugins/bootstrap/scripts/diagnose-python-venv.sh", "VENV_DIR",
            "a diagnostic a human runs against the REAL machine to inspect the production venvs (bootstrap "
            "and unreal-kit); it is meant to read the production tree and launches no plugin script"),
-    Exempt("P", "plugins/llm-scripting-kit/scripts/frontdoor.sh", "DEFAULT_PY",
-           "a long-running LAN service a person starts outside any Claude session; the code it serves comes "
-           "from this checkout's lib/ through PYTHONPATH, and only third-party packages come from the "
-           "production venv"),
-    Exempt("P", "plugins/llm-scripting-kit/scripts/model-server.sh", "default_py",
-           "the swapper launch guard runs the production venv's python on llm_scripting_kit_cli.py, which "
-           "calls reexec_under_plugin_venv, so under claudx it moves into the redirected venv or exits 2",
-           check=lambda tree: _target_guarded(tree, "plugins/llm-scripting-kit/scripts/llm_scripting_kit_cli.py")),
     # ---- S: launches the scan cannot resolve to a plugin script, by design ----
     Exempt("S", "plugins/CLAUDE.md", "<script>.py",
            "a template in maintainer prose: `<script>` stands for any guarded script of a plugin"),
@@ -1731,15 +1712,6 @@ def test_an_exemption_covers_its_own_line_and_not_a_second_literal_in_the_file(p
     assert flagged, f"{path}: an exemption swallowed a second production literal"
 
 
-def test_an_exemption_that_rests_on_a_guarded_target_fails_when_the_target_loses_its_guard():
-    tree = real_tree()
-    target = "plugins/llm-scripting-kit/scripts/llm_scripting_kit_cli.py"
-    shell = "plugins/llm-scripting-kit/scripts/model-server.sh"
-    assert not scan_file(tree, shell).problems
-    problems = scan_file(break_target(tree, target), shell).problems
-    assert any("stated reason fails" in p.message for p in problems), _fmt(problems)
-
-
 # ---- every form finds a real instance --------------------------------------------
 
 
@@ -1762,14 +1734,13 @@ def test_every_form_has_a_real_instance():
                      "<pluginRoot>", "${inputs.pluginRoot}", "{{ inputs.pluginRoot }}", "${args.pluginRoot}"]:
         assert any(spelling in t for t in texts), f"no launch spelled with {spelling}"
     assert _D_BLOCKS, "no placeholder definition block"
-    assert _OK_CONSOLES, "no guarded console script"
     assert any(p.endswith(".cmd") for p in _SHIMS) and any(not p.endswith(".cmd") for p in _SHIMS)
     assert _REDIRECT_LAUNCHERS
 
 
 def test_the_scan_sees_files_in_every_shipped_plugin_dir():
     scanned = {plugin_of(p) for p in _REAL.files}
-    assert {"bootstrap", "git-kit", "job-kit", "llm-scripting-kit", "pdf-kit", "unreal-kit", "workflow-kit"} <= scanned
+    assert {"bootstrap", "git-kit", "llm-kit", "pdf-kit", "unreal-kit", "workflow-kit"} <= scanned
 
 
 # ---- mutation: restore a production literal -------------------------------------
@@ -1920,31 +1891,6 @@ def test_a_guard_placed_after_the_foreign_import_is_flagged_as_late():
     late = text.replace(call, "") + "\n" + call
     verdict = guard_verdict(tree.with_text(_COMPILE, late), _COMPILE)
     assert verdict.state == "late" and "yaml" in verdict.detail
-
-
-# ---- the job-kit console script ----------------------------------------------------------
-
-
-def test_job_kit_cli_main_is_guarded_on_its_console_path():
-    tree = real_tree()
-    entry = next(c for c in console_entries(tree) if c.name == "job-kit")
-    assert console_problem(tree, entry) is None
-    assert not any(e.kind == "C" and e.anchor == "job-kit" for e in EXEMPT), "job-kit needs no exemption"
-
-
-def test_unguarding_job_kit_cli_main_reopens_its_console_finding():
-    """MUTATION: remove the guard, or move it off the ``argv is None`` path."""
-    tree = real_tree()
-    entry = next(c for c in console_entries(tree) if c.name == "job-kit")
-    text = tree.text(entry.module_path)
-    call = '        reexec_under_plugin_venv("job-kit")\n'
-    assert text.count(call) == 1
-    removed = tree.with_text(entry.module_path, text.replace(call, "        pass\n"))
-    assert "never calls" in (console_problem(removed, entry) or "")
-    head = "    if argv is None:\n"
-    assert text.count(head) == 1
-    off_path = tree.with_text(entry.module_path, text.replace(head, "    if True:\n"))
-    assert "argv is None" in (console_problem(off_path, entry) or "")
 
 
 # ---- the llm-kit console script ----------------------------------------------------------

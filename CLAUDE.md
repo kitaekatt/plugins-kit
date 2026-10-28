@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**plugins-kit** is the **development repository** (source of truth) for the plugins-kit Claude Code marketplace. It contains the source code for all plugins in the marketplace. Published plugins: **awesome-kit** (plugin-ecosystem poster, orchestrate, debug-context, verbose-updates), **bootstrap** (dependency management), **bootstrap-stuck-fix** (temporary remediation shim for a wedged bootstrap registry record), **cache-kit** (cache-usage reporting from transcripts), **claude-ui-kit** (status line + /statusline), **content-pipeline-kit** (FROZEN, a pointer release to llm-kit whose deletion is the user's call; library + skills for LLM-in-the-loop batch content pipelines), **git-kit** (Git/GitHub multi-agent code review + gh bootstrap), **hue-kit** (Philips Hue layered-scene framework: bridge sync, YAML scenes, meta-group solver), **llm-scripting-kit** (FROZEN, a pointer release to llm-kit whose deletion is the user's call; LLM key resolution, shared model registry, and named OpenAI-compatible endpoints -- OpenRouter is the default endpoint; importable package `llm_scripting_kit`, CLI `llm-scripting-kit`), **p4-kit** (Perforce multi-agent code review), **pdf-kit** (HTML-to-PDF via headless Chromium), **presence-kit** (whether the user is at the keyboard, away or has handed work over, and how Claude waits, asks and recaps because of it: afk, autonomous and recap skills plus a Stop hook), **relaunch-kit** (restart Claude Code for real: the `clauder` launcher resumes the session or starts a hand-off session in the same terminal, the `/restart` skill, and a hooks module that requests the exit), **secrets-kit** (fleet secrets provisioning), **skills-kit** (verb x artifact authoring/audit matrix for skills + CLAUDE.md, folded into a single domain-skill: /md-domain, plus knowledge-encoding, update-documentation, materialized-output), **task-kit** (file-backed task folders: the `task` skill and its CLI), **unreal-kit** (Unreal Engine Python API automation), **workflow-kit** (declarative .workflow.yaml compiler and node strategies), **job-kit** (FROZEN, a pointer release to llm-kit whose deletion is the user's call; durable sequential agent-job runner), and **llm-kit** (consolidation of llm-scripting-kit, job-kit and content-pipeline-kit under the library `llm_kit`, released as the `katsoft-llm-kit` package; design `docs/reference/llm-kit-architecture.md`, plans `docs/planning/llm-kit/implementation-plan.md` and `docs/planning/llm-kit/migration-plan.md`; the library source and source tests live in [katsoft-libs](https://github.com/kitaekatt/katsoft-libs); this repository's plugin and integration tests consume released PyPI packages; the user authorized publishing llm-kit at any time without asking (2026-10-17), there is no stability gate: consumers migrate and old plugins freeze without asking, because the user is the only user (user ruling 2026-10-17); only deleting the old plugins is the user's call). Dev-only (not published, `published: false`): **prototypes** (inactive experimental nursery/archive) and **yaml-data-editor-kit**.
+**plugins-kit** is the **development repository** (source of truth) for the plugins-kit Claude Code marketplace. It contains the source code for all plugins in the marketplace. Published plugins: **awesome-kit** (plugin-ecosystem poster, orchestrate, debug-context, verbose-updates), **bootstrap** (dependency management), **bootstrap-stuck-fix** (temporary remediation shim for a wedged bootstrap registry record), **cache-kit** (cache-usage reporting from transcripts), **claude-ui-kit** (status line + /statusline), **git-kit** (Git/GitHub multi-agent code review + gh bootstrap), **hue-kit** (Philips Hue layered-scene framework: bridge sync, YAML scenes, meta-group solver), **p4-kit** (Perforce multi-agent code review), **pdf-kit** (HTML-to-PDF via headless Chromium), **presence-kit** (whether the user is at the keyboard, away or has handed work over, and how Claude waits, asks and recaps because of it: afk, autonomous and recap skills plus a Stop hook), **relaunch-kit** (restart Claude Code for real: the `clauder` launcher resumes the session or starts a hand-off session in the same terminal, the `/restart` skill, and a hooks module that requests the exit), **secrets-kit** (fleet secrets provisioning), **skills-kit** (verb x artifact authoring/audit matrix for skills + CLAUDE.md, folded into a single domain-skill: /md-domain, plus knowledge-encoding, update-documentation, materialized-output), **task-kit** (file-backed task folders: the `task` skill and its CLI), **unreal-kit** (Unreal Engine Python API automation), **workflow-kit** (declarative .workflow.yaml compiler and node strategies), and **llm-kit** (consolidation of the former llm-scripting-kit, job-kit and content-pipeline-kit plugins (deleted) under the library `llm_kit`, released as the `katsoft-llm-kit` package; design `docs/reference/llm-kit-architecture.md`, plans `docs/planning/llm-kit/implementation-plan.md` and `docs/planning/llm-kit/migration-plan.md`; the library source and source tests live in [katsoft-libs](https://github.com/kitaekatt/katsoft-libs); this repository's plugin and integration tests consume released PyPI packages; the user authorized publishing llm-kit at any time without asking (2026-10-17), there is no stability gate (user ruling 2026-10-17); the old plugins were deleted at the user's direction). Dev-only (not published, `published: false`): **prototypes** (inactive experimental nursery/archive) and **yaml-data-editor-kit**.
 
 This repo is a **Claude Code plugin marketplace** -- it extends Claude Code with skills, commands, and hooks via the `.claude-plugin/marketplace.json` manifest. Plugins are loaded either via `--plugin-dir` (local development) or `enabledPlugins` in settings (production installs from the remote repo).
 
@@ -292,7 +292,7 @@ the remaining known escapes:
 
 **Bypassable at your discretion.** This is a default, not a hard gate. Trivial changes -- a version-only bump, a doc/CLAUDE.md edit, a single-file mechanical fix -- don't need a smoke session; skip it and say so. An unambiguous publish go-signal does not silently waive validation, but you may explicitly bypass when the change can't plausibly break a runtime surface.
 
-**A nested `claude -p` child under a scratch HOME/USERPROFILE is not logged in.** The macOS keychain lookup follows HOME, so a child launched that way exits with "Not logged in", and copying only the non-secret `oauthAccount` section of `~/.claude.json` does not fix it. The permission classifier refuses keychain workarounds -- symlinking `~/Library/Keychains` into the scratch HOME, a metadata-only `security find-generic-password` probe -- as credential access, even under owner authorization. What works: an owner-generated `claude setup-token` token passed only as the child's `CLAUDE_CODE_OAUTH_TOKEN` environment variable, never written to disk. A real HOME is not a safe substitute -- llm-scripting-kit's usage-verdict cache and the Codex sessions directory both derive from `Path.home()`, so a real HOME reads and writes real quota state and real session history regardless of other config variables. Worked example: docs/planning/quota-resilient-dispatch/drill-report.md (Layer B, 2026-09-24).
+**A nested `claude -p` child under a scratch HOME/USERPROFILE is not logged in.** The macOS keychain lookup follows HOME, so a child launched that way exits with "Not logged in", and copying only the non-secret `oauthAccount` section of `~/.claude.json` does not fix it. The permission classifier refuses keychain workarounds -- symlinking `~/Library/Keychains` into the scratch HOME, a metadata-only `security find-generic-password` probe -- as credential access, even under owner authorization. What works: an owner-generated `claude setup-token` token passed only as the child's `CLAUDE_CODE_OAUTH_TOKEN` environment variable, never written to disk. A real HOME is not a safe substitute -- llm-kit's usage-verdict cache and the Codex sessions directory both derive from `Path.home()`, so a real HOME reads and writes real quota state and real session history regardless of other config variables. Worked example: docs/planning/quota-resilient-dispatch/drill-report.md (Layer B, 2026-09-24).
 
 ### Anti-pattern: creating a branch, or switching the one that is checked out
 
@@ -497,9 +497,9 @@ syncs a venv the caller never meant; see "Python interpreter variables"
 below for what those call sites use instead.
 
 **Scoped exception: Python CLI launcher shims.** `uv run python` resolves the
-venv from the CWD, so a launcher a user invokes from any directory -- the seven
-Python-invoking `plugins/<name>/bin/` shims (hue-kit, job-kit, llm-kit,
-llm-scripting-kit, relaunch-kit's `clauder`, secrets-kit, task-kit) and their `.cmd` twins -- would pick up the
+venv from the CWD, so a launcher a user invokes from any directory -- the five
+Python-invoking `plugins/<name>/bin/` shims (hue-kit, llm-kit,
+relaunch-kit's `clauder`, secrets-kit, task-kit) and their `.cmd` twins -- would pick up the
 wrong environment, or none. Those shims resolve an absolute interpreter
 instead, and the order depends on whether the CLI needs a plugin venv:
 
@@ -510,25 +510,21 @@ instead, and the order depends on whether the CLI needs a plugin venv:
   absent and the variable's own realpath resolves inside the standalone
   directory (a stranger's `BOOTSTRAP_PYTHON` must never substitute for the file
   the shim was written to find); then PATH.
-- job-kit, llm-kit, llm-scripting-kit and task-kit name a plugin venv and take it FIRST, from its
+- llm-kit and task-kit name a plugin venv and take it FIRST, from its
   version-independent `~/.claude/plugins/data/<marketplace>/<plugin>/.venv/`
-  path. job-kit, llm-kit and task-kit then try the validated `BOOTSTRAP_PYTHON`, then
-  PATH.
-  llm-scripting-kit then tries the standalone path (no third-party
-  packages, so the CLI warns and uses the shipped model baseline), the
-  validated `BOOTSTRAP_PYTHON`, then PATH.
+  path. They then try the validated `BOOTSTRAP_PYTHON`, then PATH.
 
 POSIX shims fall back to `python3`, then `python`; `.cmd` shims fall back to
 `python.exe`. The absolute-path preference avoids the Windows Store stub when
 the preferred interpreter exists, but the PATH fallback can still resolve it.
 
 Two refusals sit in front of that order. When `CLAUDE_BOOTSTRAP_DATA_ROOT` is
-set (a claude-plugin-test session), job-kit, llm-kit, llm-scripting-kit and task-kit take
+set (a claude-plugin-test session), llm-kit and task-kit take
 `$CLAUDE_BOOTSTRAP_DATA_ROOT/plugins-kit/<plugin>/.venv/` as the only venv
 candidate and exit 2 when that interpreter is missing: they never fall back to
 the production venv, which holds the installed release, or to anything later in
 the chain. With the variable unset the order above is unchanged. Separately,
-all seven shims exit 2 when `CLAUDE_PLUGIN_TEST` is set and the shim itself runs
+all five shims exit 2 when `CLAUDE_PLUGIN_TEST` is set and the shim itself runs
 from the plugin cache, because that copy is the installed release and the
 session tests the working copy. task-kit's shim is also the launcher copy that
 bootstrap syncs into the plugin's data directory `bin/` and puts on PATH (so
@@ -541,9 +537,7 @@ syncs `bin` and `lib` to the data directory (the shim finds the launcher as
 refused under `CLAUDE_PLUGIN_TEST` too. Only the cache of the marketplace named in
 `CLAUDE_PLUGIN_TEST_MARKETPLACE` is refused, and every cache path when it is
 unset, the same scope as `bootstrap_lib.env_var_check.cache_root_refusal`.
-Guard: `tests/repo-scripts/test_launcher_shim_data_root_redirect.py`. The
-llm-scripting-kit's `bin/qwen3*-server` scripts are outside this exception -- they invoke
-`model-server.sh`, not Python.
+Guard: `tests/repo-scripts/test_launcher_shim_data_root_redirect.py`.
 
 Outside these two exceptions, every other FORCED call site -- bootstrap or
 recovery code that produces the interpreter itself, Claude Code hook scripts

@@ -25,7 +25,7 @@ on; those are shipped with the bootstrap skill and are cited where they apply:
 ## Vocabulary
 
 **Owner** -- the plugin that declares `shared_libs` and ships the library
-(`llm-scripting-kit` ships `llm_scripting_kit`).
+(for example, a plugin that ships a first-party library such as `skills_kit_lib`).
 
 **Consumer** -- the plugin that declares `shared_lib_imports` and imports it.
 
@@ -118,9 +118,8 @@ diagnostics, and diagnostics are not disclosure.
 ## Mechanics: REQUIRED
 
 - `bootstrap.json`: `plugins[]` entry for the owner with `install: "auto"`,
-  and `shared_lib_imports` naming the library. content-pipeline-kit's
-  `bootstrap.json` is the worked example, and its `$comment` states the
-  distinction from the action-triggered pattern.
+  and `shared_lib_imports` naming the library. See the manifest reference for the
+  `$comment` convention that states the distinction from the action-triggered pattern.
 - `plugin.json` `dependencies`: only `bootstrap` is universal
   (`plugins/CLAUDE.md`, "Plugin dependencies on bootstrap"). Adding the owner
   there is permitted for a REQUIRED dependency and makes Claude Code install
@@ -148,10 +147,9 @@ diagnostics, and diagnostics are not disclosure.
 - `pyproject.toml` third-party packages. The completeness test follows a
   first-party import into the library REGARDLESS of a `try/except ImportError`
   around it, and exempts a guarded third-party leaf only in the consumer's own
-  files. So a consumer of `llm_scripting_kit` must declare `openai` even when
+  files. So a consumer of a library that guards `openai` must declare `openai` even when
   it never reaches a transport. Two shapes satisfy the test:
-  - a hard dependency (awesome-kit, content-pipeline-kit, job-kit,
-    workflow-kit): provisioned for everyone; costs an SDK install on machines
+  - a hard dependency (awesome-kit, workflow-kit): provisioned for everyone; costs an SDK install on machines
     that never use it.
   - an optional extra (git-kit, p4-kit: `endpoint-dispatch = ["openai"]`):
     provisioned only when the plugin's OWN `bootstrap.json` lists it under
@@ -175,10 +173,9 @@ diagnostics, and diagnostics are not disclosure.
    For a module that imports, probe the frontier symbol (`getattr` /
    `hasattr`, or a `from` import whose `ImportError` is caught separately
    from the module import). A missing frontier symbol is "too old or stale",
-   never "not installed". job-kit's `lib/job_kit/select.py`
-   (`SharedLibTooOldError`) is the worked example: absent propagates as the
-   plain `ModuleNotFoundError`; present-but-missing-a-symbol is diagnosed by
-   name with the owner version the symbol first shipped in.
+   never "not installed". Absent propagates as the plain `ModuleNotFoundError`;
+   present-but-missing-a-symbol is diagnosed by name with the owner version the
+   symbol first shipped in.
 3. **Probe the frontier, not a convenient symbol.** A probe on a symbol older
    than a hard import elsewhere in the same file protects against a skew that
    cannot occur. When a hard import of a newer symbol sits on the same path,
@@ -225,7 +222,6 @@ artifact, not only under a diagnostic flag.
 | git-kit / p4-kit (md-domain claim) | DEGRADE | Skill probes for the skill by name, degrades, and notes the degradation in one line of the review. | -- |
 | awesome-kit `orchestration_guidance.py` | DEGRADE | Feature-detected by frontier symbols (`discover_model_entries`, `HARNESS_KIND`, `resolve_harness_adapter`); config-literal fallback is disclosed as a note; states 2 and 3 are handled by the same probe. Absent and too-old carry distinct wordings, each naming the owner plugin and a `claude plugin install` / `update` command, and the notes are rendered into the policy under a `Degraded render.` heading rather than only under `--explain`. | -- |
 | workflow-kit `openrouter_run.py` | REFUSE | Names the owner plugin. | Does not distinguish state 2; no frontier probe. |
-| job-kit `select.py` | REFUSE | Distinguishes absent from too old, names version and command. | -- |
 
 ## Reviewer checklist
 

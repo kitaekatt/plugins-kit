@@ -3,7 +3,7 @@
 Both native Agent lanes and endpoint lanes use the same prepared review bundle
 to verify reviewer_a citations against the CLAUDE.md chain that governs the
 reported file. This module stays LLM-neutral so every code-review kit can call
-it without depending on llm-scripting-kit.
+it without depending on llm-kit.
 """
 
 from __future__ import annotations

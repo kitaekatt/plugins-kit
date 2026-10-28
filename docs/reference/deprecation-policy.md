@@ -31,7 +31,7 @@ release.
 
 ## Evidence
 
-Removals that shipped without a shim: content-pipeline-kit 0.25.0
+Removals that shipped without a shim: content-pipeline-kit 0.25.0 (now part of llm-kit)
 (`backends.BACKEND_ENV`, 4ad89c1c), 0.28.0 (`cli.budget.guarded_sweep`,
 6fd94fcf; `RunAdapter.reconcile`, 9916e7ad), and p4-kit 0.39.0, where
 `owning_changeset` began to raise (cef63379). Each broke a consumer at import
@@ -40,19 +40,19 @@ or call time with no earlier signal.
 ## Contract listing
 
 A kit that publishes a library keeps a machine-readable listing of its public
-surface so authors and consumers see the same facts. content-pipeline-kit is
+surface so authors and consumers see the same facts. llm-kit is
 the reference implementation:
 
-- Listing: `plugins/content-pipeline-kit/contract/public-surface.json`.
+- Listing: `plugins/llm-kit/contract/public-surface.json`.
   JSON, one entry per line, each `{"name", "status", ...}` where `name` is a
   dotted `module.name` or `module.Class.attr`.
   - `public`
   - `deprecated` with `since`, `remove_after`, `replacement`
   - `removed` with `since`, `replacement`
-- Consumer checker: `plugins/content-pipeline-kit/scripts/check_consumer_contract.py`,
+- Consumer checker: `plugins/llm-kit/scripts/check_consumer_contract.py`,
   stdlib only. It scans a consumer's source for deprecated or removed names and
   exits 1 when a removed name is used.
-- Guard: `tests/content-pipeline-kit/test_public_surface_contract.py`. A public
+- Guard: `tests/llm-kit/test_consumer_contract.py`. A public
   or deprecated name that no longer resolves fails; a removed name that resolves
   again fails; a deprecated entry past `remove_after` fails; a name exported in
   a module's `__all__` but absent from the listing fails.

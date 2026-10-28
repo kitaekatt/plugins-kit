@@ -12,7 +12,7 @@ apart silently, reviewing the same diff by two different standards.
 
 So the text lives HERE, once, and both paths consume it:
 
-  * the endpoint path imports it (``llm_scripting_kit.review_lane``);
+  * the endpoint path imports it (``llm_kit.dispatch.review_lane``);
   * the Agent path gets it rendered into both SKILL.md files by
     ``scripts/gen_code_review_skills.py``, whose output is pinned byte-for-byte
     by ``tests/bootstrap/code_review/test_skill_drift.py``.
@@ -21,11 +21,11 @@ Editing a prompt here and not regenerating therefore FAILS THE SUITE, which is
 the property we want: the two dispatch paths cannot disagree by accident.
 
 DELIBERATELY NO SEAM IMPORT. This module is data plus pure functions --
-stdlib only, no ``llm_scripting_kit``, no ``openai``. ``bootstrap_lib`` is
+stdlib only, no ``llm_kit``, no ``openai``. ``bootstrap_lib`` is
 linked into many plugin venvs that will never make an LLM call, and importing a
 completion transport here would make ``openai`` a transitive requirement of the
 BOOTSTRAP plugin itself -- the one every other plugin depends on. The seam call
-therefore lives in ``llm_scripting_kit.review_lane``. Each code-review kit
+therefore lives in ``llm_kit.dispatch.review_lane``. Each code-review kit
 vendors only the ``scripts/run_review_lane.py`` wrapper that sets up bootstrap
 and probes the shared module. The boundary is enforced by
 ``tests/bootstrap/test_dependency_completeness.py`` and asserted directly by
@@ -50,7 +50,7 @@ from bootstrap_lib.model_declaration import CORE_IDS
 
 # The Agent tool's model enum. A `model` value in a resolved review profile that
 # is one of these names the NATIVE path (an Agent subagent);
-# anything else is read as an llm-scripting-kit endpoint id and dispatched
+# anything else is read as an llm-kit endpoint id and dispatched
 # through the completion seam. This is the whole override mechanism -- there is
 # no new configuration field, because `model` already exists, is already a
 # free-form string, and is already resolved through the three review-profile
@@ -312,7 +312,7 @@ speculative finding."""
 # and that the lane may therefore stop looking -- an assertion only the CALLER
 # can make good on. The two dispatch paths do not adopt the scan in lockstep
 # (the Agent path is driven by the generated SKILL.md, the endpoint path by
-# llm_scripting_kit.review_lane), so a system prompt carrying this text would
+# llm_kit.dispatch.review_lane), so a system prompt carrying this text would
 # be FALSE for any caller that had not yet started passing findings, and would
 # license a lane to skip a check nothing had run. Travelling with the findings
 # makes the claim true whenever it is made and absent whenever it is not.

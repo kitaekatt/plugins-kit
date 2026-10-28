@@ -45,7 +45,6 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = Path(__import__("llm_kit").__file__).resolve().parent
-MAP_PATH = REPO / "tests" / "llm-kit" / "repoint-map.json"
 ARCHITECTURE = REPO / "docs" / "reference" / "llm-kit-architecture.md"
 
 ROOT = "<root>"
@@ -441,13 +440,6 @@ def test_runtime_support_modules_are_classified_and_confined():
     violations = [v for v in scan(PACKAGE_ROOT)
                   if v.rule in ("runtime-imports-llm-kit", "deployment-consumer", "unclassified-source")]
     assert not violations, report(violations)
-
-
-def test_the_map_names_the_same_guard_owner_and_consumers():
-    guard = json.loads(MAP_PATH.read_text(encoding="utf-8"))["guard"]
-    assert guard["module"] == f"llm_kit.{GUARD}"
-    assert guard["owner"] == "cli"
-    assert frozenset(guard["consumers"]) == GUARD_CONSUMERS
 
 
 # --------------------------------------------------------------------------

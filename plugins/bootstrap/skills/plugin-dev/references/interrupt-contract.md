@@ -107,7 +107,7 @@ same for every store.
 A store with no literals of its own uses the shared ones:
 `REQUEST_ENVELOPE_V1` (`plugins-kit.interrupt-request/v1`) and
 `RESOLUTION_ENVELOPE_V1` (`plugins-kit.interrupt-resolution/v1`). A store that
-already has frozen literals keeps them and passes them instead; job-kit's
+already has frozen literals keeps them and passes them instead; the llm-kit job store's
 `job-kit.interrupt-request/v1` is such a literal. Pass fixed literals from
 your own module. Do not take any of the three from your caller.
 
@@ -325,16 +325,16 @@ def _interrupt_contract():
 ```
 
 Probe the validator the same way, with a constant of your own for the
-llm-scripting-kit version that carries the subset (0.56.0 for
+llm-kit version that carries the subset (any release, for
 `llm-scripting-kit.json-schema-subset/v1`):
 
 - `llm_scripting_kit` does not import: absent. Tell the user to run
-  `claude plugin install llm-scripting-kit@plugins-kit`.
+  `claude plugin install llm-kit@plugins-kit`.
 - `llm_scripting_kit.completion.json_schema` does not import, its
   `SUPPORTED_SUBSETS` is missing or lacks the literal, `check_schema` or
   `validate` is not callable, or `check_schema({}, subset=...)` or
   `validate({}, None, subset=...)` does not bind: too old or stale. Tell the
-  user to run `claude plugin update llm-scripting-kit@plugins-kit`.
+  user to run `claude plugin update llm-kit@plugins-kit`.
 
 Hold the subset literal in your own module as a string; do not read it from
 either module for a message. Run both probes before the first write, so that

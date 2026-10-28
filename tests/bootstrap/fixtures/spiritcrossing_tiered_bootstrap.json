@@ -30,7 +30,7 @@
       "install": "auto"
     },
     {
-      "ref": "plugins-kit:llm-scripting-kit",
+      "ref": "plugins-kit:llm-kit",
       "install": "auto"
     },
     {

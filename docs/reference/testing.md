@@ -167,28 +167,24 @@ item names the tests that pin it.
   `CLAUDE_PLUGIN_TEST_DIRS` and raises `ClaudxPropagationError` when the child's
   `CLAUDE_PLUGIN_TEST`, `CLAUDE_BOOTSTRAP_DATA_ROOT` or `CLAUDE_PLUGIN_TEST_DIRS`
   differs from the parent's, so a well-formed but different directory list is
-  refused rather than honoured. The `claude -p` argv of llm-scripting-kit's
-  `ClaudeCliBackend` and job-kit's claude contract commands carry the parent's set.
+  refused rather than honoured. The `claude -p` argv of the llm-kit library's
+  `ClaudeCliBackend` and its jobs' claude contract commands carry the parent's set.
   `claude --bg` and `claude respawn` are refused under claudx, because a background
   supervisor's environment and plugin flags are not carried over. Outside claudx
-  the argv is unchanged. Pinned by `tests/bootstrap/test_claudx_nested.py`,
-  `tests/llm-scripting-kit/test_claude_backend_claudx.py`,
-  `tests/job-kit/test_run_claudx.py` and
-  `tests/content-pipeline-kit/test_claude_bg_claudx.py`;
+  the argv is unchanged. Pinned by `tests/bootstrap/test_claudx_nested.py` and the
+  katsoft-libs source tests of the library;
   `tests/repo-scripts/test_nested_claude_sites.py` fails on a code site under
   `plugins/` that names the `claude` executable and is neither wired nor an
   anchored exemption.
-- **Launch paths follow the redirect.** llm-scripting-kit's console script and
-  `plugins/llm-scripting-kit/scripts/llm_scripting_kit_cli.py` re-exec into the redirected venv, and its
-  messages name the redirected console script (`cli_command()`). pdf-kit's
+- **Launch paths follow the redirect.** llm-kit's console script re-execs into the
+  redirected venv, and its messages name the redirected console script. pdf-kit's
   `html_to_pdf.py`, workflow-kit's scripts and unreal-kit's `ue-runner.cmd` take
   the same redirect. Each exits 2 when the redirected interpreter is missing and
-  never falls back to the production venv. The job-kit and llm-scripting-kit
-  shims do the same, and all four Python-invoking shims (hue-kit, job-kit,
-  llm-scripting-kit, secrets-kit) exit 2 when run as the cached copy under
+  never falls back to the production venv. The llm-kit and task-kit
+  shims do the same, and the Python-invoking shims (hue-kit, llm-kit,
+  secrets-kit, task-kit, relaunch-kit) exit 2 when run as the cached copy under
   claudx, with the marketplace scope of the cache-root refusal above. Pinned by
   `tests/repo-scripts/test_launcher_shim_data_root_redirect.py`,
-  `tests/llm-scripting-kit/test_cli_redirect.py`,
   `tests/pdf-kit/test_pdf_entry_redirect.py`,
   `tests/workflow-kit/test_workflow_entry_redirect.py` and
   `tests/unreal-kit/test_interpreter_policy.py`.
@@ -197,7 +193,7 @@ Accepted limits of these containments:
 
 - **No in-repo spawn scrubs the environment, but a consumer's can.** The generic
   runners pass a caller-supplied environment through unchanged.
-  content-pipeline-kit's `compose_worker_environment` copies the parent's
+  llm-kit's `compose_worker_environment` copies the parent's
   environment, then overlays a run's recorded `required_vars` and subtracts an
   adapter's `forbidden_vars` plus the billing-diverting names. No adapter in this
   repo declares `forbidden_vars`, so no in-repo worker loses `CLAUDE_PLUGIN_TEST`

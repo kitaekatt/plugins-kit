@@ -637,29 +637,6 @@ _SHELL_ALLOWLIST: dict[str, AllowlistEntry] = {
         "Prefer the standalone Python bootstrap installs (avoids the WindowsApps",
         "class C launcher shim (Windows); same standalone-first order as the "
         "POSIX shim, same cached-copy refusal under claudx"),
-    "plugins/job-kit/bin/job-kit": AllowlistEntry(
-        "the plugin venv bootstrap provisions -- it has the shared-lib links",
-        "class C launcher shim; the redirected venv when CLAUDE_BOOTSTRAP_DATA_ROOT "
-        "is set (exit 2 when that interpreter is missing, never the production "
-        "venv), else the plugin venv first, then BOOTSTRAP_PYTHON only when its "
-        "realpath is inside the standalone directory, then the PATH-name "
-        "fallback; exits 2 when run as the cached copy under claudx"),
-    "plugins/job-kit/bin/job-kit.cmd": AllowlistEntry(
-        "the plugin venv bootstrap provisions -- it has the shared-lib links",
-        "class C launcher shim (Windows); same venv-first order, same exit 2 on "
-        "a missing redirected venv, same cached-copy refusal under claudx"),
-    "plugins/llm-scripting-kit/bin/llm-scripting-kit": AllowlistEntry(
-        "the plugin venv bootstrap provisions -- it has PyYAML, which the CLI",
-        "class C launcher shim; the redirected venv when CLAUDE_BOOTSTRAP_DATA_ROOT "
-        "is set (exit 2 when that interpreter is missing, never the production "
-        "venv), else the plugin venv first, then the standalone path, then "
-        "BOOTSTRAP_PYTHON only when its realpath is inside the standalone "
-        "directory, then the PATH-name fallback, with the documented "
-        "stdlib-only degrade; exits 2 when run as the cached copy under claudx"),
-    "plugins/llm-scripting-kit/bin/llm-scripting-kit.cmd": AllowlistEntry(
-        "the plugin venv bootstrap provisions -- it has PyYAML, which the CLI",
-        "class C launcher shim (Windows); same venv-first order, same exit 2 on "
-        "a missing redirected venv, same cached-copy refusal under claudx"),
     "plugins/relaunch-kit/bin/clauder": AllowlistEntry(
         'Interpreter order, from root CLAUDE.md "Scoped exception:',
         "class C launcher shim; the standalone path first (no plugin venv: the "
@@ -774,12 +751,6 @@ _PYTHON_ALLOWLIST: dict[str, AllowlistEntry] = {
     "plugins/hue-kit/scripts/bootstrap_guard.py": AllowlistEntry(
         'for rel in (("Scripts", "python.exe"), ("bin", "python"), ("bin", "python3")):',
         _BOOTSTRAP_GUARD_REASON),
-    "plugins/job-kit/lib/bootstrap_guard.py": AllowlistEntry(
-        'for rel in (("Scripts", "python.exe"), ("bin", "python"), ("bin", "python3")):',
-        _BOOTSTRAP_GUARD_REASON),
-    "plugins/llm-scripting-kit/lib/llm_scripting_kit/bootstrap_guard.py": AllowlistEntry(
-        'for rel in (("Scripts", "python.exe"), ("bin", "python"), ("bin", "python3")):',
-        _BOOTSTRAP_GUARD_REASON),
     "plugins/pdf-kit/skills/html-pdf/scripts/bootstrap_guard.py": AllowlistEntry(
         'for rel in (("Scripts", "python.exe"), ("bin", "python"), ("bin", "python3")):',
         _BOOTSTRAP_GUARD_REASON),
@@ -829,16 +800,6 @@ _PYTHON_ALLOWLIST: dict[str, AllowlistEntry] = {
         "launch-note WARNING prose the generator emits into the p4-kit skill; "
         "its launchers are the guarded BOOTSTRAP_PYTHON form (and uv_run "
         "literals here are never bypassed: _FORCED_REGARDLESS_OF_VARIANT)"),
-    "plugins/llm-scripting-kit/lib/llm_scripting_kit/completion/backends.py": AllowlistEntry(
-        "Path(sys.argv[0]).name or 'python'",
-        "display-label fallback string for an API user field, not a spawn"),
-    "plugins/llm-scripting-kit/lib/llm_scripting_kit/frontdoor/server.py": AllowlistEntry(
-        'prog="python -m llm_scripting_kit.frontdoor"',
-        "argparse prog= display string, not an invocation"),
-    "plugins/llm-scripting-kit/lib/llm_scripting_kit/swapper.py": AllowlistEntry(
-        'name.lower().startswith("python")',
-        "process-name classification (psutil name of an mlx_lm.server "
-        "host process), not an interpreter spawn"),
     "plugins/pdf-kit/custom_bootstrap.py": AllowlistEntry(
         'data_dir / ".venv" / "Scripts" / "python.exe",',
         "resolves the plugin-data venv python path, then subprocess.run "
@@ -946,10 +907,6 @@ _MD_PLUGINS_ALLOWLIST: dict[str, AllowlistEntry] = {
         '"subdir": "python",',
         "manifest example value (a directory name) + prose describing "
         "python_stub_check, not an instruction"),
-    "plugins/content-pipeline-kit/skills/execute-work-unit/SKILL.md": AllowlistEntry(
-        "BEGIN ENUMERATED-INVOCATIONS",
-        "illustrative example of a CONSUMER-supplied WorkerCommand between "
-        "generator-owned do-not-edit-by-hand markers"),
     "plugins/p4-kit/skills/p4-code-review/SKILL.md": AllowlistEntry(
         "never as a bare path and never as bare `python`/`python3`",
         "generated launch-note WARNING prose (scripts/gen_code_review_skills.py); "
