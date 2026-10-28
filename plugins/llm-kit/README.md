@@ -2,8 +2,8 @@
 
 One plugin and one library, `llm_kit` (the `katsoft-llm-kit` package), for LLM access, durable agent
 jobs and batch content pipelines. It consolidates `llm-scripting-kit`, `job-kit`
-and `content-pipeline-kit` (migrated from those plugins; they stay installed,
-published and unchanged, and llm-kit never imports them).
+and `content-pipeline-kit` (migrated from those plugins, which have been
+removed; llm-kit replaces them).
 
 ## Library
 

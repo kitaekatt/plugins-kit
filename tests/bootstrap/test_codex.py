@@ -13,7 +13,7 @@ Hermetic: the real ``codex`` binary is never invoked. ``shutil.which`` and
 tests/awesome-kit/test_orchestration_guidance.py::TestDetectBackend.
 
 The argv tests assert the COMPLETE list rather than spot-checking flags, in
-the style of tests/llm-scripting-kit/test_completion_backends.py
+the style of tests/llm-scripting-kit/test_completion_backends.py (removed with the plugin)
 ::test_happy_path_cmd_and_response -- the ordering and the presence of the
 Windows sandbox key are the load-bearing parts, and a spot check would not
 catch a reordering that moves stdin `-` off the end.
