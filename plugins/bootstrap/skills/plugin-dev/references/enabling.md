@@ -69,7 +69,7 @@ is not proof. Use the parent's discovery, import, and frontier mechanics.
 
 **Detection.** List every capability that the enabled path uses. The probe must
 cover the newest one. Remove or age it in a fixture and confirm that stdout is empty.
-**Origin.** Orchestrate probes llm-scripting-kit entry points
+**Origin.** Orchestrate probes llm-kit entry points
 (`plugins/awesome-kit/skills/orchestrate/scripts/orchestration_guidance.py`). The
 review skills probe md-domain lane files after catalog discovery
 (`plugins/git-kit/skills/git-code-review/references/md-domain-review.md` and
@@ -218,7 +218,7 @@ a skill stops being invoked, its enabling scripts stop admitting disclosures.
 
 ## Worked instance: consult seats
 
-The first deliberate design uses llm-scripting-kit as the owner and
+The first deliberate design uses llm-kit as the owner and
 `awesome-kit:orchestrate` as the consuming skill. Its owner contract is a
 `discover_seats` callable. Each classified entry supplies tier and family.
 
@@ -245,15 +245,12 @@ EN-5
 |---|---|---|
 | skills-kit -> git-kit md-domain claim | The owner skill is discovered by exact catalog name. The consuming review skill conditionally claims Markdown and uses md-domain lane entry points. (`plugins/git-kit/skills/git-code-review/SKILL.md`, `plugins/git-kit/skills/git-code-review/references/md-domain-review.md`) | Closest exact probe fit. The enabling advertisement is silent when absent. Any review-artifact degradation note remains under the parent's Q2. |
 | skills-kit -> p4-kit md-domain claim | The owner skill is discovered by exact catalog name. The consuming review skill conditionally claims Markdown and uses md-domain lane entry points. (`plugins/p4-kit/skills/p4-code-review/SKILL.md`, `plugins/p4-kit/skills/p4-code-review/references/md-domain-review.md`) | Closest exact probe fit. It has the same two-layer contract shape as git-kit. |
-| llm-scripting-kit -> awesome-kit orchestrate registry render | The consumer script probes owner symbols before it adds registry rows. Agent-tool rows remain without the owner. (`plugins/awesome-kit/skills/orchestrate/scripts/orchestration_guidance.py`, `plugins/awesome-kit/skills/orchestrate/references/configuration.md`) | Near-fit only. The rendered policy claims completeness, so absent and too-old states need an in-artifact disclosure under the parent's Q2. |
-| llm-scripting-kit -> git-kit and p4-kit endpoint lanes | Each review wrapper distinguishes owner absence from a missing `review_lane.main` frontier and REFUSES the configured lane. (`plugins/git-kit/scripts/run_review_lane.py`, `plugins/p4-kit/scripts/run_review_lane.py`) | Does not fit. A requested lane cannot disappear silently while the review remains true as read. The parent REFUSE branch applies. |
-| llm-scripting-kit -> workflow-kit OpenRouter node | The runner directly imports the owner for the requested node. (`plugins/workflow-kit/bootstrap.json`, `plugins/workflow-kit/scripts/openrouter_run.py`, `plugins/workflow-kit/skills/workflow-kit/SKILL.md`) | Does not fit. The requested node cannot be omitted, and the runner has no frontier probe. |
-| llm-scripting-kit -> job-kit | The package has a required owner import at its front door. Its selector diagnoses missing frontier symbols. (`plugins/job-kit/bootstrap.json`, `plugins/job-kit/lib/job_kit/select.py`, `plugins/job-kit/lib/job_kit/__init__.py`) | Does not fit. The edge is REQUIRED and job-kit has no consuming skill host. |
-| llm-scripting-kit and bootstrap -> content-pipeline-kit live backends | Live backend call sites import required owner APIs. The skill contains unconditional preflight pointers. (`plugins/content-pipeline-kit/bootstrap.json`, `plugins/content-pipeline-kit/skills/content-pipeline-domain/SKILL.md`, `plugins/content-pipeline-kit/lib/content_pipeline/llm/backends.py`) | Does not fit. The live backend unit is required, and the pointers are not disclose-or-silence probes. |
+| llm-kit -> awesome-kit orchestrate registry render | The consumer script probes owner symbols before it adds registry rows. Agent-tool rows remain without the owner. (`plugins/awesome-kit/skills/orchestrate/scripts/orchestration_guidance.py`, `plugins/awesome-kit/skills/orchestrate/references/configuration.md`) | Near-fit only. The rendered policy claims completeness, so absent and too-old states need an in-artifact disclosure under the parent's Q2. |
+| llm-kit -> git-kit and p4-kit endpoint lanes | Each review wrapper distinguishes owner absence from a missing `review_lane.main` frontier and REFUSES the configured lane. (`plugins/git-kit/scripts/run_review_lane.py`, `plugins/p4-kit/scripts/run_review_lane.py`) | Does not fit. A requested lane cannot disappear silently while the review remains true as read. The parent REFUSE branch applies. |
+| llm-kit -> workflow-kit OpenRouter node | The runner directly imports the owner for the requested node. (`plugins/workflow-kit/bootstrap.json`, `plugins/workflow-kit/scripts/openrouter_run.py`, `plugins/workflow-kit/skills/workflow-kit/SKILL.md`) | Does not fit. The requested node cannot be omitted, and the runner has no frontier probe. |
 | skills-kit and bootstrap -> task-kit task and awesome-kit helper scripts | The task system hard-imports skills-kit APIs. Task-kit and awesome-kit each ship bootstrap guard modules. (`plugins/task-kit/bootstrap.json`, `plugins/task-kit/skills/task/scripts/task_system/task_items.py`, `plugins/awesome-kit/skills/orchestrate/scripts/bootstrap_guard.py`) | Does not fit. These are REQUIRED support edges, not optional skill disclosures. |
-| content-pipeline-kit -> yaml-data-editor-kit | Editor dispatch code hard-imports content-pipeline APIs. (`plugins/yaml-data-editor-kit/bootstrap.json`, `plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/dispatch/background.py`, `plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/dispatch/worker_mount.py`) | Does not fit. The edge is REQUIRED and the consumer has no `SKILL.md`. |
 | bootstrap -> git-kit and p4-kit review infrastructure | Both review systems use provisioning guards before required review scripts. (`plugins/git-kit/bootstrap.json`, `plugins/git-kit/scripts/prepare_review.py`, `plugins/p4-kit/bootstrap.json`, `plugins/p4-kit/scripts/prepare_review.py`) | Does not fit. Bootstrap is required review infrastructure. |
-| bootstrap -> llm-scripting-kit and unreal-kit | Llm-scripting-kit imports bootstrap configuration helpers. Unreal helpers import bootstrap configuration and path helpers. (`plugins/llm-scripting-kit/bootstrap.json`, `plugins/llm-scripting-kit/lib/llm_scripting_kit/models.py`, `plugins/unreal-kit/bootstrap.json`, `plugins/unreal-kit/lib/unreal_stub.py`, `plugins/unreal-kit/custom_bootstrap.py`) | Does not fit. These are required infrastructure edges, not optional consuming-skill probes. |
+| bootstrap -> unreal-kit | Unreal helpers import bootstrap configuration and path helpers. (`plugins/unreal-kit/bootstrap.json`, `plugins/unreal-kit/lib/unreal_stub.py`, `plugins/unreal-kit/custom_bootstrap.py`) | Does not fit. These are required infrastructure edges, not optional consuming-skill probes. |
 
 `task-kit:task` emitting `Skill(awesome-kit:orchestrate)` is a skill handoff
 across a declared plugin dependency (task-kit depends on awesome-kit). It is not an optional cross-plugin enabling edge.

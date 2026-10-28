@@ -340,7 +340,7 @@ def _run_with_containment(lock_args: tuple) -> None:
 # cache download can land some of a package's modules before others, so the
 # SessionStart hook may import one of these and hit a submodule that has not been
 # written YET -- a ModuleNotFoundError that self-heals once the download finishes.
-_FIRST_PARTY_LIBS = ("bootstrap_lib", "skills_kit_lib", "llm_scripting_kit")
+_FIRST_PARTY_LIBS = ("bootstrap_lib", "skills_kit_lib")
 _MAX_TRANSIENT_IMPORT_RETRIES = 3
 _IMPORT_RETRY_STATE_FILENAME = "import_retry_state.json"
 

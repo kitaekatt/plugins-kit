@@ -46,7 +46,7 @@ Plugins take no position on whether git worktrees are used
 (``plugins/CLAUDE.md``, "Plugins take no position on worktrees"). The WT group
 flags wording that tells an agent to use worktrees or to avoid them. It reads
 only prose files (``PROSE_SUFFIXES``): code docstrings describe worktree
-SUPPORT (job-kit's workspace module, git-kit's object reader) in the same
+SUPPORT (llm-kit's jobs workspace module, git-kit's object reader) in the same
 words, and a pattern that flags a factual docstring would teach people to
 disable the check. Agent prompts embedded in code are therefore outside it and
 remain review work.

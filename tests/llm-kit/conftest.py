@@ -15,7 +15,7 @@ PLUGIN_ROOT = os.path.normpath(
 
 # Integration tests import the released package installed in the project venv.
 
-# tests/llm-kit/ itself, for `import repoint` from the test modules.
+# tests/llm-kit/ itself, so test modules can import their sibling helpers.
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)

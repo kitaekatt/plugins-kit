@@ -1,12 +1,13 @@
 {
   "schema_version": 1,
   "directory": "docs/planning/task-kit-dashboard",
-  "decision": "none",
-  "source_sha": "dbcd10d27c7365ce0f89c9885056d1c73764b882",
-  "input_sha256": "8d7662f3343c20ad4e1eca5f3827efaf2cac8b6efc2d670ca5b151950919f707",
-  "input_shape_sha256": "ee9d2a522a219f9f79ce5d901a403b181817b27b25763051b78b806aa688965c",
+  "decision": "page",
+  "source_sha": "3b9194392e67ccacfcdb26076794435a89f13e8f",
+  "generation_spec_sha256": "8573606e5f3b827eff1eb29578efe854f3b917c38f7e9b9539ce898c925d9fa1",
+  "input_sha256": "61a204e5bcf81eb3a87b9a18ba1caa1865b87d46ec4cd341d8bceecc9f1f9abf",
+  "input_shape_sha256": "85144c78271cde319b283485bfd8ef33ee5423959ff038e6abedbf724b6b904f",
   "dirty": false,
-  "identity": "",
+  "identity": "The planning documents for the task-kit dashboard: architecture design, databench integration plan, and iterative detail-view mockups.",
   "instructions": "",
   "references": []
 }

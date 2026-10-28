@@ -91,14 +91,8 @@ def _run(script: Path, home: Path, env_extra: dict, *, cwd: Path) -> subprocess.
 CONSUMERS = {
     "hue-kit": ("plugins/hue-kit/bin/hue-kit", _standalone, None),
     "secrets-kit": ("plugins/secrets-kit/bin/secrets-kit", _standalone, None),
-    "job-kit": ("plugins/job-kit/bin/job-kit",
-                lambda h: _plugin_venv(h, "job-kit"), None),
     "llm-kit": ("plugins/llm-kit/bin/llm-kit",
                 lambda h: _plugin_venv(h, "llm-kit"), None),
-    "llm-scripting-kit": ("plugins/llm-scripting-kit/bin/llm-scripting-kit",
-                          lambda h: _plugin_venv(h, "llm-scripting-kit"), None),
-    "llm-scripting-kit-standalone": ("plugins/llm-scripting-kit/bin/llm-scripting-kit",
-                                     _standalone, None),
     "bootstrap-display": ("plugins/bootstrap/hooks/userpromptsubmit/bootstrap-display.sh",
                           _display_standalone, "display"),
     "diagnose-python-venv": ("plugins/bootstrap/scripts/diagnose-python-venv.sh",
@@ -184,9 +178,7 @@ def test_check_editor_build_fresh_order_is_deterministic_first():
 CMD_TWINS = {
     "plugins/hue-kit/bin/hue-kit.cmd": 'if not exist "%PY%" if defined BOOTSTRAP_PYTHON',
     "plugins/secrets-kit/bin/secrets-kit.cmd": 'if not exist "%PY%" if defined BOOTSTRAP_PYTHON',
-    "plugins/job-kit/bin/job-kit.cmd": "if not defined PY if defined BOOTSTRAP_PYTHON",
     "plugins/llm-kit/bin/llm-kit.cmd": "if not defined PY if defined BOOTSTRAP_PYTHON",
-    "plugins/llm-scripting-kit/bin/llm-scripting-kit.cmd": "if not defined PY if defined BOOTSTRAP_PYTHON",
     "plugins/unreal-kit/skills/ue-python-api/scripts/ue-runner.cmd":
         'if not defined PY if defined BOOTSTRAP_PYTHON',
 }

@@ -10,7 +10,7 @@ exports three variables describing that session:
   ``--plugin-dir``, joined with :data:`os.pathsep`, in argument order.
 
 A plugin that starts another ``claude`` session as a direct child (``claude -p``,
-a job-kit contract command) must make that session a claudx session too. The
+an llm-kit job contract command) must make that session a claudx session too. The
 child inherits the environment, but ``--plugin-dir`` is a command-line flag, so
 without it the child loads the PUBLISHED plugins against the redirected data
 root. :func:`nested_claude_args` returns the flags.
@@ -184,7 +184,7 @@ def contract_command(
     *,
     parent_env: Optional[Mapping[str, str]] = None,
 ) -> tuple[str, ...]:
-    """A job-kit contract command, made claudx-faithful when it runs ``claude``.
+    """An llm-kit job contract command, made claudx-faithful when it runs ``claude``.
 
     Outside claudx, or when ``command[0]`` is not the claude CLI, or when the
     invocation starts no session (``--version``, ``--help``, a management

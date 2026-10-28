@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/presence-kit/skills/autonomous/references",
+  "decision": "none",
+  "source_sha": "884f38ccb889117c7742fbb597f23db0c123fccb",
+  "input_sha256": "27fbf3378e67a699f19262ebcb7ed99ce39446974b2dbfd1f52a04d2c88766b6",
+  "input_shape_sha256": "d1df457c56a27e7a74d3c8264f2c2bb7d0cc39b12ec66f09bffe063d412d3e90",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

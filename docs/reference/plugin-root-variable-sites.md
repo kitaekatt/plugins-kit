@@ -165,7 +165,7 @@ NOT generalise to prose a reader types, which has no `$0` or `BASH_SOURCE`.
 - git-kit and p4-kit `references/md-domain-review.md:74` (says explicitly it is
   NOT the right path).
 - `plugins/workflow-kit/examples/node-strategies.example.js:11`,
-  `plugins/llm-scripting-kit/README.md:326`.
+  `plugins/llm-scripting-kit/README.md:326` (path removed with the plugin).
 - unreal-kit `skills/ue-python-api/references/architecture.md:48`,
   `project-setup.md:19`.
 - The generator `scripts/gen_code_review_skills.py:1138` emits a DOC-class

@@ -1,6 +1,6 @@
 """claudx containment in the launcher shims (CLAUDE_BOOTSTRAP_DATA_ROOT, CLAUDE_PLUGIN_TEST).
 
-job-kit, llm-scripting-kit, llm-kit and task-kit launch their CLI under the plugin venv at the
+llm-kit and task-kit launch their CLI under the plugin venv at the
 production path ``~/.claude/plugins/data/plugins-kit/<plugin>/.venv``. A
 claude-plugin-test session sets ``CLAUDE_BOOTSTRAP_DATA_ROOT`` to a separate
 tree that holds its own venvs, so a shim that named the production venv ran the
@@ -11,7 +11,7 @@ launcher shims"):
 * With the variable set, the redirected venv is the ONLY candidate. A missing
   one exits 2 with a message, never a fallback to the production venv. With the
   variable unset the existing chain is unchanged.
-* All seven shims (job-kit, llm-scripting-kit, llm-kit, task-kit, hue-kit, secrets-kit,
+* All five shims (llm-kit, task-kit, hue-kit, secrets-kit,
   relaunch-kit's clauder) refuse to
   run as the CACHED copy, a path under ``plugins/cache/<marketplace>/``, when
   ``CLAUDE_PLUGIN_TEST`` is set. The marketplace is
@@ -87,8 +87,6 @@ _BASH32 = _find_bash32()
 
 # (plugin, shim file stem, entrypoint relative to the plugin root)
 _VENV_SHIMS = [
-    ("job-kit", "job-kit", "lib/job_kit_entrypoint.py"),
-    ("llm-scripting-kit", "llm-scripting-kit", "scripts/llm_scripting_kit_cli.py"),
     ("llm-kit", "llm-kit", "bin/llm_kit_entrypoint.py"),
     ("task-kit", "task-kit", "bin/task_kit_entrypoint.py"),
 ]
@@ -414,8 +412,7 @@ def test_data_dir_launcher_copy_never_reads_the_production_venv_in_a_redirected_
 # Root CLAUDE.md: the variable counts only when its OWN realpath resolves inside
 # the standalone directory; a stranger's BOOTSTRAP_PYTHON must never substitute.
 # The cases run against each shim that accepts BOOTSTRAP_PYTHON (task-kit, llm-kit,
-# hue-kit, secrets-kit, relaunch-kit); job-kit and llm-scripting-kit are frozen and out of
-# scope.
+# hue-kit, secrets-kit, relaunch-kit).
 # Every case runs with no plugin venv, a fakebin ``python3`` that prints PATHPY
 # first on PATH, and a tools directory holding only the utilities the shim calls.
 

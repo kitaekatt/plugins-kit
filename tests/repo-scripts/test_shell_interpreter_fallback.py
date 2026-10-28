@@ -96,13 +96,11 @@ class TestHueKitAndSecretsKitShape:
 
 
 class TestVenvChainShims:
-    """job-kit, llm-kit and llm-scripting-kit insert the same validated fallback
-    between their venv/standalone deterministic tiers and the PATH tier."""
+    """llm-kit inserts the validated fallback between its venv/standalone
+    deterministic tiers and the PATH tier."""
 
     @pytest.mark.parametrize("rel", [
-        "plugins/job-kit/bin/job-kit",
         "plugins/llm-kit/bin/llm-kit",
-        "plugins/llm-scripting-kit/bin/llm-scripting-kit",
     ])
     def test_uses_validated_bootstrap_python_when_deterministic_absent(self, home, rel):
         h, inside, _outside = home
@@ -110,9 +108,7 @@ class TestVenvChainShims:
         assert "MARKER_INSIDE_STANDALONE" in result.stdout, result.stderr
 
     @pytest.mark.parametrize("rel", [
-        "plugins/job-kit/bin/job-kit",
         "plugins/llm-kit/bin/llm-kit",
-        "plugins/llm-scripting-kit/bin/llm-scripting-kit",
     ])
     def test_ignores_bootstrap_python_outside_standalone_dir(self, home, rel):
         h, _inside, outside = home

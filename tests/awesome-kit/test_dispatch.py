@@ -89,6 +89,41 @@ def _run_args(tmp_path: Path, brief: Path, cache: Path, *extra: str) -> list[str
     ]
 
 
+@pytest.mark.skipif(os.name != "nt", reason="requires Windows on-disk path casing")
+def test_windows_wrong_case_roots_are_canonical_in_argv_and_cache(tmp_path, monkeypatch, capsys):
+    root = tmp_path / "MixedCaseWorkspace"
+    extra = tmp_path / "MixedCaseScratch"
+    root.mkdir()
+    extra.mkdir()
+    brief = _brief(tmp_path)
+    cache = tmp_path / "cache"
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        Path(argv[argv.index("-o") + 1]).write_text("result\n", encoding="utf-8")
+        return dispatch.subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(dispatch.subprocess, "run", fake_run)
+    canonical_root = root.resolve()
+    canonical_extra = extra.resolve()
+    assert dispatch.main(_run_args(
+        Path(str(root).swapcase()), brief, cache,
+        "--add-dir", str(extra).swapcase(),
+    )) == 0
+    entry = Path(capsys.readouterr().out.splitlines()[0])
+    argv, kwargs = calls[0]
+    assert argv[argv.index("-C") + 1] == str(canonical_root)
+    assert argv[argv.index("--add-dir") + 1] == str(canonical_extra)
+    assert kwargs["cwd"] == str(canonical_root)
+    meta = json.loads((entry / "meta.json").read_text(encoding="utf-8"))
+    assert meta["cwd"] == str(canonical_root)
+    assert meta["add_dirs"] == [str(canonical_extra)]
+    assert dispatch.main(_run_args(root, brief, cache, "--add-dir", str(extra))) == 0
+    assert "CACHE HIT" in capsys.readouterr().out
+    assert len(calls) == 1
+
+
 def test_cache_miss_writes_entry_and_cache_hit_skips_codex(tmp_path, monkeypatch, capsys):
     brief = _brief(tmp_path)
     cache = tmp_path / "cache"

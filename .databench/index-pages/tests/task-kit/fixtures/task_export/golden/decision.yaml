@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "tests/task-kit/fixtures/task_export/golden",
+  "decision": "none",
+  "source_sha": "a2707156814e6f7a6c9f4ae7f4bdc36a0666f28a",
+  "input_sha256": "dd2a0871db0bd60ce41cf62f3d191b51e33f07775145abd5055178adcb4da432",
+  "input_shape_sha256": "01fe16b280f4b102ea61a90d20e8dcff4c63ccb55dc28c8696e85119c5c36de2",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

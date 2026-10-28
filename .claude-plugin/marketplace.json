@@ -9,7 +9,7 @@
     {
       "name": "unreal-kit",
       "description": "Unreal Engine automation: Python API for asset inspection and data extraction; MCP server for live Editor authoring (actors, Blueprints, materials, PIE)",
-      "version": "0.17.13",
+      "version": "0.17.14",
       "author": {
         "name": "Christina"
       },
@@ -35,7 +35,7 @@
     {
       "name": "bootstrap",
       "description": "Installs each plugin's tools, Python venvs, and config automatically at session start.",
-      "version": "0.166.0",
+      "version": "0.167.0",
       "author": {
         "name": "Christina"
       },
@@ -45,7 +45,7 @@
     {
       "name": "p4-kit",
       "description": "Multi-agent code review for pending Perforce changelists (/p4-code-review) -- auto-shelves, reviews, cleans up.",
-      "version": "0.69.2",
+      "version": "0.69.3",
       "author": {
         "name": "Christina"
       },
@@ -58,7 +58,7 @@
     {
       "name": "git-kit",
       "description": "Multi-agent pre-push code review for git (/git-code-review) with per-finding validation and declined-findings memory.",
-      "version": "0.51.2",
+      "version": "0.51.3",
       "author": {
         "name": "Christina"
       },
@@ -71,7 +71,7 @@
     {
       "name": "skills-kit",
       "description": "Author and audit every md file a project loads or ships -- CLAUDE.md, SKILL.md, project docs, and their cross-references -- for placement, cohesion, and drift.",
-      "version": "0.98.5",
+      "version": "0.98.6",
       "author": {
         "name": "Christina"
       },
@@ -97,7 +97,7 @@
     {
       "name": "awesome-kit",
       "description": "Provides plugin-ecosystem, orchestrate, debug-context, verbose-updates, and arewedone skills for plugin browsing, delegated work, answering why-did-you questions from context, progress communication, and auditing whether session work is complete.",
-      "version": "0.79.0",
+      "version": "0.79.1",
       "author": {
         "name": "Christina"
       },
@@ -106,19 +106,6 @@
       "dependencies": [
         "bootstrap",
         "skills-kit"
-      ]
-    },
-    {
-      "name": "llm-scripting-kit",
-      "description": "Frozen legacy provider. Use llm-kit for LLM access, credentials, endpoint/model resolution, and completion.",
-      "version": "0.68.3",
-      "author": {
-        "name": "Christina"
-      },
-      "source": "./plugins/llm-scripting-kit",
-      "category": "development",
-      "dependencies": [
-        "bootstrap"
       ]
     },
     {
@@ -148,22 +135,9 @@
       ]
     },
     {
-      "name": "content-pipeline-kit",
-      "description": "Frozen legacy provider. Use llm-kit for the batch content pipeline library, skills, agent, and workflow.",
-      "version": "0.37.3",
-      "author": {
-        "name": "Christina"
-      },
-      "source": "./plugins/content-pipeline-kit",
-      "category": "development",
-      "dependencies": [
-        "bootstrap"
-      ]
-    },
-    {
       "name": "secrets-kit",
       "description": "Fleet secrets provisioning: materialize age-encrypted credentials from a private repo onto each machine, declaratively. One passphrase-protected identity per fleet, unlocked once per machine; blobs encrypt to the public key so adding or rotating a secret never needs the passphrase. Session-start convergence + CLI.",
-      "version": "0.8.42",
+      "version": "0.8.43",
       "author": {
         "name": "Christina"
       },
@@ -176,7 +150,7 @@
     {
       "name": "workflow-kit",
       "description": "Incremental, native-preserving improvements on the native Workflow tool: a declarative .workflow.yaml compiler plus node strategies (deterministic script + OpenRouter model calls) that run as cheap, context-light nodes via a file-passing contract. Experimental.",
-      "version": "0.14.0",
+      "version": "0.14.1",
       "author": {
         "name": "Christina"
       },
@@ -200,22 +174,9 @@
       ]
     },
     {
-      "name": "job-kit",
-      "description": "Frozen legacy provider. Use llm-kit for durable agent jobs, the jobs API, and jobs commands.",
-      "version": "0.14.2",
-      "author": {
-        "name": "Christina"
-      },
-      "source": "./plugins/job-kit",
-      "category": "development",
-      "dependencies": [
-        "bootstrap"
-      ]
-    },
-    {
       "name": "task-kit",
       "description": "Provides the task skill (a file-backed task-folder system with a CLI for creating, listing, working, closing, archiving, and moving task folders and task_list references) and task-kit export, the task facts databench's tasks view reads; bare task-kit opens that view.",
-      "version": "0.21.0",
+      "version": "0.21.1",
       "author": {
         "name": "Christina"
       },
@@ -243,7 +204,7 @@
     {
       "name": "llm-kit",
       "description": "LLM access, durable agent jobs and batch content pipelines in one library. Consolidation of llm-scripting-kit, job-kit and content-pipeline-kit.",
-      "version": "0.13.2",
+      "version": "0.15.0",
       "author": {
         "name": "Christina"
       },

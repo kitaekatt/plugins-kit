@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "tests/llm-kit/fixtures/codex_json",
+  "decision": "none",
+  "source_sha": "520878ac5620df05d50c25069a0eff7db7eef1cf",
+  "input_sha256": "6533990935aa6f8d4ee5486982b0cc2d9fb754403e8eb8582c0b8a73ee6b8244",
+  "input_shape_sha256": "17486cbec0194071674b7e15483623c41841e521b0372aab3bbb89175106171f",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

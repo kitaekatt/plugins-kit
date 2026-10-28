@@ -1,15 +1,11 @@
-"""Activation checks 2 and 3 of the llm-kit migration.
+"""Activation check 2 of the llm-kit migration.
 
 The signed design (docs/reference/llm-kit-architecture.md, "Skills, agents,
 workflows, and CLIs") makes activation conditional on three machine-checkable
 conditions. Condition 1, the maintained-reference scan, is
 ``tests/repo-scripts/test_maintained_references.py``. This module holds the
-other two.
-
-Condition 2: "Old-created resumable fixtures resume through both the old name
-and the final llm-kit name."
-Condition 3: "Rollback tests disable llm-kit registration and resume through the
-old names."
+persisted-name tripwire (condition 2). Condition 3 (rollback to the old plugins)
+ended with their deletion.
 
 Where qualified names are persisted
 -----------------------------------
@@ -45,22 +41,12 @@ registrations keep resolving them through their own unchanged implementations,
 and the retirement gate (zero nonterminal records needing an old identity) is an
 operator check at deletion, not a repository fixture.
 
-So conditions 2 and 3 reduce to:
-
-* store records created by the legacy code resume through llm-kit (the final
-  implementation) and through the legacy code (the old implementation), and
-  records created by llm-kit resume through the legacy code: tests/llm-kit/
-  test_cross_state_parity.py, in both directions, with each stretch run in its
-  own interpreter whose ``sys.path`` holds only one side;
-* a tripwire (:func:`test_no_registration_name_is_persistable_from_llm_kit_code`)
-  that fails the moment llm-kit code holds a qualified registration name as a
-  string constant, which is the precondition for persisting one, so a future
-  change cannot start persisting names without adding the translator and its
-  fixtures first;
-* a rollback guard (:func:`test_legacy_trees_do_not_depend_on_llm_kit`): with
-  llm-kit's registration disabled, the legacy trees must still work, which is
-  true only while nothing in them imports, depends on, or ships text that
-  names llm-kit.
+So condition 2 reduces to a tripwire
+(:func:`test_no_registration_name_is_persistable_from_llm_kit_code`) that fails
+the moment llm-kit code holds a qualified registration name as a string
+constant, which is the precondition for persisting one, so a future change
+cannot start persisting names without adding the translator and its fixtures
+first.
 """
 
 from __future__ import annotations
@@ -172,160 +158,3 @@ def test_persisted_event_identities_are_not_registrations() -> None:
     """
     for identity in ("job-kit:run-created", "content-pipeline-kit:run-created"):
         assert not QUALIFIED.search(identity)
-
-
-# --- condition 3: rollback; the legacy trees must work without llm-kit ------
-
-LEGACY = {name: REPO / "plugins" / name for name in OLD_PLUGINS}
-REGISTRATION_DIRS = ("skills", "agents", "workflows", "hooks")
-# The llm-kit PLUGIN as a whole token: "llm-kit", "plugins-kit:llm-kit", "plugins/llm-kit". Not the
-# PyPI package "katsoft-llm-kit" nor the module "llm_kit": a legacy plugin legitimately installs
-# the package (its bootstrap.json and pyproject name it), and the rollback this guard protects
-# is the plugin registration. A legacy Python tree importing the library is the separate AST scan.
-LLM_KIT_NAMES = re.compile(r"(?<![\w-])llm-kit(?![\w-])")
-
-
-def _python_imports_llm_kit(path: Path) -> List[str]:
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    found = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            found += [a.name for a in node.names if a.name.split(".")[0] == "llm_kit"]
-        elif isinstance(node, ast.ImportFrom):
-            if node.module and node.module.split(".")[0] == "llm_kit":
-                found.append(node.module)
-        elif (
-            isinstance(node, ast.Constant)
-            and isinstance(node.value, str)
-            and node.value.split(".")[0] == "llm_kit"
-        ):
-            found.append(node.value)  # a literal dynamic import or probe
-    return found
-
-
-def legacy_dependencies_on_llm_kit(plugin: Path) -> List[str]:
-    """Every way a legacy plugin tree can reach llm-kit that rollback would break."""
-    problems: List[str] = []
-    manifest = plugin / ".claude-plugin" / "plugin.json"
-    if manifest.is_file():
-        deps = json.loads(manifest.read_text(encoding="utf-8")).get("dependencies", [])
-        problems += [f"plugin.json dependency {d!r}" for d in deps if LLM_KIT_NAMES.search(str(d))]
-    boot = plugin / "bootstrap.json"
-    if boot.is_file() and LLM_KIT_NAMES.search(boot.read_text(encoding="utf-8")):
-        problems.append("bootstrap.json names llm-kit")
-    for path in sorted(plugin.rglob("*.py")):
-        if ".venv" in path.parts or "__pycache__" in path.parts:
-            continue
-        problems += [
-            f"{path.relative_to(plugin).as_posix()} imports {name}"
-            for name in _python_imports_llm_kit(path)
-        ]
-    for directory in REGISTRATION_DIRS:
-        for path in sorted((plugin / directory).rglob("*")) if (plugin / directory).is_dir() else ():
-            if path.is_file() and path.suffix in {".md", ".js", ".json", ".yaml", ".yml", ".sh", ".cmd"}:
-                if LLM_KIT_NAMES.search(path.read_text(encoding="utf-8", errors="replace")):
-                    problems.append(f"{path.relative_to(plugin).as_posix()} names llm-kit")
-    return problems
-
-
-@pytest.mark.parametrize("name", OLD_PLUGINS)
-def test_legacy_trees_do_not_depend_on_llm_kit(name: str) -> None:
-    plugin = LEGACY[name]
-    if not plugin.is_dir():
-        pytest.skip(f"{name} is deleted (migration increment M10); nothing to roll back to")
-    problems = legacy_dependencies_on_llm_kit(plugin)
-    assert not problems, (
-        f"{name} must keep working with llm-kit's registration disabled, but it reaches "
-        "llm-kit:\n" + "\n".join(problems)
-    )
-
-
-def _scratch_plugin(root: Path) -> Path:
-    plugin = root / "legacy-kit"
-    (plugin / ".claude-plugin").mkdir(parents=True)
-    (plugin / "lib").mkdir()
-    (plugin / "skills" / "s").mkdir(parents=True)
-    (plugin / ".claude-plugin" / "plugin.json").write_text(
-        json.dumps({"name": "legacy-kit", "dependencies": ["bootstrap"]}), encoding="utf-8"
-    )
-    (plugin / "bootstrap.json").write_text("{}", encoding="utf-8")
-    (plugin / "lib" / "mod.py").write_text("import os\n", encoding="utf-8")
-    (plugin / "skills" / "s" / "SKILL.md").write_text("A skill.\n", encoding="utf-8")
-    return plugin
-
-
-def test_the_rollback_guard_can_fail(tmp_path: Path) -> None:
-    plugin = _scratch_plugin(tmp_path)
-    assert legacy_dependencies_on_llm_kit(plugin) == []
-    plants = {
-        "dependency": lambda: (plugin / ".claude-plugin" / "plugin.json").write_text(
-            json.dumps({"dependencies": ["bootstrap", "llm-kit"]}), encoding="utf-8"
-        ),
-        "manifest": lambda: (plugin / "bootstrap.json").write_text('{"ref": "llm-kit"}', encoding="utf-8"),
-        "import": lambda: (plugin / "lib" / "mod.py").write_text("import llm_kit.jobs\n", encoding="utf-8"),
-        "from-import": lambda: (plugin / "lib" / "mod.py").write_text(
-            "from llm_kit.jobs import run\n", encoding="utf-8"
-        ),
-        "dynamic": lambda: (plugin / "lib" / "mod.py").write_text(
-            "import importlib\nimportlib.import_module('llm_kit.jobs')\n", encoding="utf-8"
-        ),
-        "skill text": lambda: (plugin / "skills" / "s" / "SKILL.md").write_text(
-            "Run llm-kit jobs run.\n", encoding="utf-8"
-        ),
-    }
-    restore = {
-        "dependency": lambda: (plugin / ".claude-plugin" / "plugin.json").write_text(
-            json.dumps({"dependencies": ["bootstrap"]}), encoding="utf-8"
-        ),
-        "manifest": lambda: (plugin / "bootstrap.json").write_text("{}", encoding="utf-8"),
-        "import": lambda: (plugin / "lib" / "mod.py").write_text("import os\n", encoding="utf-8"),
-        "from-import": lambda: (plugin / "lib" / "mod.py").write_text("import os\n", encoding="utf-8"),
-        "dynamic": lambda: (plugin / "lib" / "mod.py").write_text("import os\n", encoding="utf-8"),
-        "skill text": lambda: (plugin / "skills" / "s" / "SKILL.md").write_text("A skill.\n", encoding="utf-8"),
-    }
-    for label, plant in plants.items():
-        plant()
-        assert legacy_dependencies_on_llm_kit(plugin), f"a planted {label} dependency was not seen"
-        restore[label]()
-        assert legacy_dependencies_on_llm_kit(plugin) == [], f"restoring {label} did not clear it"
-
-
-def test_a_frozen_pointer_in_readme_or_description_is_not_a_dependency(tmp_path: Path) -> None:
-    """The freeze releases (migration plan, section 5) add README and description
-    pointers to llm-kit; those must not trip the rollback guard."""
-    plugin = _scratch_plugin(tmp_path)
-    (plugin / "README.md").write_text("Frozen; see llm-kit.\n", encoding="utf-8")
-    (plugin / ".claude-plugin" / "plugin.json").write_text(
-        json.dumps({"description": "Frozen. Use llm-kit.", "dependencies": ["bootstrap"]}),
-        encoding="utf-8",
-    )
-    assert legacy_dependencies_on_llm_kit(plugin) == []
-
-
-@pytest.mark.parametrize("name", OLD_PLUGINS)
-def test_the_real_legacy_manifests_name_the_package_not_the_plugin(name: str, tmp_path: Path) -> None:
-    """The shipped bootstrap.json of each legacy plugin names katsoft-llm-kit (the package it
-    installs), which is not a reference to the llm-kit plugin; a plugin reference added to that
-    same real text is seen."""
-    real = LEGACY[name] / "bootstrap.json"
-    if not real.is_file():
-        pytest.skip(f"{name} is deleted; nothing to read")
-    text = real.read_text(encoding="utf-8")
-    assert "katsoft-llm-kit" in text, "the premise of this test: the real manifest names the package"
-    plugin = _scratch_plugin(tmp_path)
-    (plugin / "bootstrap.json").write_text(text, encoding="utf-8")
-    assert legacy_dependencies_on_llm_kit(plugin) == []
-    for reference in ("plugins-kit:llm-kit", "llm-kit", "plugins/llm-kit/bin"):
-        (plugin / "bootstrap.json").write_text(text + "\n" + reference, encoding="utf-8")
-        assert legacy_dependencies_on_llm_kit(plugin) == ["bootstrap.json names llm-kit"], reference
-
-
-def test_the_package_name_in_skill_text_or_dependencies_is_not_the_plugin(tmp_path: Path) -> None:
-    plugin = _scratch_plugin(tmp_path)
-    (plugin / "skills" / "s" / "SKILL.md").write_text("Needs katsoft-llm-kit>=1.3.\n", encoding="utf-8")
-    (plugin / ".claude-plugin" / "plugin.json").write_text(
-        json.dumps({"dependencies": ["bootstrap", "katsoft-llm-kit"]}), encoding="utf-8"
-    )
-    assert legacy_dependencies_on_llm_kit(plugin) == []
-    (plugin / "skills" / "s" / "SKILL.md").write_text("Run plugins-kit:llm-kit jobs.\n", encoding="utf-8")
-    assert legacy_dependencies_on_llm_kit(plugin)

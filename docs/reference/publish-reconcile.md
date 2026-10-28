@@ -230,7 +230,7 @@ Then run a normal `publish.py`. The back-port-then-project order is what makes
 
 A hand merge is exactly how content goes wrong without a conflict: on
 2026-09-07 a merge-based reconcile left
-`plugins/llm-scripting-kit/lib/llm_scripting_kit/completion/capabilities.py`
+`llm_scripting_kit/completion/capabilities.py` (in the since-removed llm-scripting-kit plugin)
 with the "canonical guarantee subjects" block landed twice and the `BYPASS`
 docstring stranded between the copies, because the file merged cleanly and was
 never inspected. A projection cannot do that: it takes dev's blobs rather than

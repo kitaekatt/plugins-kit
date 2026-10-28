@@ -428,7 +428,7 @@ def test_every_plugin_declares_its_third_party_deps():
 def test_first_party_map_is_sane():
     # Sanity guard so a refactor that breaks package discovery is caught.
     assert "bootstrap_lib" in _FIRST_PARTY
-    assert "llm_scripting_kit" in _FIRST_PARTY
+    assert "llm_scripting_kit" not in _FIRST_PARTY
     # llm_kit is an installed katsoft-llm-kit package, not plugin source: a plugin
     # that imports it declares that distribution (_IMPORT_TO_DIST).
     assert "llm_kit" not in _FIRST_PARTY
@@ -480,7 +480,7 @@ def test_review_consumers_require_regex_but_prompt_consumer_does_not() -> None:
     for plugin in ("git-kit", "p4-kit"):
         required = _required_third_party(_PLUGINS / plugin)
         assert {"regex", "markdown-it-py"} <= required
-    assert "regex" not in _required_third_party(_PLUGINS / "llm-scripting-kit")
+    assert "regex" not in _required_third_party(_PLUGINS / "llm-kit")
 
 
 def test_foreign_definition_time_code_remains_reachable() -> None:

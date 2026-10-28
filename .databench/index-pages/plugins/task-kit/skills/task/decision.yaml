@@ -1,12 +1,13 @@
 {
   "schema_version": 1,
   "directory": "plugins/task-kit/skills/task",
-  "decision": "none",
-  "source_sha": "bfb555f5dc37f72e2d2c92fc42fa368e877240c8",
-  "input_sha256": "d051ad4f5ced8e8a29a10e2ddc4379c02dfb892af1ec26e5f0931f0f718189f7",
-  "input_shape_sha256": "3f659a74cc0ede6d3243d02de576ddf06f77723d7be0e870f255351561ca3db1",
+  "decision": "page",
+  "source_sha": "132214efeebada271932b45de7879c385db15793",
+  "generation_spec_sha256": "8573606e5f3b827eff1eb29578efe854f3b917c38f7e9b9539ce898c925d9fa1",
+  "input_sha256": "570b3c5dc60ac46a4c0c02b12f986c86bb9b2142437367b983f8f6d7ac6f4d0a",
+  "input_shape_sha256": "8b8463b908530769dcf0e152d695237fcde38a7fb431c77fa33030e8ec5c7895",
   "dirty": false,
-  "identity": "",
+  "identity": "The task skill: data model, CLI verbs, operational protocols, design rationale, and the answers question catalog.",
   "instructions": "",
   "references": []
 }

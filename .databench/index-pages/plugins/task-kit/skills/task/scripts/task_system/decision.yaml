@@ -2,12 +2,12 @@
   "schema_version": 1,
   "directory": "plugins/task-kit/skills/task/scripts/task_system",
   "decision": "page",
-  "source_sha": "bfb555f5dc37f72e2d2c92fc42fa368e877240c8",
-  "generation_spec_sha256": "d40323919c23e31cc9c5afe305627667e78bca3c257330f0fc0b3a9b1c826ade",
-  "input_sha256": "234ca2588235768a2d111da2cafc67999577375ddcb330936e8a516725536080",
-  "input_shape_sha256": "dd4a8c9a15ba7d36a217e85ebb1962e1dce9267f445b500d4ca7753f8346cf01",
+  "source_sha": "132214efeebada271932b45de7879c385db15793",
+  "generation_spec_sha256": "8573606e5f3b827eff1eb29578efe854f3b917c38f7e9b9539ce898c925d9fa1",
+  "input_sha256": "63f795a94b6007cff435f6d6f03da09f9350db357f6d200f5e77af7d0af0da10",
+  "input_shape_sha256": "9999f13ec4e574de7e76be0e2c7704ae2871c3af18e3f2ce85185999005c9926",
   "dirty": false,
-  "identity": "The task-system implementation: lifecycle verbs for task folders, cross-project discovery and validation, and the local read-only dashboard server.",
+  "identity": "The task-system implementation: task lifecycle and discovery, the model-answers engine, programmatic export, and manager operations.",
   "instructions": "",
   "references": []
 }

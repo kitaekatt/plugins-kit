@@ -179,12 +179,12 @@ weight.
 
 | Site | Criterion | Why it passes |
 |---|---|---|
-| `plugins/llm-scripting-kit/skills/openrouter-account/SKILL.md` | AD-3 | The skipped question is "may I use the key you already configured"; the failure branch hands the user a verbatim ask from a named file. |
+| `plugins/llm-kit/skills/openrouter-account/SKILL.md` | AD-3 | The skipped question is "may I use the key you already configured"; the failure branch hands the user a verbatim ask from a named file. |
 | `plugins/hue-kit/skills/hue-domain/SKILL.md` | AD-3 | Gates a read-only local render whose purpose is showing the user the change; the write path is separately gated. |
 | `plugins/skills-kit/skills/md-domain/workflow/*-detect.js` | AD-1 | The SILENT set is closed and enumerated, contains only non-findings, exempts serious findings, and is documented for the user. |
 | `plugins/claude-ui-kit/scripts/install_statusline.py` | -- | The model citizen: names the settings file, names the declined-record path, mandates one question, and states that the record never blocks a later switch. |
 
-Swept and clean: `secrets-kit`, `cache-kit`, `workflow-kit`, `content-pipeline-kit`,
+Swept and clean: `secrets-kit`, `cache-kit`, `workflow-kit`,
 `bootstrap-stuck-fix`, `prototypes`.
 
 ## Running the audit

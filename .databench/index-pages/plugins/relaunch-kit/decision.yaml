@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/relaunch-kit",
+  "decision": "none",
+  "source_sha": "c4d82676309f5e999982ac35216937f9bb451500",
+  "input_sha256": "a28ca4585a2dc7714cfcea0a9c34543dc8f980ca5f9810534b5b35f9dffca391",
+  "input_shape_sha256": "898dd83c9ac5758c16018e13633114d93d4ee6c2e7398ed8740f6b7721b80940",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

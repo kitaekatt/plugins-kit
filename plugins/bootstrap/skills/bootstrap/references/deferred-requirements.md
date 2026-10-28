@@ -55,7 +55,7 @@ ctx.add_deferred_requirement(
     "openrouter_credential",
     user_msg="... nothing to do until you run something that calls the API",
     agent_msg="... the prepared statement the skill presents verbatim",
-    satisfied_by="llm-scripting-kit set-key",
+    satisfied_by="example-kit set-key",
 )
 ```
 
@@ -66,15 +66,15 @@ session-start prompt. The engine writes the records to
 
 ```json
 {
-  "plugin": "llm-scripting-kit",
+  "plugin": "example-kit",
   "updated": "2026-07-29T00:00:00Z",
   "requirements": [
     {
       "name": "openrouter_credential",
-      "plugin": "llm-scripting-kit",
+      "plugin": "example-kit",
       "user_msg": "...",
       "agent_msg": "...",
-      "satisfied_by": "llm-scripting-kit set-key"
+      "satisfied_by": "example-kit set-key"
     }
   ]
 }

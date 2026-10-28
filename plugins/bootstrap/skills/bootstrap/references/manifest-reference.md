@@ -44,9 +44,9 @@ A declarative configuration file covering automatable operations. The engine rea
     {"src": "lib", "dst": "lib"}
   ],
   "shared_libs": [
-    {"name": "llm_scripting_kit", "src": "lib"}
+    {"name": "example_lib", "src": "lib"}
   ],
-  "shared_lib_imports": ["llm_scripting_kit"],
+  "shared_lib_imports": ["example_lib"],
   "json_entries": [
     {
       "reference": "known_marketplaces.json",
@@ -258,7 +258,7 @@ Example -- a project that links a published shared library into its venv, one en
   "project_venv": {
     "shared_lib_imports": [
       "content_pipeline",
-      {"name": "llm_scripting_kit", "marketplace": "plugins-kit"}
+      {"name": "example_lib", "marketplace": "plugins-kit"}
     ]
   }
 }
@@ -402,7 +402,7 @@ These two keys let one plugin reuse another plugin's first-party Python library 
 ```json
 {
   "shared_libs": [
-    {"name": "llm_scripting_kit", "src": "lib"}
+    {"name": "example_lib", "src": "lib"}
   ]
 }
 ```
@@ -418,7 +418,7 @@ For each entry the engine syncs the package source to a **stable, version-indepe
 
 ```json
 {
-  "shared_lib_imports": ["llm_scripting_kit"]
+  "shared_lib_imports": ["example_lib"]
 }
 ```
 
@@ -430,7 +430,7 @@ A plain string list of library names (deduplicated-unioned across config layers)
 
 **Ordering / eventual consistency**: the consumer link runs AFTER the `venv` handler (so the venv exists as the `.pth` target) but a consumer may be processed before its owner in a given session. A not-yet-published library is a soft skip (logged, not a failure) that self-heals on the next session; the runtime `bootstrap_guard` covers the installed-but-not-yet-provisioned window.
 
-**Source only**: a `.pth` shares first-party SOURCE, not third-party deps. If `llm_scripting_kit` needs `openai`, the plugin that imports it (under the interpreter that runs the importing script) must declare `openai` in its own `pyproject.toml` + `venv.check_imports`.
+**Source only**: a `.pth` shares first-party SOURCE, not third-party deps. If `example_lib` needs `openai`, the plugin that imports it (under the interpreter that runs the importing script) must declare `openai` in its own `pyproject.toml` + `venv.check_imports`.
 
 ## `fonts` — Per-User Font Installation
 

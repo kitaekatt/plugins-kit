@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "tests/relaunch-kit",
+  "decision": "none",
+  "source_sha": "c4d82676309f5e999982ac35216937f9bb451500",
+  "input_sha256": "0b8c64be9e862de46323d1456c6d2419c9646acd294c2b0df9767c1abb2c14e4",
+  "input_shape_sha256": "16966b3368392324713859abcb622080d1d74e516595eff7e03fb7859fd77e68",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

@@ -102,27 +102,8 @@ def _e(owner: str, *tokens: str, reason: str) -> Entry:
     return Entry(owner, frozenset(tokens), reason)
 
 
-_LSK_INSTALL = "llm-scripting-" + "kit@plugins-kit"
-_LSK_REF = "plugins-kit:llm-scripting-" + "kit"
-
-_M10 = (
-    "bootstrap standing documentation and a compatibility fixture; not a consumer "
-    "migration, so legacy deletion (M10) rewrites them unless an earlier "
-    "increment already has"
-)
-
 #: Files that may still carry an old qualified reference. Shrinks to empty.
 ALLOWLIST: Dict[str, Entry] = {
-    # M10: bootstrap standing documents and a compatibility fixture
-    "plugins/bootstrap/skills/bootstrap/references/action-triggered-install.md": _e(
-        "M10", _LSK_INSTALL, reason=_M10
-    ),
-    "plugins/bootstrap/skills/plugin-dev/references/interrupt-contract.md": _e(
-        "M10", _LSK_INSTALL, reason=_M10
-    ),
-    "tests/bootstrap/fixtures/spiritcrossing_tiered_bootstrap.json": _e(
-        "M10", _LSK_REF, reason=_M10
-    ),
 }
 
 

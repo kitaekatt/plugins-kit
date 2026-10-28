@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "tests/task-kit/fixtures/answers",
+  "decision": "none",
+  "source_sha": "490ee13a3f8f1a22ea3d3a7454f89ebcda8f2882",
+  "input_sha256": "7a44b659a9084422091c4f1409c1ec138d771b41d4a46260f2351708c5fac443",
+  "input_shape_sha256": "67eed103d186be2f86b05280931912e44d43ce6ea1298fe2e2f2adc19b69ceec",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

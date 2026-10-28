@@ -1135,17 +1135,16 @@ load the PUBLISHED plugins against the redirected data root.
   `claude respawn` run under a background supervisor whose environment and plugin
   flags are not carried over, so they are refused rather than started without the
   redirect.
-- `contract_command(command, child_env=None)` is the job-kit form: it leaves a
+- `contract_command(command, child_env=None)` is the form for a job's contract command: it leaves a
   command alone unless `command[0]` is the claude CLI, leaves session-less
   invocations (`--version`, `--help`, a management subcommand) alone, refuses
   `--bg` and `respawn`, and otherwise inserts the flags after the executable.
 
 Callers import the module lazily, only when `CLAUDE_PLUGIN_TEST` is set, so a
 production code path never touches it and no `requires_bootstrap` floor moves.
-The wired sites are `llm_scripting_kit` `ClaudeCliBackend` (the `claude -p` argv,
-reached also by job-kit agent calls and content-pipeline's claude backend),
-job-kit `run_contract`, and content-pipeline-kit `ClaudeCli.launch_bg` and
-`ClaudeCli.respawn`. `tests/repo-scripts/test_nested_claude_sites.py` lists every
+The wired sites live in the llm-kit library (`ClaudeCliBackend`, the job runner's
+`run_contract`, and the pipeline driver's `ClaudeCli.launch_bg` and
+`ClaudeCli.respawn`), audited in katsoft-libs. `tests/repo-scripts/test_nested_claude_sites.py` lists every
 code site in `plugins/` that resolves or names the `claude` executable and fails
 on one that is neither wired nor an anchored exemption (a `--version` probe, a
 `claude plugin` operation, a stop/rm/logs/agents call, the `--bg -p x` usage-error

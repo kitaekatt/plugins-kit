@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "tests/llm-kit/goldens/cli",
+  "decision": "none",
+  "source_sha": "61ed6f871f29a2014402cdca1213f62e0ae42342",
+  "input_sha256": "9a57b25651711f9ab17e18ee65c5550ddde39a8f8c29f11b3ae71e7d7fa2d178",
+  "input_shape_sha256": "3e867d712df92c16072c0a18c41319088a9afcc8810828890d8a836ad805837b",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

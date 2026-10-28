@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "docs/planning/shared-lib-packaging",
+  "decision": "none",
+  "source_sha": "32753227321609ed6f8f7f40a7bcf38a81fa5859",
+  "input_sha256": "88b2ae71fa3365f9b180c5e06bdd8edd5fb96aa382c704a9d3d4e4d4b9247b35",
+  "input_shape_sha256": "6f6f015edf391593898736c50fb2b7e40823bfb5ec88bd50cd7eea3ca5d325d1",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "tests/task-kit/fixtures/task_export/alpha",
+  "decision": "none",
+  "source_sha": "a2707156814e6f7a6c9f4ae7f4bdc36a0666f28a",
+  "input_sha256": "7a9a19789b0e23c2db0649ce0aaa65836ff2260bb52eb2ed81c3a5e27ca76cd9",
+  "input_shape_sha256": "03b136728b670861a66d03c9440c1b8776338dd88eb411e8a851a7eedfae6d6d",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

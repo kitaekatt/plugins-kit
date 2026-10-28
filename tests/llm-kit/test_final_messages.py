@@ -1,14 +1,8 @@
 """The wording of llm-kit's own messages.
 
-Two checks:
-
-* every named wording difference in ``final_wording.RENAMES`` is real: the
-  legacy source carries the legacy text and the final source carries the final
-  text (and not the legacy one), so a declared rename cannot stand in for an
-  unrelated difference;
-* no final-package message tells the reader to install, update, enable, run or
-  link a legacy plugin. The legacy plugins stay installed during the freeze,
-  but a message in llm-kit names llm-kit (or bootstrap) as the thing to install.
+No final-package message tells the reader to install, update, enable, run or
+link a legacy plugin; a message in llm-kit names llm-kit (or bootstrap) as the
+thing to install.
 """
 
 from __future__ import annotations
@@ -18,8 +12,6 @@ import re
 from pathlib import Path
 
 import pytest
-
-import final_wording as fw
 
 REPO = Path(__file__).resolve().parents[2]
 LIB = Path(__import__("llm_kit").__file__).resolve().parent
@@ -37,52 +29,6 @@ LEGACY_INSTALL_PATTERNS = {
     ),
     "legacy CLI environment": re.compile(rf"\b{_LEGACY}\s+CLI\s+environment"),
 }
-
-
-def _read(rel: str) -> str:
-    return (REPO / rel).read_text(encoding="utf-8")
-
-
-# --- the named renames -----------------------------------------------------
-
-def test_every_rename_has_a_name_and_no_duplicate_name():
-    names = [r.name for r in fw.RENAMES]
-    assert len(names) == len(set(names)), "duplicate rename names"
-    assert all(n.strip() for n in names)
-
-
-@pytest.mark.parametrize("rename", fw.RENAMES, ids=[r.name for r in fw.RENAMES])
-def test_rename_matches_the_live_sources(rename):
-    legacy_src = fw.flat(_read(rename.legacy_file))
-    final_src = fw.flat(_read(rename.final_file))
-    legacy_frag = rename.legacy_src or rename.legacy
-    final_frag = rename.final_src or rename.final
-    assert legacy_frag in legacy_src, f"{rename.legacy_file} no longer carries {legacy_frag!r}"
-    assert final_frag in final_src, f"{rename.final_file} does not carry {final_frag!r}"
-    assert legacy_frag not in final_src, f"{rename.final_file} still carries {legacy_frag!r}"
-
-
-@pytest.mark.parametrize("name, legacy, final", fw.FLOORS, ids=[f[0] for f in fw.FLOORS])
-def test_floor_difference_matches_the_live_constants(name, legacy, final):
-    texts = {
-        "json_schema subset selector": (
-            ("plugins/job-kit/lib/job_kit/interrupts.py", f'_JSON_SCHEMA_LSK_VERSION = "{legacy}"'),
-            (str(Path(__import__("llm_kit").__file__).resolve().parent / "jobs/interrupts.py"), f'_JSON_SCHEMA_LSK_VERSION = "{final}"'),
-        ),
-        "classify_backpressure": (
-            ("plugins/content-pipeline-kit/lib/content_pipeline/llm/platform.py",
-             f'_BACKPRESSURE_FLOOR = "{legacy}"'),
-            (str(Path(__import__("llm_kit").__file__).resolve().parent / "pipeline/runtime/platform.py"), f'_BACKPRESSURE_FLOOR = "{final}"'),
-        ),
-    }[name]
-    for (path, fragment) in texts:
-        assert fragment in _read(path), f"{path} does not carry {fragment}"
-
-
-def test_to_final_rewrites_every_legacy_text_and_is_idempotent():
-    for rename in fw.RENAMES:
-        assert fw.to_final(rename.legacy) == rename.final, rename.name
-        assert fw.to_final(rename.final) == rename.final, rename.name
 
 
 # --- no legacy install instruction in a final message ----------------------

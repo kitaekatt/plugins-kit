@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "tests/task-kit/fixtures/task_export/alpha/dev/tasks/build-export/answers/orientation",
+  "decision": "none",
+  "source_sha": "a2707156814e6f7a6c9f4ae7f4bdc36a0666f28a",
+  "input_sha256": "23399a18b2ec688d572631330d91fa89536b419dd168f771dce113df39a8f9a3",
+  "input_shape_sha256": "bf8cd89e662ead7f3da8514224c604a6c0ef48da9213cf347480e78f26a4c622",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

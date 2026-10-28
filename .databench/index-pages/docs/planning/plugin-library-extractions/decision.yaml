@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "docs/planning/plugin-library-extractions",
+  "decision": "none",
+  "source_sha": "7e893931e0179968e1c3bba4f1b1f828d4362c8e",
+  "input_sha256": "a2400a7495cfb16af1431119a75e51b93553bf1a71385f8f7ae20d6d336f8e43",
+  "input_shape_sha256": "2e20f27c91ead3f4771975a09bda98a6b5bc46045f5dca641e3317336cb220ff",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

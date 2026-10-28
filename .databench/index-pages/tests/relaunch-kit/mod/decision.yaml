@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "tests/relaunch-kit/mod",
+  "decision": "none",
+  "source_sha": "c4d82676309f5e999982ac35216937f9bb451500",
+  "input_sha256": "3f7a40ae1b32611d6d895346e638425563647836c83a1ef9c65672029c7a48fd",
+  "input_shape_sha256": "3293257dcb4c90ce0a3ed14fe2727e73b6aa21a174cf36686e1ae8412850a1e2",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

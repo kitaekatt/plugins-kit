@@ -103,8 +103,8 @@ Two forms, in order of preference:
   supposed to detect and report it.
 
 Whichever form, the failure message must name the plugin that provides the
-capability -- "install llm-scripting-kit" is actionable; "No module named
-llm_scripting_kit" is not.
+capability -- "install llm-kit" is actionable; "No module named
+llm_kit" is not.
 
 ### Asking
 
@@ -122,7 +122,7 @@ claude plugin install <plugin>@<marketplace>
 ```
 
 For a plugin declared in this marketplace, that is e.g.
-`claude plugin install llm-scripting-kit@plugins-kit`.
+`claude plugin install llm-kit@plugins-kit`.
 
 ### No restart needed
 

@@ -2,7 +2,7 @@
 Codex-harness entry, so an action survives either usage pool running out.
 
 Every declaration is read from the real shipped file; the family of each id
-comes from llm-scripting-kit's default_config.yaml (`harness: claude|codex`).
+comes from llm_kit.registry.models.DEFAULT_MODEL_CONFIG (`harness: claude|codex`).
 An id with no harness there fails loudly.
 
 Named exemptions (a NEW Claude-only declaration is not exempt and fails):
@@ -17,11 +17,11 @@ from pathlib import Path
 
 import pytest
 import yaml
+from llm_kit.registry.models import DEFAULT_MODEL_CONFIG
 
 ROOT = Path(__file__).resolve().parents[2]
 PLUGINS = ROOT / "plugins"
 
-DEFAULT_CONFIG = PLUGINS / "llm-scripting-kit/lib/llm_scripting_kit/default_config.yaml"
 ORCHESTRATION = PLUGINS / "awesome-kit/skills/orchestrate/defaults/orchestration.yaml"
 REVIEW_PROFILES = PLUGINS / "bootstrap/bootstrap_lib/code_review/defaults/review_profiles.yaml"
 LANE_MODELS = PLUGINS / "skills-kit/skills_kit_lib/defaults/lane_models.yaml"
@@ -36,11 +36,11 @@ def _load(path: Path):
 
 
 def _harness_of(model_id: str) -> str:
-    endpoints = _load(DEFAULT_CONFIG)["endpoints"]
+    endpoints = DEFAULT_MODEL_CONFIG["endpoints"]
     entry = endpoints.get(model_id)
     if not isinstance(entry, dict) or entry.get("harness") not in ("claude", "codex"):
         raise AssertionError(
-            f"model id {model_id!r} has no claude/codex harness in {DEFAULT_CONFIG}"
+            f"model id {model_id!r} has no claude/codex harness in llm_kit DEFAULT_MODEL_CONFIG"
         )
     return entry["harness"]
 

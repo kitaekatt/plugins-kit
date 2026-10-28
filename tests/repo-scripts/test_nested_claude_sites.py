@@ -51,40 +51,12 @@ _LIST_TOKENS = frozenset({"-p", "--print", "--bg", "respawn"})
 _CLAUDE_RESOLVERS = frozenset({"resolve_claude_executable", "resolve_claude_cli"})
 _CLAUDX_MODULE = "bootstrap_lib.claudx"
 
-_DRIVER = "plugins/content-pipeline-kit/lib/content_pipeline/execution/drivers/claude_bg.py"
-_BACKENDS = "plugins/llm-scripting-kit/lib/llm_scripting_kit/completion/backends.py"
-_JOB_RUN = "plugins/job-kit/lib/job_kit/run.py"
-_REACHABILITY = "plugins/llm-scripting-kit/lib/llm_scripting_kit/reachability.py"
 _MARKETPLACE = "plugins/bootstrap/bootstrap_lib/marketplace_lifecycle.py"
 _STUCK_FIX = "plugins/bootstrap-stuck-fix/scripts/repair_update_scope.py"
 _AGEFILE = "plugins/secrets-kit/lib/secrets_kit/agefile.py"
 
 # (relpath, function qualname, rule) -> ("wired", call) | ("exempt", anchor, reason)
 SITES = {
-    (_BACKENDS, "ClaudeCliBackend.complete", "LIST"): ("wired", "_claudx_plugin_args"),
-    (_BACKENDS, "_resolve_claude_executable", "WHICH"): (
-        "exempt", "def _resolve_claude_executable",
-        "resolves the executable only; the argv is built in ClaudeCliBackend.complete",
-    ),
-    (_DRIVER, "ClaudeCli.launch_bg", "LIST"): ("wired", "_refuse_supervised_under_claudx"),
-    (_DRIVER, "ClaudeCli.respawn", "RESPAWN"): ("wired", "_refuse_supervised_under_claudx"),
-    (_DRIVER, "ClaudeCli.resolve_executable", "WHICH"): (
-        "exempt", "def resolve_executable",
-        "resolves the executable only; each argv is built by a method of ClaudeCli",
-    ),
-    (_DRIVER, "preflight", "LIST"): (
-        "exempt", '[executable, "--bg", "-p", "x"]',
-        "the usage-error probe: --bg with -p is rejected before any session starts",
-    ),
-    (_JOB_RUN, "run_contract", "CONTRACT"): ("wired", "_claudx_contract_command"),
-    (_JOB_RUN, "_timed_out_contract", "CONTRACT"): (
-        "exempt", "def _timed_out_contract",
-        "records an Acceptance for a contract that timed out; starts nothing",
-    ),
-    (_REACHABILITY, "check_harness", "WHICH"): (
-        "exempt", '_resolve_cli("claude")',
-        "runs `claude --version`, which starts no session",
-    ),
     (_MARKETPLACE, "_find_claude_cli", "WHICH"): (
         "exempt", "def _find_claude_cli",
         "locates the CLI for `claude plugin ...` management commands, which start no session",
@@ -245,7 +217,19 @@ def test_the_scan_finds_every_rule_in_the_real_tree():
     for relpath in _tree_files():
         source = (_REPO_ROOT / relpath).read_text(encoding="utf-8")
         seen_rules.update(rule for _q, rule, _n in scan(source, relpath)[0])
-    assert seen_rules == {"WHICH", "LIST", "RESPAWN", "CONTRACT"}
+    # RESPAWN and CONTRACT sites lived in the removed content-pipeline-kit and job-kit
+    # libraries; their detectors are shown to fire on planted source below.
+    assert seen_rules == {"WHICH", "LIST"}
+
+
+def test_the_respawn_and_contract_detectors_fire_on_planted_source():
+    planted = (
+        "def go(runner, contract):\n"
+        "    runner('claude', 'respawn')\n"
+        "    return contract.command\n"
+    )
+    rules = {rule for _q, rule, _n in scan(planted, "planted.py")[0]}
+    assert {"RESPAWN", "CONTRACT"} <= rules, rules
 
 
 def test_every_table_file_is_scanned():
@@ -258,7 +242,8 @@ _WIRED = sorted(key for key, entry in SITE_TABLE.items() if entry[0] == "wired")
 
 
 def test_there_are_wired_sites_to_mutate():
-    assert {key[2] for key in _WIRED} >= {"LIST", "RESPAWN", "CONTRACT"}
+    # Every wired site lived in a removed library; the plugins now hold exemptions only.
+    assert _WIRED == []
 
 
 @pytest.mark.parametrize("key", _WIRED, ids=lambda k: f"{Path(k[0]).name}:{k[1]}")

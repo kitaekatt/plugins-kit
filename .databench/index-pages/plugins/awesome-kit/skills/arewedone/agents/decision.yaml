@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/awesome-kit/skills/arewedone/agents",
+  "decision": "none",
+  "source_sha": "2e84f301d63e4d384278c30feb005d0e268c420d",
+  "input_sha256": "4570e2aee8212762418731ee95bce9e370b4b93a8ca44772e9daefb7874d27d3",
+  "input_shape_sha256": "4f63436ff74e07e6d84bf70a93de31d64d8e92f25c6c23b1edff1bce7311d24b",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

@@ -48,7 +48,7 @@ array literal, and a repeated command-line flag all carry the same list.
 
 An id names WHAT model runs. A provider is what serves a set of ids: the
 Claude harness serves `fable`, `opus`, `sonnet`, and `haiku`; other providers
-serve the ids that the llm-scripting-kit model registry declares. HOW an id is
+serve the ids that the llm-kit model registry declares. HOW an id is
 driven -- an Agent subagent, a `claude -p` process, a CLI harness, an HTTP
 endpoint -- is decided by the id's registry entry and by the calling site,
 never by the spelling of the id.
@@ -58,7 +58,7 @@ never by the spelling of the id.
 `fable`, `opus`, `sonnet`, and `haiku` are the CORE ids
 (`bootstrap_lib.model_declaration.CORE_IDS`). The harness itself defines them,
 so they are valid on every installation and every plugin can route them
-without llm-scripting-kit. The set is closed and case-sensitive: `Opus` and
+without llm-kit. The set is closed and case-sensitive: `Opus` and
 `sonnett` are ordinary ids, not core ids.
 
 The core ids are reserved for the Claude harness. Do not define a registry
@@ -81,7 +81,7 @@ either prefix. To the validator a prefixed entry is an ordinary string.
 ## Validation
 
 `bootstrap_lib.model_declaration` checks SHAPE and nothing else. It is
-stdlib-only, reads no file, and never imports llm-scripting-kit.
+stdlib-only, reads no file, and never imports llm-kit.
 
 | Call | Result |
 |---|---|

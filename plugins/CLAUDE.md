@@ -104,7 +104,7 @@ unconfigurable opinion whose test passes is a finding.
   task system whose retirement step is manual, and should either accept that or drive
   submission themselves; there is no half-working git path to be surprised by.
 
-- **job-kit selects deterministically: a run is explainable from the declared list plus
+- **llm-kit selects deterministically: a run is explainable from the declared list plus
   the logged pace readings.** No scoring, no learned or adaptive routing: a job's
   `models` declaration is ranked by llm-kit's `describe(caller="process")` --
   unusable entries skipped silently, paced entries ordered by pace, unpaced entries in
@@ -114,7 +114,7 @@ unconfigurable opinion whose test passes is a finding.
   must be explainable from what it recorded, because nobody is watching to notice that
   the runner chose differently than last time. Judgment-driven routing is a session
   concern: that user wants `awesome-kit:orchestrate`, whose whole job is deciding, not a
-  runner whose job is executing a decision already made. Within a run, job-kit only ever
+  runner whose job is executing a decision already made. Within a run, llm-kit only ever
   NARROWS the declared list -- an endpoint that returned a persistent halt, a spent quota
   included, is excluded from later attempts and jobs -- and the ledger records every
   exclusion. When nothing usable remains, the job ends with the floor, which itemises
@@ -130,7 +130,7 @@ unconfigurable opinion whose test passes is a finding.
   difference. The alternative for that team is to state the narrower endpoint preference
   they actually mean.
 
-- **job-kit privileges git as the only workspace-isolation VCS.** Per-attempt worktrees,
+- **llm-kit privileges git as the only workspace-isolation VCS.** Per-attempt worktrees,
   which a job requests with `workspace.isolate: true`, are git-only, for the same reason as
   task-kit:task's entry: a second VCS backend would ship untested and fail first on a
   consumer's machine. The degradation is bounded and recorded, never silent -- a job that
@@ -138,7 +138,7 @@ unconfigurable opinion whose test passes is a finding.
   directory and the attempt row says `workspace: none`. A Perforce team gets a working
   runner whose isolation is manual, not a half-working git path.
 
-- **Above `max_parallel: 1`, job-kit forfeits ordering and offers nothing to get it
+- **Above `max_parallel: 1`, llm-kit forfeits ordering and offers nothing to get it
   back.** Jobs are submitted in declaration order and complete in any order; there is no
   priority, no ordering flag, and no DAG. A team that wants "run these four in parallel
   but that one last" has no way to say it, and their remedy is two runs. We refuse an
@@ -148,7 +148,7 @@ unconfigurable opinion whose test passes is a finding.
   workflow-kit's job.
 
 - **A halt narrows dispatch, and never cancels an attempt already running.** When an
-  endpoint returns a persistent halt, job-kit excludes it from jobs dispatched afterwards
+  endpoint returns a persistent halt, llm-kit excludes it from jobs dispatched afterwards
   and lets every in-flight attempt on it finish. A team could reasonably want the run to
   stop dead -- they are paying for calls that are likely to fail -- and their remedy is a
   narrower `max_parallel` or a narrower endpoint preference. We refuse to make cancellation
@@ -157,7 +157,7 @@ unconfigurable opinion whose test passes is a finding.
   observed, and a killed attempt has no observed outcome to report. The same reasoning
   makes Ctrl-C stop dispatch rather than work.
 
-- **One job-kit process per ledger.** A run is driven by one process; the parallelism is
+- **One llm-kit process per ledger.** A run is driven by one process; the parallelism is
   threads inside it. Two processes over one ledger is unsupported and undetected -- there
   is no claim or lease column, so nothing refuses the second one. A team could reasonably
   want to fan a run across machines, and their remedy is one run per machine. We refuse a
@@ -167,15 +167,15 @@ unconfigurable opinion whose test passes is a finding.
   answer is a lease plus an expiry plus a fencing token, which is a distributed runner --
   a different plugin, not a column.
 
-- **job-kit continues an answered interrupt at least once, never exactly once.** A
+- **llm-kit continues an answered interrupt at least once, never exactly once.** A
   process lost or interrupted mid-continuation returns the job to `waiting` and the next
   `resume` re-runs the contract. A team could reasonably want at-most-once for a
   side-effecting approval, and their remedy is a contract that makes its own side effect
-  idempotent. We refuse a mode switch because job-kit cannot observe what a killed contract
+  idempotent. We refuse a mode switch because llm-kit cannot observe what a killed contract
   did, so it cannot make an arbitrary side effect idempotent; it guarantees a stable key
   instead (`JOB_KIT_INTERRUPT_ID` plus a byte-identical resolution document). Exactly-once
   needs a lease plus fencing, which the entry above refuses. See the README section
-  "Durable interrupts" in `job-kit/README.md`.
+  "Durable interrupts" in `plugins/llm-kit/references/jobs.md`.
 
 - **A recorded forced worktree removal stays forced.** Once `gc --force` has begun
   removing an attempt's worktree, a later `gc` over that attempt continues as forced even
@@ -187,7 +187,7 @@ unconfigurable opinion whose test passes is a finding.
   was invoked to clear. The remedy for an accidental `--force` is that the ledger records
   it: the attempt row says the removal was forced and by which pass.
 
-- **job-kit bounds every Git call, on two fixed budgets rather than one setting.** A
+- **llm-kit bounds every Git call, on two fixed budgets rather than one setting.** A
   metadata probe (`rev-parse`, `worktree list`) gets a short bound and is presumed hung
   past it; an operation that writes or walks a working tree (`worktree add`, `status
   --untracked-files=all`, `worktree remove`, `worktree prune`) gets a long one, because on
@@ -198,7 +198,7 @@ unconfigurable opinion whose test passes is a finding.
   a value a user can raise to infinity is not a guard. A run's own `--timeout` is the
   budget users are meant to set.
 
-- **job-kit confirms an unreachable endpoint with two sequential attempts, then excludes
+- **llm-kit confirms an unreachable endpoint with two sequential attempts, then excludes
   it for the run.** `unreachable` halts one attempt; exclusion occurs only when a second
   unreachable attempt starts after the first ends, with no non-unreachable attempt
   between them. A team could reasonably want more confirmations, or never to exclude an
@@ -353,7 +353,7 @@ no more.
   reach for one. Direction either way, toward worktrees or away from them, is out of scope
   for a plugin.
 - A plugin creates a worktree only when the user's job or configuration asks for one.
-  job-kit's per-attempt worktrees are opt-in (`workspace.isolate: true`).
+  llm-kit's per-attempt job worktrees are opt-in (`workspace.isolate: true`).
 - This is not a razor opinion with a default. There is no default to configure and no
   register entry, because the plugin holds no view.
 
@@ -457,7 +457,7 @@ new positional slot), not the version that first exported the symbol.
 
 **Plugin boundaries are hard boundaries for cohesion work.** Never move content between plugins -- or into another plugin -- to achieve skill cohesion. Plugins are independently versioned, installed, and bootstrapped units; relocating a skill/reference across a plugin boundary to satisfy CCP/CRP/ADP breaks that independence (cross-plugin caches, dependency edges, version coupling) and is never worth the cohesion gain. Cohesion refactors operate *within* a plugin only. When you spot a genuine cohesion opportunity that spans plugins -- two doer-skills in different plugins sharing a subject (e.g. git-kit `git-code-review` + p4-kit `p4-code-review`), a reference duplicated across plugins, a shared substrate two plugins both consume -- **surface it as an insight** (a `claude_md:` insight or a note in the relevant skill), do **not** act on it by relocation or by spawning a unifying plugin. Sharing across plugins is done through a library both depend on (e.g. `bootstrap_lib.code_review`), not by merging the skills.
 
-**Approved consolidation exception: llm-kit.** The llm-kit merge, signed off in `docs/reference/llm-kit-architecture.md`, may copy and restructure behavior from llm-scripting-kit, content-pipeline-kit and job-kit into llm-kit. The old plugins retain their source during migration and freeze. This exception does not generalize to other plugin-boundary cohesion work. Every renamed or removed public name follows `docs/reference/deprecation-policy.md`.
+**Approved consolidation exception: llm-kit.** The llm-kit merge, signed off in `docs/reference/llm-kit-architecture.md`, copied and restructured behavior from the former llm-scripting-kit, content-pipeline-kit and job-kit plugins into llm-kit; those plugins have since been deleted. This exception does not generalize to other plugin-boundary cohesion work. Every renamed or removed public name follows `docs/reference/deprecation-policy.md`.
 
 **Reference file design** (within a skill): each reference serves a single audience and changes for a single reason (same cohesion framework). See `plugins/bootstrap/skills/bootstrap/` for the gold standard -- references split by audience with clean change boundaries.
 
@@ -521,10 +521,8 @@ must not assume it is there: probe for it at import (a guarded `getattr` /
 `try`/`except ImportError`) and fail with a message naming the owning plugin,
 the version the symbol first shipped in, and the `claude plugin install` or
 `update` command that fixes it -- never a manifest the consumer cannot edit --
-rather than crash on a raw `AttributeError` deep in a call path. job-kit's
-`select.py` is the worked example of this guard against
-`llm_scripting_kit.completion`; the frozen job-kit plugin keeps it, and llm-kit's
-`llm_kit.jobs.select` has no such guard because jobs and completion ship in one
+rather than crash on a raw `AttributeError` deep in a call path. llm-kit's
+`llm_kit.jobs.select` needs no such guard because jobs and completion ship in one
 library. This is the one statement of that rule; the
 optional-dependency section above defers to it.
 
@@ -574,23 +572,20 @@ renderer to a codex-specific module. Change both copies together.
 
 The durable-interrupt rules execute in `katsoft_contracts.interrupt_contract`,
 which `bootstrap_lib/interrupt_contract.py` aliases (module identity, no copy), for
-both job-kit and content-pipeline-kit: the request and
+llm-kit jobs and content pipelines: the request and
 resolution envelopes, the size and expiry limits, answer validation, the
 replay test, expiry arithmetic and the resolution document. It also defines the
-lapse rule; content-pipeline-kit calls it when it records an expiry, while
-job-kit runs its own copy (`job_kit.model.interrupt_lapsed`), held equal by
-`tests/job-kit/test_interrupts_contract_parity.py`. The module is stdlib-only
+lapse rule; the pipeline store calls it when it records an expiry, while
+the job store runs its own copy. The module is stdlib-only
 and imports no plugin, and it imports no validator either: the caller passes one,
 and the contract refuses any validator that does not advertise the subset
 literal `llm-scripting-kit.json-schema-subset/v1` and selects that subset with
 `subset=` on every call, so a keyword added to the validator later cannot
 change what an accepted request means. Each implementing plugin keeps its own
-store, its own continuation (job-kit re-runs the job's contract,
-content-pipeline-kit offers the unit again) and its own event phases, reaches
+store, its own continuation (jobs re-run the job's contract,
+pipelines offer the unit again) and its own event phases, reaches
 the contract and the validator through a lazy probe that REFUSES with a named
 install or update command, and declares no edge to the other plugin.
-`tests/bootstrap/test_interrupt_contract_consumers.py` drives both real stores
-with one request and one answer and compares what they record, refuse and emit.
 
 `bootstrap_lib/skill_material.py` is consumed by llm-kit
 (`completion/skill_context.py`) and skills-kit (`skills_kit_lib/material.py`);
@@ -783,8 +778,8 @@ safe with nothing to remember:
 os.environ.setdefault("_BOOTSTRAP_GUARD_SKIP_REEXEC", "1")
 ```
 
-Current setters: `tests/awesome-kit`, `tests/git-kit`, `tests/job-kit`,
-`tests/llm-kit`, `tests/llm-scripting-kit`, `tests/p4-kit`, `tests/pdf-kit`, `tests/skills-kit`, `tests/task-kit`,
+Current setters: `tests/awesome-kit`, `tests/git-kit`,
+`tests/llm-kit`, `tests/p4-kit`, `tests/pdf-kit`, `tests/skills-kit`, `tests/task-kit`,
 `tests/unreal-kit`, `tests/workflow-kit`. A dir whose tests import a re-execing script and which does
 NOT set this is a latent false green, and the failure hides itself: in a
 full-suite run an earlier conftest (alphabetically, `tests/awesome-kit`) sets
@@ -805,10 +800,10 @@ to the script that imports them (e.g. `plugins/p4-kit/scripts/bootstrap_guard.py
 location. `tests/bootstrap/test_bootstrap_guard.py` asserts every copy matches
 the canonical, and the guard must never `import bootstrap_lib`. Vendored
 copies: `git-kit/scripts`, `p4-kit/scripts`, `skills-kit/scripts`,
-`unreal-kit/lib`, `hue-kit/scripts`, `job-kit/lib`,
+`unreal-kit/lib`, `hue-kit/scripts`,
 `task-kit/skills/task/scripts`,
 `awesome-kit/skills/orchestrate/scripts`,
-`llm-scripting-kit/lib/llm_scripting_kit`, `llm-kit/bin`, `workflow-kit/scripts`,
+`llm-kit/bin`, `workflow-kit/scripts`,
 `pdf-kit/skills/html-pdf/scripts`.
 
 **The test globs `plugins/**/bootstrap_guard.py`, so it is the authority on that
@@ -979,11 +974,11 @@ so classifying it as a provider halt makes the consumer exclude a perfectly
 healthy endpoint, and (where the halt is persistent) collapse a retry budget it
 believes it still has.
 
-job-kit hit this twice, with two different transports and the same reasoning:
+The jobs runner hit this twice, with two different transports and the same reasoning:
 
 - CLI backends -- llm-kit (`llm_kit.completion.halt`) maps `AgentTimeoutError` to
   `HALT_RATE_LIMIT`, which is correct for a caller that did NOT set the
-  timeout ("CLI-layer backoff is functionally a rate limit"). job-kit did, so
+  timeout ("CLI-layer backoff is functionally a rate limit"). the jobs runner did, so
   `max_attempts: 3` silently became one attempt.
 - HTTP backends -- `OpenRouterBackend` began honoring `timeout_s` as the
   OpenAI client timeout, and `openai.APITimeoutError` is a SUBCLASS of
@@ -1024,7 +1019,7 @@ A removed or renamed public name keeps a shim that emits `DeprecationWarning`
 for two minor versions, and a behavior change from success to raise follows
 the same window. Policy, rationale, and the contract-listing convention:
 [docs/reference/deprecation-policy.md](../docs/reference/deprecation-policy.md).
-content-pipeline-kit's listing and guard are the reference implementation.
+llm-kit's listing (`contract/public-surface.json`) and guard are the reference implementation.
 
 A brief or plan that deletes, renames, or changes the signature of a
 module-level name in a plugin library cites

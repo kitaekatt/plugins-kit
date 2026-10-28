@@ -96,7 +96,7 @@ PROMPT = "Reply with exactly: ok"
 
 # Routing rows are model declarations. The core ids are the harness's own and
 # come from the one declaration validator; every other id must resolve
-# through llm-scripting-kit to one of these CLI harnesses. The deprecated
+# through llm-kit to one of these CLI harnesses. The deprecated
 # `agent:<id>` prefix is no longer accepted (declaration-format migration
 # step 12); an `agent:<id>` entry is now an ordinary unresolved id.
 sys.path.insert(0, str(REPO_ROOT / "plugins" / "bootstrap"))
@@ -160,7 +160,7 @@ def _load_harness_models(project_root: Path) -> tuple[Mapping[str, Any], list[st
     This import stays lazy because repo-script tests must load this module
     without re-executing into a plugin venv. The imported function is the
     orchestrate renderer's resolver, not a second implementation of its
-    llm-scripting-kit compatibility checks.
+    llm-kit compatibility checks.
     """
     scripts_dir = ORCHESTRATE / "scripts"
     if str(scripts_dir) not in sys.path:

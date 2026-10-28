@@ -83,7 +83,7 @@ rest declare it as a dependency, so installing any of them pulls it in.
 | **hue-kit** | Automation | Philips Hue layered-scene framework -- bridge sync, YAML scenes, meta-group solver. |
 | **awesome-kit** | Utility | Cross-domain skills -- communication framework, `/plugin-ecosystem`, background-agent orchestration, task tracking. |
 | **pdf-kit** | Utility | Convert an HTML file to a PDF via headless Chromium (`/html-pdf`). |
-| **llm-scripting-kit** | Utility | LLM key resolution, shared model registry, and named OpenAI-compatible endpoints (OpenRouter is the default). |
+| **llm-kit** | Utility | LLM access (key resolution, model registry, named OpenAI-compatible endpoints), durable agent jobs, and batch content pipelines. |
 | **claude-ui-kit** | Utility | Status line with context-window and rate-limit threshold colors, plus `/statusline`. |
 | **cache-kit** | Utility | Cache-usage reporting from transcripts -- per-request and session-level hit analysis. |
 | **bootstrap-stuck-fix** | Maintenance | Temporary shim repairing a wedged bootstrap registry record. |
