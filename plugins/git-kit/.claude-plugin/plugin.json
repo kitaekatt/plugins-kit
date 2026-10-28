@@ -1,6 +1,6 @@
 {
   "name": "git-kit",
-  "version": "0.51.3",
+  "version": "0.52.0",
   "dependencies": [
     "bootstrap"
   ],

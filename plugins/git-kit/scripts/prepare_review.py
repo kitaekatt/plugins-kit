@@ -7,6 +7,28 @@ Usage:
     prepare_review.py <a>...<b>         # review the symmetric difference (merge-base..b)
     prepare_review.py --staged          # review index vs HEAD
     prepare_review.py --working         # review working tree vs HEAD (uncommitted)
+    prepare_review.py --snapshot <commit-ish> [--base <commit-ish>]
+                                        # review <base>..<snapshot> on a FROZEN copy
+
+`--snapshot S` reviews `B..S` (B defaults to `S^1`) through the committed-range
+path, and gives every reader a frozen copy of S instead of the live checkout:
+S is materialized into `<bundle_dir>/tree/`, and `local`, the CLAUDE.md walk, the
+submit-gate scan and `project_root` all point there. Git commands still run in the
+live repository (same object database). The bundle dir is
+`<bundle-root>/<repo-name>-<hash>/snap-<sha12>/`. Git-IGNORED files under the live
+`.claude/` and `.local-data/` are copied into the tree (never over a tracked file):
+they hold per-developer review config and credentials the readers need. The live
+untracked/unstaged and merge-conflict scans describe the live tree, not the
+subject, so both lists are empty. The ledger identity (`change_id`,
+`ledger_baseline`) is the one the same review without `--snapshot` has, so declines
+collapse across snapshots: a snapshot cut by `snapshot_review.py freeze` (uncommitted
+work) takes `--working`'s (`<repo>:__working_tree__`, baseline = the HEAD it was
+cut from; a delta review shares it), and a committed tip takes
+`<repo>:<base>..<tip>` as typed, baseline = the base SHA. Combining `--snapshot` with a positional range
+exits 2. The bundle gains a top-level key:
+    "snapshot": {"commit": <sha>, "base": <sha>, "tree": <tree sha>,
+                 "ref": "refs/git-kit/review/<sha12>", "review_root": <abs path>,
+                 "live_root": <abs path>}
 
 Any invocation also accepts `--claim <glob>` (repeatable). A changed file whose
 repo-relative path matches a claim glob is held back from the generic reviewer
@@ -52,11 +74,11 @@ Output schema:
     {
       "vcs": "git",
       "range": "<the diff range we reviewed, e.g. origin/main..HEAD>",
-      "head_sha": "<short sha of HEAD>",
+      "head_sha": "<short sha of HEAD; of the snapshot commit under --snapshot>",
       "branch": "<current branch name or 'DETACHED'>",
       "auto_detected_reason": "<human-readable reason chosen, omitted if explicit>",
       "description": "<one or more commit subjects joined by '; '>",
-      "project_root": "<absolute path to the git repo root>",
+      "project_root": "<absolute path to the git repo root; the frozen tree under --snapshot>",
       "bundle_dir": "<absolute path to bundle directory>",
       "diff_chunks": [
         {"index": 0, "path": "chunks/chunk-000.diff",
@@ -115,6 +137,7 @@ import importlib
 import inspect
 import os
 import re
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -1045,6 +1068,224 @@ def _snapshot_section_effects(section: dict) -> tuple[str, str | None, str]:
     return "M", None, new_path
 
 
+# ---------------------------------------------------------------------------
+# Snapshot mode -- review a frozen commit through a frozen copy of its tree
+# ---------------------------------------------------------------------------
+
+# The ref a snapshot commit is pinned under (written by snapshot_review.py,
+# which owns the lifecycle). It is reported in the bundle whether or not it
+# exists: prepare_review never creates or deletes it.
+_SNAPSHOT_REF_PREFIX = "refs/git-kit/review/"
+_SNAPSHOT_DIR_PREFIX = "snap-"
+_SNAPSHOT_TREE_DIRNAME = "tree"
+_SNAPSHOT_INDEX_FILENAME = "snap.index"
+# Live directories whose git-IGNORED files are copied into the frozen tree:
+# per-developer review config (`.claude/*.local.*`) and `.local-data/`, which
+# may hold `.env` credentials (the llm_kit registry api_key) that endpoint
+# lanes need. They are configuration, not review subject.
+_SNAPSHOT_IGNORED_CONFIG_DIRS = (".claude", ".local-data")
+# Author email snapshot_review.py gives every commit it freezes (its _IDENTITY).
+# It is how a frozen snapshot of UNCOMMITTED work is told from a committed tip.
+_FREEZE_AUTHOR_EMAIL = "git-kit-review-snapshot@invalid"
+
+
+@dataclass(frozen=True)
+class SnapshotSpec:
+    """A resolved `--snapshot` request: the frozen commit and where it is read."""
+
+    commit: str
+    base: str
+    tree: str
+    ref: str
+    review_root: Path
+    live_root: Path
+    # Declined-findings ledger identity: `change_key` is the part of
+    # `bundle.change_id` after `<repo>:`, `ledger_baseline` the staleness token.
+    change_key: str = ""
+    ledger_baseline: str = ""
+
+    def as_bundle_value(self) -> dict:
+        return {
+            "commit": self.commit,
+            "base": self.base,
+            "tree": self.tree,
+            "ref": self.ref,
+            "review_root": str(self.review_root),
+            "live_root": str(self.live_root),
+        }
+
+
+def _rev_parse(rev: str, suffix: str, what: str) -> str:
+    if not rev or rev.startswith("-"):
+        raise ValueError(f"invalid {what}: {rev!r}")
+    rc, out, err = run_git(["rev-parse", "--verify", f"{rev}{suffix}"])
+    if rc != 0 or not out.strip():
+        raise ValueError(
+            f"could not resolve {what} {rev!r}: {err.strip() or 'not a commit'}"
+        )
+    return out.strip()
+
+
+def _run_git_with_env(
+    args: list[str], env_overrides: dict[str, str], cwd: Path
+) -> None:
+    """Run git with extra environment; raise ValueError on any failure."""
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=str(cwd),
+            env={**os.environ, **env_overrides},
+            timeout=_git_timeout_s(),
+        )
+    except subprocess.TimeoutExpired as e:
+        raise ValueError(f"git {' '.join(args)} timed out after {e.timeout}s") from e
+    if proc.returncode != 0:
+        raise ValueError(
+            f"git {' '.join(args)} failed: {(proc.stderr or '').strip() or 'no output'}"
+        )
+
+
+def snapshot_bundle_dir(repo_root: Path, commit: str) -> Path:
+    """`<bundle-root>/<repo>/snap-<sha12>`: one directory per snapshot commit."""
+    return (
+        DEFAULT_BUNDLE_ROOT
+        / _repo_dir_name(repo_root)
+        / f"{_SNAPSHOT_DIR_PREFIX}{commit[:12]}"
+    )
+
+
+def materialize_snapshot_tree(repo_root: Path, commit: str, bundle_dir: Path) -> Path:
+    """Write the tree of `commit` to `<bundle_dir>/tree/` and return that path.
+
+    A private, absolute `GIT_INDEX_FILE` keeps the shared index untouched;
+    `core.longpaths` is required for real repositories on Windows;
+    `GIT_LFS_SKIP_SMUDGE` leaves LFS files as pointers (no network, no size).
+    `core.sparseCheckout=false` stops a sparse live checkout from marking
+    entries skip-worktree and silently leaving them out of the frozen copy.
+    A tree left by an earlier run of the same snapshot is replaced.
+    """
+    bundle_dir = bundle_dir.resolve()
+    tree_dir = bundle_dir / _SNAPSHOT_TREE_DIRNAME
+    index_file = bundle_dir / _SNAPSHOT_INDEX_FILENAME
+    if tree_dir.exists():
+        shutil.rmtree(tree_dir)
+    index_file.unlink(missing_ok=True)
+    env = {"GIT_INDEX_FILE": str(index_file), "GIT_LFS_SKIP_SMUDGE": "1"}
+    try:
+        _run_git_with_env(
+            ["-c", "core.sparseCheckout=false", "read-tree", commit], env, repo_root
+        )
+        tree_dir.mkdir(parents=True)
+        _run_git_with_env(
+            [
+                "-c", "core.longpaths=true",
+                "-c", "core.sparseCheckout=false",
+                "checkout-index", "-a", "-f",
+                f"--prefix={tree_dir.as_posix()}/",
+            ],
+            env,
+            repo_root,
+        )
+    finally:
+        index_file.unlink(missing_ok=True)
+    return tree_dir
+
+
+def copy_ignored_config(repo_root: Path, tree_root: Path) -> list[str]:
+    """Copy git-ignored files under the live config dirs into the frozen tree.
+
+    Returns the repo-relative paths copied. A path the frozen tree already
+    holds is never overwritten: the tree is the snapshot, and an ignored live
+    file at a tracked path is not part of it.
+    """
+    rc, out, err = run_git(
+        [
+            "ls-files", "-z", "--others", "--ignored", "--exclude-standard",
+            "--", *_SNAPSHOT_IGNORED_CONFIG_DIRS,
+        ],
+        cwd=repo_root,
+    )
+    if rc != 0:
+        raise ValueError(f"git ls-files (ignored config) failed: {err.strip() or 'no output'}")
+    copied: list[str] = []
+    for rel in out.split("\0"):
+        if not rel:
+            continue
+        src = repo_root / rel
+        dest = tree_root / rel
+        if os.path.lexists(dest) or not src.is_file():
+            continue
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest)
+        except OSError as e:
+            raise ValueError(f"could not copy ignored config {rel!r} into the snapshot: {e}") from e
+        copied.append(rel)
+    return copied
+
+
+def _snapshot_ledger_identity(
+    commit: str, base: str, snapshot_arg: str, base_arg: Optional[str]
+) -> tuple[str, str]:
+    """(change_key, baseline) for the declined-findings ledger of a snapshot review.
+
+    A freeze snapshot is uncommitted work parented on the HEAD it was cut from,
+    so it takes the identity a `--working` review at that HEAD has
+    (`__working_tree__`, baseline = that HEAD). Every freeze of the same work at
+    the same HEAD, delta reviews (`--base <first snapshot>`) included, therefore
+    shares one ledger entry set, and a moved HEAD makes the entries stale just
+    as it does for `--working`. A committed tip keeps the identity the plain
+    range has: `<base as typed>..<tip as typed>`, baseline = the base SHA.
+    """
+    rc, email, _ = run_git(["log", "-1", "--format=%ae", commit])
+    if rc == 0 and email.strip() == _FREEZE_AUTHOR_EMAIL:
+        rc, parent, _ = run_git(["rev-parse", "--verify", "--quiet", f"{commit}^1^{{commit}}"])
+        if rc == 0 and parent.strip():
+            return "__working_tree__", parent.strip()
+    return f"{base_arg or snapshot_arg + '^1'}..{snapshot_arg}", base
+
+
+def prepare_snapshot(
+    snapshot_arg: str, base_arg: Optional[str]
+) -> tuple[SnapshotSpec, str, Path]:
+    """Resolve `--snapshot`/`--base`, materialize the tree; return (spec, range, bundle_dir)."""
+    repo_root = get_repo_root()
+    if repo_root is None:
+        raise ValueError("not inside a git repository")
+    commit = _rev_parse(snapshot_arg, "^{commit}", "snapshot")
+    tree = _rev_parse(commit, "^{tree}", "snapshot tree")
+    if base_arg is None:
+        rc, _, _ = run_git(["rev-parse", "--verify", "--quiet", f"{commit}^1"])
+        if rc != 0:
+            raise ValueError(
+                f"snapshot {commit[:12]} has no parent commit; pass --base <commit-ish>"
+            )
+        base = _rev_parse(commit, "^1^{commit}", "snapshot base")
+    else:
+        base = _rev_parse(base_arg, "^{commit}", "--base")
+    bundle_dir = snapshot_bundle_dir(repo_root, commit)
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    review_root = materialize_snapshot_tree(repo_root, commit, bundle_dir)
+    copy_ignored_config(repo_root, review_root)
+    change_key, ledger_baseline = _snapshot_ledger_identity(commit, base, snapshot_arg, base_arg)
+    spec = SnapshotSpec(
+        commit=commit,
+        base=base,
+        tree=tree,
+        ref=f"{_SNAPSHOT_REF_PREFIX}{commit[:12]}",
+        # Resolved once, so `project_root`, every `local` and the CLAUDE.md
+        # chain (all resolve()d downstream) share one spelling of the prefix.
+        review_root=review_root.resolve(),
+        live_root=repo_root,
+        change_key=change_key,
+        ledger_baseline=ledger_baseline,
+    )
+    return spec, f"{base}..{commit}", bundle_dir
+
+
 def build_bundle(
     range_spec: str,
     bundle_dir: Path,
@@ -1052,6 +1293,7 @@ def build_bundle(
     claim_globs: Optional[list[str]] = None,
     ledger_path: Optional[Path] = None,
     review_machine_emitted: bool = False,
+    frozen: Optional[SnapshotSpec] = None,
 ) -> dict:
     """Gather context for `range_spec`, write chunks to disk, return the index bundle.
 
@@ -1074,17 +1316,32 @@ def build_bundle(
     because the review target is the GENERATOR, not its output.
     `review_machine_emitted=True` disables that exclusion for an author who
     explicitly wants the full review.
+
+    With `frozen` (a SnapshotSpec), every reader of the working copy is pointed
+    at the frozen tree (`frozen.review_root`) instead: the `local` paths, the CLAUDE.md
+    walk and config layers (assemble_bundle's `workspace_root`), the submit-gate
+    scan and `project_root`. Git commands still run in the live repository --
+    same object database -- and the diff, pre-images and post-images already
+    came from it. The live untracked/unstaged and merge-conflict scans describe
+    the live tree rather than the subject, so both lists are empty.
     """
     claim_globs = claim_globs or []
-    repo_root = get_repo_root()
-    if repo_root is None:
+    live_root = get_repo_root()
+    if live_root is None:
         raise ValueError("not inside a git repository")
+    # `repo_root` stays the LIVE repository for every git invocation and the
+    # per-repo bundle/ledger names; `read_root` is where files are read from.
+    repo_root = live_root
+    read_root = frozen.review_root if frozen is not None else live_root
 
     capture = capture_git_snapshot(range_spec)
     diff = capture.diff
     description = fetch_description(range_spec)
 
-    rc, head_out, _ = run_git(["rev-parse", "--short", "HEAD"])
+    # The reviewed tip: the snapshot commit under --snapshot, else the live HEAD.
+    rc, head_out, _ = run_git(
+        ["rev-parse", "--short", frozen.commit if frozen is not None else "HEAD"]
+    )
     head_sha = head_out.strip() if rc == 0 else ""
     branch = get_current_branch() or "DETACHED"
 
@@ -1099,7 +1356,7 @@ def build_bundle(
         {
             "identifier": new_path,
             "path": new_path,
-            "local": str((repo_root / new_path).resolve()),
+            "local": str((read_root / new_path).resolve()),
             "status": status,
             "_old_path": old_path,
         }
@@ -1176,7 +1433,7 @@ def build_bundle(
         files=files,
         bundle_dir=bundle_dir,
         max_chunk_bytes=MAX_CHUNK_BYTES,
-        workspace_root=repo_root,
+        workspace_root=read_root,
         claim_globs=claim_globs,
         # Deliberately the OLD kwarg spelling. git-kit and bootstrap are
         # versioned and cached independently, so a new git-kit routinely runs
@@ -1220,21 +1477,33 @@ def build_bundle(
             seen_dirs.add(d)
             touched_dirs.append(d)
 
-    untracked_or_unstaged = find_untracked_or_unstaged(repo_root, touched_dirs)
-    untracked_or_unstaged = _filter_hygiene_kinds_for_mode(untracked_or_unstaged, range_spec)
-    merge_conflicts = find_merge_conflicts(repo_root)
+    if frozen is None:
+        untracked_or_unstaged = find_untracked_or_unstaged(repo_root, touched_dirs)
+        untracked_or_unstaged = _filter_hygiene_kinds_for_mode(
+            untracked_or_unstaged, range_spec
+        )
+        merge_conflicts = find_merge_conflicts(repo_root)
+    else:
+        # Both scans describe the live tree (what someone is editing now), not
+        # the frozen subject; reporting them would send the author to "fold in"
+        # work that is deliberately outside this review.
+        untracked_or_unstaged = []
+        merge_conflicts = []
 
     # Declined-findings ledger. The baseline is the range base SHA; when it moves
     # (origin/main advances, HEAD changes for working-tree mode) previously-
     # declined findings re-surface. Falls back to head_sha when no base resolves.
     ledger_baseline = _range_base_sha(range_spec) or head_sha or ""
+    ledger_key = range_spec
+    if frozen is not None and frozen.change_key:
+        ledger_key, ledger_baseline = frozen.change_key, frozen.ledger_baseline
     # Prefixed with the per-repository name (same helper the bundle_dir uses,
     # see its own docstring note): the range spec alone is the SAME string in
     # every repo, and range sentinels like __working_tree__ are identical
     # across repos too, so two worktrees or two clones at the same HEAD would
     # otherwise share one ledger entry -- a finding declined in one silently
     # collapses in the other, where the working tree differs.
-    change_id = f"{_repo_dir_name(repo_root)}:{range_spec}"
+    change_id = f"{_repo_dir_name(repo_root)}:{ledger_key}"
     ledger_hits = ledger.ledger_hits(ledger_path or _ledger_path(), change_id, ledger_baseline)
 
     bundle: dict = {
@@ -1243,7 +1512,7 @@ def build_bundle(
         "head_sha": head_sha,
         "branch": branch,
         "description": description,
-        "project_root": str(repo_root),
+        "project_root": str(read_root),
         "bundle_dir": core["bundle_dir"],
         "diff_chunks": core["diff_chunks"],
         "changed_files": changed_files,
@@ -1259,6 +1528,8 @@ def build_bundle(
     }
     if core.get("snapshot_identity") is not None:
         bundle["snapshot_identity"] = core["snapshot_identity"]
+    if frozen is not None:
+        bundle["snapshot"] = frozen.as_bundle_value()
     if auto_reason:
         bundle["auto_detected_reason"] = auto_reason
     if claim_globs:
@@ -1306,6 +1577,41 @@ def _parse_args(args: list[str]) -> tuple[list[str], list[str], bool]:
     return positionals, claim_globs, review_machine_emitted
 
 
+def _extract_snapshot_args(
+    args: list[str],
+) -> tuple[Optional[str], Optional[str], list[str]]:
+    """Pull `--snapshot <rev>` and `--base <rev>` (or `=` forms) out of argv[1:].
+
+    Returns (snapshot, base, remaining). Kept apart from `_parse_args` so that
+    function's return shape stays fixed for its existing callers. Raises
+    ValueError on a flag with no value.
+    """
+    values: dict[str, Optional[str]] = {"--snapshot": None, "--base": None}
+    remaining: list[str] = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        flag, eq, inline = a.partition("=")
+        if flag in values:
+            if eq:
+                value = inline
+                i += 1
+            else:
+                if i + 1 >= len(args):
+                    raise ValueError(f"{flag} requires a commit-ish argument")
+                value = args[i + 1]
+                i += 2
+            if not value:
+                raise ValueError(f"{flag} requires a commit-ish argument")
+            if values[flag] is not None:
+                raise ValueError(f"{flag} given more than once")
+            values[flag] = value
+        else:
+            remaining.append(a)
+            i += 1
+    return values["--snapshot"], values["--base"], remaining
+
+
 def main(argv: list[str]) -> int:
     if len(argv) == 3 and argv[1] == "--ledger-record":
         try:
@@ -1317,13 +1623,32 @@ def main(argv: list[str]) -> int:
         return 0
 
     try:
-        positionals, claim_globs, review_machine_emitted = _parse_args(argv[1:])
+        snapshot_arg, base_arg, rest = _extract_snapshot_args(argv[1:])
+        positionals, claim_globs, review_machine_emitted = _parse_args(rest)
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 2
 
+    if base_arg is not None and snapshot_arg is None:
+        print("Error: --base requires --snapshot", file=sys.stderr)
+        return 2
+    if snapshot_arg is not None and positionals:
+        print(
+            "Error: --snapshot reviews <base>..<snapshot> itself; do not combine it "
+            f"with a range or mode argument ({' '.join(positionals)})",
+            file=sys.stderr,
+        )
+        return 2
+
+    snapshot: Optional[SnapshotSpec] = None
     auto_reason: Optional[str] = None
-    if len(positionals) == 0:
+    if snapshot_arg is not None:
+        try:
+            snapshot, range_spec, bundle_dir = prepare_snapshot(snapshot_arg, base_arg)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+    elif len(positionals) == 0:
         try:
             range_spec, auto_reason = detect_default_range()
         except ValueError as e:
@@ -1333,16 +1658,18 @@ def main(argv: list[str]) -> int:
         range_spec = parse_range_arg(positionals[0])
     else:
         print(
-            "Usage: prepare_review.py [<ref>|<a>..<b>|<a>...<b>|--staged|--working] "
+            "Usage: prepare_review.py [<ref>|<a>..<b>|<a>...<b>|--staged|--working"
+            "|--snapshot <commit-ish> [--base <commit-ish>]] "
             "[--claim <glob> ...] [--review-machine-emitted]",
             file=sys.stderr,
         )
         return 2
 
-    bundle_dir = (
-        DEFAULT_BUNDLE_ROOT / _repo_dir_name(get_repo_root()) / _safe_dir_name(range_spec)
-    )
-    bundle_dir.mkdir(parents=True, exist_ok=True)
+    if snapshot is None:
+        bundle_dir = (
+            DEFAULT_BUNDLE_ROOT / _repo_dir_name(get_repo_root()) / _safe_dir_name(range_spec)
+        )
+        bundle_dir.mkdir(parents=True, exist_ok=True)
     try:
         bundle = build_bundle(
             range_spec,
@@ -1350,6 +1677,7 @@ def main(argv: list[str]) -> int:
             auto_reason=auto_reason,
             claim_globs=claim_globs,
             review_machine_emitted=review_machine_emitted,
+            frozen=snapshot,
         )
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
