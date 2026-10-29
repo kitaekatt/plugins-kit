@@ -40,8 +40,8 @@ REFERENCES = (
     REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/references/md-domain-review.md",
 )
 SKILLS = (
-    REPO_ROOT / "plugins/git-kit/skills/git-code-review/SKILL.md",
-    REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/SKILL.md",
+    REPO_ROOT / "plugins/git-kit/skills/git-code-review/references/full-review.md",
+    REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/references/full-review.md",
 )
 WORKFLOW_DIR = REPO_ROOT / "plugins/skills-kit/skills/md-domain/workflow"
 

@@ -35,8 +35,8 @@ def test_unavailable_classifier_takes_the_broad_skew_fallback(path: Path) -> Non
 
 
 SKILLS = (
-    REPO_ROOT / "plugins/git-kit/skills/git-code-review/SKILL.md",
-    REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/SKILL.md",
+    REPO_ROOT / "plugins/git-kit/skills/git-code-review/references/full-review.md",
+    REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/references/full-review.md",
 )
 
 

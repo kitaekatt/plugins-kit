@@ -10,6 +10,8 @@ GENERATOR = REPO_ROOT / "scripts/gen_code_review_skills.py"
 GIT_PREPARE = REPO_ROOT / "plugins/git-kit/scripts/prepare_review.py"
 GIT_SKILL = REPO_ROOT / "plugins/git-kit/skills/git-code-review/SKILL.md"
 P4_SKILL = REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/SKILL.md"
+GIT_FULL = REPO_ROOT / "plugins/git-kit/skills/git-code-review/references/full-review.md"
+P4_FULL = REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/references/full-review.md"
 GIT_MD_DOMAIN = (
     REPO_ROOT
     / "plugins/git-kit/skills/git-code-review/references/md-domain-review.md"
@@ -30,6 +32,8 @@ RELATIVE_OWNERSHIP = "now " + "owns"
         (GIT_PREPARE, RELATIVE_DAY),
         (GIT_SKILL, RELATIVE_DAY),
         (P4_SKILL, RELATIVE_DAY),
+        (GIT_FULL, RELATIVE_DAY),
+        (P4_FULL, RELATIVE_DAY),
         (GIT_MD_DOMAIN, RELATIVE_OWNERSHIP),
         (P4_MD_DOMAIN, RELATIVE_OWNERSHIP),
     ),
@@ -39,6 +43,8 @@ RELATIVE_OWNERSHIP = "now " + "owns"
         "git-prepare-relative-day",
         "git-skill-relative-day",
         "p4-skill-relative-day",
+        "git-full-review-relative-day",
+        "p4-full-review-relative-day",
         "git-md-domain-relative-ownership",
         "p4-md-domain-relative-ownership",
     ),

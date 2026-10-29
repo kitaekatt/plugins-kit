@@ -16,7 +16,7 @@ import prepare_review as pr
 
 
 def test_rendered_p4_skill_discloses_shelf_drift():
-    skill = Path("plugins/p4-kit/skills/p4-code-review/SKILL.md").read_text(
+    skill = Path("plugins/p4-kit/skills/p4-code-review/references/full-review.md").read_text(
         encoding="utf-8"
     )
     assert "shelf_drift" in skill
@@ -24,7 +24,7 @@ def test_rendered_p4_skill_discloses_shelf_drift():
 
 
 def test_rendered_p4_skill_discloses_foreign_change():
-    skill = Path("plugins/p4-kit/skills/p4-code-review/SKILL.md").read_text(
+    skill = Path("plugins/p4-kit/skills/p4-code-review/references/full-review.md").read_text(
         encoding="utf-8"
     )
     assert (
@@ -34,7 +34,7 @@ def test_rendered_p4_skill_discloses_foreign_change():
 
 
 def test_rendered_p4_skill_retries_foreign_claim_without_claim():
-    skill = Path("plugins/p4-kit/skills/p4-code-review/SKILL.md").read_text(
+    skill = Path("plugins/p4-kit/skills/p4-code-review/references/full-review.md").read_text(
         encoding="utf-8"
     )
     assert (
@@ -45,7 +45,7 @@ def test_rendered_p4_skill_retries_foreign_claim_without_claim():
 
 
 def test_rendered_p4_skill_uses_reopen_for_default_open_in_step_three():
-    skill = Path("plugins/p4-kit/skills/p4-code-review/SKILL.md").read_text(
+    skill = Path("plugins/p4-kit/skills/p4-code-review/references/full-review.md").read_text(
         encoding="utf-8"
     )
     step_three = skill.split("        - n: 3\n", 1)[1].split(

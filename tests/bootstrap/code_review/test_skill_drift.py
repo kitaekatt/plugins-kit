@@ -89,7 +89,7 @@ class TestDispatchRulePresent:
 
     def test_both_skills_carry_the_lane_rule(self):
         for vcs in ("git", "p4"):
-            body = gen.render_skill(vcs)
+            body = gen.render_skill_corpus(vcs)
             assert "lanes = R x K" in body
             assert "If lanes <= 6" in body
             assert "If lanes > 6" in body
@@ -107,7 +107,7 @@ class TestDeclarationRouting:
 
     @pytest.mark.parametrize("vcs", ["git", "p4"])
     def test_multi_entry_declarations_go_through_describe(self, vcs: str) -> None:
-        body = " ".join(gen.render_skill(vcs).split())
+        body = " ".join(gen.render_skill_corpus(vcs).split())
         assert "llm-kit models describe <entry>... --caller session" in body
         assert "/plugins-kit/llm-kit/.venv/bin/llm-kit models describe" in body
         assert "llm-scripting-kit" not in body
@@ -117,7 +117,7 @@ class TestDeclarationRouting:
 
     @pytest.mark.parametrize("vcs", ["git", "p4"])
     def test_entries_dispatch_by_their_harness(self, vcs: str) -> None:
-        body = " ".join(gen.render_skill(vcs).split())
+        body = " ".join(gen.render_skill_corpus(vcs).split())
         assert "Entry-harness rule" in body
         assert "an entry whose describe line reads `claude/agent`" in body
         kit = _KIT[vcs]
@@ -129,20 +129,20 @@ class TestDeclarationRouting:
 
     @pytest.mark.parametrize("vcs", ["git", "p4"])
     def test_without_describe_core_ids_route_through_the_harness(self, vcs: str) -> None:
-        body = " ".join(gen.render_skill(vcs).split())
+        body = " ".join(gen.render_skill_corpus(vcs).split())
         assert "`llm-kit` is not on PATH" in body
         assert "rejects `models describe` as an invalid choice" in body
         assert "skip every other entry without comment" in body
 
     @pytest.mark.parametrize("vcs", ["git", "p4"])
     def test_stale_no_agent_fallback_gotcha_is_gone(self, vcs: str) -> None:
-        body = " ".join(gen.render_skill(vcs).split())
+        body = " ".join(gen.render_skill_corpus(vcs).split())
         assert "has no Agent fallback" not in body
         assert "Every `model` in the RESOLVED table is a single string" not in body
 
     @pytest.mark.parametrize("vcs", ["git", "p4"])
     def test_no_non_routable_warning_prose(self, vcs: str) -> None:
-        for text in (gen.render_skill(vcs), gen.render_configuration(vcs)):
+        for text in (gen.render_skill_corpus(vcs), gen.render_configuration(vcs)):
             flat = " ".join(text.split())
             assert "skipped priority entry" not in flat
             assert "entry it skipped" not in flat
@@ -173,7 +173,7 @@ class TestDeclarationRouting:
 class TestMechanicalScanContract:
     def test_both_native_skills_require_contract_two_and_allow_masked_errors(self):
         for vcs in ("git", "p4"):
-            body = gen.render_skill(vcs)
+            body = gen.render_skill_corpus(vcs)
             assert "Require `bundle.mechanical_contract == 2`" in body
             assert "Preserve each record's `mechanical_contract: 2`" in body
             assert "Later errors hidden by the first diagnostic remain reviewer scope" in body
@@ -182,7 +182,7 @@ class TestMechanicalScanContract:
 
     def test_both_skills_read_per_file_phrases_from_the_bundle(self):
         for vcs in ("git", "p4"):
-            body = gen.render_skill(vcs)
+            body = gen.render_skill_corpus(vcs)
             assert "diff_chunks[i].mechanical_scan" in body
             assert "derive the covered-check list from THAT record" in body
             assert "bundle.mechanical_check_phrases" in body
@@ -192,7 +192,7 @@ class TestMechanicalScanContract:
 
     def test_both_skills_transport_claimed_scan_to_md_domain(self):
         for vcs in ("git", "p4"):
-            body = gen.render_skill(vcs)
+            body = gen.render_skill_corpus(vcs)
             ref = gen.render_md_domain_review(vcs)
             for rendered in (body, ref):
                 assert "mechanicalScan" in rendered
@@ -205,7 +205,7 @@ class TestMechanicalScanContract:
 class TestCitationVerificationDispatch:
     def test_both_skills_parse_native_lanes_and_pass_bundle_to_endpoints(self):
         for vcs in ("git", "p4"):
-            body = gen.render_skill(vcs)
+            body = gen.render_skill_corpus(vcs)
             assert "--bundle <bundle.bundle_dir>/bundle.json" in body
             assert "Parse every NATIVE Agent lane's returned array" in body
             assert "scripts/parse_review_lane.py" in body
@@ -224,7 +224,7 @@ class TestMdDomainContributorPresent:
         byte identity: changing the generator and outputs together must still
         preserve the manual route and its original lane contract.
         """
-        body = gen.render_skill(vcs)
+        body = gen.render_skill_corpus(vcs)
         ref = gen.render_md_domain_review(vcs)
         assert "Manual detect invocation" in body
         manual = ref.split("## Manual detect invocation", 1)[1].split("\n## ", 1)[0]
@@ -236,8 +236,15 @@ class TestMdDomainContributorPresent:
             f"take `laneModels.run[0]` and invoke Agent with `subagent_type: {vcs}-kit:review-lane-<effort>` "
             "and `model: <id>`, from that entry's `effort` and `id`.",
             "The Agent tool has no effort argument; the subtype's `effort` frontmatter binds effort.",
-            "Set `prompt` to the installed script's instantiated `lanePrompt` plus its exact installed "
-            "`FILE_FINDINGS_SCHEMA`, with an instruction to return only one JSON object matching that schema.",
+            "node \"<root>/skills/md-domain/scripts/lane-prompt.cjs\" --lane <claude-md|skill|project-doc> "
+            "--args-file <args.json> --out-dir <promptDir>",
+            "each `promptFile` holds that file's `lanePrompt` (the first `lanePromptLength` characters), "
+            "the script's exact `FILE_FINDINGS_SCHEMA`, and the instruction to return one JSON object "
+            "matching it.",
+            "Set `prompt` to that file's `dispatchPrompt` verbatim, or, when the prompts were written with "
+            "`--out-dir`, to one line telling the lane to read its `promptFile`",
+            "`node` missing, or a helper that exits non-zero, REFUSES: that file is `REVIEW INCOMPLETE`; "
+            "never write the prompt from memory or from a paraphrase.",
             "Parse each Agent response as JSON and validate it against the installed `FILE_FINDINGS_SCHEMA` "
             "before running the reducer. Require one schema-valid result for every requested file.",
             "Missing or invalid results mean REVIEW INCOMPLETE; never substitute empty findings or DIFF-CLEAN.",
@@ -265,7 +272,7 @@ class TestMdDomainContributorPresent:
         Each lane must be passed as `script` text; naming the installed path as
         `scriptPath` sends every review down the manual route.
         """
-        body = gen.render_skill(vcs)
+        body = gen.render_skill_corpus(vcs)
         ref = gen.render_md_domain_review(vcs)
         assert "`scriptPath = <root>/" not in ref
         for lane in ("claude-md-detect.js", "skill-detect.js", "project-doc-detect.js"):
@@ -277,7 +284,7 @@ class TestMdDomainContributorPresent:
 
     def test_both_skills_carry_probe_and_fallback(self):
         for vcs in ("git", "p4"):
-            body = gen.render_skill(vcs)
+            body = gen.render_skill_corpus(vcs)
             # step-2 claim probe: one `**/*.md` glob supersedes the two-glob form
             assert "Claim probe" in body
             assert "skills-kit:md-domain" in body
@@ -322,7 +329,7 @@ class TestMdDomainContributorPresent:
         )
 
         for vcs in ("git", "p4"):
-            body = gen.render_skill(vcs)
+            body = gen.render_skill_corpus(vcs)
             ref = gen.render_md_domain_review(vcs)
 
             # the routing rule that gives the claimed shape a destination
@@ -353,7 +360,7 @@ class TestMdDomainContributorPresent:
 
     def test_both_skills_carry_labeled_section_and_notice(self):
         for vcs in ("git", "p4"):
-            body = gen.render_skill(vcs)
+            body = gen.render_skill_corpus(vcs)
             assert "## md-domain (subject-lens) findings" in body
             assert "never merge the two" in body
             assert "ruleset changed" in body            # self-reference notice
@@ -388,7 +395,7 @@ class TestDeclinedLedgerPresent:
 
     def test_both_skills_carry_collapse_and_record(self):
         for vcs in ("git", "p4"):
-            body = gen.render_skill(vcs)
+            body = gen.render_skill_corpus(vcs)
             # step-9 collapse region
             assert "Declined-findings ledger" in body
             assert "bundle.ledger_hits" in body
@@ -416,20 +423,26 @@ class TestDeclinedLedgerPresent:
         assert expr.startswith('"${BOOTSTRAP_PYTHON:?requires bootstrap >= ')
         for vcs in ("git", "p4"):
             launcher = gen.PREPARE_LAUNCHER_YAML_SKILL[vcs]
-            # The SKILL.md body is a surface Claude Code substitutes, so the
+            # The SKILL.md body is a surface Claude Code substitutes, so a
             # launcher there is rooted on CLAUDE_PLUGIN_ROOT, never on a kit's
             # bootstrap-exported variable.
             assert "${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py" in launcher, vcs
             assert _root_var_read("git") not in launcher, vcs
             assert _root_var_read("p4") not in launcher, vcs
-            body = gen.render_skill(vcs)
-            # Single-quoted as a whole: a YAML scalar cannot start with a
-            # quoted segment (PLUGIN_CALL_SITE_EXPR's own double quotes) and
-            # continue unquoted -- YAML strips only the outer pair, so the
-            # decoded value still starts with the guarded expression.
-            assert f"tool: {launcher}" in body, vcs
-            assert _root_var_read("git") not in body, vcs
-            assert _root_var_read("p4") not in body, vcs
+            front = gen.render_skill(vcs)
+            assert _root_var_read("git") not in front, vcs
+            assert _root_var_read("p4") not in front, vcs
+            # references/full-review.md is NOT substituted by Claude Code, so
+            # its launcher anchors on the kit's own exported variable. Single-
+            # quoted as a whole: a YAML scalar cannot start with a quoted
+            # segment (PLUGIN_CALL_SITE_EXPR's own double quotes) and continue
+            # unquoted -- YAML strips only the outer pair, so the decoded value
+            # still starts with the guarded expression.
+            full = gen.render_full_review(vcs)
+            assert f"tool: {gen.PREPARE_LAUNCHER_YAML[vcs]}" in full, vcs
+            assert "${CLAUDE_PLUGIN_ROOT}" not in full, vcs
+            assert _root_var_read(_OTHER_VCS[vcs]) not in full, vcs
+            body = gen.render_skill_corpus(vcs)
             assert "python3 ${CLAUDE_PLUGIN_ROOT}" not in body
             assert "uv run --no-project python" not in body
             # ledger-record site (@PREPARE_TOOL@ token, shared
@@ -481,7 +494,9 @@ class TestDeclinedLedgerPresent:
                                    if path.name == "SKILL.md")
             ref_text = "\n".join(text for path, text in kit_files.items()
                                  if path.name != "SKILL.md")
-            assert skill_launcher in skill_text, (kit, script)
+            # Only the front door is substituted, and these three scripts are
+            # launched by the full procedure, which is a reference.
+            assert launcher in ref_text, (kit, script)
             assert _root_var_read("git") not in skill_text, (kit, script)
             assert _root_var_read("p4") not in skill_text, (kit, script)
             assert f"${{CLAUDE_PLUGIN_ROOT}}/scripts/{script}" not in ref_text, (kit, script)
@@ -525,7 +540,7 @@ class TestLaunchNarrationPresent:
 
     def test_both_skills_carry_the_launch_table(self):
         for vcs in ("git", "p4"):
-            body = gen.render_skill(vcs)
+            body = gen.render_skill_corpus(vcs)
             name = "git-code-review" if vcs == "git" else "p4-code-review"
             assert "launch_message:" in body
             # canonical style line, VCS-named
@@ -540,7 +555,7 @@ class TestLaunchNarrationPresent:
 
     def test_launch_message_documents_banned_anti_patterns(self):
         for vcs in ("git", "p4"):
-            body = gen.render_skill(vcs)
+            body = gen.render_skill_corpus(vcs)
             assert "Negative direction" in body          # anti-pattern (a)
             assert "Asserting it is not a mistake" in body  # anti-pattern (b)
             assert "let the reader draw the" in body
@@ -551,7 +566,7 @@ class TestTrivialityGatePresent:
 
     def test_both_skills_carry_the_gate_and_honest_labeling(self):
         for vcs in ("git", "p4"):
-            body = gen.render_skill(vcs)
+            body = gen.render_skill_corpus(vcs)
             assert "Triviality gate" in body
             assert "trivial_reasons" in body
             # only non-trivial files are audited
@@ -592,12 +607,12 @@ class TestEmptyChunksFastPathCannotSkipMdDomainPass:
 
     def test_generic_only_fast_path_still_gated_on_diff_chunks(self):
         for vcs in ("git", "p4"):
-            body = gen.render_skill(vcs)
+            body = gen.render_skill_corpus(vcs)
             assert "If bundle.diff_chunks is empty" in body
 
     def test_claimed_non_trivial_blocks_the_fast_path(self):
         for vcs in ("git", "p4"):
-            body = gen.render_skill(vcs)
+            body = gen.render_skill_corpus(vcs)
             # the fast path must be qualified so a non-trivial claimed file
             # keeps the md-domain pass running even with zero diff_chunks
             assert "no claimed file is NON-TRIVIAL" in body
@@ -609,7 +624,7 @@ class TestEmptyChunksFastPathCannotSkipMdDomainPass:
 
     def test_all_trivial_fast_path_still_skips_everything(self):
         for vcs in ("git", "p4"):
-            body = gen.render_skill(vcs)
+            body = gen.render_skill_corpus(vcs)
             assert "skip the reviewer fan-out AND this md-domain pass ENTIRELY" in body
 
 
@@ -617,7 +632,7 @@ class TestVcsSeamsRendered:
     """The per-VCS seams the substitution table exists for must actually land."""
 
     def test_git_seam(self):
-        body = gen.render_skill("git")
+        body = gen.render_skill_corpus("git")
         assert "# Git Code Review" in body
         assert "auto-detect" in body           # range auto-detection wording
         assert "Branch: <branch>" in body      # git-only output header
@@ -627,7 +642,7 @@ class TestVcsSeamsRendered:
         assert "- n: 11" not in body           # ...and nothing beyond it
 
     def test_p4_seam(self):
-        body = gen.render_skill("p4")
+        body = gen.render_skill_corpus("p4")
         assert "# P4 Code Review" in body
         assert "- n: 10" in body               # p4-only auto-shelf cleanup step
         assert "- n: 11" in body               # p4 ledger-record step (after cleanup)
@@ -687,6 +702,8 @@ class TestGeneratedYamlBlockParses:
     SKILLS = (
         "plugins/git-kit/skills/git-code-review/SKILL.md",
         "plugins/p4-kit/skills/p4-code-review/SKILL.md",
+        "plugins/git-kit/skills/git-code-review/references/full-review.md",
+        "plugins/p4-kit/skills/p4-code-review/references/full-review.md",
     )
 
     @staticmethod
@@ -726,7 +743,8 @@ class TestGeneratedYamlBlockParses:
                 "contain ': ' -- reword to '--' or quote the scalar."
             ) from None
         assert isinstance(data, dict), f"{rel}: contract block is not a mapping"
-        assert "technique_skill" in data, f"{rel}: contract block lost technique_skill"
+        root = "technique_skill" if rel.endswith("SKILL.md") else "full_review_reference"
+        assert root in data, f"{rel}: contract block lost {root}"
 
 
 class TestRenderedFilesAreDetectableAsMachineEmitted:
@@ -775,13 +793,13 @@ class TestRenderedSkillDoesNotClaimDiskFreeOperation:
 
     def test_intro_does_not_claim_no_disk_persistence(self):
         for vcs in ("git", "p4"):
-            body = gen.render_skill(vcs)
+            body = gen.render_skill_corpus(vcs)
             assert "no persistence to disk" not in body
             assert "disk-free" not in body
 
     def test_intro_states_what_actually_persists(self):
         for vcs in ("git", "p4"):
-            body = gen.render_skill(vcs)
+            body = gen.render_skill_corpus(vcs)
             # the transient review bundle vs. the durable ledger must both be
             # named, so the reader is told what is retained and where -- not
             # just that "something" is written
@@ -802,14 +820,14 @@ class TestStaleOpenRenderedOnP4Only:
         # itself is not one of them -- the step-2 expected-key list and the
         # step-9 checklist line both name the key, so that substring stays
         # present when the render block is deleted and would pin nothing.
-        body = gen.render_skill("p4")
+        body = gen.render_skill_corpus("p4")
         assert "## CL is not in a submittable state -- fix before review" in body
         assert "`p4 reconcile <path>` flips the CL's open action" in body
         assert "`p4 revert <path>` discards the CL's" in body
         assert "bundle.stale_open` is non-empty, list each entry's depot" in body
 
     def test_git_skill_has_none_of_it(self):
-        body = gen.render_skill("git")
+        body = gen.render_skill_corpus("git")
         assert "stale_open" not in body
         assert "## CL is not in a submittable state -- fix before review" not in body
         assert "p4 reconcile <path>" not in body
@@ -837,19 +855,19 @@ class TestP4ClaimProbeSubstitution:
 
     def test_only_the_p4_skill_carries_the_fallback_wording(self):
         fallback = "once unless the foreign-client fallback below applies"
-        assert fallback in gen.render_skill("p4")
-        assert fallback not in gen.render_skill("git")
+        assert fallback in gen.render_skill_corpus("p4")
+        assert fallback not in gen.render_skill_corpus("git")
 
 
 class TestP4PendingChangeLookup:
     """The picker asks p4 for the effective user's pending changes."""
 
     def test_uses_the_effective_user_directly(self):
-        body = gen.P4_SKILL.read_text(encoding="utf-8")
+        body = gen.P4_FULL_REVIEW.read_text(encoding="utf-8")
         assert 'input: "p4 changes --me -s pending -m 20"' in body
 
     def test_does_not_derive_the_user_from_configured_variables(self):
-        body = gen.P4_SKILL.read_text(encoding="utf-8")
+        body = gen.P4_FULL_REVIEW.read_text(encoding="utf-8")
         assert "p4 set -q P4USER" not in body
 
 
@@ -875,8 +893,8 @@ class TestSilencedErrorCriterionRendered:
     """
 
     SKILLS = {
-        "git": "plugins/git-kit/skills/git-code-review/SKILL.md",
-        "p4": "plugins/p4-kit/skills/p4-code-review/SKILL.md",
+        "git": "plugins/git-kit/skills/git-code-review/references/full-review.md",
+        "p4": "plugins/p4-kit/skills/p4-code-review/references/full-review.md",
     }
 
     PROMPT_PHRASES = (
@@ -973,10 +991,10 @@ class TestRedirectAwareFormShellClaim:
             in path.read_text(encoding="utf-8")
         }
 
-    def test_both_kits_carry_the_form_in_skill_and_configuration(self):
+    def test_both_kits_carry_the_form_in_full_review_and_configuration(self):
         names = {(p.relative_to(REPO_ROOT).parts[1], p.name) for p in self._carriers()}
         for kit in ("git-kit", "p4-kit"):
-            assert (kit, "SKILL.md") in names, kit
+            assert (kit, "full-review.md") in names, kit
             assert (kit, "configuration.md") in names, kit
 
     def test_no_carrier_claims_every_shell(self):
@@ -989,3 +1007,77 @@ class TestRedirectAwareFormShellClaim:
         for path, flat in self._carriers().items():
             assert "bash/zsh syntax" in flat, path
             assert "PowerShell and cmd do not expand it" in flat, path
+
+
+class TestFrontDoorSplit:
+    """SKILL.md is the main thread's small front door; the runner and `--inline`
+    read references/full-review.md.
+
+    The main thread loads the whole SKILL.md and acts on one technique, so
+    everything else a review needs lives in a reference the main thread never
+    opens. The checks read the COMMITTED files from disk (not the generator), so
+    a regeneration that moved the procedure back into SKILL.md cannot keep them
+    green (root CLAUDE.md `guard_cannot_see_its_own_subject`).
+    """
+
+    #: Both front doors are about 8-10 KB; the unsplit skills were over 100 KB.
+    FRONT_DOOR_LIMIT_BYTES = 16 * 1024
+    FULL_ONLY = (
+        "    - id: full_review\n",
+        "  review_profiles:\n",
+        "  subagents:\n",
+        "  false_positive_guardrails:\n",
+        "  issue_format:\n",
+        "  submit_gates:\n",
+        "  narration:\n",
+    )
+
+    @staticmethod
+    def _skill(vcs):
+        kit = _KIT[vcs]
+        return REPO_ROOT / "plugins" / kit / "skills" / f"{vcs}-code-review"
+
+    @pytest.mark.parametrize("vcs", ["git", "p4"])
+    def test_the_front_door_stays_small(self, vcs):
+        size = len((self._skill(vcs) / "SKILL.md").read_bytes())
+        assert size < self.FRONT_DOOR_LIMIT_BYTES, f"{vcs}: SKILL.md is {size} bytes"
+
+    @pytest.mark.parametrize("vcs", ["git", "p4"])
+    def test_the_full_procedure_lives_only_in_the_reference(self, vcs):
+        front = (self._skill(vcs) / "SKILL.md").read_text(encoding="utf-8")
+        full = (self._skill(vcs) / "references" / "full-review.md").read_text(encoding="utf-8")
+        for needle in self.FULL_ONLY:
+            assert needle not in front, f"{vcs}: front door carries {needle.strip()!r}"
+            assert needle in full, f"{vcs}: full-review.md lost {needle.strip()!r}"
+        assert "    - id: background_review\n" in front
+        assert "    - id: background_review\n" not in full
+
+    @pytest.mark.parametrize("vcs", ["git", "p4"])
+    def test_the_front_door_points_at_the_reference_and_the_runner_is_told_to_read_it(self, vcs):
+        front = _flat((self._skill(vcs) / "SKILL.md").read_text(encoding="utf-8"))
+        assert "Read references/full-review.md only to run `--inline` or as the `--runner`" in front
+        assert "then read the skill's references/full-review.md and follow `full_review` in runner mode" in front
+
+    @pytest.mark.parametrize("vcs", ["git", "p4"])
+    def test_every_reference_the_front_door_names_exists(self, vcs):
+        import re
+
+        front = (self._skill(vcs) / "SKILL.md").read_text(encoding="utf-8")
+        named = set(re.findall(r"references/[a-z-]+\.md", front))
+        assert "references/full-review.md" in named and "references/declined-ledger.md" in named
+        for rel in named:
+            assert (self._skill(vcs) / rel).is_file(), f"{vcs}: SKILL.md names missing {rel}"
+
+    def test_the_full_review_reference_is_a_generated_target(self):
+        names = {(p.parent.parent.parent.parent.name, p.name) for p in gen.targets()}
+        assert ("git-kit", "full-review.md") in names
+        assert ("p4-kit", "full-review.md") in names
+
+    @pytest.mark.parametrize("vcs", ["git", "p4"])
+    def test_full_review_launchers_are_the_unsubstituted_surface_form(self, vcs):
+        """A reference is not substituted by Claude Code, so its commands anchor on
+        the kit's exported root variable, never on `${CLAUDE_PLUGIN_ROOT}`."""
+        full = (self._skill(vcs) / "references" / "full-review.md").read_text(encoding="utf-8")
+        assert "${CLAUDE_PLUGIN_ROOT}" not in full
+        assert _root_var_read(vcs) in full
+        assert _root_var_read(_OTHER_VCS[vcs]) not in full

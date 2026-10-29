@@ -59,8 +59,19 @@ issues rejected + md-domain remediations not applied), write them to
 
     "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${P4_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/prepare_review.py" --ledger-record <bundle.bundle_dir>/declined.json
 
-The payload is `{change_id, baseline, declined:[{kind, file, ...}, ...]}` using
-`bundle.change_id` and `bundle.ledger_baseline`. `--ledger-record` computes keys
+The payload uses `bundle.change_id` and `bundle.ledger_baseline`, one `declined` entry per
+declined finding:
+
+    {"change_id": "<bundle.change_id>", "baseline": "<bundle.ledger_baseline>",
+     "declined": [
+       {"kind": "code_review", "file": "<path>", "reason": "bug"|"claude_md",
+        "description": "<the issue description>"},
+       {"kind": "md_audit", "file": "<path>", "criterion": "<criterion/group>",
+        "taxonomy": "<taxonomy>", "message": "<finding message>", "severity": "<severity>"}
+     ]}
+
+`"kind": "md_audit"` is the ledger's WIRE value for a md-domain finding -- the literal
+`bootstrap_lib.code_review.ledger` accepts; do not rename it. `--ledger-record` computes keys
 deterministically, drops SERIOUS md-domain findings, prunes stale entries for the
 change, and dedups by key. NEVER hand-edit the ledger JSON -- always go through
 `--ledger-record`.

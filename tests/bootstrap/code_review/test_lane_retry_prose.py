@@ -19,7 +19,7 @@ def _normalized(path: Path) -> str:
 
 
 def test_dispatch_rule_reaches_launch_correction_policy(skill_dir: Path) -> None:
-    body = _normalized(skill_dir / "SKILL.md")
+    body = _normalized(skill_dir / "references/full-review.md")
     assert "apply the pre-dispatch launch-correction rule in references/configuration.md" in body
     assert "A NON-ZERO exit is a FAILED lane, never an empty result: do NOT retry it" not in body
 
@@ -43,7 +43,7 @@ def test_correction_preserves_lane_and_security_boundaries(skill_dir: Path) -> N
 
 
 def test_corrected_attempts_are_disclosed_not_counted_as_missing(skill_dir: Path) -> None:
-    body = _normalized(skill_dir / "SKILL.md")
+    body = _normalized(skill_dir / "references/full-review.md")
     assert "Report each corrected launch's original stderr, no-dispatch evidence, correction, and final outcome" in body
     assert "Only a completed, schema-valid reviewer result restores that lane's coverage" in body
     assert "including an unsuccessful launch correction" in body
@@ -62,14 +62,14 @@ def test_corrected_attempts_are_disclosed_not_counted_as_missing(skill_dir: Path
 
 
 def test_failed_lane_reselects_through_describe_with_exclusions(skill_dir: Path) -> None:
-    body = _normalized(skill_dir / "SKILL.md")
+    body = _normalized(skill_dir / "references/full-review.md")
     assert "follow the `Re-select:` line describe printed" in body
     assert "one `--exclude <entry>` per entry this lane has already failed on" in body
     assert "Each entry is tried at most once per lane." in body
 
 
 def test_the_old_fallback_chain_walk_is_gone(skill_dir: Path) -> None:
-    body = _normalized(skill_dir / "SKILL.md")
+    body = _normalized(skill_dir / "references/full-review.md")
     ref = _normalized(skill_dir / "references/configuration.md")
     for text in (body, ref):
         assert "FAILOVER-ELIGIBLE" not in text
@@ -80,14 +80,14 @@ def test_the_old_fallback_chain_walk_is_gone(skill_dir: Path) -> None:
 
 def test_the_skill_prints_the_rule_instead_of_restating_it(skill_dir: Path) -> None:
     """The trigger set is describe's text (llm-kit RULE_TRIGGER_SESSION)."""
-    body = _normalized(skill_dir / "SKILL.md")
+    body = _normalized(skill_dir / "references/full-review.md")
     assert "print its stdout verbatim" in body
     assert "a launch that produced no output -- moves to another usable entry" not in body
     assert "is a task failure, not a trigger" not in body
 
 
 def test_a_lane_with_no_usable_entry_left_is_a_failed_lane(skill_dir: Path) -> None:
-    body = _normalized(skill_dir / "SKILL.md")
+    body = _normalized(skill_dir / "references/full-review.md")
     assert (
         "the lane has no usable entry left: report it in step 9 under `## Lane failures`, "
         "naming every entry tried and why it failed, and mark coverage missing -- never treat "
@@ -98,7 +98,7 @@ def test_a_lane_with_no_usable_entry_left_is_a_failed_lane(skill_dir: Path) -> N
 
 
 def test_lane_routes_disclosure_section_is_required(skill_dir: Path) -> None:
-    body = _normalized(skill_dir / "SKILL.md")
+    body = _normalized(skill_dir / "references/full-review.md")
     assert "prepend a `## Lane routes` section carrying every `route:` line announced in step 6, verbatim" in body
     assert "This is a disclosure, not a warning" in body
     assert "`## Lane routes` section" in body
@@ -117,7 +117,7 @@ def test_lane_routes_disclosure_section_is_required(skill_dir: Path) -> None:
 def test_describe_keeps_transports_for_lanes_that_can_run_them(skill_dir: Path) -> None:
     from bootstrap_lib.code_review.lane_prompts import LANES_REQUIRING_AGENT_LOOP
 
-    body = _normalized(skill_dir / "SKILL.md")
+    body = _normalized(skill_dir / "references/full-review.md")
     assert "plus `--dispatchable transport` when the reviewer is not" in body
     for lane in sorted(LANES_REQUIRING_AGENT_LOOP):
         assert f"`{lane}`" in body

@@ -82,6 +82,7 @@ GENERATED_ARTIFACT_EXEMPT_PATHS = frozenset(
         for kit in ("git", "p4")
         for leaf in (
             "SKILL.md",
+            "references/full-review.md",
             "references/submit-gates.md",
             "references/md-domain-review.md",
             "references/declined-ledger.md",

@@ -3,7 +3,7 @@
 
 `p4-code-review` selects a review profile -- reviewer roster, each reviewer's model entries,
 and validator_models per reason, every entry stating its own effort -- from configuration
-resolved at review time, not from a table baked into SKILL.md. The SKILL body's `review_profiles` block carries only the SELECTION
+resolved at review time, not from a table baked into SKILL.md. The `review_profiles` block of references/full-review.md carries only the SELECTION
 GUIDANCE and RATIONALE prose that helps pick a profile; the EXECUTABLE table lives in
 bootstrap_lib's shipped defaults (reproduced below) and is resolved per review by
 `bootstrap_lib.code_review.review_profiles`, invoked through this plugin's venv entry point:

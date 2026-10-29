@@ -7,8 +7,8 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SKILL_PATHS = (
-    REPO_ROOT / "plugins/git-kit/skills/git-code-review/SKILL.md",
-    REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/SKILL.md",
+    REPO_ROOT / "plugins/git-kit/skills/git-code-review/references/full-review.md",
+    REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/references/full-review.md",
 )
 AUTHORSHIP_CLAIMS = (
     "you made these edits",

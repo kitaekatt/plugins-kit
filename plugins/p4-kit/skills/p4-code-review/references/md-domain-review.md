@@ -10,7 +10,7 @@ by md-domain's headless per-artifact detect lanes (`workflow/*-detect.js`)
 instead; their findings render as a separate labeled section. When md-domain is ABSENT the
 mechanism degrades silently -- no `--claim`, no claimed files, the md files get the ordinary thin
 data_only coverage. This doc is the operational detail behind step 6 (launch) and step 9 (render);
-the SKILL body carries the decision flow.
+references/full-review.md carries the decision flow.
 
 ## Why skill references route to the skill lane
 
@@ -51,7 +51,7 @@ with zero inference. The profile fails CLOSED: an unreadable pre-image or unpars
 `trivial=false`, so the fallback is always the full audit.
 
 The skill uses this to AVOID auditing mechanical changes: only NON-TRIVIAL claimed files are sent to
-the detect lanes below; a trivial file is reported via the SKILL's `## Mechanical checks (audit skipped)`
+the detect lanes below; a trivial file is reported via the review's `## Mechanical checks (audit skipped)`
 section and is NEVER audited or written to the ledger. When every claimed file is trivial AND there
 are no generic diff chunks, the whole review is skipped. A trivial file is never DIFF-CLEAN and never
 an audit result -- it is an honest "checked mechanically, audit skipped" line. An author/user request
@@ -220,21 +220,47 @@ Use this route when the Workflow tool is unavailable (including inside a subagen
 rejects the lane script. Run the existing detect script's audit through the Agent tool.
 The installed script remains the source of the prompt and result contract.
 
-1. Read the applicable existing detect script in full. Build the same args described above and
-   below, including `review: true`, each file's `preImagePath`, `standardsPaths` and
-   `mechanicalScan`, and the top-level `disabledCriteria`, `laneModels` and `mechanicalCheckPhrases`. Resolve every referenced file against the installed root.
-2. For each file, take `laneModels.run[0]` and invoke Agent with
+1. Build the same args the Workflow tool would receive, described above and below, including
+   `review: true`, each file's `preImagePath`, `standardsPaths` and `mechanicalScan`, and the
+   top-level `disabledCriteria`, `laneModels` and `mechanicalCheckPhrases`. Resolve every referenced
+   file against the installed root. Write the object as JSON to `<args.json>` (a scratch path).
+2. Instantiate the lane prompts with ONE command. skills-kit's `lane-prompt.cjs` runs the
+   installed detect script against a stub `agent()` that records what it is called with, so each
+   prompt is the script's own `lanePrompt` -- never retyped, never reconstructed from a copy:
+
+   ```bash
+   node "<root>/skills/md-domain/scripts/lane-prompt.cjs" --lane <claude-md|skill|project-doc> --args-file <args.json> --out-dir <promptDir>
+   ```
+
+   `--lane` names the detect script from "Detect-lane entry points" (`claude-md` ->
+   `claude-md-detect.js`, `skill` -> `skill-detect.js`, `project-doc` -> `project-doc-detect.js`);
+   call it once per lane group with that group's files. It prints one JSON object,
+   `{ lane, script, run, lanes: [ { index, file, label, lanePromptLength, promptFile } ] }`: `run`
+   is `laneModels.run`, and each `promptFile` holds that file's `lanePrompt` (the first
+   `lanePromptLength` characters), the script's exact `FILE_FINDINGS_SCHEMA`, and the instruction
+   to return one JSON object matching it. Without `--out-dir` each lane carries the same text inline
+   as `dispatchPrompt`. The helper dispatches nothing. A non-zero exit prints the reason on stderr
+   and no JSON: report `REVIEW INCOMPLETE` for those files with that reason.
+
+   Cross-plugin edge (p4-kit -> skills-kit `lane-prompt.cjs`): skills-kit absent is the existing
+   DEGRADE above (the md-domain section is skipped). skills-kit present but predating the helper
+   (the file is missing) DEGRADES to building each prompt by hand from the installed script: read it
+   in full and instantiate its `lanePrompt` function for each file with the same args, with its
+   `FILE_FINDINGS_SCHEMA`; say so in the step-9 disclosure. `node` missing, or a helper that exits
+   non-zero, REFUSES: that file is `REVIEW INCOMPLETE`; never write the prompt from memory or
+   from a paraphrase.
+3. For each file, take `laneModels.run[0]` and invoke Agent with
    `subagent_type: p4-kit:review-lane-<effort>` and `model: <id>`, from that entry's `effort` and
    `id`. The Agent tool has no effort argument; the subtype's `effort` frontmatter binds effort.
-   Set `prompt` to the installed script's instantiated `lanePrompt` plus its exact installed
-   `FILE_FINDINGS_SCHEMA`, with an instruction to return only one JSON object matching that schema.
-   Preserve all prompt instructions, standards, ancestor context, and attribution input.
+   Set `prompt` to that file's `dispatchPrompt` verbatim, or, when the prompts were written with
+   `--out-dir`, to one line telling the lane to read its `promptFile` and follow it as its complete
+   instructions. Preserve all prompt instructions, standards, ancestor context, and attribution input.
    If the dispatch fails or returns no schema-valid object, announce it in one line
    (`md-domain lane failover: <file> - <id> (<effort>) failed: <reason>; running <next id> (<next effort>)`)
    and dispatch the same prompt with the next `run` entry. Use only `run` entries, in order; never
    a `dropped` entry and never a model the route does not name. Record the entry each file used
    for the step-9 disclosure line.
-3. Parse each Agent response as JSON and validate it against the installed `FILE_FINDINGS_SCHEMA`
+4. Parse each Agent response as JSON and validate it against the installed `FILE_FINDINGS_SCHEMA`
    before running the reducer. Require one schema-valid result for every requested file.
    Missing or invalid results mean REVIEW INCOMPLETE; never substitute empty findings or DIFF-CLEAN.
    For valid results, retain the input path and mechanical scan as the script does. Apply the same
@@ -337,7 +363,7 @@ disclosure line. `perFile[i]` retains the input
 DECLINED the file as outside its criteria and read nothing -- `totals.notAudited` counts these apart
 from `totals.diffClean`), and `findings[]` each with
 `severity`, `bucket`, `group`, `taxonomy`, `attributable`, `message`, `remediation`. Render these
-in the SKILL's step-9 `## md-domain (subject-lens) findings` section -- separate from the
+in the full review's step-9 `## md-domain (subject-lens) findings` section -- separate from the
 code-review issues, one decision pass over both. Accepted remediations are applied as normal edits
 after decisions. See the step-9 action for the ruleset self-reference notice.
 

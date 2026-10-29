@@ -907,7 +907,7 @@ _MD_PLUGINS_ALLOWLIST: dict[str, AllowlistEntry] = {
         '"subdir": "python",',
         "manifest example value (a directory name) + prose describing "
         "python_stub_check, not an instruction"),
-    "plugins/p4-kit/skills/p4-code-review/SKILL.md": AllowlistEntry(
+    "plugins/p4-kit/skills/p4-code-review/references/full-review.md": AllowlistEntry(
         "never as a bare path and never as bare `python`/`python3`",
         "generated launch-note WARNING prose (scripts/gen_code_review_skills.py); "
         "the launchers themselves are the guarded BOOTSTRAP_PYTHON form"),
