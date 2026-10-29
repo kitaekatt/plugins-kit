@@ -236,8 +236,15 @@ class TestMdDomainContributorPresent:
             f"take `laneModels.run[0]` and invoke Agent with `subagent_type: {vcs}-kit:review-lane-<effort>` "
             "and `model: <id>`, from that entry's `effort` and `id`.",
             "The Agent tool has no effort argument; the subtype's `effort` frontmatter binds effort.",
-            "Set `prompt` to the installed script's instantiated `lanePrompt` plus its exact installed "
-            "`FILE_FINDINGS_SCHEMA`, with an instruction to return only one JSON object matching that schema.",
+            "node \"<root>/skills/md-domain/scripts/lane-prompt.cjs\" --lane <claude-md|skill|project-doc> "
+            "--args-file <args.json> --out-dir <promptDir>",
+            "each `promptFile` holds that file's `lanePrompt` (the first `lanePromptLength` characters), "
+            "the script's exact `FILE_FINDINGS_SCHEMA`, and the instruction to return one JSON object "
+            "matching it.",
+            "Set `prompt` to that file's `dispatchPrompt` verbatim, or, when the prompts were written with "
+            "`--out-dir`, to one line telling the lane to read its `promptFile`",
+            "`node` missing, or a helper that exits non-zero, REFUSES: that file is `REVIEW INCOMPLETE`; "
+            "never write the prompt from memory or from a paraphrase.",
             "Parse each Agent response as JSON and validate it against the installed `FILE_FINDINGS_SCHEMA` "
             "before running the reducer. Require one schema-valid result for every requested file.",
             "Missing or invalid results mean REVIEW INCOMPLETE; never substitute empty findings or DIFF-CLEAN.",
