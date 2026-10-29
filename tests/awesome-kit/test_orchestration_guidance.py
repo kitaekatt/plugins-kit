@@ -2573,7 +2573,7 @@ class TestOrchestrateConsentScope:
         assert "UNUSABLE" in line
         assert "metered not allowed" in line
         assert "codex auth is metered" in line  # the library's reason, verbatim
-        assert "`llm-kit consent set --metered on`" in line  # and its exact command
+        assert "`llm-kit consent set --scope orchestrate --metered on`" in line  # and its exact command
         assert "[default]" not in line
         assert "[default]" in _entry_line(text, 1, "fable")
         assert "cost: subscription" in _entry_line(text, 1, "fable")
@@ -2618,7 +2618,7 @@ class TestOrchestrateConsentScope:
         row = "\n".join(_row_lines(text, 1))
         assert "no usable routing target" in row
         assert "sol: switched-off" in row
-        assert "`llm-kit consent set --metered on`" in row
+        assert "`llm-kit consent set --scope orchestrate --metered on`" in row
         assert _menu_ids(text, 2) == ["sonnet"]
 
     def test_the_routing_section_states_the_policy_in_force(self, declared):
