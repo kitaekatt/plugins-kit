@@ -13,6 +13,8 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GIT_SKILL = REPO_ROOT / "plugins/git-kit/skills/git-code-review/SKILL.md"
 P4_SKILL = REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/SKILL.md"
+P4_FULL = REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/references/full-review.md"
+GIT_FULL = REPO_ROOT / "plugins/git-kit/skills/git-code-review/references/full-review.md"
 
 # Strings only the git skill may carry. Each is specific enough that it cannot
 # occur in p4 prose by accident (a bare "snapshot" or "land" can).
@@ -33,9 +35,13 @@ def _git() -> str:
     return GIT_SKILL.read_text(encoding="utf-8")
 
 
+def _full() -> str:
+    return GIT_FULL.read_text(encoding="utf-8")
+
+
 def _technique(body: str) -> str:
-    """The background_review technique, up to the narration block."""
-    return body.split("    - id: background_review\n", 1)[1].split("  narration:\n", 1)[0]
+    """The background_review technique, up to the end of the front door's YAML block."""
+    return body.split("    - id: background_review\n", 1)[1].split("\n```\n", 1)[0]
 
 
 def test_main_thread_freezes_then_launches_one_background_runner() -> None:
@@ -69,7 +75,7 @@ def test_handback_delta_and_land_flow() -> None:
 
 
 def test_runner_mode_overrides_steps_3_5_9_and_10() -> None:
-    body = _git()
+    body = _full()
     assert "Runner mode: skip this step entirely and never ask the user" in body  # step 3
     assert "Runner mode: never ask. Render a NEEDS THE USER gate as `[?]`" in body  # step 5
     assert "Runner mode (`--runner`): stop after rendering." in body  # steps 9-10
@@ -77,12 +83,12 @@ def test_runner_mode_overrides_steps_3_5_9_and_10() -> None:
 
 
 def test_endpoint_lane_bash_calls_run_in_background() -> None:
-    assert "Run every endpoint-lane Bash call with `run_in_background: true`" in _git()
+    assert "Run every endpoint-lane Bash call with `run_in_background: true`" in _full()
 
 
 @pytest.mark.parametrize("needle", GIT_ONLY)
 def test_git_skill_carries_the_background_surface(needle: str) -> None:
-    assert needle in _git()
+    assert needle in _git() + _full()
 
 
 # p4 renders its own background mode (tests/p4-kit/test_snapshot_skill_prose.py)
@@ -92,6 +98,7 @@ def test_git_skill_carries_the_background_surface(needle: str) -> None:
 )
 def test_p4_skill_carries_no_git_land_step(needle: str) -> None:
     assert needle not in P4_SKILL.read_text(encoding="utf-8")
+    assert needle not in P4_FULL.read_text(encoding="utf-8")
 
 
 def test_snapshot_launcher_uses_the_interpreter_standard() -> None:
@@ -119,8 +126,8 @@ def test_landing_is_not_automatic_and_names_its_authority() -> None:
 
 
 def test_committed_ranges_go_to_the_runner_with_a_base_and_no_land() -> None:
-    body = _git()
-    tech = _technique(body)
+    body = _full()
+    tech = _technique(_git())
     assert "A merge or rebase in progress is neither: run `full_review` inline." in tech
     assert "Committed range: skip step 2" in tech
     assert "git rev-parse --abbrev-ref @{upstream}" in tech
@@ -134,6 +141,6 @@ def test_committed_ranges_go_to_the_runner_with_a_base_and_no_land() -> None:
 def test_main_thread_pointer_leads_the_body_and_the_intro_leads_with_background() -> None:
     body = _git()
     head = body.split("# Git Code Review\n", 1)[1]
-    assert head.lstrip().startswith("**Main thread: go straight to technique `background_review`.")
+    assert head.lstrip().startswith("**Main thread: technique `background_review` below is everything you need.")
     assert "directly in conversation" not in body
     assert "runs in the BACKGROUND by default" in head.split("```yaml", 1)[0]

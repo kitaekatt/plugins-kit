@@ -199,7 +199,12 @@ Modes:
   every non-delete CL file is printed from the shelf into `<bundle>/tree/`,
   a generic changed file's `local` points at that frozen copy (`live_local`
   keeps the workspace path), a claimed file gains `frozen`, and the bundle
-  carries `snapshot` {cl, id, record, frozen_root, live_root, auto_shelved}.
+  carries `snapshot` {cl, id, record, source, frozen_root, live_root,
+  auto_shelved}. A record whose `source` is `workspace` (freeze found a shelf
+  the review did not create that differs from the workspace) has no shelf to
+  read: the diff is built from the frozen copies of the CL's open files in
+  `<bundle>/tree/` against each file's have revision, the shelf is never read
+  or touched, and `auto_shelved` is false.
 - `prepare_review.py --cleanup <bundle_dir>` -- read bundle.json, and if
   `auto_shelved` is true and the live shelf fingerprint still matches, run
   `p4 shelve -d -c <CL>`. Any mismatch (file added/removed/changed, shelf gone)
@@ -217,6 +222,7 @@ past it, so `--claim` on a submitted CL exits with an error (re-run without
 Stderr-only diagnostics. Non-zero exit on hard failure.
 """
 
+import difflib
 import hashlib
 import importlib
 import inspect
@@ -235,6 +241,7 @@ from typing import NoReturn, Optional
 # before importing bootstrap_lib below -- a no-op when already there. The guard
 # is the vendored, stdlib-only bootstrap_guard next to this script; importing it
 # can never itself trip the missing-bootstrap_lib failure.
+import review_shelf  # noqa: E402
 from bootstrap_guard import data_dir, reexec_under_plugin_venv  # noqa: E402
 
 reexec_under_plugin_venv("p4-kit")
@@ -592,6 +599,20 @@ _DELETE_ACTIONS = {"delete", "move/delete", "purge"}
 # path-manipulation step this small a read does not justify.
 _P4_TIMEOUT_ENV_VAR = "P4KIT_VCS_TIMEOUT_S"
 _P4_DEFAULT_TIMEOUT_S = 60.0
+
+
+@dataclass(frozen=True)
+class WorkspaceView:
+    """A frozen copy of a CL's open workspace files standing in for its shelf.
+
+    `describe` is a `p4 describe -du -S`-shaped text built by
+    `workspace_describe`; `digests` and `actions` are the freeze record's
+    fingerprint (md5 of each frozen copy, each file's open action).
+    """
+
+    describe: str
+    digests: dict[str, str]
+    actions: dict[str, str]
 
 
 @dataclass(frozen=True)
@@ -1681,6 +1702,7 @@ def build_bundle(
     ledger_path: Optional[Path] = None,
     review_machine_emitted: bool = False,
     _seam_b_retry: bool = False,
+    workspace_view: Optional[WorkspaceView] = None,
 ) -> dict:
     """Gather CL context, partition diff into chunks on disk, return the index bundle.
 
@@ -1709,38 +1731,52 @@ def build_bundle(
     because the review target is the GENERATOR, not its output.
     `review_machine_emitted=True` disables that exclusion for an author who
     explicitly wants the full review.
+
+    With `workspace_view` the CL's shelf is never read: the view's describe
+    text and fingerprint stand in for `p4 describe -S` and the shelf scan, and
+    every shelf-only step (auto-shelve, divergence and drift scans, the Seam B
+    capture) is skipped, as it is for a submitted CL.
     """
     claim_globs = claim_globs or []
     auto_shelved = False
     shelf_fingerprint: dict[str, str] = {}
-    # F0 precedes the describe so one Seam B attempt is genuinely bracketed:
-    # fingerprint -> describe/actions/content/queries -> fingerprint. Pending
-    # unshelved changes replace this empty observation with the post-shelve F0.
-    shelf_observed: Optional[ShelfScanResult] = fetch_shelf_fingerprint(cl)
     shelf_scan_incomplete: list[dict[str, str]] = []
     opened: Optional[dict[str, str]] = None
     opened_incomplete: list[dict[str, str]] = []
-    try:
-        describe, is_shelved = fetch_describe(cl)
-    except PendingUnshelvedError:
-        # A shelf can appear after fetch_describe reports an unshelved CL.
-        # Recheck at that boundary, preserve a shelf created by another
-        # process, and use this observation as F0 for the accepted describe.
-        shelf_observed = fetch_shelf_fingerprint(cl)
-        if not shelf_observed.scan_ok:
-            raise ValueError(
-                f"could not check CL {cl} for a shelf before auto-shelve: "
-                f"{shelf_observed.scan_reason}"
-            )
-        if shelf_observed.digests:
+    if workspace_view is not None:
+        shelf_observed = ShelfScanResult(
+            digests=workspace_view.digests, actions=workspace_view.actions
+        )
+        describe, is_shelved = workspace_view.describe, False
+    else:
+        # F0 precedes the describe so one Seam B attempt is genuinely bracketed:
+        # fingerprint -> describe/actions/content/queries -> fingerprint. Pending
+        # unshelved changes replace this empty observation with the post-shelve F0.
+        shelf_observed: Optional[ShelfScanResult] = fetch_shelf_fingerprint(cl)
+        try:
             describe, is_shelved = fetch_describe(cl)
-        else:
-            # auto_shelve_cl fetches and validates the post-shelve fingerprint;
-            # capture that result instead of making another post-shelve query.
-            shelf_observed = auto_shelve_cl(cl)
-            shelf_fingerprint = shelf_observed.digests
-            describe, is_shelved = fetch_describe(cl)
-            auto_shelved = True
+        except PendingUnshelvedError:
+            # A shelf can appear after fetch_describe reports an unshelved CL.
+            # Recheck at that boundary, preserve a shelf created by another
+            # process, and use this observation as F0 for the accepted describe.
+            shelf_observed = fetch_shelf_fingerprint(cl)
+            if not shelf_observed.scan_ok:
+                raise ValueError(
+                    f"could not check CL {cl} for a shelf before auto-shelve: "
+                    f"{shelf_observed.scan_reason}"
+                )
+            if shelf_observed.digests:
+                describe, is_shelved = fetch_describe(cl)
+            else:
+                # auto_shelve_cl fetches and validates the post-shelve fingerprint;
+                # capture that result instead of making another post-shelve query.
+                shelf_observed = auto_shelve_cl(cl)
+                shelf_fingerprint = shelf_observed.digests
+                review_shelf.record_created(
+                    _review_cl_dir(bundle_dir), cl, shelf_observed.digests, shelf_observed.actions
+                )
+                describe, is_shelved = fetch_describe(cl)
+                auto_shelved = True
 
     if _is_pending(describe) and is_shelved and not shelf_observed.digests and not _seam_b_retry:
         return build_bundle(
@@ -1817,7 +1853,7 @@ def build_bundle(
 
     description = parse_description(describe)
     actions = parse_file_actions(describe)
-    diff = extract_diff(describe, actions, cl, is_shelved)
+    diff = extract_diff(describe, None if workspace_view else actions, cl, is_shelved)
     # `actions` is the canonical per-file list (Affected/Shelved files section).
     # Pure-add files in mixed shelved CLs may be absent from the Differences
     # section entirely, so deriving the file list from ==== headers undercounts.
@@ -2216,6 +2252,85 @@ def _frozen_relpath(depot: str) -> str:
     return depot.lstrip("/")
 
 
+def _print_have(depot: str, rev: str, filetype: str) -> str:
+    """The content of `depot#rev` (the revision the workspace file was opened from)."""
+    spec = P4SnapshotReader._escape_filespec(depot, preserve_encoded=True) + f"#{rev}"
+    if _is_utf16_filetype(filetype):
+        data = _fetch_content_bytes_via_outfile(spec)
+        if data is None:
+            raise ValueError(f"could not print {depot}#{rev}")
+        return _decode_utf16_aware(data)
+    rc, out, err = run_p4(["print", "-q", spec])
+    if rc != 0:
+        raise ValueError(f"could not print {depot}#{rev}: {(err or out).strip() or f'exit {rc}'}")
+    return out
+
+
+def _workspace_section(depot: str, info: dict, action: str, frozen: Path) -> str:
+    """One `==== depot#rev (type) ====` section of the diff for a frozen workspace file."""
+    rev, filetype = info["rev"], info["type"]
+    header = f"==== {depot}#{rev} ({filetype}) ====\n\n"
+    is_add = action in _ADD_ACTIONS
+    is_delete = action in _DELETE_ACTIONS
+    if not _is_text_filetype(filetype):
+        word = "deleted" if is_delete else "added" if is_add else "modified"
+        size = None if is_delete else frozen.stat().st_size
+        return header + _binary_placeholder(word, size)
+    if is_delete:
+        return header + synthesize_delete_hunk(_print_have(depot, rev, filetype))
+    data = frozen.read_bytes()
+    post = _decode_utf16_aware(data) if _is_utf16_filetype(filetype) else data.decode("utf-8", errors="replace")
+    if is_add:
+        return header + synthesize_add_hunk(post)
+    pre = _print_have(depot, rev, filetype)
+    lines = difflib.unified_diff(pre.splitlines(), post.splitlines(), lineterm="", n=3)
+    # Drop the `---`/`+++` pair: p4's own diff output starts at the first hunk.
+    return header + "".join(line + "\n" for line in list(lines)[2:])
+
+
+def workspace_view(cl: str, record: dict, tree: Path) -> WorkspaceView:
+    """Build the describe text and fingerprint a `workspace` freeze record stands for.
+
+    The header and description come from `p4 describe -s` (the CL must still be
+    pending); the file list and every hunk come from the record and the frozen
+    copies under `tree`, so nothing here reads the CL's shelf.
+    """
+    files = record.get("files")
+    if record.get("source") != "workspace" or not isinstance(files, dict) or not files:
+        raise ValueError(f"freeze record for CL {cl} is not a workspace snapshot")
+    rc, out, err = run_p4(["describe", "-s", cl])
+    if rc != 0:
+        raise ValueError(f"p4 describe -s {cl} failed: {(err or out).strip() or f'exit {rc}'}")
+    head: list[str] = []
+    for line in out.splitlines():
+        if line.startswith(("Affected files ...", "Shelved files ...", "Jobs fixed ...", "Differences ...")):
+            break
+        head.append(line)
+    head_text = "\n".join(head).rstrip("\n")
+    if not any(line.startswith("Change ") for line in head):
+        raise ValueError(f"p4 describe -s {cl} printed no Change header")
+    if not _is_pending(head_text):
+        raise ValueError(f"CL {cl} is no longer pending; its workspace snapshot cannot be reviewed")
+    actions = dict(record["actions"])
+    parts = [head_text, "", "Affected files ...", ""]
+    parts += [f"... {depot}#{files[depot]['rev']} {actions[depot]}" for depot in sorted(files)]
+    parts += ["", "Differences ...", ""]
+    sections: list[str] = []
+    for depot in sorted(files):
+        frozen = tree / _frozen_relpath(depot)
+        if actions[depot] not in _DELETE_ACTIONS and not frozen.is_file():
+            raise ValueError(
+                f"the frozen copy of {depot} is missing from {tree} (was the snapshot's tree dropped?)"
+            )
+        sections.append(_workspace_section(depot, files[depot], actions[depot], frozen))
+    describe = "\n".join(parts) + "\n" + "".join(sections)
+    return WorkspaceView(
+        describe=describe,
+        digests={depot: digest.upper() for depot, digest in record["fingerprint"].items()},
+        actions=actions,
+    )
+
+
 def build_snapshot_bundle(
     cl: str,
     record_arg: str,
@@ -2236,30 +2351,47 @@ def build_snapshot_bundle(
     step-10 cleanup removes that shelf.
     """
     record, bundle_dir = load_freeze_record(record_arg, cl)
-    _require_frozen_shelf(cl, record, "before prepare")
-    bundle = build_bundle(
-        cl,
-        bundle_dir,
-        claim_globs=claim_globs,
-        ledger_path=ledger_path,
-        review_machine_emitted=review_machine_emitted,
-    )
-    scan = _require_frozen_shelf(cl, record, "after prepare")
+    source = record.get("source", "shelf")
+    if source not in {"shelf", "workspace"}:
+        raise ValueError(f"freeze record for CL {cl} has unknown source {source!r}")
     tree = bundle_dir / "tree"
     frozen: dict[str, str] = {}
-    for depot, action in sorted(record["actions"].items()):
-        if action in _DELETE_ACTIONS:
-            continue
-        dest = tree / _frozen_relpath(depot)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        spec = P4SnapshotReader._escape_filespec(depot, preserve_encoded=True) + f"@={cl}"
-        rc, out, err = run_p4(["print", "-q", "-o", str(dest), spec])
-        if rc != 0 or not dest.is_file():
-            raise ValueError(
-                f"could not print {depot} from the shelf of CL {cl}: "
-                f"{(err or out).strip() or f'exit {rc}'}"
-            )
-        frozen[depot] = str(dest)
+    if source == "workspace":
+        # The copies were made at freeze time; the shelf is not read at all.
+        bundle = build_bundle(
+            cl,
+            bundle_dir,
+            claim_globs=claim_globs,
+            ledger_path=ledger_path,
+            review_machine_emitted=review_machine_emitted,
+            workspace_view=workspace_view(cl, record, tree),
+        )
+        for depot, action in sorted(record["actions"].items()):
+            if action not in _DELETE_ACTIONS:
+                frozen[depot] = str(tree / _frozen_relpath(depot))
+    else:
+        _require_frozen_shelf(cl, record, "before prepare")
+        bundle = build_bundle(
+            cl,
+            bundle_dir,
+            claim_globs=claim_globs,
+            ledger_path=ledger_path,
+            review_machine_emitted=review_machine_emitted,
+        )
+        scan = _require_frozen_shelf(cl, record, "after prepare")
+        for depot, action in sorted(record["actions"].items()):
+            if action in _DELETE_ACTIONS:
+                continue
+            dest = tree / _frozen_relpath(depot)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            spec = P4SnapshotReader._escape_filespec(depot, preserve_encoded=True) + f"@={cl}"
+            rc, out, err = run_p4(["print", "-q", "-o", str(dest), spec])
+            if rc != 0 or not dest.is_file():
+                raise ValueError(
+                    f"could not print {depot} from the shelf of CL {cl}: "
+                    f"{(err or out).strip() or f'exit {rc}'}"
+                )
+            frozen[depot] = str(dest)
     for entry in bundle["changed_files"]:
         path = frozen.get(entry.get("depot", ""))
         if path:
@@ -2275,12 +2407,22 @@ def build_snapshot_bundle(
     bundle["snapshot"] = {
         "cl": cl,
         "id": record["snapshot"],
+        "source": source,
         "record": str(bundle_dir / "freeze.json"),
         "frozen_root": str(tree),
         "live_root": bundle.get("project_root"),
         "auto_shelved": bool(record.get("auto_shelved")),
     }
     return bundle, bundle_dir
+
+
+def _review_cl_dir(bundle_dir: Path) -> Path:
+    """`<reviews>/<CL>`, the directory that holds review-shelf.json.
+
+    An inline review's bundle directory is that directory itself; a snapshot's
+    is its `snap-<id>` child.
+    """
+    return bundle_dir.parent if _SNAP_DIR_NAME.match(bundle_dir.name) else bundle_dir
 
 
 def cleanup_auto_shelve(bundle_dir: Path) -> int:
@@ -2307,15 +2449,20 @@ def cleanup_auto_shelve(bundle_dir: Path) -> int:
     if not bundle.get("auto_shelved"):
         return 0
     cl = bundle["cl"]
+    cl_dir = _review_cl_dir(bundle_dir)
     recorded = bundle.get("shelf_fingerprint", {})
     current = fetch_shelf_fingerprint(cl).digests
     if not current:
+        review_shelf.forget(cl_dir)
         print(
             f"prepare_review: CL {cl} shelf already gone; nothing to clean up.",
             file=sys.stderr,
         )
         return 0
     if current != recorded:
+        # Someone reshelved: the shelf is theirs now, so the review stops
+        # claiming it.
+        review_shelf.forget(cl_dir)
         print(
             f"prepare_review: CL {cl} shelf changed since review prep; "
             f"leaving in place (your work is preserved).",
@@ -2329,6 +2476,7 @@ def cleanup_auto_shelve(bundle_dir: Path) -> int:
             file=sys.stderr,
         )
         return 1
+    review_shelf.forget(cl_dir)
     print(
         f"prepare_review: deleted auto-created shelf for CL {cl}.",
         file=sys.stderr,

@@ -10,7 +10,7 @@ by md-domain's headless per-artifact detect lanes (`workflow/*-detect.js`)
 instead; their findings render as a separate labeled section. When md-domain is ABSENT the
 mechanism degrades silently -- no `--claim`, no claimed files, the md files get the ordinary thin
 data_only coverage. This doc is the operational detail behind step 6 (launch) and step 9 (render);
-the SKILL body carries the decision flow.
+references/full-review.md carries the decision flow.
 
 ## Why skill references route to the skill lane
 
@@ -51,7 +51,7 @@ with zero inference. The profile fails CLOSED: an unreadable pre-image or unpars
 `trivial=false`, so the fallback is always the full audit.
 
 The skill uses this to AVOID auditing mechanical changes: only NON-TRIVIAL claimed files are sent to
-the detect lanes below; a trivial file is reported via the SKILL's `## Mechanical checks (audit skipped)`
+the detect lanes below; a trivial file is reported via the review's `## Mechanical checks (audit skipped)`
 section and is NEVER audited or written to the ledger. When every claimed file is trivial AND there
 are no generic diff chunks, the whole review is skipped. A trivial file is never DIFF-CLEAN and never
 an audit result -- it is an honest "checked mechanically, audit skipped" line. An author/user request
@@ -337,7 +337,7 @@ disclosure line. `perFile[i]` retains the input
 DECLINED the file as outside its criteria and read nothing -- `totals.notAudited` counts these apart
 from `totals.diffClean`), and `findings[]` each with
 `severity`, `bucket`, `group`, `taxonomy`, `attributable`, `message`, `remediation`. Render these
-in the SKILL's step-9 `## md-domain (subject-lens) findings` section -- separate from the
+in the full review's step-9 `## md-domain (subject-lens) findings` section -- separate from the
 code-review issues, one decision pass over both. Accepted remediations are applied as normal edits
 after decisions. See the step-9 action for the ruleset self-reference notice.
 

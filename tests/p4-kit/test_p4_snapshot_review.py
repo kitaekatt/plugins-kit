@@ -42,6 +42,7 @@ class FakeP4:
         self.opened: dict[str, str] = {}
         self.shelf: dict[str, tuple[str, str]] = {}  # depot -> (digest, action)
         self.calls: list[list[str]] = []
+        self.types: dict[str, str] = {}
 
     def local(self, depot: str) -> Path:
         return self.workspace / depot[len("//depot/"):]
@@ -58,7 +59,9 @@ class FakeP4:
             return 0, "... clientName ws1\n... clientRoot " + str(self.workspace) + "\n", ""
         if args[:3] == ["-ztag", "opened", "-c"]:
             out = "".join(
-                f"... depotFile {d}\n... action {a}\n\n" for d, a in sorted(self.opened.items())
+                f"... depotFile {d}\n... action {a}\n... haveRev 3\n"
+                f"... type {self.types.get(d, 'text')}\n\n"
+                for d, a in sorted(self.opened.items())
             )
             return 0, out, ""
         if args[:3] == ["-ztag", "fstat", "-Ol"]:
@@ -69,6 +72,9 @@ class FakeP4:
                 for d, (g, a) in sorted(self.shelf.items())
             )
             return 0, out, ""
+        if args[:3] == ["shelve", "-d", "-c"]:
+            self.shelf.clear()
+            return 0, f"Shelved files deleted from change {CL}.\n", ""
         if args[:2] == ["shelve", "-c"]:
             for depot, action in self.opened.items():
                 path = self.local(depot)
@@ -140,6 +146,141 @@ def test_freeze_refuses_a_shelf_that_differs_from_the_workspace(p4, tmp_path):
     assert not (_reviews(tmp_path) / CL).exists()
     # --use-shelf reviews the shelf as it stands instead.
     assert sr.freeze(CL, use_shelf=True)["auto_shelved"] is False
+
+
+# ------------------------------------------- who created the shelf decides its fate
+
+
+def _shelve_by_review(p4):
+    """A freeze that shelves, leaving a review-created shelf behind (a cut-off run)."""
+    p4.write("//depot/a.py", b"one\n")
+    first = sr.freeze(CL)
+    assert first["auto_shelved"] is True
+    return first
+
+
+def test_a_stale_shelf_the_review_created_is_reshelved_without_a_question(p4):
+    _shelve_by_review(p4)
+    p4.local("//depot/a.py").write_bytes(b"two\n")  # edited since; the shelf is stale
+    p4.calls.clear()
+    result = sr.freeze(CL)  # no flags: nothing to ask
+    assert result["reshelved"] is True
+    assert result["auto_shelved"] is True  # still the review's, so the runner's cleanup owns it
+    assert result["source"] == "shelf"
+    assert ["shelve", "-d", "-c", CL] in p4.calls and ["shelve", "-c", CL] in p4.calls
+    assert not any(call[:2] == ["shelve", "-f"] for call in p4.calls)
+    record = json.loads(Path(result["record"]).read_text(encoding="utf-8"))
+    assert record["fingerprint"] == {"//depot/a.py": _digest(b"two\n")}
+    # The shelf now equals the workspace, so the next freeze just pins it.
+    assert sr.freeze(CL)["reshelved"] is False
+
+
+def test_a_pinned_shelf_the_review_created_stays_the_reviews_to_clean_up(p4):
+    _shelve_by_review(p4)
+    second = sr.freeze(CL)  # unchanged workspace: pinned, not re-made
+    assert second["reshelved"] is False and second["auto_shelved"] is True
+
+
+def test_a_shelf_the_user_made_is_left_alone_and_freeze_asks(p4, tmp_path):
+    p4.write("//depot/a.py", b"new\n")
+    p4.shelf = {"//depot/a.py": (_digest(b"old\n"), "edit")}  # the user's own shelf
+    with pytest.raises(sr.ShelfDecisionNeeded) as exc:
+        sr.freeze(CL)
+    message = str(exc.value)
+    assert "this review did not create it" in message
+    assert "--foreign-shelf workspace" in message and "--use-shelf" in message
+    assert not any(call[:1] == ["shelve"] for call in p4.calls)
+    assert p4.shelf == {"//depot/a.py": (_digest(b"old\n"), "edit")}
+    assert not (_reviews(tmp_path) / CL).exists()
+    assert sr.main(["freeze", CL]) == 3
+
+
+def test_a_shelf_reshelved_by_the_user_after_the_review_made_it_is_the_users(p4):
+    _shelve_by_review(p4)
+    p4.local("//depot/a.py").write_bytes(b"two\n")
+    p4.shelf = {"//depot/a.py": (_digest(b"user's own\n"), "edit")}  # the user reshelved
+    with pytest.raises(sr.ShelfDecisionNeeded):
+        sr.freeze(CL)
+    assert p4.shelf == {"//depot/a.py": (_digest(b"user's own\n"), "edit")}
+
+
+def test_foreign_shelf_workspace_freezes_the_workspace_files_and_never_touches_the_shelf(p4):
+    p4.write("//depot/a.py", b"new line\r\n")
+    p4.write("//depot/b.py", b"fresh\n", action="add")
+    p4.write("//depot/gone.py", b"bye\n")
+    p4.opened["//depot/gone.py"] = "delete"
+    p4.local("//depot/gone.py").unlink()
+    user_shelf = {"//depot/a.py": (_digest(b"old\n"), "edit")}
+    p4.shelf = dict(user_shelf)
+    p4.calls.clear()
+
+    result = sr.freeze(CL, foreign_shelf="workspace")
+
+    assert result["source"] == "workspace"
+    assert result["auto_shelved"] is False and result["reshelved"] is False
+    assert result["files"] == ["//depot/a.py", "//depot/b.py", "//depot/gone.py"]
+    # The shelf is untouched: no p4 call may write one.
+    assert p4.shelf == user_shelf
+    assert not any(call[:1] == ["shelve"] for call in p4.calls)
+    bundle = Path(result["bundle_dir"])
+    tree = bundle / "tree" / "depot"
+    assert (tree / "a.py").read_bytes() == b"new line\r\n"
+    assert (tree / "b.py").read_bytes() == b"fresh\n"
+    assert not (tree / "gone.py").exists()  # a delete has no post-image
+    record = json.loads(Path(result["record"]).read_text(encoding="utf-8"))
+    assert record["source"] == "workspace"
+    assert record["auto_shelved"] is False
+    assert record["files"]["//depot/a.py"] == {"rev": "3", "type": "text"}
+    assert record["actions"]["//depot/gone.py"] == "delete"
+    assert record["fingerprint"]["//depot/gone.py"] == ""
+    # The record fingerprints the frozen copies, so verify compares the workspace to them.
+    assert sr.verify(result["record"])["matches"] is True
+
+
+def test_a_workspace_snapshot_is_immune_to_later_edits_and_verify_reports_them(p4):
+    p4.write("//depot/a.py", b"reviewed\n")
+    p4.shelf = {"//depot/a.py": (_digest(b"old\n"), "edit")}
+    result = sr.freeze(CL, foreign_shelf="workspace")
+    frozen = Path(result["bundle_dir"]) / "tree" / "depot" / "a.py"
+    p4.local("//depot/a.py").write_bytes(b"edited during the review\n")
+    assert frozen.read_bytes() == b"reviewed\n"
+    state = sr.verify(result["record"])
+    assert state["matches"] is False and state["changed"] == ["//depot/a.py"]
+
+
+def test_foreign_shelf_workspace_is_inert_without_a_differing_foreign_shelf(p4):
+    # No shelf at all: the review shelves as ever.
+    p4.write("//depot/a.py", b"x\n")
+    assert sr.freeze(CL, foreign_shelf="workspace")["source"] == "shelf"
+    # A foreign shelf that already equals the workspace is pinned, not copied.
+    p4.shelf = {"//depot/a.py": (_digest(b"x\n"), "edit")}
+    (sr._cl_dir(CL) / "review-shelf.json").unlink()
+    again = sr.freeze(CL, foreign_shelf="workspace")
+    assert again["source"] == "shelf" and again["auto_shelved"] is False
+
+
+def test_workspace_freeze_refuses_a_missing_workspace_file_and_leaves_no_record(p4, tmp_path):
+    p4.write("//depot/a.py", b"x\n")
+    p4.shelf = {"//depot/a.py": (_digest(b"old\n"), "edit")}
+    p4.local("//depot/a.py").unlink()
+    with pytest.raises(sr.SnapshotError, match="workspace file is missing"):
+        sr.freeze(CL, foreign_shelf="workspace")
+    assert not (_reviews(tmp_path) / CL).exists()
+
+
+def test_use_shelf_and_the_workspace_policy_are_alternatives(p4):
+    p4.write("//depot/a.py", b"x\n")
+    with pytest.raises(sr.SnapshotError, match="cannot be combined"):
+        sr.freeze(CL, use_shelf=True, foreign_shelf="workspace")
+    with pytest.raises(sr.SnapshotError, match="'ask' or 'workspace'"):
+        sr.freeze(CL, foreign_shelf="sometimes")
+
+
+def test_main_passes_the_foreign_shelf_policy_through(p4, capsys):
+    p4.write("//depot/a.py", b"new\n")
+    p4.shelf = {"//depot/a.py": (_digest(b"old\n"), "edit")}
+    assert sr.main(["freeze", CL, "--foreign-shelf", "workspace"]) == 0
+    assert json.loads(capsys.readouterr().out)["source"] == "workspace"
 
 
 def test_verify_matches_until_a_reviewed_file_is_edited(p4):

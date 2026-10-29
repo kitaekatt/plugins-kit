@@ -8,12 +8,12 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SKILLS = (
     (
-        REPO_ROOT / "plugins/git-kit/skills/git-code-review/SKILL.md",
+        REPO_ROOT / "plugins/git-kit/skills/git-code-review/references/full-review.md",
         "does not post a PR comment",
         "publishing the rendered review to a PR comment",
     ),
     (
-        REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/SKILL.md",
+        REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/references/full-review.md",
         "does not post a Swarm or PR comment",
         "publishing the rendered review to Swarm or a PR comment",
     ),
@@ -22,6 +22,11 @@ SKILLS = (
 
 def _body(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def _front_door(path: Path) -> str:
+    """The SKILL.md that sits two directories above a references/full-review.md."""
+    return (path.parent.parent / "SKILL.md").read_text(encoding="utf-8")
 
 
 def _gotchas(body: str) -> str:
@@ -59,11 +64,11 @@ def test_gotcha_names_transient_and_durable_disk_artifacts(
 def test_scope_does_not_exclude_disk_persistence(
     path: Path, comment_claim: str, scope_claim: str
 ) -> None:
-    assert "persisting review output to disk" not in _scope(_body(path))
+    assert "persisting review output to disk" not in _scope(_front_door(path))
 
 
 @pytest.mark.parametrize("path,comment_claim,scope_claim", SKILLS, ids=("git", "p4"))
 def test_scope_retains_the_no_comment_boundary(
     path: Path, comment_claim: str, scope_claim: str
 ) -> None:
-    assert scope_claim in _scope(_body(path))
+    assert scope_claim in _scope(_front_door(path))

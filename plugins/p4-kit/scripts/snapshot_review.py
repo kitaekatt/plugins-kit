@@ -2,27 +2,37 @@
 """Freeze, verify, drop and prune review snapshots for p4-code-review.
 
 Usage:
-    snapshot_review.py freeze <CL> [--use-shelf]
+    snapshot_review.py freeze <CL> [--foreign-shelf workspace | --use-shelf]
     snapshot_review.py verify <record>
     snapshot_review.py drop <record> [--tree-only]
     snapshot_review.py prune [--older-than-days N]
 
 A p4 review snapshot is the CL's SHELF, pinned by the shelf fingerprint (the
-server's per-file digest and action) recorded at freeze time. A shelf is
+server's per-file digest and action) recorded at freeze time; when a shelf the
+review did not create differs from the workspace, it is a frozen copy of the
+CL's open workspace files instead (see freeze). A shelf is
 server-side and does not change until someone reshelves, so a background review
 reads a fixed subject while the agent keeps editing the workspace.
 
 freeze   Shelve the CL when it has no shelf (`p4 shelve -c`, the same
-         mutation prepare_review.py makes on its own). When a shelf already
-         exists it must match the CL's open files and the workspace content;
-         otherwise exit 1 naming the files: replace it with
-         `p4 shelve -f -c <CL>`, or pass --use-shelf to review the shelf as it
-         stands. Freeze never overwrites a shelf. Writes the record
+         mutation prepare_review.py makes on its own). An existing shelf that
+         matches the CL's open files and the workspace content is pinned as it
+         stands. A shelf that differs depends on who made it. One the review
+         created (review_shelf.py keeps the record) is deleted and shelved
+         again from the current files, with no question. Any other shelf is
+         never overwritten: exit 3 names the files and the three ways forward.
+         `--foreign-shelf workspace` freezes a copy of the CL's open workspace
+         files into the snapshot (`source` is `workspace`; the shelf stays as
+         the user left it), `--use-shelf` reviews the shelf as it stands, and
+         replacing the shelf is the user's own `p4 shelve -f -c <CL>` before a
+         new freeze (this script never force-shelves). Writes the record
          `<data>/reviews/<CL>/snap-<id12>/freeze.json` and prints JSON
-         {cl, snapshot, record, bundle_dir, auto_shelved, files}. Exit 1 when
-         the CL has nothing to review. Runs `prune` afterwards.
+         {cl, snapshot, record, bundle_dir, source, auto_shelved, reshelved,
+         files}. Exit 1 when the CL has nothing to review. Runs `prune`
+         afterwards.
 verify   Read-only. Exit 0 when the CL's open files (membership, actions) and
-         their workspace content still equal the frozen shelf, else exit 1.
+         their workspace content still equal the frozen shelf (or, for a
+         `workspace` snapshot, the frozen copy), else exit 1.
          Prints JSON {cl, snapshot, matches, changed, opened_after, not_open,
          unverifiable}.
 drop     Delete a record directory, or with --tree-only just its `tree/`.
@@ -35,8 +45,8 @@ review again when it reports a difference. Only
 shelf is touched by drop or prune. Content equality is md5 of the workspace
 file against the server digest, retried with CRLF normalized to LF; a file type
 the server normalizes differently (utf16, keyword expansion) reads as changed,
-which only ever refuses. Errors exit non-zero with a message; nothing is
-retried or ignored.
+which only ever refuses. Errors exit non-zero with a message (3 only for the
+foreign-shelf decision above); nothing is retried or ignored.
 """
 
 from __future__ import annotations
@@ -54,6 +64,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+import review_shelf
 from bootstrap_guard import data_dir
 
 SCHEMA_VERSION = 1
@@ -68,6 +79,10 @@ _P4_PATH_BATCH = 100
 
 class SnapshotError(Exception):
     """A refusal or failure that the caller must see; main() exits 1."""
+
+
+class ShelfDecisionNeeded(SnapshotError):
+    """A shelf the review did not create differs from the workspace; main() exits 3."""
 
 
 # ---------------------------------------------------------------- p4 plumbing
@@ -156,6 +171,26 @@ def _opened(cl: str) -> dict[str, str]:
         if depot and action:
             opened[depot] = action
     return opened
+
+
+def _opened_info(cl: str) -> dict[str, dict[str, str]]:
+    """Open files of the CL with the action, have revision and filetype of each."""
+    out = _p4_ok(["-ztag", "opened", "-c", cl])
+    info: dict[str, dict[str, str]] = {}
+    for record in _ztag_records(out):
+        depot = record.get("depotFile")
+        action = record.get("action")
+        if not (depot and action):
+            continue
+        rev = record.get("haveRev") or record.get("rev") or ""
+        filetype = record.get("type", "")
+        if not rev.isdigit() or not filetype:
+            raise SnapshotError(
+                f"p4 opened reports no usable revision or filetype for {depot} "
+                f"(rev {rev!r}, type {filetype!r}); cannot freeze the workspace copy"
+            )
+        info[depot] = {"action": action, "rev": rev, "type": filetype}
+    return info
 
 
 def _where(depots: list[str]) -> dict[str, str]:
@@ -296,36 +331,33 @@ def _rmtree(path: Path) -> None:
 # ------------------------------------------------------------------ commands
 
 
-def freeze(cl: str, *, use_shelf: bool = False) -> dict:
-    if not _CL.match(cl):
-        raise SnapshotError(f"CL must be a positive integer, got {cl!r}")
-    client = _client()
-    opened = _opened(cl)
-    digests, actions = _shelf(cl)
-    auto_shelved = False
-    if not digests:
-        if not opened:
-            raise SnapshotError(f"CL {cl} has no open files and no shelf: nothing to review")
-        _p4_ok(["shelve", "-c", cl])
-        digests, actions = _shelf(cl)
-        if not digests:
-            raise SnapshotError(f"p4 shelve -c {cl} reported success but the shelf is empty")
-        auto_shelved = True
-    local = _where(sorted(digests))
-    if not auto_shelved and not use_shelf:
-        diff = _compare(digests, actions, opened, local)
-        if not opened:
-            raise SnapshotError(
-                f"CL {cl} has no files open in this workspace; pass --use-shelf to review its shelf"
-            )
-        if _differs(diff):
-            raise SnapshotError(
-                f"CL {cl}'s shelf differs from the workspace ({_describe_diff(diff)}). "
-                f"To review the workspace, replace the shelf with `p4 shelve -f -c {cl}` and "
-                f"freeze again; to review the shelf as it stands, pass --use-shelf"
-            )
+def _cl_dir(cl: str) -> Path:
+    return _reviews_root() / cl
+
+
+def _md5_file(path: Path) -> str:
+    digest = hashlib.md5()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest().upper()
+
+
+def _write_record(
+    cl: str,
+    client: str,
+    digests: dict[str, str],
+    actions: dict[str, str],
+    local: dict[str, str],
+    *,
+    source: str,
+    auto_shelved: bool,
+    use_shelf: bool,
+    files: Optional[dict[str, dict[str, str]]] = None,
+) -> tuple[str, Path, Path]:
+    """Create `<reviews>/<cl>/snap-<id12>/freeze.json`; return (id, record, directory)."""
     frozen_at = time.time()
-    canonical = json.dumps([cl, sorted(digests.items()), sorted(actions.items()), frozen_at])
+    canonical = json.dumps([cl, source, sorted(digests.items()), sorted(actions.items()), frozen_at])
     snap = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
     bundle_dir = _record_dir(cl, snap)
     bundle_dir.mkdir(parents=True, exist_ok=False)
@@ -334,6 +366,7 @@ def freeze(cl: str, *, use_shelf: bool = False) -> dict:
         "cl": cl,
         "snapshot": snap,
         "client": client,
+        "source": source,
         "fingerprint": digests,
         "actions": actions,
         "local": local,
@@ -341,14 +374,150 @@ def freeze(cl: str, *, use_shelf: bool = False) -> dict:
         "use_shelf": use_shelf,
         "frozen_at": frozen_at,
     }
+    if files is not None:
+        record["files"] = files
     record_path = bundle_dir / "freeze.json"
     record_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return snap, record_path, bundle_dir
+
+
+def _freeze_workspace(cl: str, client: str) -> dict:
+    """Freeze a copy of the CL's open workspace files; the shelf is left alone.
+
+    Each non-delete file is copied into `<snap>/tree/<depot path>` and the
+    record fingerprints those copies, so `verify` compares the workspace to
+    what the review will read. The diff is not computed here: prepare_review.py
+    builds it from the copies and `p4 print` of each file's have revision.
+    """
+    info = _opened_info(cl)
+    if not info:
+        raise SnapshotError(f"CL {cl} has no open files in this workspace: nothing to review")
+    local = _where(sorted(info))
+    digests: dict[str, str] = {}
+    actions = {depot: item["action"] for depot, item in info.items()}
+    sources: dict[str, Path] = {}
+    for depot, item in sorted(info.items()):
+        if item["action"] in _DELETE_ACTIONS:
+            digests[depot] = ""
+            continue
+        path = local.get(depot)
+        if not path or not os.path.isfile(path):
+            raise SnapshotError(
+                f"{depot} is open for {item['action']} in CL {cl} but its workspace file "
+                f"is missing ({path or 'no client mapping'}); cannot freeze the workspace copy"
+            )
+        digests[depot] = _md5_file(Path(path))
+        sources[depot] = Path(path)
+    snap, record_path, bundle_dir = _write_record(
+        cl,
+        client,
+        digests,
+        actions,
+        local,
+        source="workspace",
+        auto_shelved=False,
+        use_shelf=False,
+        files={depot: {"rev": item["rev"], "type": item["type"]} for depot, item in info.items()},
+    )
+    tree = bundle_dir / "tree"
+    try:
+        for depot, path in sources.items():
+            dest = tree / depot.lstrip("/")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(path, dest)
+            if _md5_file(dest) != digests[depot]:
+                raise SnapshotError(f"{path} changed while it was being frozen; freeze again")
+    except BaseException:
+        _rmtree(bundle_dir)
+        raise
     return {
         "cl": cl,
         "snapshot": snap,
         "record": str(record_path),
         "bundle_dir": str(bundle_dir),
+        "source": "workspace",
+        "auto_shelved": False,
+        "reshelved": False,
+        "files": sorted(digests),
+    }
+
+
+def freeze(
+    cl: str,
+    *,
+    use_shelf: bool = False,
+    foreign_shelf: str = "ask",
+) -> dict:
+    if not _CL.match(cl):
+        raise SnapshotError(f"CL must be a positive integer, got {cl!r}")
+    if foreign_shelf not in {"ask", "workspace"}:
+        raise SnapshotError(f"--foreign-shelf must be 'ask' or 'workspace', got {foreign_shelf!r}")
+    if use_shelf and foreign_shelf != "ask":
+        raise SnapshotError("--foreign-shelf workspace cannot be combined with --use-shelf")
+    client = _client()
+    opened = _opened(cl)
+    digests, actions = _shelf(cl)
+    cl_dir = _cl_dir(cl)
+    auto_shelved = False
+    reshelved = False
+    if not digests:
+        if not opened:
+            raise SnapshotError(f"CL {cl} has no open files and no shelf: nothing to review")
+        _p4_ok(["shelve", "-c", cl])
+        digests, actions = _shelf(cl)
+        if not digests:
+            raise SnapshotError(f"p4 shelve -c {cl} reported success but the shelf is empty")
+        review_shelf.record_created(cl_dir, cl, digests, actions)
+        auto_shelved = True
+    else:
+        owned = review_shelf.is_review_created(cl_dir, digests, actions)
+        diff: dict[str, list[str]] = {}
+        if not use_shelf:
+            if not opened:
+                raise SnapshotError(
+                    f"CL {cl} has no files open in this workspace; pass --use-shelf to review its shelf"
+                )
+            diff = _compare(digests, actions, opened, _where(sorted(digests)))
+        if _differs(diff):
+            if owned:
+                # The review made this shelf and nobody has touched it since:
+                # replace it with the current files, no question.
+                _p4_ok(["shelve", "-d", "-c", cl])
+                _p4_ok(["shelve", "-c", cl])
+                digests, actions = _shelf(cl)
+                review_shelf.record_created(cl_dir, cl, digests, actions)
+                owned = True
+                reshelved = True
+            elif foreign_shelf == "workspace":
+                return _freeze_workspace(cl, client)
+            else:
+                raise ShelfDecisionNeeded(
+                    f"CL {cl}'s shelf differs from the workspace ({_describe_diff(diff)}) and this "
+                    f"review did not create it, so it is left alone. Choose: review the workspace "
+                    f"files (--foreign-shelf workspace), replace the shelf yourself "
+                    f"(`p4 shelve -f -c {cl}`, then freeze again), or review the shelf as it "
+                    f"stands (--use-shelf)"
+                )
+        auto_shelved = owned
+    local = _where(sorted(digests))
+    snap, record_path, bundle_dir = _write_record(
+        cl,
+        client,
+        digests,
+        actions,
+        local,
+        source="shelf",
+        auto_shelved=auto_shelved,
+        use_shelf=use_shelf,
+    )
+    return {
+        "cl": cl,
+        "snapshot": snap,
+        "record": str(record_path),
+        "bundle_dir": str(bundle_dir),
+        "source": "shelf",
         "auto_shelved": auto_shelved,
+        "reshelved": reshelved,
         "files": sorted(digests),
     }
 
@@ -401,7 +570,12 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     p_freeze = sub.add_parser("freeze", help="pin the CL's shelf as the review subject")
     p_freeze.add_argument("cl")
-    p_freeze.add_argument("--use-shelf", action="store_true", help="review an existing shelf as it stands")
+    p_freeze.add_argument("--use-shelf", action="store_true", help="review a differing shelf as it stands")
+    p_freeze.add_argument(
+        "--foreign-shelf", choices=("ask", "workspace"), default="ask",
+        help="what to do with a differing shelf the review did not create: exit 3 (ask, default) "
+        "or freeze the workspace files and leave the shelf alone (workspace)",
+    )
     sub.add_parser("verify", help="does the CL still equal the frozen shelf?").add_argument("record")
     p_drop = sub.add_parser("drop", help="delete a snapshot record directory")
     p_drop.add_argument("record")
@@ -415,7 +589,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
         if args.command == "freeze":
-            result = freeze(args.cl, use_shelf=args.use_shelf)
+            result = freeze(
+                args.cl,
+                use_shelf=args.use_shelf,
+                foreign_shelf=args.foreign_shelf,
+            )
             print(json.dumps(result, indent=2))
             pruned = prune(DEFAULT_PRUNE_DAYS)
             if pruned["pruned"]:
@@ -431,6 +609,9 @@ def main(argv: Optional[list[str]] = None) -> int:
             result = prune(args.older_than_days)
         print(json.dumps(result, indent=2))
         return 0
+    except ShelfDecisionNeeded as exc:
+        print(f"snapshot_review: {exc}", file=sys.stderr)
+        return 3
     except SnapshotError as exc:
         print(f"snapshot_review: {exc}", file=sys.stderr)
         return 1

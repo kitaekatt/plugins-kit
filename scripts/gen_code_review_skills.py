@@ -38,6 +38,7 @@ target), mirroring tests/skills-kit/test_workflow_js_drift.py.
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -123,6 +124,8 @@ SNAPSHOT_LAUNCHER_SKILL = _launcher("git", "snapshot_review.py", "skill")
 P4_SNAPSHOT_LAUNCHER_SKILL = _launcher("p4", "snapshot_review.py", "skill")
 GIT_SKILL = REPO_ROOT / "plugins/git-kit/skills/git-code-review/SKILL.md"
 P4_SKILL = REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/SKILL.md"
+GIT_FULL_REVIEW = REPO_ROOT / "plugins/git-kit/skills/git-code-review/references/full-review.md"
+P4_FULL_REVIEW = REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/references/full-review.md"
 GIT_AGENTS = REPO_ROOT / "plugins/git-kit/agents"
 P4_AGENTS = REPO_ROOT / "plugins/p4-kit/agents"
 GIT_SUBMIT_GATES = REPO_ROOT / "plugins/git-kit/skills/git-code-review/references/submit-gates.md"
@@ -606,16 +609,8 @@ LEDGER_RECORD_STEP = """\
             re-litigate them. After the decision pass, collect every finding the author DECLINED --
             both code-review issues they rejected and md-domain remediations they chose NOT to apply.
             Skip this step entirely when nothing was declined. Otherwise write a JSON file to
-            `<bundle.bundle_dir>/declined.json`:
-              {"change_id": "<bundle.change_id>", "baseline": "<bundle.ledger_baseline>",
-               "declined": [
-                 {"kind": "code_review", "file": "<path>", "reason": "bug"|"claude_md",
-                  "description": "<the issue description>"},
-                 {"kind": "md_audit", "file": "<path>", "criterion": "<criterion/group>",
-                  "taxonomy": "<taxonomy>", "message": "<finding message>", "severity": "<severity>"}
-               ]}
-            (`"kind": "md_audit"` is the ledger's WIRE value for a md-domain finding -- it is the
-            literal `bootstrap_lib.code_review.ledger` accepts; do not rename it.)
+            `<bundle.bundle_dir>/declined.json` in the payload shape references/declined-ledger.md
+            gives under "Record" (the wire `kind` of a md-domain finding is the literal `md_audit`).
             Then run prepare_review.py --ledger-record on that file. The ledger keys each entry by a
             normalized anchor (never line numbers or exact wording) and NEVER records a SERIOUS
             md-domain finding (those always re-surface). Do NOT hand-edit the ledger JSON -- always go
@@ -639,7 +634,7 @@ LEDGER_GOTCHAS = """
 # layers a user and a project override on top. Appended to both gotcha blocks.
 # ===========================================================================
 PROFILE_GOTCHAS = """
-        - The `review_profiles` block above is SELECTION GUIDANCE AND RATIONALE ONLY. It carries no reviewer roster, model, or validator_models -- that executable table is resolved per review by @RENDER_TOOL@ (step 0, before any other step), which merges the shipped bootstrap_lib defaults with any `~/.claude/config/review_profiles.yaml` (user) or `<project_root>/.claude/review_profiles.yaml` (project) override. Never merge those layers yourself and never hand-edit the resolved output.
+        - The `review_profiles` block below is SELECTION GUIDANCE AND RATIONALE ONLY. It carries no reviewer roster, model, or validator_models -- that executable table is resolved per review by @RENDER_TOOL@ (step 0, before any other step), which merges the shipped bootstrap_lib defaults with any `~/.claude/config/review_profiles.yaml` (user) or `<project_root>/.claude/review_profiles.yaml` (project) override. Never merge those layers yourself and never hand-edit the resolved output.
         - The `profile` in steps 6-7 is a RESOLVED-table entry: match the guidance prose to a profile id, then read `reviewers` and `validator_models` off that entry.
         - See references/configuration.md for the layer precedence, merge rules (profiles/reviewers merge by id/name; validator_models and other mappings deep-merge; `disabled: true` removes a record; plain lists like `data_only_extensions`, a reviewer's `model` entry list, and a validator reason's entry list replace), the shipped default table, what a declaration entry may name, how a multi-entry declaration is routed, which lanes may take an endpoint entry, and what happens when a lane fails.
         - A reviewer's `model` is a model DECLARATION -- an ordered list of `{id, effort}` entries. Each entry is dispatched by its harness under step 6's entry-harness rule, at that entry's own effort -- a `claude` entry launches the `@KIT@:review-lane-<effort>` agent with its `id` as the model, any other entry runs through @LANE_TOOL@ with `--model <id> --effort <effort>`.
@@ -705,7 +700,7 @@ LAUNCH_EMIT = """\
 # The canonical SKILL.md template. Shared prose is inline (one copy); tokens
 # (@NAME@ ...) carry the genuinely per-VCS regions, filled from FRAGMENTS.
 # ===========================================================================
-SKILL_TEMPLATE = """\
+FRONT_DOOR_TEMPLATE = """\
 ---
 _schema_version: 1
 name: @NAME@
@@ -716,7 +711,7 @@ description: @DESC@
 
 # @TITLE@
 
-**Main thread: go straight to technique `background_review`. Read `full_review` only to run `--inline` or as the `--runner`.**
+**Main thread: technique `background_review` below is everything you need. Read references/full-review.md only to run `--inline` or as the `--runner`.**
 
 @INTRO@
 
@@ -732,6 +727,21 @@ technique_skill:
       - surfacing path-scoped pre-submit reminders (submit gates) from CLAUDE.md
     excludes:
 @SCOPE_EXCLUDES@
+  techniques:@BACKGROUND_TECHNIQUE@
+```
+"""
+
+
+FULL_REVIEW_TEMPLATE = """\
+# @TITLE@: full review procedure
+
+The `--runner` agent and the `--inline` path follow this reference. The main thread following technique
+`background_review` in SKILL.md does not need it. A path written `references/<file>` is relative to the
+skill directory.
+
+```yaml
+full_review_reference:
+  _schema_version: "1"
   techniques:
     - id: full_review
       name: Full multi-agent review
@@ -800,7 +810,7 @@ technique_skill:
         - n: 6
           action: |
             Select one profile from the RESOLVED table fetched in step 0, using
-            `review_profiles.profiles[].selection.guidance` above (this SKILL's guidance prose,
+            `review_profiles.profiles[].selection.guidance` in this file's `review_profiles` block below (its guidance prose,
             each entry naming the profile it documents) -- this is an inference call, not regex.
             Read each profile's guidance, weigh the actual contents of `bundle.changed_files`, and
             pick the most appropriate profile id from the resolved table. Default to `code` when
@@ -936,7 +946,7 @@ technique_skill:
 @STEP10@@LEDGER_RECORD_STEP@      checklist:
 @CHECKLIST@
       gotchas:
-@GOTCHAS@@BACKGROUND_TECHNIQUE@
+@GOTCHAS@
   narration:
     note: Reviews involve long silent stretches (batched file reads, parallel subagents that take 30s+). Post one short status line per step using these templates verbatim, filling in the bracketed counts. Do not paraphrase, omit, or add extras.
     templates:
@@ -1118,7 +1128,7 @@ GIT_INTRO = (
     'Review git changes with a multi-agent code review that runs in the BACKGROUND by default, so '
     'the agent keeps working (technique `background_review`): this session\'s uncommitted work is '
     'frozen as a snapshot, a committed range (a ref, `<a>..<b>`, the branch\'s upstream range) is '
-    'reviewed as it stands, and a runner returns the verdict. `--inline` runs the steps below in '
+    'reviewed as it stands, and a runner returns the verdict. `--inline` runs `full_review` (references/full-review.md) in '
     'the foreground instead. The diff is partitioned on disk into chunks (under a 1 MB cap); '
     'reviewer subagents (set by the selected review profile) '
     'run **once per (role @X@ chunk)**, and an independent validator confirms each flagged issue. '
@@ -1131,8 +1141,10 @@ GIT_INTRO = (
 P4_INTRO = (
     'Review a Perforce changelist with a multi-agent code review that runs in the BACKGROUND by '
     'default, so the agent keeps working (technique `background_review`): a pending CL in this '
-    'workspace is reviewed on its frozen shelf, a submitted CL or another client\'s CL as it '
-    'stands, and a runner returns the verdict. `--inline` runs the steps below in the foreground '
+    'workspace is reviewed on its frozen shelf (or, when the shelf is not the review\'s own and '
+    'differs, on a frozen copy of the workspace files), a submitted CL or another client\'s CL '
+    'as it stands, and a runner returns the verdict. A review Claude invokes asks no pre-launch '
+    'question. `--inline` runs `full_review` (references/full-review.md) in the foreground '
     'instead. The diff is partitioned on disk into chunks (under a 1 MB cap); '
     'reviewer subagents (set by the selected review profile) run '
     '**once per (role @X@ chunk)**, and an independent validator confirms each flagged issue. '
@@ -1220,12 +1232,14 @@ GIT_STEP1 = """\
 P4_STEP1 = """\
         - n: 1
           action: |
-            Resolve the CL number (from argument, else list pending CLs and prompt the user).
+            Resolve the CL number as technique `background_review` step 1 states: the argument, else the
+            invoker rule (a Claude-invoked review picks the CL and asks nothing; a user-invoked review asks
+            which CL, listing the pending CLs).
             Runner mode (`<CL> --runner [--snapshot <record>]`): the CL is given; never prompt. Go to step 2
             and pass `--snapshot <record>` to prepare when one was given.
           tool: p4
           input: "p4 changes --me -s pending -m 20"
-          expected: A single integer CL number confirmed by the user."""
+          expected: A single integer CL number, confirmed by the user only when a user-invoked review asked."""
 
 GIT_STEP2 = """\
         - n: 2
@@ -1388,7 +1402,7 @@ GIT_BACKGROUND_TECHNIQUE = (
     "      preconditions:\n"
     "        - cwd is inside a git repository.\n"
     "        - The target is this session's uncommitted work or a committed range (a ref, `<a>..<b>`, `<a>...<b>`, the upstream range). A merge or rebase in progress is neither: run `full_review` inline.\n"
-    "        - \"`--inline` runs `full_review` in the foreground and skips this technique. `--runner --snapshot <sha> [--base <sha>]` marks the background agent itself: it runs `full_review` in runner mode and never this technique.\"\n"
+    "        - \"`--inline` runs `full_review` in the foreground and skips this technique. `--runner --snapshot <sha> [--base <sha>]` marks the background agent itself: it runs `full_review` in runner mode and never this technique. Both read the procedure from references/full-review.md.\"\n"
     "      steps:\n"
     "        - n: 1\n"
     "          action: |\n"
@@ -1411,7 +1425,8 @@ GIT_BACKGROUND_TECHNIQUE = (
     "            and no `model` override, using this fixed runner brief (fill in the shas, add nothing else;\n"
     "            <sha> is the snapshot, or a committed range's tip):\n"
     "              Invoke git-kit:git-code-review with `--snapshot <sha> --runner` (add `--base <base>`: the previous\n"
-    "              snapshot for a delta review, a committed range's base). Run it against\n"
+    "              snapshot for a delta review, a committed range's base), then read the skill's\n"
+    "              references/full-review.md and follow `full_review` in runner mode. Run it against\n"
     "              `prepare_review.py --snapshot <sha> [--base <base>]`.\n"
     "              Never ask the user, edit, commit, land or push. Return the rendered review, the snapshot and\n"
     "              base shas, bundle.change_id, bundle.ledger_baseline, bundle.bundle_dir, every NEEDS-THE-USER\n"
@@ -1425,8 +1440,9 @@ GIT_BACKGROUND_TECHNIQUE = (
     "          action: |\n"
     "            On hand-back, present the findings and ask every `?` gate in ONE turn (one AskUserQuestion).\n"
     "            Then run the decision pass over the code-review and md-domain findings, record declined\n"
-    "            findings (`full_review` step 10, using the runner's bundle_dir), and apply accepted fixes. If\n"
-    "            the runner could not launch (no Claude pool), run `full_review` inline instead.\n"
+    "            findings (references/declined-ledger.md, Record, using the runner's bundle_dir), and apply\n"
+    "            accepted fixes. If the runner could not launch (no Claude pool), run `full_review` inline\n"
+    "            (references/full-review.md) instead.\n"
     "        - n: 5\n"
     "          action: |\n"
     "            Review uncommitted fixes as a delta. Freeze again with `--paths` covering EVERY path of the first\n"
@@ -1465,42 +1481,59 @@ P4_STEP5_RUNNER = (
 
 # A second technique after full_review's gotchas, as for git. p4 has no land:
 # `p4 submit` stays the user's, and `verify` reports whether the CL still equals
-# the reviewed shelf so the user can compare before submitting.
+# the reviewed snapshot (the CL's shelf, or a frozen copy of its open workspace
+# files when the shelf is not the review's own) before the user submits.
 P4_BACKGROUND_TECHNIQUE = (
     "\n"
     "    - id: background_review\n"
-    "      name: Background review on a frozen shelf (default)\n"
-    "      keywords: [background review, snapshot, freeze, shelf, runner, non-blocking review]\n"
+    "      name: Background review on a frozen snapshot (default)\n"
+    "      keywords: [background review, snapshot, freeze, shelf, workspace, runner, non-blocking review]\n"
     "      goal: Review one pending CL while the agent keeps working, and tell the user whether the CL still equals what was reviewed.\n"
     "      preconditions:\n"
+    "        - \"Who invoked this skill decides what you may ask. USER-invoked: the turn carries a `<command-name>` tag naming this skill, because the user typed `/p4-code-review`. CLAUDE-invoked: every other start -- you called the Skill tool, or you are the `--runner` agent. When unsure, treat the review as Claude-invoked. A Claude-invoked review asks no pre-launch question: it picks the CL (step 1) and settles the shelf (step 2) itself. A user-invoked review asks only the two questions those steps name, and only when the answer was not already given.\"\n"
     "        - The CL is pending with its files open in THIS workspace (freeze it, steps 2-3), or it is submitted or belongs to another client: that CL has no workspace files to protect, so skip step 2 and launch the runner with `<CL> --runner` and no `--snapshot` (prepare reads `p4 describe`; there is no frozen view, `--claim` is refused, files are read from the workspace).\n"
-    "        - \"`--inline` runs `full_review` in the foreground and skips this technique. `<CL> --runner [--snapshot <record>]` marks the background agent itself: it runs `full_review` in runner mode and never this technique.\"\n"
+    "        - \"`--inline` runs `full_review` in the foreground and skips this technique. `<CL> --runner [--snapshot <record>]` marks the background agent itself: it runs `full_review` in runner mode and never this technique. Both read the procedure from references/full-review.md.\"\n"
     "      steps:\n"
     "        - n: 1\n"
-    "          action: Resolve the CL number as `full_review` step 1 does.\n"
+    "          action: |\n"
+    "            Resolve the CL number. A CL given in the arguments is used as given. Without one, a\n"
+    "            Claude-invoked review picks the CL itself and asks nothing: the pending CL that holds the files\n"
+    "            this session changed (`p4 opened <file>` names a file's CL), else the newest of\n"
+    "            `p4 changes --me -s pending -m 20`. A user-invoked review asks which CL, once, listing that output.\n"
     "        - n: 2\n"
     "          action: |\n"
     "            Freeze a pending CL, a few seconds and the only synchronous work: run " + P4_SNAPSHOT_LAUNCHER_SKILL + " freeze <CL>\n"
-    "            It shelves the CL when it has no shelf, and otherwise pins the existing shelf after checking it\n"
-    "            equals the open files and the workspace. It prints JSON `{cl, snapshot, record, bundle_dir,\n"
-    "            auto_shelved, files}`. Exit 1: report its stderr. When it says the shelf differs from the\n"
-    "            workspace, never overwrite that shelf yourself: ask the user whether to replace it\n"
-    "            (`p4 shelve -f -c <CL>`, then freeze again) or review it as it stands (`--use-shelf`).\n"
-    "            After freeze returns, edits to the workspace cannot reach the review's diff.\n"
+    "            and add `--foreign-shelf workspace` when the review is Claude-invoked. It prints JSON `{cl, snapshot,\n"
+    "            record, bundle_dir, source, auto_shelved, reshelved, files}`. Exit 1: report its stderr.\n"
+    "            The CL's shelf is the user's unless this review created it. No shelf: freeze makes one\n"
+    "            (`auto_shelved`). A shelf equal to the open files: pinned as it stands. A shelf this review\n"
+    "            created that went stale (an earlier run was cut off): replaced from the open files with no\n"
+    "            question (`reshelved`); freeze again only after the earlier runner for that CL has handed\n"
+    "            back, because a runner still reading the older shelf then fails loudly. A shelf the review did\n"
+    "            NOT create that differs from the workspace is never touched. With `--foreign-shelf workspace`\n"
+    "            freeze copies the CL's open workspace files into the snapshot and reports `source: workspace`;\n"
+    "            the review reads those copies, so editing meanwhile stays safe. Without the flag a\n"
+    "            user-invoked freeze exits 3 naming the files: ask the user once how to proceed -- review the\n"
+    "            workspace files (run it again with `--foreign-shelf workspace`), replace the shelf (they run or\n"
+    "            approve `p4 shelve -f -c <CL>`, then you freeze again), or review the shelf as it stands\n"
+    "            (`--use-shelf`). After freeze returns, edits to the workspace cannot reach the review's diff.\n"
     "          tool: Bash\n"
     "        - n: 3\n"
     "          action: |\n"
     "            Launch ONE background Agent with `subagent_type: general-purpose`, `run_in_background: true`\n"
     "            and no `model` override, using this fixed runner brief (fill in the CL and record, add nothing else):\n"
     "              Invoke p4-kit:p4-code-review with `<CL> --runner --snapshot <record>` (no `--snapshot` for a\n"
-    "              submitted or other-client CL). Run it against `prepare_review.py <CL> [--snapshot <record>]`. Never ask the user, edit, reconcile, reopen,\n"
+    "              submitted or other-client CL), then read the skill's references/full-review.md and follow\n"
+    "              `full_review` in runner mode. Run it against `prepare_review.py <CL> [--snapshot <record>]`.\n"
+    "              Never ask the user, edit, reconcile, reopen,\n"
     "              shelve or submit. Return the rendered review, bundle.snapshot.record, bundle.change_id,\n"
     "              bundle.ledger_baseline, bundle.bundle_dir, every NEEDS-THE-USER gate as a `?` item with its\n"
     "              question, the fold-in candidates, and every lane failure. Finish with step 10's cleanup and,\n"
     "              when frozen, `snapshot_review.py drop <record> --tree-only`.\n"
     "            Then tell the user in one line that the review of CL <CL> is running on snapshot <snapshot>,\n"
     "            and RETURN TO WORK. Do not wait, poll, sleep or check on the runner: its verdict arrives as a\n"
-    "            task notification. The diff and the CL's generic files are read from the frozen shelf;\n"
+    "            task notification. The diff and the CL's generic files are read from the frozen shelf (from the\n"
+    "            frozen workspace copies when `source` is `workspace`);\n"
     "            claimed Markdown and files outside the CL are read from the workspace, so an edit to one of\n"
     "            those while the runner works makes that part of the review stale (step 4 names it).\n"
     "          tool: Agent\n"
@@ -1510,23 +1543,24 @@ P4_BACKGROUND_TECHNIQUE = (
     "            exit 1 lists every CL file that changed since the freeze). Then present the findings, every\n"
     "            `?` gate, the fold-in candidates and the changed files in ONE turn (one AskUserQuestion). Run the\n"
     "            decision pass over the code-review and md-domain findings, record declined findings\n"
-    "            (`full_review` step 11, using the runner's bundle_dir), and apply accepted fixes and fold-ins\n"
-    "            (`p4 reconcile -c` / `p4 reopen -c`). If the runner could not launch (no Claude pool), run\n"
-    "            `full_review` inline instead.\n"
+    "            (references/declined-ledger.md, Record, using the runner's bundle_dir), and apply accepted\n"
+    "            fixes and fold-ins (`p4 reconcile -c` / `p4 reopen -c`). If the runner could not launch (no\n"
+    "            Claude pool), run `full_review` inline (references/full-review.md) instead.\n"
     "        - n: 5\n"
     "          action: |\n"
     "            Fixes, fold-ins, or files `verify` reported as changed: freeze again and launch a new runner.\n"
-    "            p4 has no delta review -- the new shelf replaces the reviewed one, so the whole CL is\n"
+    "            p4 has no delta review -- the new snapshot replaces the reviewed one, so the whole CL is\n"
     "            reviewed again. Then run " + P4_SNAPSHOT_LAUNCHER_SKILL + " drop <superseded record>.\n"
     "        - n: 6\n"
     "          action: |\n"
     "            Before the CL is submitted, run `verify <latest record>` and report the result with the\n"
-    "            snapshot id: exit 0 means the CL equals the reviewed shelf and is ready for the user's own\n"
+    "            snapshot id: exit 0 means the CL equals the reviewed snapshot and is ready for the user's own\n"
     "            `p4 submit -c <CL>`; exit 1 names the files to review again first. This skill never submits.\n"
     "            If the user asks to submit while the runner is still working, say the review is running.\n"
     "          tool: Bash\n"
     "      checklist:\n"
-    "        - CL frozen before editing resumed; an existing shelf that differs from the workspace never overwritten without the user\n"
+    "        - Invoker identified from the `<command-name>` tag; a Claude-invoked review asked no pre-launch question\n"
+    "        - CL frozen before editing resumed; a shelf the review did not create never touched (the workspace files frozen instead, or the user's choice)\n"
     "        - ONE runner launched with `run_in_background: true` and the fixed brief; the user told in one line; no waiting, polling or sleeping\n"
     "        - verify run on hand-back; findings, every `?` gate, fold-in candidates and changed files presented in one turn\n"
     "        - Fixes and fold-ins reviewed again on a new freeze; superseded records dropped\n"
@@ -1974,13 +2008,48 @@ _SKILL_TOKEN_ORDER = [
 ]
 
 
-def render_skill(vcs: str) -> str:
+_LEFTOVER_TOKEN = re.compile(r"@[A-Z][A-Z0-9_]*@")
+
+
+def _fill(template: str, vcs: str) -> str:
+    """Substitute every token of `template`; fail when one is left unresolved."""
     frags = dict(_SHARED)
     frags.update(FRAGMENTS[vcs])
-    out = SKILL_TEMPLATE
+    out = template
     for token in _SKILL_TOKEN_ORDER:
         out = out.replace(f"@{token}@", frags[token])
+    left = _LEFTOVER_TOKEN.findall(out)
+    if left:
+        raise ValueError(f"unresolved template tokens for {vcs}: {sorted(set(left))}")
     return out
+
+
+def render_skill(vcs: str) -> str:
+    """The SKILL.md front door: identity, scope, mode selection, technique `background_review`."""
+    return _fill(FRONT_DOOR_TEMPLATE, vcs)
+
+
+def render_full_review(vcs: str) -> str:
+    """references/full-review.md: `full_review` and everything only it needs.
+
+    The shared step text bakes the SKILL-surface launchers (`${CLAUDE_PLUGIN_ROOT}`),
+    but a references/*.md file is not substituted by Claude Code, so each is
+    rewritten to the guarded `<PLUGIN>_ROOT` form a reference anchors on.
+    """
+    out = _fill(FULL_REVIEW_TEMPLATE, vcs)
+    skill_root = chr(34) + "${CLAUDE_PLUGIN_ROOT}/scripts/"
+    reference_root = (
+        chr(34) + "${" + plugin_root_env_var_name(_KIT_BY_VCS[vcs]) + ":?" + _ROOT_UNSET_HINT + "}/scripts/"
+    )
+    out = out.replace(skill_root, reference_root)
+    if "CLAUDE_PLUGIN_ROOT" in out:
+        raise ValueError(f"full-review reference for {vcs} still names CLAUDE_PLUGIN_ROOT")
+    return out
+
+
+def render_skill_corpus(vcs: str) -> str:
+    """Front door plus full-review reference, for checks over the whole review contract."""
+    return render_skill(vcs) + "\n" + render_full_review(vcs)
 
 
 # ===========================================================================
@@ -2021,7 +2090,7 @@ SUBMIT_GATES_FRAGMENTS = {
             "them deterministically (via `prepare_review.py`, the same parser as `p4-code-review`) "
             "and surfaces them verbatim at review time when at least one file in the range falls "
             "within a gate's scope. This doc covers only how to author them; detection and rendering "
-            "are described in the `submit_gates` block of the SKILL.md contract."
+            "are described in the `submit_gates` block of references/full-review.md."
         ),
         "SG_ANCHOR": "repo root",
     },
@@ -2032,7 +2101,7 @@ SUBMIT_GATES_FRAGMENTS = {
             "them deterministically (via `prepare_review.py`) and surfaces them verbatim at review "
             "time when at least one file in the CL falls within a gate's scope. This doc covers only "
             "how to author them; detection and rendering are described in the `submit_gates` block "
-            "of the SKILL.md contract."
+            "of references/full-review.md."
         ),
         "SG_ANCHOR": "workspace root",
     },
@@ -2063,7 +2132,7 @@ by md-domain's headless per-artifact detect lanes (`workflow/*-detect.js`)
 instead; their findings render as a separate labeled section. When md-domain is ABSENT the
 mechanism degrades silently -- no `--claim`, no claimed files, the md files get the ordinary thin
 data_only coverage. This doc is the operational detail behind step 6 (launch) and step 9 (render);
-the SKILL body carries the decision flow.
+references/full-review.md carries the decision flow.
 
 ## Why skill references route to the skill lane
 
@@ -2104,7 +2173,7 @@ with zero inference. The profile fails CLOSED: an unreadable pre-image or unpars
 `trivial=false`, so the fallback is always the full audit.
 
 The skill uses this to AVOID auditing mechanical changes: only NON-TRIVIAL claimed files are sent to
-the detect lanes below; a trivial file is reported via the SKILL's `## Mechanical checks (audit skipped)`
+the detect lanes below; a trivial file is reported via the review's `## Mechanical checks (audit skipped)`
 section and is NEVER audited or written to the ledger. When every claimed file is trivial AND there
 are no generic diff chunks, the whole review is skipped. A trivial file is never DIFF-CLEAN and never
 an audit result -- it is an honest "checked mechanically, audit skipped" line. An author/user request
@@ -2389,7 +2458,7 @@ disclosure line. `perFile[i]` retains the input
 DECLINED the file as outside its criteria and read nothing -- `totals.notAudited` counts these apart
 from `totals.diffClean`), and `findings[]` each with
 `severity`, `bucket`, `group`, `taxonomy`, `attributable`, `message`, `remediation`. Render these
-in the SKILL's step-9 `## md-domain (subject-lens) findings` section -- separate from the
+in the full review's step-9 `## md-domain (subject-lens) findings` section -- separate from the
 code-review issues, one decision pass over both. Accepted remediations are applied as normal edits
 after decisions. See the step-9 action for the ruleset self-reference notice.
 
@@ -2499,8 +2568,19 @@ issues rejected + md-domain remediations not applied), write them to
 
     @PREPARE_TOOL@ --ledger-record <bundle.bundle_dir>/declined.json
 
-The payload is `{change_id, baseline, declined:[{kind, file, ...}, ...]}` using
-`bundle.change_id` and `bundle.ledger_baseline`. `--ledger-record` computes keys
+The payload uses `bundle.change_id` and `bundle.ledger_baseline`, one `declined` entry per
+declined finding:
+
+    {"change_id": "<bundle.change_id>", "baseline": "<bundle.ledger_baseline>",
+     "declined": [
+       {"kind": "code_review", "file": "<path>", "reason": "bug"|"claude_md",
+        "description": "<the issue description>"},
+       {"kind": "md_audit", "file": "<path>", "criterion": "<criterion/group>",
+        "taxonomy": "<taxonomy>", "message": "<finding message>", "severity": "<severity>"}
+     ]}
+
+`"kind": "md_audit"` is the ledger's WIRE value for a md-domain finding -- the literal
+`bootstrap_lib.code_review.ledger` accepts; do not rename it. `--ledger-record` computes keys
 deterministically, drops SERIOUS md-domain findings, prunes stale entries for the
 change, and dedups by key. NEVER hand-edit the ledger JSON -- always go through
 `--ledger-record`.
@@ -2555,7 +2635,7 @@ CONFIGURATION_TEMPLATE = """\
 
 `@SKILL_NAME@` selects a review profile -- reviewer roster, each reviewer's model entries,
 and validator_models per reason, every entry stating its own effort -- from configuration
-resolved at review time, not from a table baked into SKILL.md. The SKILL body's `review_profiles` block carries only the SELECTION
+resolved at review time, not from a table baked into SKILL.md. The `review_profiles` block of references/full-review.md carries only the SELECTION
 GUIDANCE and RATIONALE prose that helps pick a profile; the EXECUTABLE table lives in
 bootstrap_lib's shipped defaults (reproduced below) and is resolved per review by
 `bootstrap_lib.code_review.review_profiles`, invoked through this plugin's venv entry point:
@@ -3012,6 +3092,8 @@ def targets() -> dict[Path, str]:
     rendered = {
         GIT_SKILL: _with_banner(render_skill("git")),
         P4_SKILL: _with_banner(render_skill("p4")),
+        GIT_FULL_REVIEW: _with_banner(render_full_review("git")),
+        P4_FULL_REVIEW: _with_banner(render_full_review("p4")),
         GIT_SUBMIT_GATES: _with_banner(render_submit_gates("git")),
         P4_SUBMIT_GATES: _with_banner(render_submit_gates("p4")),
         GIT_MD_DOMAIN_REVIEW: _with_banner(render_md_domain_review("git")),

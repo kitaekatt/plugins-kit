@@ -36,6 +36,11 @@ The mechanisms that make it more than "ask a model about a diff":
   deletes it afterward -- but only if the live shelf still exactly matches
   the recorded fingerprint. If you reshelved or edited in the meantime, the
   cleanup is a silent no-op; your work is never touched.
+- **Your shelf is yours.** The review replaces a stale shelf only when it made
+  that shelf itself. A shelf you made that differs from the workspace is left
+  alone: when Claude runs the review it reviews a frozen copy of the workspace
+  files instead, and when you run `/p4-code-review` yourself you are asked how
+  to proceed (and which CL, if you gave none).
 
 The review is rendered as markdown in chat. The prepare step writes
 `bundle.json`, diff chunks, and claim pre-images to the plugin data directory.

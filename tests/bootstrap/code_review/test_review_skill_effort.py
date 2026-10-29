@@ -44,11 +44,11 @@ def _flat(text: str) -> str:
 
 def _steps(vcs: str) -> list[dict]:
     """The ordered steps of the rendered skill's full_review technique."""
-    body = gen.render_skill(vcs)
+    body = gen.render_full_review(vcs)
     block = body.split("```yaml\n", 1)[1].split("\n```", 1)[0]
     data = yaml.safe_load(block)
     (technique,) = [
-        t for t in data["technique_skill"]["techniques"] if t["id"] == "full_review"
+        t for t in data["full_review_reference"]["techniques"] if t["id"] == "full_review"
     ]
     return technique["steps"]
 
@@ -111,7 +111,7 @@ def test_resolution_does_not_wait_for_the_prepare_bundle(vcs: str) -> None:
 
 @pytest.mark.parametrize("vcs", VCS)
 def test_agent_entries_dispatch_to_their_own_effort_agent(vcs: str) -> None:
-    body = _flat(gen.render_skill(vcs))
+    body = _flat(gen.render_skill_corpus(vcs))
     kit = KIT[vcs]
     assert (
         f"`subagent_type: {kit}:review-lane-<entry effort>` and `model: <entry id>`" in body
@@ -123,7 +123,7 @@ def test_agent_entries_dispatch_to_their_own_effort_agent(vcs: str) -> None:
 
 @pytest.mark.parametrize("vcs", VCS)
 def test_lane_tool_entries_are_passed_their_effort(vcs: str) -> None:
-    body = _flat(gen.render_skill(vcs))
+    body = _flat(gen.render_skill_corpus(vcs))
     assert "`--model <entry id>`, `--effort <entry effort>`, `--bundle" in body
     ref = _flat(gen.render_configuration(vcs))
     assert "with `--model <id> --effort <effort>`" in ref
@@ -131,7 +131,7 @@ def test_lane_tool_entries_are_passed_their_effort(vcs: str) -> None:
 
 @pytest.mark.parametrize("vcs", VCS)
 def test_a_runner_refusal_is_not_re_selected_past(vcs: str) -> None:
-    body = _flat(gen.render_skill(vcs))
+    body = _flat(gen.render_skill_corpus(vcs))
     assert "Exit 2 from the runner is a REFUSAL" in body
     assert "or a plugin venv that has no katsoft-llm-kit package installed yet." in body
     assert "Do not re-select past it, and do not re-run the entry at another effort." in body
@@ -166,9 +166,9 @@ def test_step7_drops_non_agent_validator_entries_with_a_route_line(vcs: str) -> 
 @pytest.mark.parametrize("vcs", VCS)
 def test_no_subagent_is_declared_general_purpose(vcs: str) -> None:
     """Every reviewer and the validator now runs on an effort agent."""
-    body = gen.render_skill(vcs)
+    body = gen.render_full_review(vcs)
     block = body.split("```yaml\n", 1)[1].split("\n```", 1)[0]
-    subagents = yaml.safe_load(block)["technique_skill"]["subagents"]
+    subagents = yaml.safe_load(block)["full_review_reference"]["subagents"]
     for agent in subagents:
         assert agent["subagent_type"].startswith(f"{KIT[vcs]}:review-lane-<entry effort>"), agent
 
