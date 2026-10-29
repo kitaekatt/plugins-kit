@@ -1558,3 +1558,407 @@ def test_working_snapshot_retries_one_race_then_accepts_stable_pair():
 
     assert capture.diff == "stable"
     assert capture.snapshot_seed is not None
+
+
+# ---------------------------------------------------------------------------
+# --snapshot: review a frozen commit through a frozen copy of its tree
+# ---------------------------------------------------------------------------
+
+
+class TestSnapshotMode:
+    """`--snapshot` points every reader of the working copy at a materialized
+    copy of the snapshot commit. Snapshot commits are built here with plumbing
+    (private index + commit-tree), exactly as a freeze would, so these tests do
+    not depend on snapshot_review.py."""
+
+    @pytest.fixture(autouse=True)
+    def _isolated(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(tmp_path / "dataroot"))
+        self.bundle_root = tmp_path / "bundles"
+        monkeypatch.setattr(pr, "DEFAULT_BUNDLE_ROOT", self.bundle_root)
+
+    # -- helpers ----------------------------------------------------------
+
+    @staticmethod
+    def _sha(repo, rev):
+        return repo.git("rev-parse", rev).stdout.strip()
+
+    def _make_snapshot(self, repo, changes, parent="HEAD", email="t@example.com"):
+        """Commit `parent` + `changes` ({path: text | None}) without touching
+        the shared index or the worktree; return the commit sha. `email` is the
+        author email: `pr._FREEZE_AUTHOR_EMAIL` makes it look like a freeze."""
+        index = repo.path.parent / f"plumbing-{abs(hash(tuple(changes.items())))}.index"
+        env = {
+            **os.environ,
+            "GIT_INDEX_FILE": str(index),
+            "GIT_AUTHOR_NAME": "t",
+            "GIT_AUTHOR_EMAIL": email,
+            "GIT_COMMITTER_NAME": "t",
+            "GIT_COMMITTER_EMAIL": "t@example.com",
+        }
+
+        def run(*args, data=None):
+            proc = subprocess.run(
+                ["git", *args], cwd=repo.path, env=env, input=data,
+                capture_output=True, check=True,
+            )
+            return proc.stdout.decode("utf-8").strip()
+
+        try:
+            run("read-tree", parent)
+            for path, text in changes.items():
+                if text is None:
+                    run("update-index", "--force-remove", "--", path)
+                else:
+                    oid = run("hash-object", "-w", "--stdin", data=text.encode("utf-8"))
+                    run("update-index", "--add", "--cacheinfo", f"100644,{oid},{path}")
+            tree = run("write-tree")
+            return run("commit-tree", tree, "-p", self._sha(repo, parent), "-m", "snapshot")
+        finally:
+            index.unlink(missing_ok=True)
+
+    def _commit_base(self, repo, files):
+        for name, text in files.items():
+            target = repo.path / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding="utf-8")
+        repo.git("add", "-f", "--", *files)
+        repo.git("commit", "-qm", "base")
+
+    def _review(self, capsys, *args):
+        capsys.readouterr()
+        rc = pr.main(["prepare_review.py", *args])
+        captured = capsys.readouterr()
+        bundle = json.loads(captured.out) if rc == 0 else None
+        return rc, bundle, captured.err
+
+    @staticmethod
+    def _under(path, root):
+        return Path(path).resolve().is_relative_to(Path(root).resolve())
+
+    # -- the five core cases ---------------------------------------------
+
+    def test_live_edit_changes_neither_chunk_nor_frozen_file(self, git_repo, capsys):
+        self._commit_base(git_repo, {"src/a.py": "x = 0\n"})
+        snap = self._make_snapshot(git_repo, {"src/a.py": "x = 1\n"})
+        # The author keeps editing after the freeze.
+        (git_repo.path / "src" / "a.py").write_text("x = 999\n", encoding="utf-8")
+
+        rc, bundle, err = self._review(capsys, "--snapshot", snap)
+
+        assert rc == 0, err
+        diff = _concat_diff_from_chunks(bundle)
+        assert "+x = 1" in diff and "999" not in diff
+        frozen = Path(bundle["snapshot"]["review_root"]) / "src" / "a.py"
+        assert frozen.read_text(encoding="utf-8") == "x = 1\n"
+        # What a reader is TOLD to open (`local`) is the frozen file, not the live one.
+        (cf,) = bundle["changed_files"]
+        assert Path(cf["local"]).read_text(encoding="utf-8") == "x = 1\n"
+        (git_repo.path / "src" / "a.py").write_text("x = 5000\n", encoding="utf-8")
+        assert frozen.read_text(encoding="utf-8") == "x = 1\n"
+        assert Path(cf["local"]).read_text(encoding="utf-8") == "x = 1\n"
+
+    def test_local_paths_and_project_root_sit_under_review_root(self, git_repo, capsys):
+        self._commit_base(git_repo, {"src/a.py": "x = 0\n", "keep.txt": "k\n"})
+        base = self._sha(git_repo, "HEAD")
+        snap = self._make_snapshot(git_repo, {"src/a.py": "x = 1\n"})
+        (git_repo.path / "src" / "forgotten.py").write_text("y = 2\n", encoding="utf-8")
+        shared_index = (git_repo.path / ".git" / "index").read_bytes()
+
+        rc, bundle, err = self._review(capsys, "--snapshot", snap)
+
+        assert rc == 0, err
+        meta = bundle["snapshot"]
+        root = Path(meta["review_root"])
+        assert meta == {
+            "commit": snap,
+            "base": base,
+            "tree": self._sha(git_repo, f"{snap}^{{tree}}"),
+            "ref": f"refs/git-kit/review/{snap[:12]}",
+            "review_root": str(root),
+            "live_root": str(git_repo.path.resolve()),
+        }
+        assert bundle["project_root"] == str(root)
+        assert bundle["range"] == f"{base}..{snap}"
+        assert [cf["path"] for cf in bundle["changed_files"]] == ["src/a.py"]
+        for cf in bundle["changed_files"]:
+            assert self._under(cf["local"], root)
+            assert Path(cf["local"]) == (root / cf["path"]).resolve()
+        # The tree is complete (context files exist), not just the changed paths.
+        assert (root / "keep.txt").read_text(encoding="utf-8") == "k\n"
+        # Live-tree scans describe the live tree, not the subject.
+        assert not (root / "src" / "forgotten.py").exists()
+        assert bundle["untracked_or_unstaged"] == []
+        assert bundle["merge_conflicts"] == []
+        # The shared index is untouched and the private index is gone.
+        assert (git_repo.path / ".git" / "index").read_bytes() == shared_index
+        assert not (Path(bundle["bundle_dir"]) / "snap.index").exists()
+        assert Path(bundle["bundle_dir"]) == (
+            self.bundle_root / pr._repo_dir_name(git_repo.path) / f"snap-{snap[:12]}"
+        )
+        on_disk = json.loads(
+            (Path(bundle["bundle_dir"]) / "bundle.json").read_text(encoding="utf-8")
+        )
+        assert on_disk == bundle
+
+    def test_two_snapshots_get_distinct_dirs_and_neither_clobbers_the_other(
+        self, git_repo, capsys
+    ):
+        self._commit_base(git_repo, {"src/a.py": "x = 0\n"})
+        snap1 = self._make_snapshot(git_repo, {"src/a.py": "x = 1\n"})
+        snap2 = self._make_snapshot(git_repo, {"src/a.py": "x = 2\n"})
+
+        rc1, first, err1 = self._review(capsys, "--snapshot", snap1)
+        rc2, second, err2 = self._review(capsys, "--snapshot", snap2)
+
+        assert rc1 == 0 and rc2 == 0, (err1, err2)
+        assert first["bundle_dir"] != second["bundle_dir"]
+        assert first["snapshot"]["review_root"] != second["snapshot"]["review_root"]
+        assert "+x = 1" in _concat_diff_from_chunks(first)
+        assert "+x = 2" not in _concat_diff_from_chunks(first)
+        assert "+x = 2" in _concat_diff_from_chunks(second)
+        tree1 = Path(first["snapshot"]["review_root"]) / "src" / "a.py"
+        tree2 = Path(second["snapshot"]["review_root"]) / "src" / "a.py"
+        assert tree1.read_text(encoding="utf-8") == "x = 1\n"
+        assert tree2.read_text(encoding="utf-8") == "x = 2\n"
+
+    def test_claude_md_chain_comes_from_the_frozen_tree(self, git_repo, capsys):
+        self._commit_base(git_repo, {"CLAUDE.md": "base rule\n", "src/a.py": "x = 0\n"})
+        snap = self._make_snapshot(
+            git_repo, {"CLAUDE.md": "snapshot rule\n", "src/a.py": "x = 1\n"}
+        )
+        (git_repo.path / "CLAUDE.md").write_text("live rule\n", encoding="utf-8")
+
+        rc, bundle, err = self._review(capsys, "--snapshot", snap)
+
+        assert rc == 0, err
+        root = Path(bundle["snapshot"]["review_root"])
+        cf = next(c for c in bundle["changed_files"] if c["path"] == "src/a.py")
+        assert [Path(p).resolve() for p in cf["claude_mds"]] == [(root / "CLAUDE.md").resolve()]
+        assert Path(cf["claude_mds"][0]).read_text(encoding="utf-8") == "snapshot rule\n"
+        assert bundle["unique_claude_mds"]
+        for md in bundle["unique_claude_mds"]:
+            assert self._under(md, root)
+
+    def test_submit_gate_scan_matches_the_frozen_paths(self, git_repo, capsys):
+        gate = "**Submit gate:** Run the src checks.\nApplies to:\n- src/\n"
+        self._commit_base(git_repo, {"CLAUDE.md": "no gate\n", "src/a.py": "x = 0\n"})
+        snap = self._make_snapshot(git_repo, {"CLAUDE.md": gate, "src/a.py": "x = 1\n"})
+        # The live CLAUDE.md carries no gate: only the frozen one can produce it.
+
+        rc, bundle, err = self._review(capsys, "--snapshot", snap)
+
+        assert rc == 0, err
+        root = Path(bundle["snapshot"]["review_root"])
+        assert len(bundle["submit_gates"]) == 1
+        fired = bundle["submit_gates"][0]
+        assert fired["summary"] == "Run the src checks"
+        assert self._under(fired["source"], root)
+        frozen_a = (root / "src" / "a.py").resolve()
+        assert [Path(p).resolve() for p in fired["matched_files"]] == [frozen_a]
+
+    # -- --base ------------------------------------------------------------
+
+    def test_base_reviews_only_the_fix_delta(self, git_repo, capsys):
+        self._commit_base(git_repo, {"src/a.py": "x = 0\n", "src/b.py": "y = 0\n"})
+        head = self._sha(git_repo, "HEAD")
+        snap1 = self._make_snapshot(git_repo, {"src/a.py": "x = 1\n"})
+        # The second freeze covers every path of the first (and the fix).
+        snap2 = self._make_snapshot(
+            git_repo, {"src/a.py": "x = 1\n# fixed\n", "src/b.py": "y = 1\n"}
+        )
+
+        rc, delta, err = self._review(capsys, "--snapshot", snap2, "--base", snap1)
+        assert rc == 0, err
+        assert delta["snapshot"]["base"] == snap1
+        assert delta["range"] == f"{snap1}..{snap2}"
+        diff = _concat_diff_from_chunks(delta)
+        assert "+# fixed" in diff and "+y = 1" in diff
+        assert "x = 0" not in diff  # the first freeze's change is not re-reviewed
+
+        rc, full, err = self._review(capsys, "--snapshot", snap2)
+        assert rc == 0, err
+        assert full["snapshot"]["base"] == head  # S^1 by default
+        assert "-x = 0" in _concat_diff_from_chunks(full)
+        assert full["bundle_dir"] == delta["bundle_dir"]
+
+    def test_head_sha_is_the_reviewed_snapshot_commit_not_the_base(self, git_repo, capsys):
+        self._commit_base(git_repo, {"src/a.py": "x = 0\n"})
+        snap = self._make_snapshot(git_repo, {"src/a.py": "x = 1\n"})
+        rc, bundle, err = self._review(capsys, "--snapshot", snap)
+        assert rc == 0, err
+        assert bundle["head_sha"] == self._sha(git_repo, snap)[: len(bundle["head_sha"])]
+        assert bundle["head_sha"] != self._sha(git_repo, "HEAD")[: len(bundle["head_sha"])]
+
+    # -- declined-findings ledger identity ----------------------------------
+
+    _DECLINED = [{"kind": "code_review", "file": "src/a.py", "reason": "bug",
+                  "description": "constant assignment never used"}]
+
+    def test_freeze_marker_matches_what_snapshot_review_writes(self):
+        sys.path.insert(0, str(Path(pr.__file__).parent))
+        try:
+            import snapshot_review
+        finally:
+            sys.path.pop(0)
+        assert snapshot_review._IDENTITY["GIT_AUTHOR_EMAIL"] == pr._FREEZE_AUTHOR_EMAIL
+
+    def test_freeze_snapshots_share_the_working_review_ledger_identity(
+        self, git_repo, capsys
+    ):
+        self._commit_base(git_repo, {"src/a.py": "x = 0\n"})
+        (git_repo.path / "src" / "a.py").write_text("x = 1\n", encoding="utf-8")
+        rc, working, err = self._review(capsys, "--working")
+        assert rc == 0, err
+        assert working["change_id"].endswith(":__working_tree__")
+
+        snap1 = self._make_snapshot(
+            git_repo, {"src/a.py": "x = 1\n"}, email=pr._FREEZE_AUTHOR_EMAIL
+        )
+        snap2 = self._make_snapshot(
+            git_repo, {"src/a.py": "x = 2\n"}, email=pr._FREEZE_AUTHOR_EMAIL
+        )
+        rc, first, err = self._review(capsys, "--snapshot", snap1)
+        assert rc == 0, err
+        rc, delta, err = self._review(capsys, "--snapshot", snap2, "--base", snap1)
+        assert rc == 0, err
+        for bundle in (first, delta):
+            assert bundle["change_id"] == working["change_id"]
+            assert bundle["ledger_baseline"] == working["ledger_baseline"]
+
+        # A decline recorded on the first snapshot collapses on the delta review
+        # and on a plain `--working` review at the same HEAD.
+        pr.ledger.record_declined(
+            pr._ledger_path(), first["change_id"], first["ledger_baseline"], self._DECLINED
+        )
+        rc, delta, err = self._review(capsys, "--snapshot", snap2, "--base", snap1)
+        assert rc == 0, err
+        assert [h["label"] for h in delta["ledger_hits"]] == ["constant assignment never used"]
+        rc, working, err = self._review(capsys, "--working")
+        assert rc == 0, err
+        assert len(working["ledger_hits"]) == 1
+
+    def test_a_moved_head_makes_freeze_declines_stale(self, git_repo, capsys):
+        self._commit_base(git_repo, {"src/a.py": "x = 0\n"})
+        snap1 = self._make_snapshot(
+            git_repo, {"src/a.py": "x = 1\n"}, email=pr._FREEZE_AUTHOR_EMAIL
+        )
+        rc, first, err = self._review(capsys, "--snapshot", snap1)
+        assert rc == 0, err
+        pr.ledger.record_declined(
+            pr._ledger_path(), first["change_id"], first["ledger_baseline"], self._DECLINED
+        )
+        self._commit_base(git_repo, {"other.txt": "o\n"})  # HEAD moves
+        snap2 = self._make_snapshot(
+            git_repo, {"src/a.py": "x = 1\n"}, email=pr._FREEZE_AUTHOR_EMAIL
+        )
+        rc, second, err = self._review(capsys, "--snapshot", snap2)
+        assert rc == 0, err
+        assert second["change_id"] == first["change_id"]
+        assert second["ledger_baseline"] != first["ledger_baseline"]
+        assert second["ledger_hits"] == []
+
+    def test_committed_tip_snapshot_shares_the_plain_range_ledger_identity(
+        self, git_repo, capsys
+    ):
+        self._commit_base(git_repo, {"src/a.py": "x = 0\n"})
+        git_repo.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        git_repo.commit_file("src/a.py", "x = 1\n", "change a")
+
+        rc, plain, err = self._review(capsys, "origin/main..HEAD")
+        assert rc == 0, err
+        rc, snap, err = self._review(
+            capsys, "--snapshot", "HEAD", "--base", "origin/main"
+        )
+        assert rc == 0, err
+        assert snap["change_id"] == plain["change_id"]
+        assert snap["ledger_baseline"] == plain["ledger_baseline"]
+        # The subject is the committed tip, read from a frozen tree.
+        assert "+x = 1" in _concat_diff_from_chunks(snap)
+        assert self._under(snap["project_root"], snap["snapshot"]["review_root"])
+
+        pr.ledger.record_declined(
+            pr._ledger_path(), plain["change_id"], plain["ledger_baseline"], self._DECLINED
+        )
+        rc, snap, err = self._review(
+            capsys, "--snapshot", "HEAD", "--base", "origin/main"
+        )
+        assert rc == 0, err
+        assert len(snap["ledger_hits"]) == 1
+
+    # -- ignored per-developer config -------------------------------------
+
+    def test_ignored_claude_and_local_data_are_copied_but_never_over_tracked(
+        self, git_repo, capsys
+    ):
+        self._commit_base(
+            git_repo,
+            {
+                ".gitignore": ".claude/*.local.yaml\n.local-data/\nbuild/\n",
+                "src/a.py": "x = 0\n",
+                # Force-added: tracked although a .gitignore rule matches it.
+                ".claude/force.local.yaml": "tracked\n",
+            },
+        )
+        snap = self._make_snapshot(git_repo, {"src/a.py": "x = 1\n"})
+        live = git_repo.path
+        (live / ".claude" / "review.local.yaml").write_text("cfg\n", encoding="utf-8")
+        (live / ".local-data").mkdir()
+        (live / ".local-data" / ".env").write_text("API_KEY=secret\n", encoding="utf-8")
+        (live / "build").mkdir()
+        (live / "build" / "out.bin").write_text("junk\n", encoding="utf-8")
+        # Untrack force.local.yaml in the live index only, leaving a different,
+        # now-ignored file on disk at a path the snapshot tree DOES hold.
+        git_repo.git("rm", "-q", "--cached", ".claude/force.local.yaml")
+        (live / ".claude" / "force.local.yaml").write_text("live-ignored\n", encoding="utf-8")
+
+        rc, bundle, err = self._review(capsys, "--snapshot", snap)
+
+        assert rc == 0, err
+        root = Path(bundle["snapshot"]["review_root"])
+        assert (root / ".claude" / "review.local.yaml").read_text(encoding="utf-8") == "cfg\n"
+        assert (root / ".local-data" / ".env").read_text(encoding="utf-8") == "API_KEY=secret\n"
+        assert (root / ".claude" / "force.local.yaml").read_text(encoding="utf-8") == "tracked\n"
+        assert not (root / "build").exists()  # only the two config dirs are copied
+
+    # -- argument handling -------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "extra", [["main..HEAD"], ["--staged"], ["--working"], ["main"]]
+    )
+    def test_snapshot_with_a_range_or_mode_exits_2(self, git_repo, capsys, extra):
+        self._commit_base(git_repo, {"a.txt": "base\n"})
+        snap = self._make_snapshot(git_repo, {"a.txt": "snap\n"})
+
+        rc, _, err = self._review(capsys, "--snapshot", snap, *extra)
+
+        assert rc == 2
+        assert "--snapshot" in err
+        assert not self.bundle_root.exists()  # refused before anything was written
+
+    def test_base_without_snapshot_exits_2(self, git_repo, capsys):
+        self._commit_base(git_repo, {"a.txt": "base\n"})
+        rc, _, err = self._review(capsys, "--base", "HEAD")
+        assert rc == 2
+        assert "--base requires --snapshot" in err
+
+    def test_snapshot_without_a_value_exits_2(self, git_repo, capsys):
+        rc, _, err = self._review(capsys, "--snapshot")
+        assert rc == 2
+        assert "--snapshot requires" in err
+
+    def test_unresolvable_snapshot_fails_loudly(self, git_repo, capsys):
+        self._commit_base(git_repo, {"a.txt": "base\n"})
+        rc, _, err = self._review(capsys, "--snapshot", "no-such-commit")
+        assert rc == 1
+        assert "could not resolve snapshot" in err
+
+    def test_root_commit_without_base_fails_loudly(self, git_repo, capsys):
+        self._commit_base(git_repo, {"a.txt": "base\n"})
+        rc, _, err = self._review(capsys, "--snapshot", "HEAD")
+        assert rc == 1
+        assert "has no parent commit" in err

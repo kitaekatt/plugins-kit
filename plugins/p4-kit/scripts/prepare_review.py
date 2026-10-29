@@ -192,6 +192,14 @@ Exclusions match depot paths the same way positives do.
 
 Modes:
 - `prepare_review.py <CL>` -- gather context, emit bundle JSON on stdout.
+- `prepare_review.py <CL> --snapshot <freeze record>` -- the background
+  runner's form: review the shelf that `snapshot_review.py freeze <CL>` pinned.
+  Refuses (exit 1) when the live shelf no longer equals the recorded
+  fingerprint. The bundle lands in the record's own `snap-<id>` directory,
+  every non-delete CL file is printed from the shelf into `<bundle>/tree/`,
+  a generic changed file's `local` points at that frozen copy (`live_local`
+  keeps the workspace path), a claimed file gains `frozen`, and the bundle
+  carries `snapshot` {cl, id, record, frozen_root, live_root, auto_shelved}.
 - `prepare_review.py --cleanup <bundle_dir>` -- read bundle.json, and if
   `auto_shelved` is true and the live shelf fingerprint still matches, run
   `p4 shelve -d -c <CL>`. Any mismatch (file added/removed/changed, shelf gone)
@@ -2158,6 +2166,123 @@ def build_bundle(
     return bundle
 
 
+_FREEZE_SCHEMA_VERSION = 1
+_SNAP_DIR_NAME = re.compile(r"^snap-[0-9a-f]{12}$")
+
+
+def load_freeze_record(arg: str, cl: str) -> tuple[dict, Path]:
+    """Read a snapshot_review.py freeze record for `cl`; return (record, its dir).
+
+    The record directory is the snapshot's bundle directory, so it must be
+    `<reviews root>/<cl>/snap-<12 hex>` -- anything else is refused rather than
+    written into.
+    """
+    path = Path(arg)
+    if path.is_dir():
+        path = path / "freeze.json"
+    if not path.is_file():
+        raise ValueError(f"no freeze record at {arg}")
+    record = json.loads(path.read_text(encoding="utf-8"))
+    if record.get("schema_version") != _FREEZE_SCHEMA_VERSION:
+        raise ValueError(f"unsupported freeze record schema in {path}")
+    if record.get("cl") != cl:
+        raise ValueError(f"freeze record {path} is for CL {record.get('cl')}, not CL {cl}")
+    directory = path.parent.resolve()
+    if (
+        directory.parent != (DEFAULT_BUNDLE_ROOT / cl).resolve()
+        or not _SNAP_DIR_NAME.match(directory.name)
+    ):
+        raise ValueError(f"freeze record {path} is not under {DEFAULT_BUNDLE_ROOT / cl}/snap-<id>")
+    return record, directory
+
+
+def _require_frozen_shelf(cl: str, record: dict, when: str) -> ShelfScanResult:
+    """The live shelf must still be the one the record froze."""
+    scan = fetch_shelf_fingerprint(cl)
+    if not scan.scan_ok:
+        raise ValueError(f"could not read the shelf of CL {cl} {when}: {scan.scan_reason}")
+    live = {depot: digest.upper() for depot, digest in scan.digests.items()}
+    frozen = {depot: digest.upper() for depot, digest in record["fingerprint"].items()}
+    if live != frozen or scan.actions != record["actions"]:
+        raise ValueError(
+            f"CL {cl}'s shelf changed since snapshot {record['snapshot']} was frozen ({when}); "
+            f"freeze again with snapshot_review.py freeze {cl}"
+        )
+    return scan
+
+
+def _frozen_relpath(depot: str) -> str:
+    """Workspace-independent location of a depot file inside `<bundle>/tree/`."""
+    return depot.lstrip("/")
+
+
+def build_snapshot_bundle(
+    cl: str,
+    record_arg: str,
+    claim_globs: Optional[list[str]] = None,
+    ledger_path: Optional[Path] = None,
+    review_machine_emitted: bool = False,
+) -> tuple[dict, Path]:
+    """Build the bundle for a frozen shelf (`--snapshot <record>`).
+
+    The bundle directory is the record's own `snap-<id>` directory, so two
+    reviews of one CL never share chunks. The shelf must equal the frozen
+    fingerprint before and after the build. Every non-delete CL file is printed
+    from the shelf into `<bundle>/tree/<depot path>`; a generic changed file's
+    `local` then points at that frozen copy (its workspace path stays as
+    `live_local`), and a claimed file gains `frozen` while its `local` stays in
+    the workspace, where md-domain resolves links and siblings. When the freeze
+    created the shelf, `auto_shelved` and `shelf_fingerprint` come from it so the
+    step-10 cleanup removes that shelf.
+    """
+    record, bundle_dir = load_freeze_record(record_arg, cl)
+    _require_frozen_shelf(cl, record, "before prepare")
+    bundle = build_bundle(
+        cl,
+        bundle_dir,
+        claim_globs=claim_globs,
+        ledger_path=ledger_path,
+        review_machine_emitted=review_machine_emitted,
+    )
+    scan = _require_frozen_shelf(cl, record, "after prepare")
+    tree = bundle_dir / "tree"
+    frozen: dict[str, str] = {}
+    for depot, action in sorted(record["actions"].items()):
+        if action in _DELETE_ACTIONS:
+            continue
+        dest = tree / _frozen_relpath(depot)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        spec = P4SnapshotReader._escape_filespec(depot, preserve_encoded=True) + f"@={cl}"
+        rc, out, err = run_p4(["print", "-q", "-o", str(dest), spec])
+        if rc != 0 or not dest.is_file():
+            raise ValueError(
+                f"could not print {depot} from the shelf of CL {cl}: "
+                f"{(err or out).strip() or f'exit {rc}'}"
+            )
+        frozen[depot] = str(dest)
+    for entry in bundle["changed_files"]:
+        path = frozen.get(entry.get("depot", ""))
+        if path:
+            entry["live_local"] = entry.get("local")
+            entry["local"] = path
+    for entry in bundle.get("claimed_files", []):
+        path = frozen.get(entry.get("depot", ""))
+        if path:
+            entry["frozen"] = path
+    if record.get("auto_shelved"):
+        bundle["auto_shelved"] = True
+        bundle["shelf_fingerprint"] = scan.digests
+    bundle["snapshot"] = {
+        "cl": cl,
+        "id": record["snapshot"],
+        "record": str(bundle_dir / "freeze.json"),
+        "frozen_root": str(tree),
+        "live_root": bundle.get("project_root"),
+        "auto_shelved": bool(record.get("auto_shelved")),
+    }
+    return bundle, bundle_dir
+
+
 def cleanup_auto_shelve(bundle_dir: Path) -> int:
     """Delete the auto-created shelf for `bundle_dir`'s CL iff it still matches.
 
@@ -2244,7 +2369,7 @@ def _parse_args(args: list[str]) -> tuple[list[str], list[str], bool]:
 
 def _usage() -> int:
     print(
-        "Usage: prepare_review.py <CL> [--claim <glob> ...] [--review-machine-emitted]\n"
+        "Usage: prepare_review.py <CL> [--snapshot <freeze record>] [--claim <glob> ...] [--review-machine-emitted]\n"
         "       prepare_review.py --cleanup <bundle_dir>\n"
         "       prepare_review.py --ledger-record <declined.json>",
         file=sys.stderr,
@@ -2269,8 +2394,20 @@ def main(argv: list[str]) -> int:
                 return 1
             print(f"prepare_review: recorded {n} declined finding(s) into the ledger.", file=sys.stderr)
             return 0
+        rest = list(argv[1:])
+        snapshot_record: Optional[str] = None
+        if "--snapshot" in rest:
+            i = rest.index("--snapshot")
+            if i + 1 >= len(rest) or rest[i + 1].startswith("-"):
+                print("Error: --snapshot requires a freeze record path", file=sys.stderr)
+                return 2
+            snapshot_record = rest[i + 1]
+            del rest[i:i + 2]
+            if "--snapshot" in rest:
+                print("Error: --snapshot given more than once", file=sys.stderr)
+                return 2
         try:
-            positionals, claim_globs, review_machine_emitted = _parse_args(argv[1:])
+            positionals, claim_globs, review_machine_emitted = _parse_args(rest)
         except ValueError as e:
             print(f"Error: {e}", file=sys.stderr)
             return 2
@@ -2284,6 +2421,18 @@ def main(argv: list[str]) -> int:
         if not re.fullmatch(r"[0-9]+", cl):
             print(f"Error: CL must be a positive integer, got {cl!r}", file=sys.stderr)
             return 2
+        if snapshot_record is not None:
+            try:
+                bundle, bundle_dir = build_snapshot_bundle(
+                    cl,
+                    snapshot_record,
+                    claim_globs=claim_globs,
+                    review_machine_emitted=review_machine_emitted,
+                )
+            except ValueError as e:
+                print(f"Error: {e}", file=sys.stderr)
+                return 1
+            return emit_bundle(bundle, bundle_dir)
         bundle_dir = DEFAULT_BUNDLE_ROOT / cl
         bundle_dir.mkdir(parents=True, exist_ok=True)
         try:

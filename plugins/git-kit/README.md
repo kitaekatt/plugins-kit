@@ -82,6 +82,34 @@ explicit range (`<a>..<b>`, `--staged`, `--working`) if it guessed wrong.
 - `gh` is provisioned by bootstrap for the GitHub-side features (auth,
   optional org membership); the review itself only needs git.
 
+## Background review
+
+By default a review runs in the background on a frozen snapshot, so the
+session stays free and the agent can keep editing the same files while
+reviewers read the frozen copy.
+
+1. `snapshot_review.py freeze --paths <p>...` (or `--patch F` / `--staged`)
+   records this session's change as a commit under
+   `refs/git-kit/review/<sha12>`. It is built in a private index and never
+   touches the shared index or the working tree. It writes no scratch copy.
+2. The background runner runs `prepare_review.py --snapshot <sha>`, which
+   writes the snapshot's full tree as a scratch copy under the git-kit data
+   directory. Reviewers read only that copy. The runner never asks the
+   user, edits, commits or lands; it returns findings and questions to the
+   main session, then `drop <sha> --tree-only` removes the scratch copy.
+3. Fixes are reviewed as a delta: freeze again and review with
+   `--base <previous snapshot>`.
+4. `snapshot_review.py land <sha> -F <msgfile>` commits exactly the reviewed
+   snapshot (same tree, or the same patch when HEAD moved meanwhile). Edits
+   made after the freeze stay uncommitted, and other sessions' changes are
+   not included. It then removes the ref and the bundle directory.
+   `drop <sha>` abandons a snapshot without committing.
+
+Pass `--inline` to run the review in the foreground against the live working
+tree instead. Snapshot refs are local only. `snapshot_review.py prune`
+removes snapshot refs older than 7 days (`--older-than-days N` changes the
+age).
+
 ## When not to use it
 
 - **Trivial single-file mechanical changes.** The pipeline has a triviality

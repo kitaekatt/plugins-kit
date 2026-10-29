@@ -14,9 +14,9 @@ and the post-decision `--ledger-record` step.
 
 ## Change identity + baseline
 
-- `change_id` (`bundle.change_id`) = the diff range spec (e.g. `origin/main..HEAD`). It is the outer ledger
+- `change_id` (`bundle.change_id`) = the diff range spec as typed (e.g. `origin/main..HEAD`), or `__working_tree__` for uncommitted work, whether reviewed as `--working` or as a frozen snapshot of it (delta reviews included). It is the outer ledger
   key -- entries are bucketed per change.
-- `baseline` (`bundle.ledger_baseline`) = the range base SHA (`git rev-parse <base>`). Every recorded entry
+- `baseline` (`bundle.ledger_baseline`) = the range base SHA (`git rev-parse <base>`); for uncommitted work, the HEAD SHA (a snapshot's is the HEAD it was cut from). Every recorded entry
   stores the baseline it was declined at; on a later run prepare_review recomputes
   the current baseline and emits only entries whose baseline STILL MATCHES as
   `bundle.ledger_hits`. When the baseline moves the entry is stale and the finding
