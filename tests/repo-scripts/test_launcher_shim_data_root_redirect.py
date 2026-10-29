@@ -424,9 +424,29 @@ _BP_SHIMS = [spec for spec in _SHIMS
 
 def _script(path: Path, marker: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"#!/bin/sh\necho {marker}\n", encoding="utf-8")
+    # newline="\n": Windows text mode would write CRLF and the shebang would read
+    # "/bin/sh\r", which bash refuses as a bad interpreter.
+    path.write_text(f"#!/bin/sh\necho {marker}\n", encoding="utf-8", newline="\n")
     path.chmod(0o755)
     return path
+
+
+def _expose_tool(link: Path, real: str) -> None:
+    """Make ``link`` runnable as the utility at ``real`` from a bare PATH directory.
+
+    A symlink does it on POSIX. A Git Bash utility is an MSYS executable that loads
+    ``msys-2.0.dll`` from its own directory, and a symlink elsewhere does not carry
+    that directory with it: the program dies with "error while loading shared
+    libraries", ``$(dirname ...)`` expands to nothing, and the shim under test sees a
+    host with no ``dirname``/``uname``. On Windows the entry is therefore a one-line
+    ``sh`` script that execs the real executable by absolute path.
+    """
+    if _IS_WINDOWS:
+        target = Path(real).resolve().as_posix()
+        link.write_text(f'#!/bin/sh\nexec "{target}" "$@"\n', encoding="utf-8", newline="\n")
+        link.chmod(0o755)
+    else:
+        link.symlink_to(real)
 
 
 class _BootstrapPython:
@@ -446,7 +466,7 @@ class _BootstrapPython:
         for name in _TOOLS:
             found = shutil.which(name)
             assert found, f"{name} not found on PATH"
-            (self.tools / name).symlink_to(found)
+            _expose_tool(self.tools / name, found)
         self.fakebin = tmp_path / "fakebin"
         _script(self.fakebin / "python3", "PATHPY")
         self.stranger = _script(tmp_path / "stranger" / "python", "STRANGER")
@@ -455,7 +475,7 @@ class _BootstrapPython:
         return _script(self.standalone.joinpath(*parts), marker)
 
     def run(self, bootstrap_python: Path | None, *, with_path_python: bool = True):
-        path = (f"{self.fakebin}:{self.tools}" if with_path_python else str(self.tools))
+        path = (f"{self.fakebin}{os.pathsep}{self.tools}" if with_path_python else str(self.tools))
         extra = {"BOOTSTRAP_PYTHON": str(bootstrap_python)} if bootstrap_python else {}
         return self.launch.run(redirect=False, path=path, extra_env=extra)
 
@@ -517,7 +537,9 @@ def test_a_relative_symlink_with_dotdot_that_stays_inside_is_accepted(bp):
     bp.inside("python", "lib", "real-python")
     link = bp.standalone / "python" / "bin" / "py"
     link.parent.mkdir(parents=True, exist_ok=True)
-    link.symlink_to("../lib/real-python")
+    # os.path.join: a Windows relative symlink target needs backslashes, or the OS
+    # cannot resolve the link when the shim execs it.
+    link.symlink_to(os.path.join("..", "lib", "real-python"))
     assert _marker(bp.run(link)) == "STANDALONE"
 
 
@@ -593,7 +615,13 @@ def test_relaunch_kit_synced_copy_finds_its_launcher_and_the_real_claude(tmp_pat
     home = tmp_path / "home"
     data = home / ".claude" / "plugins" / "data" / "plugins-kit" / "relaunch-kit"
     _sync_like_bootstrap(manifest, data)
-    fake_claude = _script(tmp_path / "claude-target" / "claude", "REAL-CLAUDE")
+    if _IS_WINDOWS:
+        # The launcher runs only .exe, .com, .cmd and .bat claude installs on Windows.
+        fake_claude = tmp_path / "claude-target" / "claude.cmd"
+        fake_claude.parent.mkdir(parents=True)
+        fake_claude.write_text("@echo REAL-CLAUDE\r\n", encoding="ascii", newline="")
+    else:
+        fake_claude = _script(tmp_path / "claude-target" / "claude", "REAL-CLAUDE")
     env = {name: value for name, value in os.environ.items() if name not in _SCRUBBED_ENV}
     env.update(HOME=str(home), USERPROFILE=str(home), RELAUNCH_KIT_CLAUDE=str(fake_claude))
     bash = _BASH if posix_kind == "posix" else _BASH32
