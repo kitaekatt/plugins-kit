@@ -119,9 +119,10 @@ for an in-session caller:
   `metered`). The renderer applies llm-kit's consent scope `orchestrate`
   (`llm-kit consent show --scope orchestrate`): an entry whose class that policy does not
   allow is listed after the menu as `UNUSABLE`, with the library's reason and the exact
-  `llm-kit consent set` command, is never the default, and is not usable. A scope can only
-  restrict the global policy, so enabling a class the global policy has off needs the global
-  command the line names. Native Agent-tool (Claude) entries take their class from the
+  `llm-kit consent set` command, is never the default, and is not usable. The global policy
+  holds only defaults: scope `orchestrate` overrides it per class in either direction, so
+  enabling a class the global policy has off needs only the scoped command the line names.
+  Native Agent-tool (Claude) entries take their class from the
   session environment (a billing-diverting variable such as `ANTHROPIC_API_KEY` makes them
   `metered`, otherwise `subscription`) and are never probed; codex entries take the codex
   CLI's authentication state. Without llm-kit, or when its describe() fails, the

@@ -72,10 +72,10 @@ belong to the [katsoft-libs source tree](https://github.com/kitaekatt/katsoft-li
 Change library behavior there. This plugin holds no library source and publishes no shared lib. A consumer
 venv installs the package with the extras it reaches (`katsoft-llm-kit[<extras>]>=A.B,<N` in
 its `pyproject.toml`). The plugin's own venv does the same: its `pyproject.toml` is a
-non-package project that requires the released `katsoft-llm-kit[<every extra>]>=1.7,<2` and
+non-package project that requires the released `katsoft-llm-kit[<every extra>]>=1.10,<2` and
 `katsoft-contracts>=1.0,<2`, so the extras flow from that distribution and `bootstrap.json`
-names none. The floor is 1.7 because the per-model output-cap surface first ships in 1.7.0; the job supervisor first shipped in
-1.6.0. Codex in package mode, the project model file, `models catalog`, protocol 2 of
+names none. The floor is 1.10 because a consent scope overrides the global defaults from 1.10.0; the per-model output-cap surface
+first shipped in 1.7.0 and the job supervisor in 1.6.0. Codex in package mode, the project model file, `models catalog`, protocol 2 of
 `completion complete`, local selection overrides and the neutral user paths shipped in 1.3.0;
 `custom_bootstrap.py` reads `llm-kit account status --json`, which first shipped in 1.2.0;
 bootstrap holds the venv at the highest imported released target the requirement
@@ -1190,10 +1190,11 @@ layer instead. The file is `$LLM_KIT_CONSENT_FILE` when set, else
 `~/.claude/plugins/data/plugins-kit/llm-kit/consent.json` when the neutral file does not
 exist (resolved on each call; "Persisted state keeps its historical names"), with
 `{"schema": 2, "local": bool, "subscription": bool, "metered": bool, "scopes": {name: {class: bool}},
-"updated_at": ...}`. The global classes are a ceiling and a scope may only restrict:
-`effective = global AND scope.get(class, true)`, so an absent scope key inherits, and a scope `on`
-that the global policy blocks is reported as blocked with the global command that lifts it. A
-global change preserves every scope entry. With no file the policy is `local` on, `subscription`
+"updated_at": ...}`. The global classes are defaults and a scope overrides them in both directions:
+`effective = scope[class] if the scope states it, else global[class]`, so an absent scope key
+inherits, and a scope `on` over a global `off` allows that class for that scope only (the
+scope-less policy and other scopes keep the global value). A global change preserves every
+scope entry. With no file the policy is `local` on, `subscription`
 on, `metered` off, with provenance `default`, and nothing is created; a file that is unreadable or
 malformed raises `ConsentConfigError` when a caller opts in, and is never read otherwise.
 

@@ -89,8 +89,8 @@ replaces the location for reads and writes. When the neutral file does not exist
 file `~/.claude/plugins/data/plugins-kit/llm-kit/consent.json` is read; a
 write always targets the neutral file (or the override) and carries the legacy values across,
 after which the neutral file wins. The file is `{schema: 2, local, subscription, metered,
-scopes, updated_at}`. The global classes are a ceiling; a scope may only restrict, and an
-absent scope key inherits.
+scopes, updated_at}`. The global classes are defaults; a scope overrides them in either
+direction for the classes it states, and an absent scope key inherits.
 
 ```
 llm-kit consent show [--scope NAME] [--json]                      # effective policy and where each value comes from
