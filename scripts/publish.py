@@ -766,13 +766,20 @@ def _require_bootstrap_dependency() -> None:
     there rather than restated, so the publish gate and the commit gate can
     never disagree.
     """
-    # Resolved next to THIS file, and scanning the checker's own default
-    # plugins dir, rather than via REPO_ROOT: the invariant is a property of
-    # the real plugin tree, not of the commit range, and REPO_ROOT is patched
-    # to a synthetic repo by tests/repo-scripts/test_publish.py.
+    # Resolved next to THIS file, and judging the checker's own default plugins
+    # dir and that dir's parent repo (the REAL repo's index), rather than via
+    # REPO_ROOT: the invariant is a property of the real plugin tree, not of
+    # the commit range, and REPO_ROOT is patched to a synthetic repo by
+    # tests/repo-scripts/test_publish.py. from_index=True judges only the
+    # plugins git tracks (names and plugin.json both read from the index), so
+    # an ignored leftover under plugins/ (uv.lock, __pycache__, egg-info of a
+    # deleted plugin) is not a plugin and cannot refuse a publish, while a
+    # tracked plugin with a missing or non-declaring plugin.json still does.
+    # The clean-tree gate has already run, so the index equals the committed
+    # state being published.
     module = _load_rule_module("check_bootstrap_dependency.py")
 
-    outliers = module.find_outliers()
+    outliers = module.find_outliers(from_index=True)
     if outliers:
         raise PublishError(
             "refusing: plugin(s) do not declare the bootstrap dependency:\n  "

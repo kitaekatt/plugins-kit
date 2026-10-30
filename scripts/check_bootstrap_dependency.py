@@ -153,9 +153,11 @@ def find_outliers(
     An outlier is any plugin dir (other than bootstrap itself) whose
     plugin.json is missing, unparseable, or lacks the bootstrap dependency.
 
-    Defaults are the FULL working-tree sweep that publish.py and the invariant
-    test depend on. ``from_index`` / ``only`` are how the ``--staged`` commit
-    gate narrows itself to the commit at hand.
+    Defaults are the FULL working-tree sweep the invariant test and the
+    no-argument CLI use. ``from_index`` judges only git-tracked plugins (names
+    and plugin.json from the index); publish.py uses it unscoped, so ignored
+    residue under plugins/ is not a plugin. ``only`` additionally narrows the
+    ``--staged`` commit gate to the commit at hand.
     """
     root = PLUGINS_DIR if plugins_dir is None else plugins_dir
     if from_index and repo_root is None:
@@ -196,7 +198,8 @@ def main(argv: list[str]) -> int:
     # written without the dependencies field) made EVERY commit by EVERY
     # session fail, on a plugin none of them were touching. A commit that
     # stages no plugin manifest cannot break the dependency edge; publish.py's
-    # preflight runs the unscoped sweep before anything reaches master.
+    # preflight sweeps every TRACKED plugin (from_index, unscoped) before
+    # anything reaches master.
     where = "working-tree"
     if "--staged" in argv:
         repo_root = PLUGINS_DIR.parent

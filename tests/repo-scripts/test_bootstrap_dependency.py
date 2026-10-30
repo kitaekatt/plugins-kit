@@ -140,7 +140,7 @@ class TestStagedScoping:
         self._add(repo, "README.md")
 
         assert self._main(repo, monkeypatch, ["--staged"]) == 0
-        # The unscoped sweep publish.py runs still sees it.
+        # The unscoped working-tree sweep still sees it.
         assert self._main(repo, monkeypatch, []) == 1
 
     def test_untracked_scaffold_is_invisible_to_the_commit(
@@ -208,3 +208,68 @@ class TestStagedScoping:
         monkeypatch.setattr(_checker._gitindex, "staged_paths", lambda root: None)
         assert self._main(repo, monkeypatch, ["--staged"]) == 1
         assert "could not read the index" in capsys.readouterr().err
+
+
+class TestTrackedSweep:
+    """The mode publish.py uses: ``find_outliers(from_index=True)`` unscoped.
+
+    Only plugins git tracks are judged. Ignored residue of a deleted plugin
+    (uv.lock, __pycache__, egg-info) leaves a directory under plugins/ that is
+    not a plugin; the full working-tree sweep called it one and refused every
+    publish.
+    """
+
+    def _repo(self, tmp_path):
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+        for k, v in (("user.email", "t@example.com"), ("user.name", "t")):
+            subprocess.run(
+                ["git", "-C", str(tmp_path), "config", k, v], check=True)
+        (tmp_path / ".gitignore").write_text("uv.lock\n__pycache__/\n*.egg-info/\n")
+        (tmp_path / "plugins").mkdir()
+        return tmp_path
+
+    def _commit_all(self, root):
+        subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "commit", "-qm", "init"], check=True)
+
+    def _sweep(self, root):
+        return _checker.find_outliers(
+            root / "plugins", repo_root=root, from_index=True)
+
+    def test_ignored_residue_directory_is_not_an_outlier(self, tmp_path):
+        repo = self._repo(tmp_path)
+        _plugin(repo / "plugins", "good-kit", deps=["bootstrap"])
+        self._commit_all(repo)
+        residue = repo / "plugins" / "zz-residue"
+        (residue / "__pycache__").mkdir(parents=True)
+        (residue / "uv.lock").write_text("")
+        (residue / "__pycache__" / "x.pyc").write_text("")
+        (residue / "zz.egg-info").mkdir()
+        (residue / "zz.egg-info" / "PKG-INFO").write_text("")
+        # The full working-tree sweep calls the residue a plugin ...
+        assert any("zz-residue" in o for o in _checker.find_outliers(
+            repo / "plugins"))
+        # ... the tracked sweep publish uses does not.
+        assert self._sweep(repo) == []
+
+    def test_tracked_plugin_without_plugin_json_is_an_outlier(self, tmp_path):
+        repo = self._repo(tmp_path)
+        _plugin(repo / "plugins", "some-kit", plugin_json=False)
+        self._commit_all(repo)
+        (out,) = self._sweep(repo)
+        assert "some-kit" in out and "no .claude-plugin/plugin.json" in out
+
+    def test_tracked_plugin_not_declaring_bootstrap_is_an_outlier(
+            self, tmp_path):
+        repo = self._repo(tmp_path)
+        _plugin(repo / "plugins", "some-kit", deps=[])
+        self._commit_all(repo)
+        (out,) = self._sweep(repo)
+        assert "does not declare" in out
+
+    def test_tracked_declaring_plugin_passes(self, tmp_path):
+        repo = self._repo(tmp_path)
+        _plugin(repo / "plugins", "some-kit", deps=["bootstrap"])
+        self._commit_all(repo)
+        assert self._sweep(repo) == []
