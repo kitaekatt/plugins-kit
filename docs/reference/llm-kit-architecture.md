@@ -2,6 +2,8 @@
 
 Status: signed off by the user 2026-10-16 (all 14 decisions).
 
+Addition 2026-10-30, approved by the user: `llm_kit.graph` (new in katsoft-llm-kit 1.10) joins the graph as the 17th component at Layer 6, and `cli` moves to Layer 7 with `graph` added to its set. The other signed decisions are unchanged.
+
 Source ownership: the library tree and source tests described below now live in
 [katsoft-libs](https://github.com/kitaekatt/katsoft-libs). Paths under
 `packages/katsoft-llm-kit/` refer to that repository. This marketplace retains
@@ -113,9 +115,12 @@ Shared bootstrap execution contracts live in execution; SQLite and ownership mec
 A -> {B} is the complete inter-component import set. Same-package imports are unrestricted; an omitted edge is forbidden.
 
 ~~~text
-Layer 6  cli                -> {schema, completion, registry, adapters, dispatch, jobs,
+Layer 7  cli                -> {schema, completion, registry, adapters, dispatch, jobs,
                                 pipeline.runtime, pipeline.execution, pipeline.analysis,
-                                frontdoor, scaffold}
+                                frontdoor, scaffold, graph}
+Layer 6  graph              -> {completion, dispatch, registry, schema,
+                                pipeline.artifacts, pipeline.execution,
+                                pipeline.runtime}
 Layer 5  pipeline.execution -> {execution, storage, pipeline.core,
                                 pipeline.artifacts, pipeline.runtime, adapters}
 Layer 4  jobs               -> {completion, registry, dispatch, execution, storage}
@@ -135,7 +140,7 @@ Layer 0  schema             -> {}
          scaffold           -> {}
 ~~~
 
-Deployment-mode support sits outside the 16 components, like `bootstrap_guard`: `llm_kit._runtime` (`mode()`, the routed-contract `load()`, `fleet()`, `require_fleet()`) may be imported by any component, imports no llm_kit module except `llm_kit._deployment`, and `llm_kit._deployment` (the marker the `katsoft-llm-kit` wheel replaces) is imported by `_runtime` alone. The guard `tests/llm-kit/test_import_graph.py` enforces all three. The package deployment, its contracts routing and the features it refuses are in `docs/planning/shared-lib-packaging/implementation-spec.md`, section C.
+Deployment-mode support sits outside the 17 components, like `bootstrap_guard`: `llm_kit._runtime` (`mode()`, the routed-contract `load()`, `fleet()`, `require_fleet()`) may be imported by any component, imports no llm_kit module except `llm_kit._deployment`, and `llm_kit._deployment` (the marker the `katsoft-llm-kit` wheel replaces) is imported by `_runtime` alone. The guard `tests/llm-kit/test_import_graph.py` enforces all three. The package deployment, its contracts routing and the features it refuses are in `docs/planning/shared-lib-packaging/implementation-spec.md`, section C.
 
 ### Required moves and composition seams
 

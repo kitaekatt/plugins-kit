@@ -1,7 +1,7 @@
 """Import-direction guard for the llm-kit component graph (check C2).
 
 The signed architecture (docs/reference/llm-kit-architecture.md, "Exact
-dependency graph") is the complete inter-component import set for the 16 final
+dependency graph") is the complete inter-component import set for the 17 final
 components. This module parses every ``.py`` file under
 ``packages/katsoft-llm-kit/src/llm_kit`` and reports each import whose
 source component -> target component pair is not in that set.
@@ -59,7 +59,11 @@ ALLOWED: dict[str, frozenset[str]] = {
     "cli": frozenset({
         "schema", "completion", "registry", "adapters", "dispatch", "jobs",
         "pipeline.runtime", "pipeline.execution", "pipeline.analysis",
-        "frontdoor", "scaffold",
+        "frontdoor", "scaffold", "graph",
+    }),
+    "graph": frozenset({
+        "completion", "dispatch", "registry", "schema", "pipeline.artifacts",
+        "pipeline.execution", "pipeline.runtime",
     }),
     "pipeline.execution": frozenset({
         "execution", "storage", "pipeline.core", "pipeline.artifacts",
@@ -401,8 +405,8 @@ def test_encoded_graph_equals_the_architecture_document():
     assert _documented_graph() == ALLOWED
 
 
-def test_there_are_sixteen_components():
-    assert len(COMPONENTS) == 16
+def test_there_are_seventeen_components():
+    assert len(COMPONENTS) == 17
     for targets in ALLOWED.values():
         assert targets <= COMPONENTS
 
