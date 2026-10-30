@@ -396,7 +396,7 @@ keys are `project_root`, `file`, `selection` or `model` (exactly one), `prompt`,
 means the selection's; `null` sends none), `max_tokens` (see "Output cap" below), `timeout_s` and `consent`; an
 unknown key is refused. `consent` opts in to the optional consent layer: omitted or `false`
 means the layer is not used, `true` applies the global policy, and `{"scope": "<name>"}`
-applies that scope's restrictions over the global policy. The name must be a non-empty
+applies that scope's values, which override the global defaults. The name must be a non-empty
 string without surrounding whitespace, and any other value is a `protocol` refusal. Protocol 2
 has no per-call allow list, so an `allow` key is an unknown key. `mode` is `completion`
 (default) or `workspace`; there is no image or build mode, and a caller that writes files names the files in `expect_files`. A

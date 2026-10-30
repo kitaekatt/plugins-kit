@@ -823,7 +823,7 @@ read. None of them names a harness.
 |---|---|---|
 | `.env` | user API keys, one `KEY=VALUE` per line | `LLM_KIT_ENV_FILE` |
 | `model-endpoints.yaml` | the endpoint registry | `MODEL_ENDPOINTS_REGISTRY` |
-| `consent.json` | the optional consent layer's policy for the `local`, `subscription` and `metered` cost classes, with per-scope restrictions | `LLM_KIT_CONSENT_FILE` |
+| `consent.json` | the optional consent layer's policy for the `local`, `subscription` and `metered` cost classes, with per-scope overrides of the global defaults | `LLM_KIT_CONSENT_FILE` |
 
 An override names one explicit file and replaces the location. For the registry,
 a missing override file is an error; a missing neutral file is the normal
