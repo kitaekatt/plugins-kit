@@ -126,7 +126,7 @@ choosing a side:
   `registry.models.package_mode_model_config`; with the fleet, package mode
   uses the layered registry like legacy mode. Codex reachability uses
   `llm_kit.adapters.codex_command.detect_codex` in both.
-- `_runtime` is a support module outside the 16 components: any component may
+- `_runtime` is a support module outside the 17 components: any component may
   import it, it imports only `_deployment`, and only `_runtime` imports
   `_deployment`. `tests/llm-kit/test_import_graph.py` enforces this. Import it
   inside a function where a module is compared with a legacy twin, so the
@@ -1242,7 +1242,7 @@ class and never reads the consent file. Only an opted-in request is checked.
 ## `llm_kit.cli`, launchers and bootstrap
 
 The console script is `llm-kit = llm_kit.cli:main`, with the groups `account`, `completion`,
-`models`, `jobs`, `pipeline`, `frontdoor`, `local` and `consent`. `llm_kit.cli.LEGACY_VERBS` maps each
+`models`, `jobs`, `pipeline`, `frontdoor`, `local`, `consent` and `graph`. `llm_kit.cli.LEGACY_VERBS` maps each
 verb the consolidated commands carried to its group; a bare old verb prints the migration
 hint. Each carried verb keeps its arguments, output and exit codes; the exit-code tables
 differ by group because the commands differed (the scripting groups use 2 usage, 3 halt, 4
@@ -1271,6 +1271,19 @@ each group's module documents its own.
   `tests/llm-kit/test_custom_bootstrap.py` covers the script and
   [the library account-status test](https://github.com/kitaekatt/katsoft-libs/blob/dev/tests/llm-kit/test_account_status_json.py)
   covers the document.
+- **`llm-kit graph`.** The group validates, runs and inspects data-defined generation graphs
+  (`llm_kit.graph`, the library's opt-in `graph` extra; `llm_kit.graph` is imported only by this
+  group). Its verbs are `validate`, `run`, `status`, `answer`, `resume`, `serve` and `replay`,
+  each in `llm_kit.graph.commands.<verb>`; a verb whose module is absent from the build exits 2
+  naming the module. `graph validate [--project DIR] [GRAPH ...]` checks graph files statically
+  and exits 0 (`ok: <n> graph(s)`), 1 (one line per problem) or 2 (usage). `graph run GRAPH
+  --item ID` exits 0 done, 1 failed or invalid, 2 usage, 3 stopped; `graph status` prints run
+  state and what a run would do now; `graph answer` lists or answers open human-input waits and
+  `graph resume` continues a stopped run; `graph replay GRAPH --item ID --node NODE` reruns one
+  node from its saved inputs; `graph serve` serves a read-only viewer on `127.0.0.1`. A GRAPH is
+  a name from the project's `.llm-kit/graphs.yaml` or a graph file path. The file format, project
+  config and static checks are in
+  [the katsoft-libs graph reference](https://github.com/kitaekatt/katsoft-libs/blob/dev/docs/reference/llm-kit-graph.md).
 - **Consumer contract.** `contract/public-surface.json` lists the public names of the pipeline
   products and `scripts/check_consumer_contract.py` reports deprecated and removed names in a
   consumer's source (invocation: `README.md`).
