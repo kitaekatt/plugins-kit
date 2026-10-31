@@ -31,6 +31,12 @@
 //   laneModels: { run: [{id, effort}], dropped: [{id, effort, reason}] }
 //                               // REQUIRED: lane_models.remediate from
 //                               // scripts/resolve_standards.py; absent throws
+//   maxConcurrent: integer|undefined
+//                               // OPTIONAL: a positive integer bounding the agents in
+//                               // flight in each fan-out (a worker pool: a free slot
+//                               // takes the next item at once); absent leaves it
+//                               // unbounded apart from the runtime cap; any other
+//                               // value throws before any agent runs
 // }
 
 export const meta = {
@@ -132,6 +138,40 @@ async function laneAgent(key, prompt, opts) {
   return null
 }
 const laneRoutes = () => ({ dropped: laneModels.dropped, perFile: laneRoutePerFile })
+
+// maxConcurrent is OPTIONAL: a positive integer bounding the agents in flight in
+// each fan-out. Absent leaves the fan-out unbounded apart from the runtime cap.
+// Any other value (0, negative, fractional, string, null) throws before any agent
+// is dispatched, because a bound that is silently ignored is a bound that was
+// never applied.
+const laneMaxConcurrent = input.maxConcurrent
+const laneBounded = laneMaxConcurrent !== undefined
+if (laneBounded && !(typeof laneMaxConcurrent === 'number' && Number.isInteger(laneMaxConcurrent) && laneMaxConcurrent >= 1)) {
+  throw new Error(`md-domain lane: args.maxConcurrent must be a positive integer (the most agents in flight per fan-out) or absent, got ${JSON.stringify(laneMaxConcurrent)}. Pass a whole number of 1 or more, or omit it for an unbounded fan-out.`)
+}
+if (laneBounded) {
+  log('md-domain lanes: at most ' + laneMaxConcurrent + ' agent(s) in flight per fan-out (args.maxConcurrent)')
+}
+// Every fan-out in a lane script goes through laneParallel, never a bare
+// parallel(). Unset, or no more items than the bound: parallel() itself, so the
+// call behaves as it always has. Bounded: a worker pool of laneMaxConcurrent
+// workers, each taking the next item the moment it finishes its last, so a free
+// slot never waits on the slowest of a fixed batch. Results keep input order. An
+// item that throws resolves to null, as it does under parallel(), and never stops
+// the other workers.
+async function laneParallel(thunks) {
+  if (!laneBounded || thunks.length <= laneMaxConcurrent) return parallel(thunks)
+  const results = new Array(thunks.length).fill(null)
+  let next = 0
+  const worker = async () => {
+    while (next < thunks.length) {
+      const i = next++
+      try { results[i] = await thunks[i]() } catch (_) { results[i] = null }
+    }
+  }
+  await parallel(Array.from({ length: laneMaxConcurrent }, () => worker))
+  return results
+}
 // lane-route: end
 
 // Drop files whose every remediation is a skip — nothing to do, no lane needed.
@@ -181,7 +221,7 @@ Return a summary: counts of applied/skipped/failed and a per-item action list.`
 phase('Remediate')
 // The model and effort come from args.laneModels through laneAgent (the lane
 // route above); nothing is inherited from the session and nothing is pinned here.
-const results = await parallel(actionable.map((f) => () =>
+const results = await laneParallel(actionable.map((f) => () =>
   laneAgent(f.path, lanePrompt(f), {
     label: `fix:${f.path.split(/[\\/]/).pop()}`,
     phase: 'Remediate',

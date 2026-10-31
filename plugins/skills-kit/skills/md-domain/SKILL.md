@@ -119,7 +119,7 @@ FOR EXAMPLE
   "audit this skill"                     one SKILL.md against its type contract
   "audit the docs"                       every project document under docs/
   "check for broken references"          cross-reference audit across the repo
-  "audit everything"                     all of the above, across the repo
+  "audit everything"                     all four audits above, across the repo
   "analyze src/cache"                    what that directory's CLAUDE.md is missing
   "author me a new skill"                from what you tell me
   "author a README for this project"     same, as a project doc
@@ -272,6 +272,21 @@ it judges nothing and so has no standards doc.
 `discover_coverage.py`, `coverage-detect.js` and the composition `code_directory`
 all keep the word `coverage` because coverage is what `analyze` produces. The
 verb was renamed; the artifact it emits was not.
+
+**"Audit everything" is one discovery run plus one Workflow call per lane, not a
+lane.** It has no lane record. Run `scripts/discover_all.py` once (`--out <file>`
+writes the JSON; `--max-concurrent N` bounds each lane's fan-out). It applies the
+discoverers' one pruning policy, leaves a path a second lane would also take with
+its owner (a skill's reference documents stay with `audit_skill`; CLAUDE.md,
+AGENTS.md and SKILL.md stay with their own lanes), resolves standards and each
+file's ancestor chain, and prints `lanes.<lane id>`: the exact `args` of that
+lane's detect script, `workflow/references-classify.js` for `audit_references`. A
+lane with no subjects is absent from `lanes` and named in `skipped`. Announce the
+per-lane counts and the skipped list as "Naming and scope announcement" requires,
+then make one top-level Workflow call per lane, passing `lanes.<lane id>` verbatim
+as `args`. Never nest the lane scripts into one driver. The gate, remediation and
+review-mode rules stay in `references/lanes/audit-lane.md`. `analyze` is not part
+of it: it reads one directory and has no whole-repo default.
 
 **`author x references` has no lane, deliberately.** Cross-references are not an
 authored artifact -- they are an emergent property of the other three. There is
@@ -575,9 +590,11 @@ ambiguous, ask rather than guessing.
   this CLAUDE.md too verbose", "audit for token efficiency") sets the same flag.
   Off by default; the lens never runs unless requested. On any other lane, say the
   flag does not apply there and continue without it.
-- **`--scope skills|references|md|all`, `--path`, `--json`, `--verbose`,
-  `--ignore-dir`, `--ignore-file`** -- pass-through to the `audit_references`
-  scanner.
+- **`--scope skills|references|md|all`, `--sources project|all`, `--path`,
+  `--json`, `--verbose`, `--ignore-dir`, `--ignore-file`** -- pass-through to the
+  `audit_references` scanner. `--sources` picks which roots it REPORTS on
+  (default `project`; `all` adds the user and plugin skill trees). `--scope` and
+  `--sources` also steer the references lane of `scripts/discover_all.py`.
 
 ## Review mode
 

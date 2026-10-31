@@ -82,6 +82,12 @@ entries is configured behaviour. The `audit_job` family does not go through
 `agent_route`, because its route runs through llm-kit,
 where `luna` runs.
 
+**Overrides apply.** A user or project layer replaces the shipped default on
+that machine, so the model a run uses can differ from the table above. Run
+`skills_kit_tool.py lane-models` (launched as Step 1 describes for its entry points) to print
+the slot a run will resolve, and quote that output rather than the table when
+stating a lane's model.
+
 **Checking the slot.** `skills_kit_tool.py lane-models --check` exits 0 when
 every entry is complete, 1 when an entry lacks an effort (findings are
 collected across all layers), and 2 when a layer is malformed (unknown family
@@ -96,6 +102,63 @@ The md-audit evidence-pack adapter is enforced in `scripts/emit_audit_jobs.py`,
 which attaches the pack only for the endpoints it was measured for. Detect
 lanes build their prompts in process and run only core ids, so no
 adapter-admitted endpoint reaches them.
+
+## Bounding fan-out (`maxConcurrent`)
+
+Every md-domain workflow lane (detect, classify, remediate, coverage and
+generate) takes an optional `maxConcurrent` argument: a positive integer that
+bounds how many agents are in flight in each of the lane's fan-outs, through a
+worker pool. Unset, nothing but the runtime's own cap bounds the fan-out. An
+invalid value (zero, negative, fractional, or not a number) throws before any
+agent launches; it is never clamped or ignored. It is a Workflow `args` field
+like `laneModels`, and it bounds concurrency only: results, their order and the
+lane's schema checks are the same at every value.
+
+## Auditing everything (`discover_all.py`)
+
+"Audit everything" is the menu's name for running the four lanes over a repo.
+It is not a lane and has no record in the dispatch table: it is one discovery
+run, then one top-level Workflow call per lane. The entry point is
+`scripts/discover_all.py`, which re-execs under the plugin venv as
+`resolve_standards.py` does:
+
+```
+"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${SKILLS_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/skills/md-domain/scripts/discover_all.py" \
+  [--out FILE] [--max-concurrent N] [--scope SCOPES] [--sources project|all] [--include-dir NAME]
+```
+
+It performs Step 1 for every lane at once: the discoverers of the three
+per-file lanes plus the cross-reference scan, under one pruning policy (links,
+noise-named directories and VCS-ignored paths are left out and the pruned
+directories reported); one `resolve_standards.py` run for all four primitives;
+and each file's `ancestorClaudeMdPaths` and `standardsPaths`. A path that
+two lanes would take stays with its owner (a skill's reference documents with
+`audit_skill`; CLAUDE.md, AGENTS.md and SKILL.md with their own lanes) and the
+duplicate claim is listed under `deduplicated` or counted; a path two lanes
+claim under no such rule is an error (exit 2). It leaves out `analyze` and
+composition, which read one directory and have no whole-repo default.
+
+The JSON it prints has `lanes`, `skipped` (pruned directories, files no lane
+took, empty lanes, each with its reason), `deduplicated`, `counts`, `fixMode`,
+`notes`, `projectRoot` and `scanRoot`. `lanes.<lane id>` is the `args` object of
+that lane's detect script, to pass VERBATIM as the `args` of one Workflow call:
+`workflow/skill-detect.js`, `workflow/claude-md-detect.js`,
+`workflow/project-doc-detect.js`, and `workflow/references-classify.js` for
+`audit_references`. A lane with no subjects is absent from `lanes`, because the
+scripts throw on an empty `files`; its `skipped` entry says so. Keep the
+run-level `fixMode` and surface `notes` as Step 1 describes. The output is
+never nested into a driver script: each lane is its own top-level call (see
+"Passing a lane script to the Workflow tool").
+
+`--max-concurrent N` (a positive integer, otherwise a usage error with exit 2)
+becomes `maxConcurrent` in every lane's `args` and is absent when not given; see
+"Bounding fan-out". The remediate calls of Step 5 take the same field, which
+the caller adds to their `args`, since they are built from decided findings and
+not by this script. `--scope` and `--sources` are the `audit_references` flags
+of the same names. The script emits `review: false` and `density: false`:
+review mode needs per-file pre-images, so a change-scoped audit still starts
+from Step 1. After detection, each lane's result goes through Steps 3 to 6 as
+for a single-lane run.
 
 ## The pipeline
 
@@ -145,12 +208,45 @@ directory has no CLAUDE.md (precedence: `../standards/claude-md-standards.md`
 section 1.0; a shadowed AGENTS.md is skipped), ordered NEAREST-ANCESTOR FIRST, EXCLUDING the target itself. Empty when nothing
 sits above it.
 
+`<venvPython>` in the commands below is the skills-kit plugin venv's
+interpreter, the one bootstrap provisions with pyyaml. It sits at a path that
+does not change across versions:
+
+```
+Windows:     "${CLAUDE_BOOTSTRAP_DATA_ROOT:-$HOME/.claude/plugins/data}/plugins-kit/skills-kit/.venv/Scripts/python.exe"
+macOS/Linux: "${CLAUDE_BOOTSTRAP_DATA_ROOT:-$HOME/.claude/plugins/data}/plugins-kit/skills-kit/.venv/bin/python"
+```
+
+The expression is bash/zsh syntax. `CLAUDE_BOOTSTRAP_DATA_ROOT` is set only in a
+`claudx` session, where the production venv holds the installed release instead
+of the working copy. The venv is absent until bootstrap has provisioned the
+plugin; `bootstrap_guard.py` (vendored in `scripts/`) is a presence check that
+reports that case with an install message and does not locate an interpreter
+for the caller. `scripts/resolve_standards.py`, `scripts/skills_kit_tool.py` and
+`skills/md-domain/scripts/discover_all.py` need no venv path, because each calls
+the guard's `reexec_under_plugin_venv` and moves itself into the venv at start:
+launch them under `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}"`. Only
+`-m skills_kit_lib.audit` needs the venv interpreter by name; the equivalent
+launcher form is `skills_kit_tool.py audit <path> --json --config`. This file
+is a reference, not a skill body, so `CLAUDE_PLUGIN_ROOT` is not substituted in
+it and is unset in the Bash tool; every command here anchors on
+`SKILLS_KIT_ROOT` instead.
+
 ONCE per run (not per file), resolve the configurable standards via the plugin venv:
 
 ```
-(cd "${SKILLS_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}" && <venvPython> scripts/resolve_standards.py \
+(cd "${SKILLS_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}" && "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" scripts/resolve_standards.py \
    --project-root <workspace root> --primitive <artifact primitive>)
 ```
+
+Valid `--primitive` values: `skill_md`, `claude_md`, `reference_doc`, `plain_md`.
+
+Pass the primitive that names the artifact: `skill_md` (a SKILL.md),
+`reference_doc` (a skill reference document), `claude_md` (a CLAUDE.md or
+AGENTS.md) or `plain_md` (a project doc); the filename-to-subject table is in
+`../configuring-standards.md`, "Additive standards files". `--primitive` is
+repeatable. `code_directory` (and its former spelling `code_subtree`) is not
+valid here: no lane applies authored standards for it, and the script exits 2.
 
 A non-zero exit means STOP: the script wrote nothing to stdout and a single
 diagnostic line to stderr. Exit 1 is a malformed config layer, an un-tunable
@@ -205,6 +301,14 @@ though its error text says a readable working-directory file is accepted.
 Every Workflow result names a saved script file; a later call in the same
 session may pass that returned path as `scriptPath`. A rejected `scriptPath`
 is not fixed by respelling the path -- switch to `script`.
+
+Do not nest lane scripts: no nested `workflow({scriptPath})` call inside a
+script, and no inlined multi-script driver. Run each lane as its own top-level
+Workflow call, with the script text as `script`, and pass
+the prior stage's output as `args` -- the route this procedure already takes:
+DETECT returns `{ perFile, totals, review }`, the Q&A gate decides, and Step 5
+builds the REMEDIATE call's `args` from the decided findings, so the two stages
+never share a script.
 
 **REVIEW MODE OVERRIDE: the threshold is 1.** Always use the Workflow path, even
 for a single file. A review-mode verdict gates a submit, so it must not depend on
@@ -569,6 +673,13 @@ its location moved. It differs from the three per-file lanes in five ways:
    "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${SKILLS_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/skills/md-domain/scripts/references_audit.py" \
      --project-dir .claude/skills --user-dir $HOME/.claude/skills $ARGUMENTS
    ```
+
+   `--sources project|all` picks which roots the scan REPORTS on; the default,
+   `project`, scans only `--project-dir`. `--user-dir` and the installed plugins
+   still feed the name pool, so a reference from a project file to a user-level
+   or plugin skill resolves, but a broken reference inside a user-level or
+   plugin skill is not reported. Pass `--sources all` to scan those roots as
+   well, for an audit of the user's own skill tree. `--path` overrides both.
 
    Re-run with `--json` when remediation will follow, so the classify phase can
    consume structured findings. The scan itself is never fanned out.

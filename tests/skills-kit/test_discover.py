@@ -22,8 +22,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 import discover_claude_md as discover
 import discover_skill
+from test_dirwalk import LINK_KINDS, make_dir_link
 
 
 def _write(path: Path, text: str = "# CLAUDE.md\n") -> None:
@@ -423,3 +426,145 @@ class TestHasSchemaBlockRegexIsExportedPublicly:
 
     def test_it_does_not_match_prose_mentioning_the_words(self):
         assert not discover.HAS_SCHEMA_BLOCK.search("See the claude_md file for details.\n")
+
+
+def _git_init(directory: Path, ignore_lines: str) -> None:
+    subprocess.run(["git", "init", "-q", str(directory)], check=True,
+                   capture_output=True, text=True)
+    (directory / ".gitignore").write_text(ignore_lines, encoding="utf-8")
+
+
+def _run_script(script: Path, cwd: Path):
+    result = subprocess.run(
+        [sys.executable, str(script), "--json", "--cwd", str(cwd)],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+CLAUDE_MD_SCRIPT = (
+    Path(__file__).resolve().parents[2] / "plugins" / "skills-kit" / "skills"
+    / "md-domain" / "scripts" / "discover_claude_md.py"
+)
+SKILL_SCRIPT = CLAUDE_MD_SCRIPT.with_name("discover_skill.py")
+
+_SKILL_FM = "---\nname: {name}\n---\nbody\n"
+
+
+@pytest.mark.parametrize("kind", LINK_KINDS)
+class TestLinkedDirectoriesAreNotWalked:
+    """`dev/tasks` is a link into a separate repository. A walk that descends
+    it (a Windows junction escapes os.walk's followlinks=False) reports that
+    repository's CLAUDE.md files as this project's."""
+
+    def test_claude_md_behind_a_link_is_not_discovered_and_is_reported(self, tmp_path, kind):
+        project = tmp_path / "proj"
+        _mkgit(project)
+        _write(project / "real" / "CLAUDE.md")
+        _write(tmp_path / "private" / "task1" / "CLAUDE.md")
+        (project / "dev").mkdir()
+        make_dir_link(project / "dev" / "tasks", tmp_path / "private", kind)
+
+        payload = _run_script(CLAUDE_MD_SCRIPT, project)
+
+        paths = {rec["path"] for rec in payload if "path" in rec}
+        assert paths == {str(project / "real" / "CLAUDE.md")}
+        skips = {rec["skipped_dir"]: rec["reason"] for rec in payload if "skipped_dir" in rec}
+        assert skips[str(Path("dev") / "tasks")] == "link"
+
+    def test_skill_md_behind_a_link_is_not_discovered(self, tmp_path, kind):
+        project = tmp_path / "proj"
+        _write(project / "skills" / "real" / "SKILL.md", _SKILL_FM.format(name="real"))
+        _write(tmp_path / "private" / "SKILL.md", _SKILL_FM.format(name="leaked"))
+        make_dir_link(project / "linked", tmp_path / "private", kind)
+
+        payload = _run_script(SKILL_SCRIPT, project)
+
+        names = {rec["name"] for rec in payload if "name" in rec}
+        assert names == {"real"}
+        skips = {rec["skipped_dir"]: rec["reason"] for rec in payload if "skipped_dir" in rec}
+        assert skips["linked"] == "link"
+
+    def test_dot_claude_skills_link_is_not_discovered(self, tmp_path, kind):
+        _write(tmp_path / "outside" / "alpha" / "SKILL.md", _SKILL_FM.format(name="alpha"))
+        project = tmp_path / "proj"
+        (project / ".claude").mkdir(parents=True)
+        make_dir_link(project / ".claude" / "skills", tmp_path / "outside", kind)
+
+        assert discover_skill.collect_skill_md(project) == []
+
+
+class TestVcsIgnoredResultsAreDropped:
+    """discover_project_doc already drops what the project's ignore rules
+    cover; the CLAUDE.md and SKILL.md scanners prune alike."""
+
+    def test_claude_md_in_a_gitignored_directory_is_dropped(self, tmp_path):
+        _git_init(tmp_path, "scratch/\n")
+        _write(tmp_path / "keep" / "CLAUDE.md")
+        _write(tmp_path / "scratch" / "CLAUDE.md")
+        _write(tmp_path / "scratch" / "deep" / "CLAUDE.md")
+        _write(tmp_path / "scratch" / "deep" / "CLAUDE.local.md")
+
+        paths = _paths(discover.discover(tmp_path))
+
+        assert paths == {tmp_path / "keep" / "CLAUDE.md"}
+
+    def test_a_gitignored_claude_md_file_is_dropped(self, tmp_path):
+        _git_init(tmp_path, "sub/CLAUDE.md\n")
+        _write(tmp_path / "sub" / "CLAUDE.md")
+        _write(tmp_path / "other" / "CLAUDE.md")
+
+        assert _paths(discover.discover(tmp_path)) == {tmp_path / "other" / "CLAUDE.md"}
+
+    def test_gitignored_claude_local_md_is_still_discovered(self, tmp_path):
+        """CLAUDE.local.md is personal and gitignored by convention; the lane
+        audits it as role `local`, so its own ignore rule must not drop it."""
+        _git_init(tmp_path, "CLAUDE.local.md\n")
+        _write(tmp_path / "sub" / "CLAUDE.local.md")
+
+        results = discover.discover(tmp_path)
+
+        assert _role_of(results, tmp_path / "sub" / "CLAUDE.local.md") == "local"
+
+    def test_scan_root_inside_an_ignored_tree_is_not_emptied(self, tmp_path):
+        _git_init(tmp_path, "work/\n")
+        _write(tmp_path / "work" / "sub" / "CLAUDE.md")
+
+        results = discover.discover(tmp_path / "work")
+
+        assert _paths(results) == {tmp_path / "work" / "sub" / "CLAUDE.md"}
+
+    def test_no_vcs_drops_nothing(self, tmp_path):
+        _write(tmp_path / "scratch" / "CLAUDE.md")
+        _write(tmp_path / "keep" / "CLAUDE.md")
+
+        assert len(_paths(discover.discover(tmp_path))) == 2
+
+    def test_skill_in_a_gitignored_directory_is_dropped(self, tmp_path):
+        _git_init(tmp_path, "scratch/\n")
+        _write(tmp_path / "skills" / "keep" / "SKILL.md", _SKILL_FM.format(name="keep"))
+        gone = tmp_path / "scratch" / "skills" / "gone"
+        _write(gone / "SKILL.md", _SKILL_FM.format(name="gone"))
+        _write(gone / "references" / "r.md", "r\n")
+
+        results = discover_skill.collect_skill_md(tmp_path, include_references=True)
+
+        assert {name for _, name, _, _ in results} == {"keep"}
+
+    def test_a_gitignored_skill_md_file_is_dropped(self, tmp_path):
+        _git_init(tmp_path, "skills/hidden/SKILL.md\n")
+        _write(tmp_path / "skills" / "hidden" / "SKILL.md", _SKILL_FM.format(name="hidden"))
+        _write(tmp_path / "skills" / "shown" / "SKILL.md", _SKILL_FM.format(name="shown"))
+
+        results = discover_skill.collect_skill_md(tmp_path)
+
+        assert {name for _, name, _, _ in results} == {"shown"}
+
+    def test_skill_scan_root_inside_an_ignored_tree_is_not_emptied(self, tmp_path):
+        _git_init(tmp_path, "work/\n")
+        _write(tmp_path / "work" / "skills" / "s" / "SKILL.md", _SKILL_FM.format(name="s"))
+
+        results = discover_skill.collect_skill_md(tmp_path / "work")
+
+        assert {name for _, name, _, _ in results} == {"s"}

@@ -39,7 +39,7 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-from skills_kit_lib.dirwalk import iter_dirs  # noqa: E402
+from skills_kit_lib.dirwalk import is_link_dir, iter_dirs  # noqa: E402
 from skills_kit_lib.markdown_heuristics import parse_frontmatter  # noqa: E402
 
 import vcs_ignore  # noqa: E402
@@ -90,6 +90,23 @@ def _collect_reference_docs(refs_dir: Path, root: Path) -> list[Path]:
     return found
 
 
+def _drop_vcs_ignored(skill_dirs: list[Path], cwd: Path) -> list[Path]:
+    """Drop skill directories the project's VCS ignore rules cover (the same
+    filter discover_project_doc.py and discover_claude_md.py apply through
+    `vcs_ignore.ignored_paths`; no ignore information drops nothing). A skill
+    is dropped when its directory or its SKILL.md is ignored. When `cwd`
+    itself is ignored the user pointed the scan at an ignored tree on purpose,
+    so nothing is filtered."""
+    if not skill_dirs:
+        return skill_dirs
+    ignored = vcs_ignore.ignored_paths(
+        [cwd, *skill_dirs, *(d / "SKILL.md" for d in skill_dirs)], root=cwd
+    )
+    if not ignored or cwd in ignored:
+        return skill_dirs
+    return [d for d in skill_dirs if d not in ignored and d / "SKILL.md" not in ignored]
+
+
 def collect_skill_md(
     cwd: Path,
     include_references: bool = False,
@@ -108,11 +125,14 @@ def collect_skill_md(
     `Build/`) is silently invisible and nothing says so.
     """
     out: list[tuple[Path, str, str, str]] = []
-    for current_path, files in iter_dirs(
-        cwd, DESCEND_MAX_DEPTH, include_dirs=include_dirs, skipped_out=skipped_out
-    ):
-        if "SKILL.md" not in files:
-            continue
+    skill_dirs = [
+        current_path
+        for current_path, files in iter_dirs(
+            cwd, DESCEND_MAX_DEPTH, include_dirs=include_dirs, skipped_out=skipped_out
+        )
+        if "SKILL.md" in files
+    ]
+    for current_path in _drop_vcs_ignored(skill_dirs, cwd):
         path = current_path / "SKILL.md"
         try:
             content = path.read_text(encoding="utf-8")
@@ -167,13 +187,15 @@ def main() -> int:
         cwd, include_references=args.references,
         include_dirs=include_dirs, skipped_out=skipped_dirs,
     )
-    skipped_rel = []
+    skipped = []
     for p in skipped_dirs:
         try:
-            skipped_rel.append(str(p.relative_to(cwd)))
+            rel = str(p.relative_to(cwd))
         except ValueError:
-            skipped_rel.append(str(p))
-    skipped_rel.sort()
+            rel = str(p)
+        skipped.append((rel, "link" if is_link_dir(p) else "noise-name"))
+    skipped.sort()
+    skipped_rel = [rel for rel, _ in skipped]
 
     if args.json:
         # Kept as a flat LIST -- see discover_claude_md.py's main() for the
@@ -185,7 +207,7 @@ def main() -> int:
              "skill_type": skill_type, "kind": kind}
             for i, (p, name, skill_type, kind) in enumerate(results)
         ]
-        payload.extend({"skipped_dir": rel, "reason": "noise-name"} for rel in skipped_rel)
+        payload.extend({"skipped_dir": rel, "reason": reason} for rel, reason in skipped)
         print(json.dumps(payload, indent=2))
         return 0
 
@@ -203,7 +225,8 @@ def main() -> int:
         print(f"  {i:>3}. [{skill_type:<18}] {name:<24} {display}")
 
     if skipped_rel:
-        print(f"\nskipped {len(skipped_rel)} noise-named directory/ies (use --include-dir to opt one back in):")
+        print(f"\nskipped {len(skipped_rel)} directory/ies pruned as noise names or links "
+              "(--include-dir opts a noise name back in; a symlink or junction is never walked):")
         for rel in skipped_rel:
             print(f"  - {rel}")
     return 0

@@ -12,6 +12,9 @@ references. The scan scope is configurable:
 - all         -- alias for md.
 
 Scopes can be combined with commas (e.g. --scope skills,references).
+--sources project|all picks which roots are scanned: project (default) scans
+only --project-dir; all also scans --user-dir and the installed plugins. The
+skill pool that references resolve against always includes all three roots.
 --path FILE narrows the scan to one specific file (may be repeated); the skill
 pool is still loaded from the full scan roots so refs resolve correctly.
 
@@ -585,6 +588,10 @@ def parse_scope_arg(raw: str) -> set[str]:
     return out
 
 
+#: Valid `--sources` values: which roots are scanned for references.
+SOURCES_CHOICES = ("project", "all")
+
+
 def _fwd(path: Path) -> str:
     return str(path).replace("\\", "/")
 
@@ -599,7 +606,18 @@ def analyze(
     ignore_files: list[str],
     verbose: bool = False,
     json_output: bool = False,
+    sources_scope: str = "project",
 ) -> int:
+    """Run the scan. `sources_scope` limits which roots are SCANNED for
+    references: "project" scans only the project skills dir, "all" also scans
+    the user dir and the installed plugins. The skill pool that references
+    resolve against always includes all three roots, whichever value is
+    given."""
+    if sources_scope not in SOURCES_CHOICES:
+        raise ValueError(
+            f"unknown sources scope '{sources_scope}'. Valid: {list(SOURCES_CHOICES)}"
+        )
+    scan_all = sources_scope == "all"
     # 0. ONE plugin-tier discovery (installed_plugins.json parsed exactly once,
     #    via skills_kit_lib.corpus); the pool, the skill-dir set, and the scan
     #    roots below all derive from it.
@@ -630,13 +648,14 @@ def analyze(
         if project_dir.exists():
             for root in find_project_skill_roots(project_dir):
                 base_dirs.append((root, "project"))
-        if user_dir and user_dir.exists():
-            for root in find_user_skill_roots(user_dir):
-                base_dirs.append((root, "user"))
-        for entry in plugin_entries:
-            base_dirs.append(
-                (entry.install_path / "skills", f"plugin:{plugin_id_of(entry)}")
-            )
+        if scan_all:
+            if user_dir and user_dir.exists():
+                for root in find_user_skill_roots(user_dir):
+                    base_dirs.append((root, "user"))
+            for entry in plugin_entries:
+                base_dirs.append(
+                    (entry.install_path / "skills", f"plugin:{plugin_id_of(entry)}")
+                )
         sources = discover_source_files(
             base_dirs, scopes, skill_dirs, ignore_dirs, ignore_files
         )
@@ -738,6 +757,8 @@ def analyze(
     for s in all_skills:
         if s.source.startswith("plugin:"):
             continue
+        if s.source == "user" and not scan_all:
+            continue
         candidate_roots = project_roots if s.source == "project" else user_roots
         expected = None
         for base in candidate_roots:
@@ -810,6 +831,7 @@ def analyze(
 
     print("# Reference Audit Report\n")
     print(f"**Scope:** {scope_label}\n")
+    print(f"**Sources:** {sources_scope}\n")
     if by_kind:
         kinds_str = ", ".join(f"{n} {k}" for k, n in sorted(by_kind.items()))
         print(f"**Source files scanned:** {len(sources)} ({kinds_str})\n")
@@ -904,6 +926,16 @@ def main():
              "is still loaded from the scan roots so refs resolve.",
     )
     parser.add_argument(
+        "--sources",
+        choices=SOURCES_CHOICES,
+        default="project",
+        help="Which roots are scanned for references. project (default): "
+             "only --project-dir. all: also --user-dir and the installed "
+             "plugins. The skill pool that references resolve against always "
+             "includes the user dir and the installed plugins, whichever "
+             "value is given.",
+    )
+    parser.add_argument(
         "--ignore-dir",
         type=str,
         action="append",
@@ -949,6 +981,7 @@ def main():
         args.ignore_file,
         args.verbose,
         args.json,
+        args.sources,
     ))
 
 

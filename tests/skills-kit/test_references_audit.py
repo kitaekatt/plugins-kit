@@ -199,6 +199,97 @@ class TestScannerBehaviors:
         assert payload["source_files_by_kind"].get("reference") == 1
 
 
+def _add_user_skill(dirs: dict, body: str, dir_name: str = "ubroken",
+                    fm_name: str = "ubroken") -> None:
+    """Give the tree a user-level skill whose own body holds a broken ref."""
+    udir = dirs["user_dir"] / dir_name
+    udir.mkdir(parents=True)
+    (udir / "SKILL.md").write_text(
+        f"---\nname: {fm_name}\ndescription: d\n---\n" + body, encoding="utf-8"
+    )
+
+
+def _analyze_sources(dirs: dict, capsys, sources_scope: str) -> dict:
+    ra.analyze(
+        dirs["project_dir"], dirs["user_dir"], dirs["plugins_dir"],
+        {"skills"}, [], [], [],
+        verbose=False, json_output=True, sources_scope=sources_scope,
+    )
+    return json.loads(capsys.readouterr().out)
+
+
+class TestSourcesScope:
+    """--sources limits which roots are SCANNED; the name pool stays full."""
+
+    def test_project_scope_excludes_user_source_findings(self, tmp_path, capsys):
+        dirs = _build_tree(tmp_path, "# A\nPlain.\n")
+        _add_user_skill(dirs, "# U\nSee /user-broken-ref.\n")
+        payload = _analyze_sources(dirs, capsys, "project")
+        assert "user-broken-ref" not in _refs(payload)
+        assert not any(f["source"] == "user" for f in payload["findings"])
+        assert payload["source_files_scanned"] == 1
+
+    def test_all_scope_includes_user_source_findings(self, tmp_path, capsys):
+        dirs = _build_tree(tmp_path, "# A\nPlain.\n")
+        _add_user_skill(dirs, "# U\nSee /user-broken-ref.\n")
+        payload = _analyze_sources(dirs, capsys, "all")
+        hits = [f for f in payload["findings"] if f["ref"] == "user-broken-ref"]
+        assert [f["source"] for f in hits] == ["user"]
+
+    def test_project_ref_to_user_skill_resolves_under_both_scopes(
+            self, tmp_path, capsys):
+        dirs = _build_tree(tmp_path, "# A\nUse /ubroken here.\n")
+        _add_user_skill(dirs, "# U\nPlain.\n")
+        for scope in ("project", "all"):
+            payload = _analyze_sources(dirs, capsys, scope)
+            assert "ubroken" not in _refs(payload), scope
+            assert payload["skill_pool"]["user"] == 1, scope
+
+    def test_project_scope_excludes_user_name_mismatch(self, tmp_path, capsys):
+        dirs = _build_tree(tmp_path, "# A\nPlain.\n")
+        _add_user_skill(dirs, "# U\nPlain.\n", dir_name="udir", fm_name="other")
+        project = _analyze_sources(dirs, capsys, "project")
+        assert not [f for f in project["findings"]
+                    if f["category_hint"] == "name-mismatch"]
+        everything = _analyze_sources(dirs, capsys, "all")
+        assert [f["source"] for f in everything["findings"]
+                if f["category_hint"] == "name-mismatch"] == ["user"]
+
+    def test_plugin_source_findings_follow_the_same_scope(self, tmp_path, capsys):
+        dirs = _build_tree(tmp_path, "# A\nPlain.\n")
+        beta = tmp_path / "demo-install" / "skills" / "beta" / "SKILL.md"
+        beta.write_text("---\nname: beta\ndescription: d\n---\nSee /plugin-ghost.\n",
+                        encoding="utf-8")
+        assert "plugin-ghost" not in _refs(_analyze_sources(dirs, capsys, "project"))
+        assert "plugin-ghost" in _refs(_analyze_sources(dirs, capsys, "all"))
+
+    def test_default_is_project(self, tmp_path, capsys):
+        dirs = _build_tree(tmp_path, "# A\nPlain.\n")
+        _add_user_skill(dirs, "# U\nSee /user-broken-ref.\n")
+        rc, payload = _analyze(dirs, capsys)  # no sources_scope argument
+        assert "user-broken-ref" not in _refs(payload)
+
+    def test_cli_flag_defaults_to_project_and_rejects_unknown(self, tmp_path):
+        import subprocess
+        import sys
+        dirs = _build_tree(tmp_path, "# A\nPlain.\n")
+        _add_user_skill(dirs, "# U\nSee /user-broken-ref.\n")
+        base = [sys.executable, str(SCRIPT), "--json",
+                "--project-dir", str(dirs["project_dir"]),
+                "--user-dir", str(dirs["user_dir"]),
+                "--plugins-dir", str(dirs["plugins_dir"])]
+        default = json.loads(subprocess.run(
+            base, capture_output=True, text=True, check=True).stdout)
+        assert "user-broken-ref" not in _refs(default)
+        everything = json.loads(subprocess.run(
+            base + ["--sources", "all"], capture_output=True, text=True,
+            check=True).stdout)
+        assert "user-broken-ref" in _refs(everything)
+        bad = subprocess.run(base + ["--sources", "bogus"],
+                             capture_output=True, text=True)
+        assert bad.returncode == 2
+
+
 class TestSharedFrontmatterParser:
     def test_parse_frontmatter_uses_lib_light_parser(self):
         fm = ra.parse_frontmatter("---\nname: x\nskill-type: t\n---\nbody\n")

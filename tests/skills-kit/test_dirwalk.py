@@ -2,9 +2,13 @@
 from the two audit discover.py scripts (arch-review S12).
 """
 
+import subprocess
+import sys
 from pathlib import Path
 
-from skills_kit_lib.dirwalk import SKIP_DIR_NAMES, iter_dirs
+import pytest
+
+from skills_kit_lib.dirwalk import SKIP_DIR_NAMES, is_link_dir, iter_dirs
 
 
 def _mk(tmp_path: Path, *parts: str) -> Path:
@@ -97,3 +101,93 @@ class TestDepthLimit:
         results = dict(iter_dirs(tmp_path, 1))
         assert tmp_path in results
         assert "SKILL.md" in results[tmp_path]
+
+
+LINK_KINDS = ["symlink", "junction"]
+
+
+def make_dir_link(link: Path, target: Path, kind: str) -> None:
+    """Create a directory link at `link` pointing at `target`.
+
+    "junction" is `mklink /J` through cmd (Windows only; needs no privilege);
+    "symlink" is a real directory symlink. Skips only when the platform or the
+    permission set cannot create that kind.
+    """
+    if kind == "junction":
+        if sys.platform != "win32":
+            pytest.skip("junctions exist only on Windows")
+        proc = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+            capture_output=True, text=True,
+        )
+        if proc.returncode != 0:
+            pytest.skip(f"mklink /J failed: {proc.stdout}{proc.stderr}")
+        return
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symlinks not creatable here: {exc}")
+
+
+@pytest.mark.parametrize("kind", LINK_KINDS)
+class TestLinkPruning:
+    """A symlink or Windows junction entry is never descended and is recorded
+    in skipped_out. os.walk(followlinks=False) already skips a symlink but
+    descends into a junction (os.path.islink is False for one), which is how a
+    junction such as dev/tasks leaked a private tree into discovery."""
+
+    def _tree(self, tmp_path: Path, kind: str, link_name: str = "linked"):
+        target = _mk(tmp_path, "elsewhere", "inner")
+        (target / "note.md").write_text("x", encoding="utf-8")
+        root = _mk(tmp_path, "proj", "src")
+        link = tmp_path / "proj" / link_name
+        make_dir_link(link, tmp_path / "elsewhere", kind)
+        return tmp_path / "proj", link, tmp_path / "elsewhere"
+
+    def test_link_is_not_descended(self, tmp_path, kind):
+        root, link, _ = self._tree(tmp_path, kind)
+        visited = {p for p, _ in iter_dirs(root, 8)}
+        assert root / "src" in visited
+        assert link not in visited
+        assert link / "inner" not in visited
+
+    def test_link_is_recorded_in_skipped_out(self, tmp_path, kind):
+        root, link, _ = self._tree(tmp_path, kind)
+        skipped: list = []
+        list(iter_dirs(root, 8, skipped_out=skipped))
+        assert link in skipped
+        assert is_link_dir(link)
+        assert root / "src" not in skipped
+
+    def test_include_dirs_does_not_reopen_a_link(self, tmp_path, kind):
+        root, link, _ = self._tree(tmp_path, kind, link_name="tmp")
+        skipped: list = []
+        visited = {
+            p for p, _ in iter_dirs(root, 8, include_dirs=["tmp"], skipped_out=skipped)
+        }
+        assert link not in visited and link / "inner" not in visited
+        assert link in skipped
+
+    def test_dot_claude_skills_link_is_not_followed(self, tmp_path, kind):
+        target = _mk(tmp_path, "shared", "alpha")
+        root = _mk(tmp_path, "proj", ".claude")
+        link = root / "skills"
+        make_dir_link(link, tmp_path / "shared", kind)
+        skipped: list = []
+        visited = {p for p, _ in iter_dirs(tmp_path / "proj", 8, skipped_out=skipped)}
+        assert root in visited
+        assert link not in visited and link / "alpha" not in visited
+        assert link in skipped
+
+    def test_walk_root_that_is_a_link_is_still_walked(self, tmp_path, kind):
+        _mk(tmp_path, "real", "inner")
+        link = tmp_path / "rootlink"
+        make_dir_link(link, tmp_path / "real", kind)
+        visited = {p for p, _ in iter_dirs(link, 8)}
+        assert link in visited and link / "inner" in visited
+
+
+def test_is_link_dir_is_false_for_a_plain_directory_and_a_missing_path(tmp_path):
+    plain = _mk(tmp_path, "plain")
+    assert not is_link_dir(plain)
+    assert not is_link_dir(tmp_path / "missing")
