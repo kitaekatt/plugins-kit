@@ -107,6 +107,9 @@ workflow.
 There is no remediate lane, so the `sonnet` + `low` remediation pin and
 `scripts/gen_workflow_js.py` do not apply here at all.
 
+The detect workflow also takes the optional `maxConcurrent` argument that bounds
+its fan-out; see audit-lane.md, "Bounding fan-out (`maxConcurrent`)".
+
 ## Feeding a wide run: input modes and batching
 
 A single-directory run needs none of this. It matters when a caller wants a whole

@@ -21,6 +21,11 @@ classification:
                     exists above it (a subordinate file, not the project root)
       local      -- CLAUDE.local.md at any of the above locations
 
+The downward walk never descends a symlink or a Windows junction (dev/tasks is
+one) and drops results the project's VCS ignore rules cover, as
+discover_project_doc.py does; a CLAUDE.local.md is judged by its directory only,
+since it is gitignored by convention.
+
 Stdlib-only.
 """
 
@@ -39,8 +44,16 @@ _PLUGIN_ROOT = Path(__file__).resolve().parents[3]
 if str(_PLUGIN_ROOT) not in sys.path:
     sys.path.insert(0, str(_PLUGIN_ROOT))
 
-from skills_kit_lib.dirwalk import iter_dirs  # noqa: E402
+# Sibling scripts are imported by module name; make this directory importable
+# even when this module is loaded by path (importlib) rather than run directly.
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+
+from skills_kit_lib.dirwalk import is_link_dir, iter_dirs  # noqa: E402
 from skills_kit_lib.instruction_files import resolve_instruction_file  # noqa: E402
+
+import vcs_ignore  # noqa: E402
 
 
 DESCEND_MAX_DEPTH = 6
@@ -209,6 +222,33 @@ def collect_at_cwd(cwd: Path, has_ancestor_root: bool = False) -> list[tuple[Pat
     return out
 
 
+def _drop_vcs_ignored(
+    found: list[tuple[Path, str]], cwd: Path
+) -> list[tuple[Path, str]]:
+    """Drop results the project's VCS ignore rules cover, the same filter
+    discover_project_doc.py applies (`vcs_ignore.ignored_paths`: no ignore
+    information -- no VCS, git absent -- drops nothing).
+
+    A result is dropped when its DIRECTORY is ignored (a task folder, a build
+    tree) or, for CLAUDE.md / AGENTS.md, when the file itself is. A
+    CLAUDE.local.md is NOT dropped for its own ignore rule: it is personal by
+    design and gitignored by convention, and the audit lane judges it (role
+    `local`). When `cwd` itself is ignored the user pointed the scan at an
+    ignored tree on purpose, so nothing is filtered.
+    """
+    if not found:
+        return found
+    dirs = sorted({p.parent for p, _ in found})
+    files = [p for p, role in found if role != "local"]
+    ignored = vcs_ignore.ignored_paths([cwd, *dirs, *files], root=cwd)
+    if not ignored or cwd in ignored:
+        return found
+    return [
+        (p, role) for p, role in found
+        if p.parent not in ignored and p not in ignored
+    ]
+
+
 def collect_descendants(
     cwd: Path,
     include_dirs: Iterable[str] = (),
@@ -235,6 +275,7 @@ def collect_descendants(
                 break
         if "CLAUDE.local.md" in files:
             out.append((current_path / "CLAUDE.local.md", "local"))
+    out = _drop_vcs_ignored(out, cwd)
     out.sort(key=lambda x: str(x[0]))
     return out
 
@@ -283,9 +324,10 @@ def main() -> int:
     include_dirs = _resolve_include_dirs(args.include_dir)
     skipped_dirs: list[Path] = []
     results = discover(cwd, include_dirs=include_dirs, skipped_out=skipped_dirs)
-    skipped_rel = sorted(
-        str(_relative_or_self(p, cwd)) for p in skipped_dirs
+    skipped = sorted(
+        (str(_relative_or_self(p, cwd)), _skip_reason(p)) for p in skipped_dirs
     )
+    skipped_rel = [rel for rel, _ in skipped]
 
     # role=local files are personal-scoped; they never take the code-directory
     # dimension. Everything else gets the Level-1 trigger classified.
@@ -303,7 +345,7 @@ def main() -> int:
             {"index": i + 1, "path": str(p), "role": role, "dimension": dim_for(p, role)}
             for i, (p, role) in enumerate(results)
         ]
-        payload.extend({"skipped_dir": rel, "reason": "noise-name"} for rel in skipped_rel)
+        payload.extend({"skipped_dir": rel, "reason": reason} for rel, reason in skipped)
         print(json.dumps(payload, indent=2))
         return 0
 
@@ -321,10 +363,16 @@ def main() -> int:
             print(f"  {i:>3}. [{role:<8}] [{tag:<8}] {display}")
 
     if skipped_rel:
-        print(f"\nskipped {len(skipped_rel)} noise-named directory/ies (use --include-dir to opt one back in):")
+        print(f"\nskipped {len(skipped_rel)} directory/ies pruned as noise names or links "
+              "(--include-dir opts a noise name back in; a symlink or junction is never walked):")
         for rel in skipped_rel:
             print(f"  - {rel}")
     return 0
+
+
+def _skip_reason(path: Path) -> str:
+    """Why `iter_dirs` pruned a directory: a symlink/junction, else a noise name."""
+    return "link" if is_link_dir(path) else "noise-name"
 
 
 def _relative_or_self(path: Path, root: Path) -> Path:

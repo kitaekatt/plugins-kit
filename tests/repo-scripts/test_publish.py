@@ -1911,3 +1911,39 @@ class TestNoWorktreeMechanism:
         assert not any("dev-tree" in c or "dev_tree" in c for c in flat), calls
         whats = [what for what, _cmd in calls]
         assert "marketplace.json regen" in whats
+
+
+class TestBootstrapDependencyGateScope:
+    """The gate judges git-tracked plugins of the REAL repo, not the working tree."""
+
+    def test_gate_uses_the_tracked_sweep(self, repo, monkeypatch):
+        seen: list[dict] = []
+        real_loader = publish._load_rule_module
+
+        def loader(name):
+            module = real_loader(name)
+            original = module.find_outliers
+
+            def spy(*args, **kwargs):
+                seen.append(kwargs)
+                return original(*args, **kwargs)
+
+            module.find_outliers = spy
+            return module
+
+        monkeypatch.setattr(publish, "_load_rule_module", loader)
+        publish._require_bootstrap_dependency()
+        assert seen == [{"from_index": True}]
+
+    def test_gate_refuses_a_tracked_outlier(self, monkeypatch):
+        real_loader = publish._load_rule_module
+
+        def loader(name):
+            module = real_loader(name)
+            module.find_outliers = lambda *a, **k: [
+                "some-kit: has no .claude-plugin/plugin.json"]
+            return module
+
+        monkeypatch.setattr(publish, "_load_rule_module", loader)
+        with pytest.raises(publish.PublishError, match="some-kit"):
+            publish._require_bootstrap_dependency()

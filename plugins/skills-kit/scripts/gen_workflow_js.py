@@ -25,9 +25,11 @@ check_shared_chunks(). LANE_ROUTE_CHUNK is the one chunk this generator also
 WRITES into those hand-written scripts: it sits between its own begin and end
 marker lines, and a write run replaces that region, so the core-id list it
 carries is re-derived from bootstrap_lib.model_declaration.CORE_IDS rather
-than hand-copied. No workflow script carries a `model: '...'` literal; the model
-and effort of every lane come from the caller's args.laneModels
-(check_no_model_literals()).
+than hand-copied. The same chunk carries the optional args.maxConcurrent bound
+and laneParallel(), the worker pool every fan-out goes through; a bare parallel()
+in a script is a defect (check_fanout_pool()). No workflow script carries a
+`model: '...'` literal; the model and effort of every lane come from the caller's
+args.laneModels (check_no_model_literals()).
 """
 
 from __future__ import annotations
@@ -151,6 +153,40 @@ async function laneAgent(key, prompt, opts) {
   return null
 }
 const laneRoutes = () => ({ dropped: laneModels.dropped, perFile: laneRoutePerFile })
+
+// maxConcurrent is OPTIONAL: a positive integer bounding the agents in flight in
+// each fan-out. Absent leaves the fan-out unbounded apart from the runtime cap.
+// Any other value (0, negative, fractional, string, null) throws before any agent
+// is dispatched, because a bound that is silently ignored is a bound that was
+// never applied.
+const laneMaxConcurrent = input.maxConcurrent
+const laneBounded = laneMaxConcurrent !== undefined
+if (laneBounded && !(typeof laneMaxConcurrent === 'number' && Number.isInteger(laneMaxConcurrent) && laneMaxConcurrent >= 1)) {
+  throw new Error(`md-domain lane: args.maxConcurrent must be a positive integer (the most agents in flight per fan-out) or absent, got ${JSON.stringify(laneMaxConcurrent)}. Pass a whole number of 1 or more, or omit it for an unbounded fan-out.`)
+}
+if (laneBounded) {
+  log('md-domain lanes: at most ' + laneMaxConcurrent + ' agent(s) in flight per fan-out (args.maxConcurrent)')
+}
+// Every fan-out in a lane script goes through laneParallel, never a bare
+// parallel(). Unset, or no more items than the bound: parallel() itself, so the
+// call behaves as it always has. Bounded: a worker pool of laneMaxConcurrent
+// workers, each taking the next item the moment it finishes its last, so a free
+// slot never waits on the slowest of a fixed batch. Results keep input order. An
+// item that throws resolves to null, as it does under parallel(), and never stops
+// the other workers.
+async function laneParallel(thunks) {
+  if (!laneBounded || thunks.length <= laneMaxConcurrent) return parallel(thunks)
+  const results = new Array(thunks.length).fill(null)
+  let next = 0
+  const worker = async () => {
+    while (next < thunks.length) {
+      const i = next++
+      try { results[i] = await thunks[i]() } catch (_) { results[i] = null }
+    }
+  }
+  await parallel(Array.from({ length: laneMaxConcurrent }, () => worker))
+  return results
+}
 @END@
 """
 
@@ -243,7 +279,7 @@ if (input.fixMode === 'propose') {
 phase('Remediate')
 // The model and effort come from args.laneModels through laneAgent (the lane
 // route above); nothing is inherited from the session and nothing is pinned here.
-const results = await parallel(actionable.map((f) => () =>
+const results = await laneParallel(actionable.map((f) => () =>
   laneAgent(f.@KEY@, lanePrompt(f), {
     label: `fix:${f.@KEY@.split(/[\\\\/]/)@LABEL_TAIL@}`,
     phase: 'Remediate',
@@ -303,6 +339,12 @@ CLAUDE_MD_HEADER = f"""\
 //   laneModels: {{ run: [{{id, effort}}], dropped: [{{id, effort, reason}}] }}
 //                               // REQUIRED: lane_models.remediate from
 //                               // scripts/resolve_standards.py; absent throws
+//   maxConcurrent: integer|undefined
+//                               // OPTIONAL: a positive integer bounding the agents in
+//                               // flight in each fan-out (a worker pool: a free slot
+//                               // takes the next item at once); absent leaves it
+//                               // unbounded apart from the runtime cap; any other
+//                               // value throws before any agent runs
 // }}
 """
 
@@ -364,6 +406,12 @@ SKILL_AUDIT_HEADER = f"""\
 //   laneModels: {{ run: [{{id, effort}}], dropped: [{{id, effort, reason}}] }}
 //                               // REQUIRED: lane_models.remediate from
 //                               // scripts/resolve_standards.py; absent throws
+//   maxConcurrent: integer|undefined
+//                               // OPTIONAL: a positive integer bounding the agents in
+//                               // flight in each fan-out (a worker pool: a free slot
+//                               // takes the next item at once); absent leaves it
+//                               // unbounded apart from the runtime cap; any other
+//                               // value throws before any agent runs
 // }}
 """
 
@@ -423,6 +471,12 @@ REFERENCES_HEADER = f"""\
 //   laneModels: {{ run: [{{id, effort}}], dropped: [{{id, effort, reason}}] }}
 //                               // REQUIRED: lane_models.remediate from
 //                               // scripts/resolve_standards.py; absent throws
+//   maxConcurrent: integer|undefined
+//                               // OPTIONAL: a positive integer bounding the agents in
+//                               // flight in each fan-out (a worker pool: a free slot
+//                               // takes the next item at once); absent leaves it
+//                               // unbounded apart from the runtime cap; any other
+//                               // value throws before any agent runs
 // }}
 """
 
@@ -486,6 +540,12 @@ PROJECT_DOC_HEADER = f"""\
 //   laneModels: {{ run: [{{id, effort}}], dropped: [{{id, effort, reason}}] }}
 //                               // REQUIRED: lane_models.remediate from
 //                               // scripts/resolve_standards.py; absent throws
+//   maxConcurrent: integer|undefined
+//                               // OPTIONAL: a positive integer bounding the agents in
+//                               // flight in each fan-out (a worker pool: a free slot
+//                               // takes the next item at once); absent leaves it
+//                               // unbounded apart from the runtime cap; any other
+//                               // value throws before any agent runs
 // }}
 """
 
@@ -767,9 +827,70 @@ def check_no_model_literals() -> list[str]:
     return problems
 
 
+# A bare fan-out primitive in a lane script bypasses args.maxConcurrent: the
+# bound would silently not apply to that call. The only sanctioned call sites
+# are inside LANE_ROUTE_CHUNK (laneParallel itself); every script body routes
+# through laneParallel. A lowercase-p `parallel(` or `pipeline(` not preceded by
+# an identifier character or a dot, or a Promise combinator, is a bare fan-out.
+_BARE_FANOUT_RE = re.compile(
+    r"(?<![A-Za-z0-9_$.])(?:parallel|pipeline)\s*\(|\bPromise\s*\.\s*(?:all|allSettled|race|any)\s*\("
+)
+_POOL_CALL_RE = re.compile(r"(?<![A-Za-z0-9_$.])laneParallel\s*\(")
+
+
+def _blank_comments_and_chunk(text: str) -> str:
+    """Return text with the lane-route region and whole-line comments blanked,
+    keeping every line number stable."""
+    text = _LANE_ROUTE_REGION_RE.sub(lambda m: "\n" * m.group(0).count("\n"), text)
+    out: list[str] = []
+    in_block = False
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if in_block:
+            if "*/" in line:
+                in_block = False
+            out.append("")
+        elif stripped.startswith("//"):
+            out.append("")
+        elif stripped.startswith("/*"):
+            in_block = "*/" not in line
+            out.append("")
+        else:
+            out.append(line)
+    return "\n".join(out)
+
+
+def bare_fanout_problems(path: Path) -> list[str]:
+    """Problems for one workflow script: a bare parallel()/pipeline()/Promise
+    combinator outside the lane-route chunk, or no laneParallel call at all."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as e:
+        return [f"{path}: unreadable ({e})"]
+    body = _blank_comments_and_chunk(text)
+    problems = [
+        f"{path}:{n}: bare fan-out ({line.strip()}); route it through laneParallel "
+        "so args.maxConcurrent bounds it"
+        for n, line in enumerate(body.splitlines(), start=1)
+        if _BARE_FANOUT_RE.search(line)
+    ]
+    if not _POOL_CALL_RE.search(body):
+        problems.append(f"{path}: no fan-out routed through laneParallel")
+    return problems
+
+
+def check_fanout_pool() -> list[str]:
+    """Every md-domain workflow script routes its fan-out through laneParallel."""
+    problems: list[str] = []
+    for path in sorted(WORKFLOW_DIR.glob("*.js")):
+        problems.extend(bare_fanout_problems(path))
+    return problems
+
+
 def check_shared_chunks() -> list[str]:
     """Return drift messages for the hand-written scripts' shared-skeleton
-    chunks, plus any pinned model literal in a workflow script."""
+    chunks, plus any pinned model literal and any bare fan-out in a workflow
+    script."""
     problems: list[str] = []
     for path, chunks in SHARED_CHUNK_TARGETS.items():
         try:
@@ -785,6 +906,7 @@ def check_shared_chunks() -> list[str]:
                     "not found verbatim"
                 )
     problems.extend(check_no_model_literals())
+    problems.extend(check_fanout_pool())
     return problems
 
 
