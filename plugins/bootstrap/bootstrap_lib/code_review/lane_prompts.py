@@ -391,9 +391,9 @@ FULL_READ_RULE = """\
 Read in full. Read the assigned chunk diff page by page: for each [offset, limit]
 pair in <pages>, in order, call Read with that offset and limit, until you have
 read line <lines>; the pairs and the line count are supplied with the chunk path.
-Read every CLAUDE.md
-you are directed to read in full: when Read returns a partial view, continue with
-the offset it names until the last line. Never review from a partial page."""
+Read every CLAUDE.md you are directed to read in full: when Read returns a partial
+view, continue with the offset it names until the last line. Never review from a
+partial page."""
 
 
 @dataclass(frozen=True)
