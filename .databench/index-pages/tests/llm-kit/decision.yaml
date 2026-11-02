@@ -1,13 +1,12 @@
 {
   "schema_version": 1,
   "directory": "tests/llm-kit",
-  "decision": "page",
-  "source_sha": "c8712b21df627254cda7faa3d394bb2dcf0799fe",
-  "generation_spec_sha256": "8573606e5f3b827eff1eb29578efe854f3b917c38f7e9b9539ce898c925d9fa1",
-  "input_sha256": "5bc0cef2471b1dd119864779aeb97d3d8aba5de27578849a4aeb05e2df0f4906",
-  "input_shape_sha256": "6fea10af9366e29a059147e88459aa0255d9e4f15d0d0063e3d6f6071dc2042a",
+  "decision": "none",
+  "source_sha": "2020a3e05ba5cc6b5b64bef4190edf26395504ab",
+  "input_sha256": "431c07c64741707e5eb9ae6e2b79a963839b5a9fd63e2781b02dcf7ebf3d1e82",
+  "input_shape_sha256": "d2f02dc9d9e361c218e6f94f498e0c002c729b85d84a8a93b845e77eb2868c4d",
   "dirty": false,
-  "identity": "Tests that verify llm-kit replaces the legacy plugins with differential parity, cross-state compatibility, and migration activation checks.",
+  "identity": "",
   "instructions": "",
   "references": []
 }

@@ -2,12 +2,12 @@
   "schema_version": 1,
   "directory": "plugins",
   "decision": "page",
-  "source_sha": "ac45595ab2e47bbf2bdf14c7a50e2a7fb3fdc476",
+  "source_sha": "2020a3e05ba5cc6b5b64bef4190edf26395504ab",
   "generation_spec_sha256": "d40323919c23e31cc9c5afe305627667e78bca3c257330f0fc0b3a9b1c826ade",
-  "input_sha256": "c6be02695dd567fe59258b6bd9c881b6ee92297c4468aa7915b1d642dfc19176",
-  "input_shape_sha256": "6c6c3d28c6ff3b48fd53d9fd2a144013f62d821370c0fb5218b2643fb945051a",
+  "input_sha256": "6311baf860e57193b7b577fd614fe7b1838e2233573cdf7d921ccca23da1c744",
+  "input_shape_sha256": "fead99c93ca9673444ef83c982d4d4bdf39e1c7d1442e66d02c2a636402d13ad",
   "dirty": false,
-  "identity": "The marketplace of independently installable Claude Code plugins for code review, LLM dispatch, job execution, Hue scenes, PDF rendering, secrets, tasks, and Unreal Engine automation, provisioned by the bootstrap engine and linked through shared libraries",
+  "identity": "The Claude Code plugin marketplace: independently installable plugins for code review, LLM dispatch, task tracking, Hue scenes, PDF rendering, fleet secrets, and Unreal Engine automation, provisioned by the bootstrap engine and linked through shared libraries",
   "instructions": "",
   "references": []
 }
