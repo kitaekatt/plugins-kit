@@ -382,13 +382,16 @@ Return [] when there is nothing to report."""
 
 # The Read tool refuses a page over about 25,000 tokens, so a reviewer that
 # guesses a page size hits "file content exceeds maximum" errors and retries.
-# prepare_review measures each chunk (`lines`, `page_lines`) and the
-# orchestrator appends both values to the lane input. The rule is stated once
-# here and embedded in every reviewer prompt.
+# prepare_review measures each chunk (`lines`, and `pages`: [offset, limit] pairs
+# that tile it within the Read cap) and the orchestrator appends both to the lane
+# input. A uniform page size is set by the widest lines, so a few long lines made
+# every page tiny; the plan gives a wide line its own page only. The rule is
+# stated once here and embedded in every reviewer prompt.
 FULL_READ_RULE = """\
-Read in full. Read the assigned chunk diff from line 1 with `limit: <page_lines>`,
-then each next page with `offset` advanced by that limit, until you have read
-line <lines>; both numbers are supplied with the chunk path. Read every CLAUDE.md
+Read in full. Read the assigned chunk diff page by page: for each [offset, limit]
+pair in <pages>, in order, call Read with that offset and limit, until you have
+read line <lines>; the pairs and the line count are supplied with the chunk path.
+Read every CLAUDE.md
 you are directed to read in full: when Read returns a partial view, continue with
 the offset it names until the last line. Never review from a partial page."""
 

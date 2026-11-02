@@ -120,6 +120,12 @@ def partition_sections_into_chunks(
 # The Read tool refuses a page larger than about 25,000 tokens (roughly 100,000
 # bytes) and a reader that does not know a chunk's line widths guesses a page
 # size and fails. 800 lines is the ceiling for short lines.
+#
+# `page_lines` is one uniform page size, so a few very wide lines set it for the
+# whole chunk: nine 20 KB run records in a 728-line chunk gave page_lines 2 and a
+# 364-call read, and reviewers gave up partway. `pages` is the plan a reviewer
+# follows instead: [offset, limit] pairs that tile the chunk greedily, so a page
+# is as long as the bytes allow and a wide line only costs its own page.
 READ_PAGE_MAX_LINES = 800
 READ_PAGE_MAX_BYTES = 100_000
 
@@ -151,6 +157,40 @@ def _max_window_lines(widths: list[int], cap_bytes: int, cap_lines: int) -> int:
     return lo
 
 
+def _split_lines(data: bytes) -> list[bytes]:
+    """Lines of `data` without their newline; a trailing terminator adds no empty line."""
+    parts = data.split(b"\n")
+    if parts and parts[-1] == b"":
+        parts.pop()
+    return parts
+
+
+def _line_widths(data: bytes) -> list[int]:
+    """Per-line byte widths, one terminator counted per line, as Read pages them."""
+    return [len(p) + 1 for p in _split_lines(data)]
+
+
+def plan_read_pages(widths: list[int], cap_bytes: int, cap_lines: int) -> list[list[int]]:
+    """Tile lines 1..len(widths) into [offset, limit] Read pages, greedily.
+
+    `widths` are line widths including terminators. A page starts at the next
+    unread line and grows while its bytes stay <= cap_bytes and its line count
+    <= cap_lines; a single line wider than cap_bytes gets a page of its own
+    (limit 1). `offset` is 1-based, as the Read tool takes it. Empty -> [].
+    """
+    pages: list[list[int]] = []
+    i = 0
+    while i < len(widths):
+        total = widths[i]
+        n = 1
+        while i + n < len(widths) and n < cap_lines and total + widths[i + n] <= cap_bytes:
+            total += widths[i + n]
+            n += 1
+        pages.append([i + 1, n])
+        i += n
+    return pages
+
+
 def chunk_read_geometry(data: bytes) -> tuple[int, int, int]:
     """Return (lines, longest_line_bytes, page_lines) for one written chunk.
 
@@ -159,11 +199,11 @@ def chunk_read_geometry(data: bytes) -> tuple[int, int, int]:
     Read call such that no `page_lines` consecutive lines, terminators
     included, exceed READ_PAGE_MAX_BYTES, capped at READ_PAGE_MAX_LINES and
     never below 1. Bounding the window rather than the widest line keeps one
-    outlier line from shrinking the page of its whole chunk.
+    outlier line from shrinking the page of its whole chunk. A uniform size is
+    still set by the widest run of lines; `plan_read_pages` gives the tighter
+    per-page plan that write_chunks records as `pages`.
     """
-    parts = data.split(b"\n")
-    if parts and parts[-1] == b"":
-        parts.pop()
+    parts = _split_lines(data)
     longest = max((len(p.rstrip(b"\r")) for p in parts), default=0)
     page = _max_window_lines([len(p) + 1 for p in parts], READ_PAGE_MAX_BYTES, READ_PAGE_MAX_LINES)
     return len(parts), longest, page
@@ -178,9 +218,12 @@ def write_chunks(chunks: list[dict], bundle_dir: Path) -> list[dict]:
 
     Each index entry: {"index": int, "path": "chunks/chunk-NNN.diff",
     "files": [identifier...], "bytes": int, "lines": int,
-    "longest_line_bytes": int, "page_lines": int}. `path` is relative to
-    `bundle_dir`. The last three are measured on the written file so a
-    reader can page it with `Read(limit=page_lines)` and stop at line `lines`.
+    "longest_line_bytes": int, "page_lines": int, "pages": [[offset, limit]...]}.
+    `path` is relative to `bundle_dir`. The last four are measured on the
+    written file. `pages` tiles lines 1..`lines` in order with no gap or
+    overlap, each page within the Read byte and line caps, so a reader calls
+    Read once per pair; `page_lines` is the older uniform page size, kept for
+    older consumers.
     """
     chunks_dir = bundle_dir / "chunks"
     if chunks_dir.exists():
@@ -191,7 +234,8 @@ def write_chunks(chunks: list[dict], bundle_dir: Path) -> list[dict]:
     for i, c in enumerate(chunks):
         rel = f"chunks/chunk-{i:03d}.diff"
         (bundle_dir / rel).write_text(c["text"], encoding="utf-8")
-        lines, longest, page = chunk_read_geometry((bundle_dir / rel).read_bytes())
+        data = (bundle_dir / rel).read_bytes()
+        lines, longest, page = chunk_read_geometry(data)
         index.append(
             {
                 "index": i,
@@ -201,6 +245,7 @@ def write_chunks(chunks: list[dict], bundle_dir: Path) -> list[dict]:
                 "lines": lines,
                 "longest_line_bytes": longest,
                 "page_lines": page,
+                "pages": plan_read_pages(_line_widths(data), READ_PAGE_MAX_BYTES, READ_PAGE_MAX_LINES),
             }
         )
     return index
