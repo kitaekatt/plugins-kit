@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "relay-protocol/1/envelope.response.json",
+  "title": "Response envelope",
+  "description": "Every relay reply body: ok with result, or not ok with error.",
+  "type": "object",
+  "properties": {
+    "protocol": {
+      "$ref": "#/$defs/protocol"
+    },
+    "id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "The request id; null only when the request could not be parsed."
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "result": {
+      "type": "object",
+      "description": "The verb's response schema (<verb>.response.json)."
+    },
+    "error": {
+      "$ref": "#/$defs/error"
+    },
+    "signed": {
+      "$ref": "#/$defs/signed"
+    }
+  },
+  "required": [
+    "protocol",
+    "id",
+    "ok"
+  ],
+  "additionalProperties": true,
+  "anyOf": [
+    {
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    },
+    {
+      "properties": {
+        "ok": {
+          "const": false
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  ],
+  "examples": [
+    {
+      "protocol": "relay-protocol/1",
+      "id": "req-0001",
+      "ok": true,
+      "result": {
+        "message": {
+          "id": "msg_01JBX3V9Q8K2M4N6P7R8S9T0VW",
+          "to": "m5pro/claude/7f3c2a10-5b7e-4c1d-9a8e-0d6f4b2c9e11",
+          "sender": "direct:m5pro/claude/b91e0c44-2f8a-4d3b-8c6e-71a5d0e3f2a9",
+          "kind": "instruction",
+          "body": "Run the targeted tests.",
+          "hop": 0,
+          "created_at": 1793664000.0,
+          "expires_at": 1793667600.0,
+          "updated_at": 1793664000.0,
+          "state": "queued",
+          "attempts": 0
+        },
+        "replayed": false
+      }
+    },
+    {
+      "protocol": "relay-protocol/1",
+      "id": "req-0004",
+      "ok": false,
+      "error": {
+        "code": "grant_required",
+        "message": "no live grant covers send_message for this session",
+        "retryable": false
+      }
+    },
+    {
+      "protocol": "relay-protocol/1",
+      "id": null,
+      "ok": false,
+      "error": {
+        "code": "bad_request",
+        "message": "body is not JSON",
+        "retryable": false
+      }
+    },
+    {
+      "protocol": "relay-protocol/1",
+      "id": "req-0005",
+      "ok": false,
+      "error": {
+        "code": "target_ambiguous",
+        "message": "cwd:katsoft-libs matches 2 sessions",
+        "retryable": false,
+        "details": {
+          "candidates": [
+            "m5pro/claude/7f3c2a10-5b7e-4c1d-9a8e-0d6f4b2c9e11",
+            "m5pro/claude/b91e0c44-2f8a-4d3b-8c6e-71a5d0e3f2a9"
+          ]
+        }
+      }
+    }
+  ]
+}

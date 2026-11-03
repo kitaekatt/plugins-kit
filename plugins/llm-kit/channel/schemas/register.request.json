@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "relay-protocol/1/register.request.json",
+  "title": "register params",
+  "description": "A channel server registers its session; returns the registration and lease. Request params (strict).",
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "$ref": "#/$defs/session_id"
+    },
+    "harness": {
+      "enum": [
+        "claude"
+      ]
+    },
+    "pid": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The harness process the channel server serves (its parent)."
+    },
+    "cwd": {
+      "$ref": "#/$defs/path_text"
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "The harness version."
+    },
+    "accepts": {
+      "$ref": "#/$defs/accepts"
+    },
+    "channel_nonce": {
+      "$ref": "#/$defs/channel_nonce"
+    },
+    "title": {
+      "$ref": "#/$defs/short_text"
+    },
+    "task": {
+      "$ref": "#/$defs/short_text"
+    },
+    "transcript_path": {
+      "$ref": "#/$defs/path_text"
+    }
+  },
+  "required": [
+    "session_id",
+    "harness",
+    "pid",
+    "cwd",
+    "version",
+    "accepts",
+    "channel_nonce"
+  ],
+  "additionalProperties": false,
+  "examples": [
+    {
+      "session_id": "7f3c2a10-5b7e-4c1d-9a8e-0d6f4b2c9e11",
+      "harness": "claude",
+      "pid": 41234,
+      "cwd": "/Users/christina/Dev/katsoft-libs",
+      "version": "2.1.317",
+      "accepts": [
+        "note",
+        "instruction",
+        "question"
+      ],
+      "channel_nonce": "c2hhbm5lbC1ub25jZS0wMDAx",
+      "title": "relay F0",
+      "task": "plugins-kit/harness-messaging"
+    },
+    {
+      "session_id": "7f3c2a10-5b7e-4c1d-9a8e-0d6f4b2c9e11",
+      "harness": "claude",
+      "pid": 41234,
+      "cwd": "/tmp",
+      "version": "2.1.317",
+      "accepts": [],
+      "channel_nonce": "c2hhbm5lbC1ub25jZS0wMDAx"
+    }
+  ]
+}

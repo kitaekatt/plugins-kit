@@ -1,0 +1,1060 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "relay-protocol/1/common.json",
+  "title": "relay-protocol/1 shared definitions",
+  "description": "Shared $defs. Every other schema references these as #/$defs/<name>; llm_kit.relay.protocol.load_schema merges them in. Written in llm-scripting-kit.json-schema-subset/v1.",
+  "$defs": {
+    "protocol": {
+      "const": "relay-protocol/1",
+      "description": "The protocol literal."
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "Caller-chosen request id, [A-Za-z0-9._:-]{1,128}; echoed in the response."
+    },
+    "verb": {
+      "enum": [
+        "register",
+        "heartbeat",
+        "deregister",
+        "poll",
+        "ack",
+        "reply",
+        "list_machines",
+        "list_sessions",
+        "read_session",
+        "ask_llm",
+        "send_message",
+        "get_replies",
+        "list_questions",
+        "answer_question",
+        "grant_mint",
+        "grant_check",
+        "pause",
+        "resume",
+        "status"
+      ],
+      "description": "A relay-protocol/1 verb."
+    },
+    "grantable_verb": {
+      "enum": [
+        "list_machines",
+        "list_sessions",
+        "read_session",
+        "ask_llm",
+        "send_message",
+        "get_replies",
+        "list_questions",
+        "answer_question"
+      ],
+      "description": "A verb a grant may name."
+    },
+    "identity": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 300,
+      "description": "channel:<address> | direct:<address> (harness claude) | operator:<machine> | relay:<machine> | claude.ai/<user>."
+    },
+    "machine_label": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 63,
+      "description": "Fleet machine label: a lowercase DNS label, not a reserved word (protocol.RESERVED_LABELS)."
+    },
+    "address": {
+      "type": "string",
+      "minLength": 5,
+      "maxLength": 200,
+      "description": "<machine>/<harness>/<session>; harness claude | codex | llm."
+    },
+    "target": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1100,
+      "description": "An address, or a selector [<machine>/][<harness>/](latest | task:<project>/<stub> | cwd:<project-or-absolute-path>)."
+    },
+    "message_id": {
+      "type": "string",
+      "minLength": 5,
+      "maxLength": 68,
+      "description": "msg_[A-Za-z0-9_-]{1,64}; the sender's idempotency key."
+    },
+    "reply_id": {
+      "type": "string",
+      "minLength": 5,
+      "maxLength": 68,
+      "description": "rpl_[A-Za-z0-9_-]{1,64}."
+    },
+    "grant_id": {
+      "type": "string",
+      "minLength": 5,
+      "maxLength": 68,
+      "description": "grt_[A-Za-z0-9_-]{1,64}; relay-assigned."
+    },
+    "registration_id": {
+      "type": "string",
+      "minLength": 5,
+      "maxLength": 68,
+      "description": "reg_[A-Za-z0-9_-]{1,64}; relay-assigned."
+    },
+    "question_id": {
+      "type": "string",
+      "minLength": 4,
+      "maxLength": 266,
+      "description": "q:<machine>/<local id>; relay-assigned, routable by machine."
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "The harness's own session id: [A-Za-z0-9][A-Za-z0-9._-]{0,127}, never 'latest'."
+    },
+    "channel_nonce": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 128,
+      "description": "Random value the channel server picks at start; binds every later channel call to the registration."
+    },
+    "epoch": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Seconds since the Unix epoch."
+    },
+    "epoch_or_null": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "message_kind": {
+      "enum": [
+        "note",
+        "instruction",
+        "question"
+      ]
+    },
+    "mailbox_state": {
+      "enum": [
+        "queued",
+        "delivered",
+        "acked",
+        "answered",
+        "declined",
+        "lapsed",
+        "session-ended",
+        "refused"
+      ]
+    },
+    "session_state": {
+      "enum": [
+        "live-accepting",
+        "live-read-only",
+        "idle",
+        "ended"
+      ]
+    },
+    "session_harness": {
+      "enum": [
+        "claude",
+        "codex"
+      ]
+    },
+    "machine_status": {
+      "enum": [
+        "up",
+        "paused",
+        "unreachable"
+      ]
+    },
+    "question_state": {
+      "enum": [
+        "open",
+        "answered",
+        "rejected",
+        "expired"
+      ]
+    },
+    "grant_state": {
+      "enum": [
+        "live",
+        "used-up",
+        "expired"
+      ]
+    },
+    "pause_scope": {
+      "enum": [
+        "relay",
+        "hub"
+      ]
+    },
+    "error_code": {
+      "enum": [
+        "bad_request",
+        "unsupported_protocol",
+        "unknown_verb",
+        "not_implemented",
+        "unauthenticated",
+        "origin_not_allowed",
+        "grant_required",
+        "grant_unknown",
+        "grant_wrong_session",
+        "grant_wrong_verb",
+        "grant_wrong_target",
+        "grant_expired",
+        "grant_used_up",
+        "proof_unsupported",
+        "target_invalid",
+        "target_not_found",
+        "target_ambiguous",
+        "not_opted_in",
+        "session_ended",
+        "hop_limit",
+        "too_large",
+        "idempotency_conflict",
+        "invalid_transition",
+        "message_not_found",
+        "question_not_found",
+        "answer_invalid",
+        "registration_unknown",
+        "registration_conflict",
+        "already_running",
+        "nonce_mismatch",
+        "consent_refused",
+        "endpoint_refused",
+        "rate_limited",
+        "paused",
+        "machine_unreachable",
+        "upstream_unavailable",
+        "internal"
+      ],
+      "description": "A stable relay error code (protocol.ERROR_CODES)."
+    },
+    "body": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192,
+      "description": "Message or reply text. The relay caps UTF-8 bytes at 8192 (too_large)."
+    },
+    "cursor": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "description": "Opaque read cursor from a previous read_session result."
+    },
+    "short_text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300
+    },
+    "reason_text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000
+    },
+    "path_text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "accepts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/message_kind"
+      },
+      "minItems": 0,
+      "maxItems": 3,
+      "description": "Message kinds the session accepts; empty means read-only."
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/error_code"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 2000
+        },
+        "retryable": {
+          "type": "boolean",
+          "description": "Equals the code's value in protocol.ERROR_CODES."
+        },
+        "details": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "retryable"
+      ],
+      "additionalProperties": true
+    },
+    "signed": {
+      "type": "object",
+      "properties": {
+        "audience": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "description": "Who the signed content is for (relay machine label or hub id)."
+        },
+        "issued_at": {
+          "$ref": "#/$defs/epoch"
+        },
+        "not_after": {
+          "$ref": "#/$defs/epoch"
+        },
+        "nonce": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "key_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "alg": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "signature": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        }
+      },
+      "required": [],
+      "additionalProperties": true,
+      "description": "RESERVED for a signing proof scheme (alternative B). relay-protocol/1 verifies none of it and never treats it as authentication."
+    },
+    "origin_proof_none": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "none"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false,
+      "description": "Alternative A: minted by the /direct guardrail hook. Proves nothing about a human."
+    },
+    "origin_proof_enclave_signature": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "enclave-signature"
+        },
+        "key_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "alg": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "challenge": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "signature": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "signed": {
+          "$ref": "#/$defs/signed"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": true,
+      "description": "RESERVED for alternative B. A relay-protocol/1 relay refuses it with proof_unsupported."
+    },
+    "origin_proof": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/origin_proof_none"
+        },
+        {
+          "$ref": "#/$defs/origin_proof_enclave_signature"
+        }
+      ],
+      "description": "How the grant's human origin is evidenced. New proof types are added as new branches."
+    },
+    "reply_record": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/reply_id"
+        },
+        "in_reply_to": {
+          "$ref": "#/$defs/message_id"
+        },
+        "sender": {
+          "$ref": "#/$defs/identity"
+        },
+        "state": {
+          "enum": [
+            "answered",
+            "declined"
+          ]
+        },
+        "body": {
+          "$ref": "#/$defs/body"
+        },
+        "at": {
+          "$ref": "#/$defs/epoch"
+        }
+      },
+      "required": [
+        "id",
+        "in_reply_to",
+        "sender",
+        "state",
+        "body",
+        "at"
+      ],
+      "additionalProperties": true
+    },
+    "message_record": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/message_id"
+        },
+        "to": {
+          "$ref": "#/$defs/address"
+        },
+        "sender": {
+          "$ref": "#/$defs/identity"
+        },
+        "kind": {
+          "$ref": "#/$defs/message_kind"
+        },
+        "body": {
+          "$ref": "#/$defs/body"
+        },
+        "hop": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "created_at": {
+          "$ref": "#/$defs/epoch"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/epoch"
+        },
+        "updated_at": {
+          "$ref": "#/$defs/epoch"
+        },
+        "state": {
+          "$ref": "#/$defs/mailbox_state"
+        },
+        "attempts": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Deliveries made so far."
+        },
+        "task": {
+          "$ref": "#/$defs/short_text"
+        },
+        "state_reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "description": "Why the message is refused, lapsed or session-ended (an error code or session_changed)."
+        },
+        "reply": {
+          "$ref": "#/$defs/reply_record"
+        }
+      },
+      "required": [
+        "id",
+        "to",
+        "sender",
+        "kind",
+        "body",
+        "hop",
+        "created_at",
+        "expires_at",
+        "updated_at",
+        "state",
+        "attempts"
+      ],
+      "additionalProperties": true
+    },
+    "delivered_message": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/message_id"
+        },
+        "sender": {
+          "$ref": "#/$defs/identity"
+        },
+        "kind": {
+          "$ref": "#/$defs/message_kind"
+        },
+        "body": {
+          "$ref": "#/$defs/body"
+        },
+        "hop": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "created_at": {
+          "$ref": "#/$defs/epoch"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/epoch"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "1 on first delivery; higher on a redelivery."
+        },
+        "task": {
+          "$ref": "#/$defs/short_text"
+        },
+        "signed": {
+          "$ref": "#/$defs/signed"
+        }
+      },
+      "required": [
+        "id",
+        "sender",
+        "kind",
+        "body",
+        "hop",
+        "created_at",
+        "expires_at",
+        "attempt"
+      ],
+      "additionalProperties": true
+    },
+    "session": {
+      "type": "object",
+      "properties": {
+        "address": {
+          "$ref": "#/$defs/address"
+        },
+        "machine": {
+          "$ref": "#/$defs/machine_label"
+        },
+        "harness": {
+          "$ref": "#/$defs/session_harness"
+        },
+        "session_id": {
+          "$ref": "#/$defs/session_id"
+        },
+        "state": {
+          "$ref": "#/$defs/session_state"
+        },
+        "registered": {
+          "type": "boolean",
+          "description": "True when a channel server registered it; false for a scanned session."
+        },
+        "accepts": {
+          "$ref": "#/$defs/accepts"
+        },
+        "cwd": {
+          "$ref": "#/$defs/path_text"
+        },
+        "title": {
+          "$ref": "#/$defs/short_text"
+        },
+        "task": {
+          "$ref": "#/$defs/short_text"
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "last_activity_at": {
+          "$ref": "#/$defs/epoch"
+        }
+      },
+      "required": [
+        "address",
+        "machine",
+        "harness",
+        "session_id",
+        "state",
+        "registered",
+        "accepts"
+      ],
+      "additionalProperties": true
+    },
+    "pause_flag": {
+      "type": "object",
+      "properties": {
+        "paused": {
+          "type": "boolean"
+        },
+        "paused_since": {
+          "$ref": "#/$defs/epoch_or_null"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/short_text"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "paused",
+        "paused_since",
+        "reason"
+      ],
+      "additionalProperties": true
+    },
+    "pause_state": {
+      "type": "object",
+      "properties": {
+        "relay": {
+          "$ref": "#/$defs/pause_flag"
+        },
+        "hub": {
+          "$ref": "#/$defs/pause_flag"
+        }
+      },
+      "required": [
+        "relay",
+        "hub"
+      ],
+      "additionalProperties": true
+    },
+    "machine_reach": {
+      "type": "object",
+      "properties": {
+        "machine": {
+          "$ref": "#/$defs/machine_label"
+        },
+        "status": {
+          "$ref": "#/$defs/machine_status"
+        },
+        "error": {
+          "$ref": "#/$defs/error"
+        }
+      },
+      "required": [
+        "machine",
+        "status"
+      ],
+      "additionalProperties": true,
+      "description": "One machine's reachability in a fan-out result; an unreachable machine is listed, never omitted."
+    },
+    "machine": {
+      "type": "object",
+      "properties": {
+        "machine": {
+          "$ref": "#/$defs/machine_label"
+        },
+        "status": {
+          "$ref": "#/$defs/machine_status"
+        },
+        "protocol": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "last_contact_at": {
+          "$ref": "#/$defs/epoch"
+        },
+        "pause": {
+          "$ref": "#/$defs/pause_state"
+        },
+        "endpoints": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/address"
+          },
+          "minItems": 0,
+          "maxItems": 64,
+          "description": "LLM endpoint addresses (<machine>/llm/<entry>) on the machine."
+        },
+        "error": {
+          "$ref": "#/$defs/error"
+        }
+      },
+      "required": [
+        "machine",
+        "status"
+      ],
+      "additionalProperties": true
+    },
+    "turn": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "enum": [
+            "user",
+            "assistant",
+            "tool",
+            "system",
+            "channel"
+          ]
+        },
+        "text": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 65536
+        },
+        "at": {
+          "$ref": "#/$defs/epoch"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "role",
+        "text"
+      ],
+      "additionalProperties": true
+    },
+    "chat_message": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "enum": [
+            "system",
+            "user",
+            "assistant"
+          ]
+        },
+        "content": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 32768
+        }
+      },
+      "required": [
+        "role",
+        "content"
+      ],
+      "additionalProperties": false
+    },
+    "question_source": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "job"
+        },
+        "ledger": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "description": "The watched job ledger's configured name."
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "job_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "interrupt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        }
+      },
+      "required": [
+        "kind",
+        "ledger",
+        "run_id",
+        "job_id",
+        "interrupt_id"
+      ],
+      "additionalProperties": true
+    },
+    "question": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/question_id"
+        },
+        "machine": {
+          "$ref": "#/$defs/machine_label"
+        },
+        "source": {
+          "$ref": "#/$defs/question_source"
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "description": "The interrupt request's kind."
+        },
+        "payload": {
+          "type": "object"
+        },
+        "request_schema": {
+          "type": "object",
+          "description": "The JSON Schema an answer's input must satisfy."
+        },
+        "created_at": {
+          "$ref": "#/$defs/epoch"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/epoch_or_null"
+        },
+        "state": {
+          "$ref": "#/$defs/question_state"
+        }
+      },
+      "required": [
+        "id",
+        "machine",
+        "source",
+        "kind",
+        "payload",
+        "request_schema",
+        "created_at",
+        "expires_at",
+        "state"
+      ],
+      "additionalProperties": true
+    },
+    "grant": {
+      "type": "object",
+      "properties": {
+        "grant_id": {
+          "$ref": "#/$defs/grant_id"
+        },
+        "session": {
+          "$ref": "#/$defs/address"
+        },
+        "verb": {
+          "$ref": "#/$defs/grantable_verb"
+        },
+        "targets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/target"
+          },
+          "minItems": 0,
+          "maxItems": 16,
+          "description": "Resolved targets; empty covers only a call that names no target."
+        },
+        "issued_at": {
+          "$ref": "#/$defs/epoch"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/epoch"
+        },
+        "uses": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32
+        },
+        "uses_remaining": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 32
+        },
+        "origin_proof": {
+          "$ref": "#/$defs/origin_proof"
+        },
+        "state": {
+          "$ref": "#/$defs/grant_state"
+        }
+      },
+      "required": [
+        "grant_id",
+        "session",
+        "verb",
+        "targets",
+        "issued_at",
+        "expires_at",
+        "uses",
+        "uses_remaining",
+        "origin_proof",
+        "state"
+      ],
+      "additionalProperties": true
+    },
+    "audit_row": {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Append order; strictly increasing."
+        },
+        "at": {
+          "$ref": "#/$defs/epoch"
+        },
+        "machine": {
+          "$ref": "#/$defs/machine_label"
+        },
+        "ingress": {
+          "enum": [
+            "relay",
+            "hub"
+          ]
+        },
+        "event": {
+          "enum": [
+            "call",
+            "transition"
+          ]
+        },
+        "origin": {
+          "$ref": "#/$defs/identity"
+        },
+        "verb": {
+          "enum": [
+            "register",
+            "heartbeat",
+            "deregister",
+            "poll",
+            "ack",
+            "reply",
+            "list_machines",
+            "list_sessions",
+            "read_session",
+            "ask_llm",
+            "send_message",
+            "get_replies",
+            "list_questions",
+            "answer_question",
+            "grant_mint",
+            "grant_check",
+            "pause",
+            "resume",
+            "status",
+            "expire",
+            "scan"
+          ]
+        },
+        "outcome": {
+          "enum": [
+            "ok",
+            "refused",
+            "error"
+          ]
+        },
+        "request_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/request_id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/target"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "grant_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/grant_id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/message_id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "from_state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/mailbox_state"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "to_state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/mailbox_state"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/error_code"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "seq",
+        "at",
+        "machine",
+        "ingress",
+        "event",
+        "origin",
+        "verb",
+        "outcome"
+      ],
+      "additionalProperties": true
+    }
+  }
+}

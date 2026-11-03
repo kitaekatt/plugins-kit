@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "relay-protocol/1/deregister.response.json",
+  "title": "deregister result",
+  "description": "End the registration; unfinished messages become session-ended. Response result (unknown fields allowed).",
+  "type": "object",
+  "properties": {
+    "registration_id": {
+      "$ref": "#/$defs/registration_id"
+    },
+    "address": {
+      "$ref": "#/$defs/address"
+    },
+    "ended_messages": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "registration_id",
+    "address",
+    "ended_messages"
+  ],
+  "additionalProperties": true,
+  "examples": [
+    {
+      "registration_id": "reg_01JBX3S0A1B2C3D4E5F6G7H8J9",
+      "address": "m5pro/claude/7f3c2a10-5b7e-4c1d-9a8e-0d6f4b2c9e11",
+      "ended_messages": 1
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "relay-protocol/1/heartbeat.request.json",
+  "title": "heartbeat params",
+  "description": "Renew the lease and report metadata, including a session-id change. Request params (strict).",
+  "type": "object",
+  "properties": {
+    "registration_id": {
+      "$ref": "#/$defs/registration_id"
+    },
+    "session_id": {
+      "$ref": "#/$defs/session_id"
+    },
+    "channel_nonce": {
+      "$ref": "#/$defs/channel_nonce"
+    },
+    "previous_session_id": {
+      "$ref": "#/$defs/session_id"
+    },
+    "cwd": {
+      "$ref": "#/$defs/path_text"
+    },
+    "title": {
+      "$ref": "#/$defs/short_text"
+    },
+    "task": {
+      "$ref": "#/$defs/short_text"
+    },
+    "accepts": {
+      "$ref": "#/$defs/accepts"
+    }
+  },
+  "required": [
+    "registration_id",
+    "session_id",
+    "channel_nonce"
+  ],
+  "additionalProperties": false,
+  "examples": [
+    {
+      "registration_id": "reg_01JBX3S0A1B2C3D4E5F6G7H8J9",
+      "session_id": "7f3c2a10-5b7e-4c1d-9a8e-0d6f4b2c9e11",
+      "channel_nonce": "c2hhbm5lbC1ub25jZS0wMDAx"
+    },
+    {
+      "registration_id": "reg_01JBX3S0A1B2C3D4E5F6G7H8J9",
+      "session_id": "4d2e9b17-8c3a-4f6e-b1d0-5a7c9e2f4b63",
+      "channel_nonce": "c2hhbm5lbC1ub25jZS0wMDAx",
+      "previous_session_id": "7f3c2a10-5b7e-4c1d-9a8e-0d6f4b2c9e11",
+      "title": "after /clear"
+    }
+  ]
+}

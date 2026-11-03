@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "relay-protocol/1/heartbeat.response.json",
+  "title": "heartbeat result",
+  "description": "Renew the lease and report metadata, including a session-id change. Response result (unknown fields allowed).",
+  "type": "object",
+  "properties": {
+    "registration_id": {
+      "$ref": "#/$defs/registration_id"
+    },
+    "address": {
+      "$ref": "#/$defs/address"
+    },
+    "lease_expires_at": {
+      "$ref": "#/$defs/epoch"
+    },
+    "paused": {
+      "type": "boolean"
+    },
+    "session_changed": {
+      "type": "boolean"
+    },
+    "ended_messages": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Messages moved to session-ended by this call."
+    }
+  },
+  "required": [
+    "registration_id",
+    "address",
+    "lease_expires_at",
+    "paused",
+    "session_changed",
+    "ended_messages"
+  ],
+  "additionalProperties": true,
+  "examples": [
+    {
+      "registration_id": "reg_01JBX3S0A1B2C3D4E5F6G7H8J9",
+      "address": "m5pro/claude/7f3c2a10-5b7e-4c1d-9a8e-0d6f4b2c9e11",
+      "lease_expires_at": 1793664120.0,
+      "paused": false,
+      "session_changed": false,
+      "ended_messages": 0
+    },
+    {
+      "registration_id": "reg_01JBX3S0A1B2C3D4E5F6G7H8J9",
+      "address": "m5pro/claude/4d2e9b17-8c3a-4f6e-b1d0-5a7c9e2f4b63",
+      "lease_expires_at": 1793664150.0,
+      "paused": false,
+      "session_changed": true,
+      "ended_messages": 2
+    }
+  ]
+}

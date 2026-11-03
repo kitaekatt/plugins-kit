@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "relay-protocol/1/register.response.json",
+  "title": "register result",
+  "description": "A channel server registers its session; returns the registration and lease. Response result (unknown fields allowed).",
+  "type": "object",
+  "properties": {
+    "registration_id": {
+      "$ref": "#/$defs/registration_id"
+    },
+    "address": {
+      "$ref": "#/$defs/address"
+    },
+    "machine": {
+      "$ref": "#/$defs/machine_label"
+    },
+    "heartbeat_s": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "lease_s": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "lease_expires_at": {
+      "$ref": "#/$defs/epoch"
+    },
+    "ack_timeout_s": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "max_wait_s": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "paused": {
+      "type": "boolean"
+    },
+    "replaced": {
+      "type": "boolean",
+      "description": "True when this registration replaced a stale one for the same session."
+    }
+  },
+  "required": [
+    "registration_id",
+    "address",
+    "machine",
+    "heartbeat_s",
+    "lease_s",
+    "lease_expires_at",
+    "ack_timeout_s",
+    "max_wait_s",
+    "paused",
+    "replaced"
+  ],
+  "additionalProperties": true,
+  "examples": [
+    {
+      "registration_id": "reg_01JBX3S0A1B2C3D4E5F6G7H8J9",
+      "address": "m5pro/claude/7f3c2a10-5b7e-4c1d-9a8e-0d6f4b2c9e11",
+      "machine": "m5pro",
+      "heartbeat_s": 30,
+      "lease_s": 90,
+      "lease_expires_at": 1793664090.0,
+      "ack_timeout_s": 60,
+      "max_wait_s": 25,
+      "paused": false,
+      "replaced": false
+    }
+  ]
+}

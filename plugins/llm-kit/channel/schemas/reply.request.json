@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "relay-protocol/1/reply.request.json",
+  "title": "reply params",
+  "description": "Answer or decline one delivered message. Request params (strict).",
+  "type": "object",
+  "properties": {
+    "registration_id": {
+      "$ref": "#/$defs/registration_id"
+    },
+    "session_id": {
+      "$ref": "#/$defs/session_id"
+    },
+    "channel_nonce": {
+      "$ref": "#/$defs/channel_nonce"
+    },
+    "in_reply_to": {
+      "$ref": "#/$defs/message_id"
+    },
+    "state": {
+      "enum": [
+        "answered",
+        "declined"
+      ]
+    },
+    "body": {
+      "$ref": "#/$defs/body"
+    },
+    "id": {
+      "$ref": "#/$defs/reply_id"
+    }
+  },
+  "required": [
+    "registration_id",
+    "session_id",
+    "channel_nonce",
+    "in_reply_to",
+    "state",
+    "body"
+  ],
+  "additionalProperties": false,
+  "examples": [
+    {
+      "registration_id": "reg_01JBX3S0A1B2C3D4E5F6G7H8J9",
+      "session_id": "7f3c2a10-5b7e-4c1d-9a8e-0d6f4b2c9e11",
+      "channel_nonce": "c2hhbm5lbC1ub25jZS0wMDAx",
+      "in_reply_to": "msg_01JBX3V9Q8K2M4N6P7R8S9T0VW",
+      "state": "answered",
+      "body": "Done: tests pass.",
+      "id": "rpl_01JBX3VA2C4E6G8J0K2M4N6P8Q"
+    },
+    {
+      "registration_id": "reg_01JBX3S0A1B2C3D4E5F6G7H8J9",
+      "session_id": "7f3c2a10-5b7e-4c1d-9a8e-0d6f4b2c9e11",
+      "channel_nonce": "c2hhbm5lbC1ub25jZS0wMDAx",
+      "in_reply_to": "msg_01JBX3V9Q8K2M4N6P7R8S9T0VW",
+      "state": "declined",
+      "body": "Not in this session's scope."
+    }
+  ]
+}
