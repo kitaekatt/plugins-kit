@@ -284,7 +284,7 @@ citations.
   Verified by: no automated test (owner config); floor-propagation tests
   exercise the shape indirectly.
 
-## LLM front-door failover (not yet scheduled)
+## LLM front-door failover (task llm-frontdoor-failover)
 
 The LLM front door (`llm_kit.frontdoor`, router on port 4000) runs on one
 host. Every client request goes through it first, so when that host is down a
@@ -310,7 +310,7 @@ left to the implementing task.
   router being reachable.
   Source: owner ruling 2026-11-03 (task llm-frontdoor-failover); owner
   preference for client-side ordered-endpoint retry in plugins-kit.
-  Implemented by: not yet scheduled (no migration step; needs a new task).
+  Implemented by: task llm-frontdoor-failover (no migration step).
   Verified by: test to be named by the implementing task; it takes the
   router down and shows the unit completes on a member endpoint.
 - **R40.** A transport error on one endpoint (connection refused, timeout,
@@ -318,7 +318,7 @@ left to the implementing task.
   the group is exhausted to the next entry of the declaration, instead of
   failing the unit.
   Source: owner ruling 2026-11-03 (task llm-frontdoor-failover).
-  Implemented by: not yet scheduled (no migration step; needs a new task).
+  Implemented by: task llm-frontdoor-failover (no migration step).
   Verified by: test to be named by the implementing task; it refuses the
   connection on the first endpoint and shows the second is called.
 - **R41.** An endpoint that reports busy (all slots taken, a 429 or 503
@@ -326,7 +326,7 @@ left to the implementing task.
   unavailable endpoint: the unit moves to the next endpoint without waiting
   on the busy one and without recording a quota halt.
   Source: owner ruling 2026-11-03 (task llm-frontdoor-failover).
-  Implemented by: not yet scheduled (no migration step; needs a new task).
+  Implemented by: task llm-frontdoor-failover (no migration step).
   Verified by: test to be named by the implementing task; it returns a busy
   response from the first endpoint and shows the second is called.
 - **R42.** Open question, recorded and not answered: clients that do not use
@@ -334,7 +334,7 @@ left to the implementing task.
   owner decides whether they stay router-only, gain a second router, or
   are moved onto llm-kit.
   Source: owner ruling 2026-11-03 (task llm-frontdoor-failover).
-  Implemented by: not yet scheduled (no migration step; needs a new task);
+  Implemented by: task llm-frontdoor-failover (no migration step);
   blocked on the owner's decision.
   Verified by: no test; the decision is recorded in this section when made.
 
