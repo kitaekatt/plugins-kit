@@ -248,6 +248,32 @@ def test_gate_recognizes_the_command_form(skill_text: str) -> None:
     assert gate.find_client_args(example) == [["machines", "--session", "S"]]
 
 
+def answer_row_problems(text: str) -> list[str]:
+    """The answer row must state the relay's input rule and that answering does not resume the run."""
+    rows = [ln for ln in text.splitlines() if ln.startswith("| `/direct answer")]
+    if len(rows) != 1:
+        return [f"expected one answer row, found {len(rows)}"]
+    row = rows[0]
+    return [
+        f"answer row does not say {needle!r}"
+        for needle in ("does not resume its run", "`answer` needs `--input`", "`reject` takes `--reason` and no `--input`")
+        if needle not in row
+    ]
+
+
+def test_answer_row_states_the_input_rule_and_that_the_run_is_not_resumed(skill_text: str) -> None:
+    """Edit that turns it red: delete "`reject` takes `--reason` and no `--input`" from the answer row.
+    The behaviour behind each claim is pinned in test_direct_writes_e2e.py."""
+    assert answer_row_problems(skill_text) == []
+
+
+def test_counterfactual_answer_row() -> None:
+    real = SKILL.read_text(encoding="utf-8")
+    assert answer_row_problems(real) == []
+    assert answer_row_problems(real.replace("and no `--input`", "")) != []
+    assert answer_row_problems(real.replace("does not resume its run", "resumes its run")) != []
+
+
 def test_skill_states_the_gate_is_a_guardrail(skill_text: str) -> None:
     assert guardrail_problems(skill_text) == []
 

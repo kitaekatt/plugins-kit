@@ -125,10 +125,10 @@ Rules for every call:
 | `/direct sessions [machine]` | `llm-kit relay client sessions --session S [--machine M] [--harness claude\|codex] [--state live-accepting\|live-read-only\|idle\|ended]` | A leading bare word is the machine label. |
 | `/direct read <address> [--since C] [--limit N]` | `llm-kit relay client read ADDRESS --session S [--since C] [--limit N]` | A capped, redacted tail. With several addresses, one call each. `--since` takes the cursor from the previous result. |
 | `/direct ask <endpoint> <prompt text>` | `llm-kit relay client ask ENDPOINT --session S --prompt 'TEXT'` | `ENDPOINT` is `<machine>/llm/<entry>` or a bare entry name on this machine. The words after it are the prompt. |
-| `/direct questions [machine] [--state open\|all]` | `llm-kit relay client questions --session S [--machine M] [--state open\|all]` | Pending operator questions. |
+| `/direct questions [machine] [--state open\|all]` | `llm-kit relay client questions --session S [--machine M] [--state open\|all]` | Pending operator questions; `--state all` adds answered, rejected and expired ones. Each result carries the `id` that `/direct answer` takes. |
 | `/direct replies --message-id ID` or `--address A` | `llm-kit relay client replies --session S --message-id ID [--wait SECONDS] [--limit N]`, or `--address A` in place of `--message-id` | Replies to a sent message. `--wait` long-polls at most 25 s. |
 | `/direct send <address> [--kind note\|instruction\|question] <text>` | `llm-kit relay client send ADDRESS --session S --kind K --body 'TEXT'` | The text is the message body, verbatim. `K` is the typed kind, else `note`; say which kind was sent. |
-| `/direct answer <question id> --decision answer\|reject [--input JSON] [--reason TEXT]` | `llm-kit relay client answer ID --session S --decision D [--input 'JSON'] [--reason 'TEXT']` | Resolves one question. `--input` goes with `answer`. |
+| `/direct answer <question id> --decision answer\|reject [--input JSON] [--reason TEXT]` | `llm-kit relay client answer ID --session S --decision D [--input 'JSON'] [--reason 'TEXT']` | Resolves one question and does not resume its run: the result's `job_state` shows where the job is. `answer` needs `--input` (JSON that fits the question's `request_schema`); `reject` takes `--reason` and no `--input`. The relay refuses either mismatch. |
 
 `send` and `answer` change state on another session or on a job, and both are
 refused unless the grant covers that exact target. The relay delivers a message
