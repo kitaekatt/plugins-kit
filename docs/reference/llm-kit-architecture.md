@@ -2,9 +2,9 @@
 
 Status: signed off by the user 2026-10-16 (all 14 decisions).
 
-Addition 2026-10-30, approved by the user: `llm_kit.graph` (new in katsoft-llm-kit 1.10) joins the graph as the 17th component at Layer 6, and `cli` moves to Layer 7 with `graph` added to its set. The other signed decisions are unchanged.
+Addition 2026-10-30, approved by the user: `llm_kit.graph` (added in katsoft-llm-kit 1.10) joins the graph as the 17th component at Layer 6, and `cli` moves to Layer 7 with `graph` added to its set. The other signed decisions are unchanged.
 
-Addition 2026-11-03, approved by the owner: `llm_kit.relay` (new in katsoft-llm-kit 1.11) joins the graph as the 18th component at Layer 6, and `cli` adds `relay` to its set. The other signed decisions are unchanged.
+Addition 2026-11-03, approved by the owner: `llm_kit.relay` (added in katsoft-llm-kit 1.11) joins the graph as the 18th component at Layer 6, and `cli` adds `relay` to its set. The other signed decisions are unchanged.
 
 Source ownership: the library tree and source tests described below now live in
 [katsoft-libs](https://github.com/kitaekatt/katsoft-libs). Paths under
