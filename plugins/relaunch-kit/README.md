@@ -83,8 +83,9 @@ value when set, else the interpreter running `clauder`) and
 
 This needs the `llm-kit` plugin and is refused without it: `clauder` exits with
 status 2 and starts nothing, and the message tells you whether llm-kit is not
-installed (`claude plugin install llm-kit@plugins-kit`) or too old to ship the
-channel (`claude plugin update llm-kit@plugins-kit`). relaunch-kit does not
+installed (`claude plugin install llm-kit@plugins-kit`) or older than llm-kit
+0.17.0, the first version to ship the channel (`claude plugin update
+llm-kit@plugins-kit`). relaunch-kit does not
 depend on llm-kit; only this option does. `clauder` finds llm-kit in this order:
 
 1. `LLM_KIT_CHANNEL_SCRIPT`, when you set it to an absolute path of a

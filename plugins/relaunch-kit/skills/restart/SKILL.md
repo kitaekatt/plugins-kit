@@ -137,8 +137,9 @@ technique_skill:
             When the user reports that `clauder --relay` printed
             `clauder: ...` and exited with status 2, read the message and pass
             it on. "none is installed" means `claude plugin install
-            llm-kit@plugins-kit`; "predates the relay channel" means `claude
-            plugin update llm-kit@plugins-kit`. clauder finds llm-kit in this
+            llm-kit@plugins-kit`; "predates the relay channel" means the
+            installed llm-kit is older than 0.17.0, the first version to ship
+            the channel, so run `claude plugin update llm-kit@plugins-kit`. clauder finds llm-kit in this
             order: `LLM_KIT_CHANNEL_SCRIPT`; under claudx the llm-kit directory
             in `CLAUDE_PLUGIN_TEST_DIRS` (never the cache; the fix is
             `claudx --all`); else the newest version in

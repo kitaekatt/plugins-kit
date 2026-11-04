@@ -256,7 +256,7 @@ def answer_row_problems(text: str) -> list[str]:
     row = rows[0]
     return [
         f"answer row does not say {needle!r}"
-        for needle in ("does not resume its run", "`answer` needs `--input`", "`reject` takes `--reason` and no `--input`")
+        for needle in ("does not resume its run", "`answer` takes `--input`", "and no `--reason`", "`reject` takes `--reason` and no `--input`")
         if needle not in row
     ]
 
@@ -271,6 +271,7 @@ def test_counterfactual_answer_row() -> None:
     real = SKILL.read_text(encoding="utf-8")
     assert answer_row_problems(real) == []
     assert answer_row_problems(real.replace("and no `--input`", "")) != []
+    assert answer_row_problems(real.replace("and no `--reason`", "")) != []
     assert answer_row_problems(real.replace("does not resume its run", "resumes its run")) != []
 
 

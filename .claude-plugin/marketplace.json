@@ -204,7 +204,7 @@
     {
       "name": "llm-kit",
       "description": "LLM access, durable agent jobs and batch content pipelines in one library. Consolidation of llm-scripting-kit, job-kit and content-pipeline-kit.",
-      "version": "0.16.1",
+      "version": "0.17.0",
       "author": {
         "name": "Christina"
       },
@@ -217,7 +217,7 @@
     {
       "name": "relaunch-kit",
       "description": "Restart Claude Code for real: the clauder launcher resumes the session or starts a hand-off session in the same terminal, and this plugin's hooks module requests the exit after the turn ends.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "author": {
         "name": "Christina"
       },
