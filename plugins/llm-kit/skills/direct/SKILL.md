@@ -6,6 +6,7 @@ skill-type: technique-skill
 description: Use when the user types /direct to list machines, read or message a session, or ask a local LLM via the llm-kit relay. Do NOT use on the model's own initiative.
 disable-model-invocation: true
 user-invocable: true
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/bin/llm-kit relay client *)
 ---
 
 # Direct
@@ -83,16 +84,27 @@ hook's line if they differ).
 
 ## Running the call
 
-`llm-kit` below stands for the plugin's version-free CLI path, which works from
-any shell and directory once bootstrap has provisioned the plugin venv:
+`llm-kit` below stands for the plugin's launcher shim, whose path Claude Code
+writes into this skill when it loads (`${CLAUDE_PLUGIN_ROOT}` is substituted in
+a plugin skill's body and in its `allowed-tools` Bash rules). Use that path as
+the command word, exactly as it reads here:
 
 ```
-"${CLAUDE_BOOTSTRAP_DATA_ROOT:-$HOME/.claude/plugins/data}"/plugins-kit/llm-kit/.venv/bin/llm-kit
-(Windows: "${CLAUDE_BOOTSTRAP_DATA_ROOT:-$HOME/.claude/plugins/data}"/plugins-kit/llm-kit/.venv/Scripts/llm-kit.exe)
+${CLAUDE_PLUGIN_ROOT}/bin/llm-kit relay client <verb> --session <session id> ...
 ```
+
+The shim finds the plugin venv bootstrap provisioned, from any shell and
+directory, on every OS Claude Code runs on. The command is a literal path with
+no shell expansion, which is what lets the `allowed-tools` rule in this skill's
+frontmatter match it without a permission prompt. That rule applies only during
+the turn in which the user's `/direct` invoked this skill. It adds no authority:
+the PreToolUse gate runs first, and a call that no live grant covers is still
+refused.
 
 Rules for every call:
 
+- If the path above still reads `${CLAUDE_PLUGIN_ROOT}` literally, the harness
+  did not substitute it: report that and stop. Do not guess a path.
 - One plain command per Bash call: `llm-kit relay client <verb> --session
   <session id> ...`. No pipes, no `bash -c`, no variables holding the command,
   no abbreviated option names; the gate refuses what it cannot read.
