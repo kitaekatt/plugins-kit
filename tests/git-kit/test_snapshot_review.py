@@ -597,3 +597,68 @@ def test_land_accepts_the_full_ref_form_with_a_long_sha(repo, capsys, tmp_path):
 
     assert "does not match" not in err
     assert rc == 0, err
+
+
+# ------------------------------------------------- long paths (Windows MAX_PATH)
+
+
+def test_extended_path_forms():
+    # Pure string logic: runs identically on every host.
+    ext = "\\\\?\\"
+    assert snap._extended_path("C:\\a\\b") == ext + "C:\\a\\b"
+    assert snap._extended_path("C:/a/b") == ext + "C:\\a\\b"
+    assert snap._extended_path("\\\\server\\share\\a") == ext + "UNC\\server\\share\\a"
+    # Already-prefixed forms are not prefixed twice.
+    assert snap._extended_path(ext + "C:\\a") == ext + "C:\\a"
+    assert snap._extended_path(ext + "UNC\\s\\sh\\a") == ext + "UNC\\s\\sh\\a"
+    assert snap._extended_path("\\\\.\\C:\\a") == "\\\\.\\C:\\a"
+
+
+def _record_rmtree(monkeypatch):
+    seen = []
+    monkeypatch.setattr(snap.shutil, "rmtree", lambda path, **kw: seen.append(path))
+    return seen
+
+
+def test_rmtree_hands_shutil_the_extended_path_on_windows(tmp_path, monkeypatch):
+    monkeypatch.setattr(snap, "_WINDOWS", True)
+    seen = _record_rmtree(monkeypatch)
+    snap._rmtree(tmp_path / "tree")
+    assert len(seen) == 1
+    assert isinstance(seen[0], str) and seen[0].startswith("\\\\?\\")
+
+
+def test_rmtree_leaves_the_path_alone_off_windows(tmp_path, monkeypatch):
+    monkeypatch.setattr(snap, "_WINDOWS", False)
+    seen = _record_rmtree(monkeypatch)
+    snap._rmtree(tmp_path / "tree")
+    assert seen == [tmp_path / "tree"]
+
+
+def test_rmtree_still_clears_read_only_files(tmp_path):
+    victim = tmp_path / "tree" / "sub"
+    victim.mkdir(parents=True)
+    ro = victim / "f.txt"
+    ro.write_text("x")
+    os.chmod(ro, 0o444)
+    snap._rmtree(tmp_path / "tree")
+    assert not (tmp_path / "tree").exists()
+
+
+def test_drop_removes_a_tree_holding_a_very_long_path(repo, capsys):
+    write(repo, "f.txt", lines({2: "D"}))
+    result = frozen(capsys, "--paths", "f.txt")
+    sha12 = result["snapshot"][:12]
+    bdir = bundle_dir(sha12)
+    deep = bdir / "tree"
+    for part in ("d" * 60, "e" * 60, "f" * 60, "g" * 60):
+        deep = deep / part
+    deep.mkdir(parents=True)
+    (deep / ("w" * 180 + ".webp")).write_bytes(b"x")
+    assert len(str(deep)) > 260
+
+    rc, out, err = run(capsys, "drop", result["snapshot"], "--tree-only")
+
+    assert rc == 0, err
+    assert not (bdir / "tree").exists()
+    assert has_ref(repo, sha12)
