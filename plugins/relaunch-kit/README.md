@@ -102,6 +102,10 @@ Claude Code asks you to confirm loading a development channel on every launch,
 including each relaunch. A relaunch under `--relay` therefore waits at that
 dialog until it is answered.
 
+The restart skill (`skills/restart/SKILL.md`, technique `relay_launch`) carries
+the same facts for the session, so it can explain a refusal or a waiting
+relaunch.
+
 ## `/restart` and `/restart hand-off`
 
 `/restart` stops new work, lets running background jobs finish, and checks that
