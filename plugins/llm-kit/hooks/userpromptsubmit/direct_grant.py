@@ -201,7 +201,7 @@ def run(
     grant = result.get("grant") if isinstance(result.get("grant"), dict) else {}
     shown = ", ".join(grant.get("targets", command.targets)) or "no target"
     return _context(
-        f"/direct: the user typed this command and a relay grant was minted: verb {command.wire_verb}, "
+        f"/direct: the prompt starts with /direct and a relay grant was minted: verb {command.wire_verb}, "
         f"targets {shown}, {EXPIRES_IN_S} s, {command.uses} use(s). The grant is a guardrail against "
         "accidental calls, not a security boundary. Calls to `llm-kit relay client "
         f"{command.client_verb} --session {session}` for these targets now pass the grant gate."

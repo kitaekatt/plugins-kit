@@ -202,6 +202,8 @@ def test_typed_direct_mints_a_grant(relay, home):
         "command": f"/direct read {READ_TARGET}",
     }
     assert "grant was minted" in context(out)
+    assert "the prompt starts with /direct" in context(out)
+    assert "the user typed" not in context(out)
 
 
 @pytest.mark.parametrize("line, verb, targets, uses", [
@@ -331,6 +333,8 @@ def test_gate_denies_without_a_grant(relay, home):
     assert decision["permissionDecision"] == "deny"
     assert "grant_required" in decision["permissionDecisionReason"]
     assert f"/direct read {READ_TARGET}" in decision["permissionDecisionReason"]
+    assert "Only the owner should grant it" in decision["permissionDecisionReason"]
+    assert "can grant it" not in decision["permissionDecisionReason"]
     assert relay.verbs() == ["grant_check"]
 
 

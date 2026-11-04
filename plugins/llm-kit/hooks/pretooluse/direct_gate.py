@@ -230,7 +230,7 @@ def run(
             return _deny(
                 f"Refused ({code}): no live /direct grant covers `llm-kit relay client {call.client_verb}`"
                 + (f" on {call.target}" if call.target else "")
-                + f" for this session. Only the owner can grant it, by typing {_type_it(call)} in this session. "
+                + f" for this session. Only the owner should grant it, by typing {_type_it(call)} in this session. "
                 "Do not retry until they have."
             )
     if notes:
