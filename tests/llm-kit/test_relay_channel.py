@@ -13,6 +13,7 @@ import importlib.util
 import json
 import os
 import queue
+import signal
 import subprocess
 import sys
 import threading
@@ -58,6 +59,7 @@ class FakeRelay:
         self.cond = threading.Condition()
         self.registrations = {}
         self.next_error = {}
+        self.paused = False
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -191,6 +193,8 @@ class FakeRelay:
         if params["session_id"] != reg["session"]:
             return self._fail(request_id, "origin_not_allowed", "stale session", 403)
         if verb == "poll":
+            if self.paused:  # as the real relay: no messages, `paused`, at once
+                return {"messages": [], "paused": True, "lease_expires_at": now + 90}
             deadline = time.monotonic() + params["wait_s"]
             with self.cond:
                 # a poll that names a superseded session gets nothing, as at the real relay
@@ -483,6 +487,28 @@ def test_stdin_eof_deregisters_and_exits(harness, relay):
     assert h.proc.wait(timeout=10) == 0
     call = relay.wait_for("deregister")
     assert call["params"]["session_id"] == "sess-one"
+
+
+def test_sigterm_deregisters_and_exits(harness, relay):
+    h = harness()
+    h.handshake()
+    relay.wait_for("poll")
+    h.proc.send_signal(signal.SIGTERM)
+    assert h.proc.wait(timeout=10) == 0
+    assert relay.wait_for("deregister")["params"]["session_id"] == "sess-one"
+
+
+def test_a_paused_relay_is_polled_slowly_and_delivery_resumes_after_resume(harness, relay):
+    relay.paused = True
+    h = harness(extra_env={"LLM_KIT_CHANNEL_PAUSED_POLL_S": "3"})
+    h.handshake()
+    relay.wait_for("poll")
+    time.sleep(2.5)
+    assert len(relay.seen("poll")) <= 2, "a paused relay was polled once a second; every poll is an audit row"
+    assert h.proc.poll() is None
+    relay.paused = False
+    relay.enqueue("msg_after_pause", body="queued during the pause")
+    assert _channel_notifications(h, 1, timeout=10)[0]["meta"]["message_id"] == "msg_after_pause"
 
 
 def test_an_unreachable_relay_is_retried_and_never_ends_the_session(tmp_path):

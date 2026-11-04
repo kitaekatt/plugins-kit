@@ -38,6 +38,10 @@ Environment (all optional):
                               default note,instruction,question
     LLM_KIT_CHANNEL_BACKOFF   "base,max" seconds, default "1,30"
     LLM_KIT_CHANNEL_SESSION_POLL_S   session file poll interval, default 1.0
+    LLM_KIT_CHANNEL_PAUSED_POLL_S    gap between polls while the relay is paused,
+                              default 5.0 (a paused relay answers a poll at once and
+                              every poll is an audit row, so a pause is polled slowly;
+                              delivery resumes within this gap after resume)
     XDG_STATE_HOME            holds llm-kit/relay/relay.token
     CLAUDE_CONFIG_DIR         claude home, default ~/.claude
 """
@@ -151,6 +155,7 @@ class Config:
         self.backoff_base_s = base
         self.backoff_max_s = cap
         self.session_poll_s = float(env.get("LLM_KIT_CHANNEL_SESSION_POLL_S", "1.0"))
+        self.paused_poll_s = float(env.get("LLM_KIT_CHANNEL_PAUSED_POLL_S", "5.0"))
         self.claude_home = env.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
         xdg_state = env.get("XDG_STATE_HOME", "")
         if xdg_state and os.path.isabs(xdg_state):
@@ -536,8 +541,9 @@ class ChannelServer:
         if failure is not None:
             raise failure
         elapsed = time.monotonic() - started
-        if not messages and elapsed < MIN_EMPTY_POLL_S:
-            self._wake.wait(MIN_EMPTY_POLL_S - elapsed)
+        gap = max(MIN_EMPTY_POLL_S, self.config.paused_poll_s) if paused else MIN_EMPTY_POLL_S
+        if not messages and elapsed < gap:
+            self._wake.wait(gap - elapsed)
 
     def _deliver(self, reg, message):
         if not isinstance(message, dict) or not all(k in message for k in ("id", "sender", "kind", "body")):
