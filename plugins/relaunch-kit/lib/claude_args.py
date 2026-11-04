@@ -48,6 +48,9 @@ VARIADIC = "variadic"
 # once and exits with its status.
 SELECTOR = "selector"
 MODE = "mode"
+# a launcher option: clauder's own, never sent to claude. parse() removes it
+# from `carried` and reports where it stood in the argv.
+LAUNCHER = "launcher"
 
 
 @dataclass(frozen=True)
@@ -128,6 +131,20 @@ FLAGS: Tuple[Flag, ...] = (
     Flag(("-w", "--worktree"), OPTIONAL),
 )
 
+# The clauder option that loads the llm-kit relay channel (lib/relay_option.py).
+RELAY_FLAG = "--relay"
+
+# Options claude accepts but leaves out of `claude --help`, plus clauder's own.
+# Kept apart from FLAGS because tests/relaunch-kit/test_claude_args.py compares
+# FLAGS, alias by alias, with the live help: a hidden entry is either absent from
+# that help by design or not claude's at all. The lexer reads both tables.
+HIDDEN_FLAGS: Tuple[Flag, ...] = (
+    # `<servers...>` in claude's own registration; relay_option.py passes it
+    # `server:relay`. Present in the 2.1.318 binary, absent from its help.
+    Flag(("--dangerously-load-development-channels",), VARIADIC),
+    Flag((RELAY_FLAG,), NONE, LAUNCHER),
+)
+
 # Subcommand names and aliases from the `Commands:` section of `claude --help`,
 # plus Commander's implicit `help`.
 SUBCOMMANDS = frozenset({
@@ -136,7 +153,7 @@ SUBCOMMANDS = frozenset({
     "respawn", "rm", "setup-token", "stop", "ultrareview", "update", "upgrade",
 })
 
-_BY_NAME = {name: flag for flag in FLAGS for name in flag.names}
+_BY_NAME = {name: flag for flag in FLAGS + HIDDEN_FLAGS for name in flag.names}
 _LONG_WITH_VALUE = re.compile(r"^--[^=]+=")
 
 
@@ -152,6 +169,11 @@ class Parsed:
     carried: Tuple[str, ...]
     # The positional arguments (the prompt), for the record.
     operands: Tuple[str, ...]
+    # Indexes in the argv given to parse() of the launcher options (`--relay`) met
+    # before parsing stopped. They are not in `carried`; strip_launcher() removes them.
+    launcher_positions: Tuple[int, ...] = ()
+    # Index of the `--` that ended option parsing, if it was met.
+    terminator_position: Optional[int] = None
 
 
 def maybe_option(token: str) -> bool:
@@ -172,9 +194,17 @@ def parse(argv: List[str]) -> Parsed:
     items: List[_Item] = []
     operands: List[str] = []
     active: Optional[_Item] = None  # the variadic option still collecting values
+    launcher: List[int] = []
+    terminator: List[int] = []
+    taken = 0  # raw argv tokens consumed so far; the token just taken sits at taken - 1
+
+    def take() -> str:
+        nonlocal taken
+        taken += 1
+        return queue.popleft()
 
     def pass_through(reason: str) -> Parsed:
-        return Parsed(reason, (), tuple(operands))
+        return Parsed(reason, (), tuple(operands), tuple(launcher), (terminator or [None])[0])
 
     def note_operand(token: str) -> Optional[Parsed]:
         if not operands and token in SUBCOMMANDS:
@@ -184,8 +214,9 @@ def parse(argv: List[str]) -> Parsed:
         return None
 
     while queue:
-        token = queue.popleft()
+        token = take()
         if token == "--":
+            terminator.append(taken - 1)
             rest = list(queue)
             queue.clear()
             for operand in rest:
@@ -204,10 +235,13 @@ def parse(argv: List[str]) -> Parsed:
                 if flag.arity in (REQUIRED, VARIADIC):
                     if not queue:
                         raise ArgsError("option '%s' argument missing" % token)
-                    tokens.append(queue.popleft())
+                    tokens.append(take())
                 elif flag.arity == OPTIONAL:
                     if queue and not maybe_option(queue[0]):
-                        tokens.append(queue.popleft())
+                        tokens.append(take())
+                if flag.role == LAUNCHER:
+                    launcher.append(taken - 1)
+                    continue
                 item = _Item(flag, tokens)
                 items.append(item)
                 if flag.role == MODE:
@@ -223,6 +257,7 @@ def parse(argv: List[str]) -> Parsed:
                     if flag.role == MODE:
                         return pass_through("-" + token[1])
                     queue.appendleft("-" + token[2:])
+                    taken -= 1  # the rest of this token is read again, not a new raw token
                 else:
                     # The rest of the token is this flag's value.
                     items.append(_Item(flag, [token]))
@@ -247,7 +282,28 @@ def parse(argv: List[str]) -> Parsed:
             return done
 
     carried = tuple(tok for item in items if item.flag.role != SELECTOR for tok in item.tokens)
-    return Parsed(None, carried, tuple(operands))
+    return Parsed(None, carried, tuple(operands), tuple(launcher), (terminator or [None])[0])
+
+
+def launch_argv(argv: List[str], parsed: Parsed, extra: Tuple[str, ...]) -> List[str]:
+    """`argv` without its launcher options, with the flags `extra` added.
+
+    `extra` goes before the `--` that ends option parsing, else at the end, so
+    claude reads it as options and a variadic flag of `extra` cannot take a
+    prompt that follows it. `parsed` is parse(argv).
+    """
+    drop = set(parsed.launcher_positions)
+    out: List[str] = []
+    inserted = False
+    for index, token in enumerate(argv):
+        if index == parsed.terminator_position:
+            out.extend(extra)
+            inserted = True
+        if index not in drop:
+            out.append(token)
+    if not inserted:
+        out.extend(extra)
+    return out
 
 
 def with_request(carried: Tuple[str, ...], *, resume_id: Optional[str], prompt: Optional[str]) -> List[str]:

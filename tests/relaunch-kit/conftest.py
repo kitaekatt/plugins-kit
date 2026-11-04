@@ -27,6 +27,7 @@ _SCRUBBED = (
     "RELAUNCH_KIT_TOKEN", "RELAUNCH_KIT_DIR", "RELAUNCH_KIT_CLAUDE", "RELAUNCH_KIT_SHIM",
     "CLAUDE_PLUGIN_TEST", "CLAUDE_PLUGIN_TEST_MARKETPLACE", "CLAUDE_PLUGIN_TEST_DIRS",
     "CLAUDE_BOOTSTRAP_DATA_ROOT", "BOOTSTRAP_PYTHON", "BOOTSTRAP_PROJECT_PYTHON",
+    "LLM_KIT_CHANNEL_SCRIPT",
 )
 
 posix_only = pytest.mark.skipif(os.name == "nt", reason="needs a POSIX shell and executable stubs")
@@ -69,6 +70,16 @@ class FakeClaude:
         if not path.exists():
             return []
         return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+    def install_llm_kit(self, version: str = "0.17.0", *, channel: bool = True) -> Path:
+        """A fake cached llm-kit under this launch's HOME; `channel` False models a release without it."""
+        root = self.root / ".claude" / "plugins" / "cache" / "plugins-kit" / "llm-kit" / version
+        root.mkdir(parents=True)
+        if channel:
+            (root / "channel").mkdir()
+            (root / "channel" / "relay_channel.py").write_text("# fake channel\n", encoding="utf-8")
+            (root / "channel" / "mcp.json").write_text("{}\n", encoding="utf-8")
+        return root
 
     def rendezvous(self) -> Path:
         return self.data / "plugins-kit" / "relaunch-kit" / "relaunch"
