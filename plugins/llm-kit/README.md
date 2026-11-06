@@ -161,6 +161,7 @@ opinions. The long-form documents live in `references/`:
 | skill | `llm-kit:background-pipeline` | `skills/background-pipeline/` |
 | skill | `llm-kit:execute-work-unit` | `skills/execute-work-unit/` |
 | skill | `llm-kit:workflow-pipeline` | `skills/workflow-pipeline/` |
+| skill | `llm-kit:direct` | `skills/direct/` |
 | agent | `llm-kit:pipeline-worker` | `agents/pipeline-worker.md` |
 | workflow | `llm-kit:run-ready-wave` | `workflows/run-ready-wave.js` |
 

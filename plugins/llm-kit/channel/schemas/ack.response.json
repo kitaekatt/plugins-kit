@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "relay-protocol/1/ack.response.json",
+  "title": "ack result",
+  "description": "Acknowledge one delivered message after pushing it into the session. Response result (unknown fields allowed).",
+  "type": "object",
+  "properties": {
+    "message_id": {
+      "$ref": "#/$defs/message_id"
+    },
+    "state": {
+      "$ref": "#/$defs/mailbox_state"
+    }
+  },
+  "required": [
+    "message_id",
+    "state"
+  ],
+  "additionalProperties": true,
+  "examples": [
+    {
+      "message_id": "msg_01JBX3V9Q8K2M4N6P7R8S9T0VW",
+      "state": "acked"
+    }
+  ]
+}

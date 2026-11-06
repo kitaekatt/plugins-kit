@@ -4,7 +4,8 @@ Run it through a stub executable (see conftest.py). Environment:
   FAKE_CLAUDE_STATE   directory holding calls.jsonl and a call counter
   FAKE_CLAUDE_SCRIPT  path of a JSON list; entry N drives call N
 
-Every call appends {argv, cwd, token, dir, shim} to calls.jsonl. A script entry
+Every call appends {argv, cwd, token, dir, shim, relay_env} to calls.jsonl
+(relay_env holds BOOTSTRAP_PYTHON and LLM_KIT_CHANNEL_SCRIPT, null when unset). A script entry
 may hold:
   sleep    seconds to wait before acting
   request  object merged over the default token file and written to
@@ -36,6 +37,7 @@ record = {
     "token": os.environ.get("RELAUNCH_KIT_TOKEN"),
     "dir": os.environ.get("RELAUNCH_KIT_DIR"),
     "shim": os.environ.get("RELAUNCH_KIT_SHIM"),
+    "relay_env": {k: os.environ.get(k) for k in ("BOOTSTRAP_PYTHON", "LLM_KIT_CHANNEL_SCRIPT")},
 }
 with open(os.path.join(state, "calls.jsonl"), "a") as handle:
     handle.write(json.dumps(record) + "\n")

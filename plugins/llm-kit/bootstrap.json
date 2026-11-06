@@ -8,7 +8,7 @@
   ],
   "shared_lib_imports": ["bootstrap_lib"],
   "venv": {
-    "check_imports": ["yaml", "openai", "psutil", "fastapi", "uvicorn", "httpx", "llm_kit"]
+    "check_imports": ["yaml", "openai", "psutil", "fastapi", "uvicorn", "httpx", "mcp", "llm_kit"]
   },
   "script": {
     "path": "custom_bootstrap.py",

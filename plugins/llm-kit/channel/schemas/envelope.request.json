@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "relay-protocol/1/envelope.request.json",
+  "title": "Request envelope",
+  "description": "POST /v1/<verb> body. params is the verb's <verb>.request schema.",
+  "type": "object",
+  "properties": {
+    "protocol": {
+      "$ref": "#/$defs/protocol"
+    },
+    "id": {
+      "$ref": "#/$defs/request_id"
+    },
+    "verb": {
+      "$ref": "#/$defs/verb"
+    },
+    "origin": {
+      "$ref": "#/$defs/identity"
+    },
+    "params": {
+      "type": "object",
+      "description": "The verb's request schema (<verb>.request.json)."
+    },
+    "signed": {
+      "$ref": "#/$defs/signed"
+    }
+  },
+  "required": [
+    "protocol",
+    "id",
+    "verb",
+    "origin",
+    "params"
+  ],
+  "additionalProperties": false,
+  "examples": [
+    {
+      "protocol": "relay-protocol/1",
+      "id": "req-0001",
+      "verb": "send_message",
+      "origin": "direct:m5pro/claude/b91e0c44-2f8a-4d3b-8c6e-71a5d0e3f2a9",
+      "params": {
+        "to": "m5pro/claude/7f3c2a10-5b7e-4c1d-9a8e-0d6f4b2c9e11",
+        "kind": "question",
+        "body": "Are the relay tests green?",
+        "id": "msg_01JBX3V9Q8K2M4N6P7R8S9T0VW",
+        "expires_in_s": 3600,
+        "task": "plugins-kit/harness-messaging"
+      }
+    },
+    {
+      "protocol": "relay-protocol/1",
+      "id": "req-0002",
+      "verb": "poll",
+      "origin": "channel:m5pro/claude/7f3c2a10-5b7e-4c1d-9a8e-0d6f4b2c9e11",
+      "params": {
+        "registration_id": "reg_01JBX3S0A1B2C3D4E5F6G7H8J9",
+        "session_id": "7f3c2a10-5b7e-4c1d-9a8e-0d6f4b2c9e11",
+        "channel_nonce": "c2hhbm5lbC1ub25jZS0wMDAx",
+        "wait_s": 25
+      }
+    },
+    {
+      "protocol": "relay-protocol/1",
+      "id": "req-0003",
+      "verb": "status",
+      "origin": "operator:m5pro",
+      "params": {},
+      "signed": {
+        "audience": "m5pro",
+        "issued_at": 1793664000.0,
+        "not_after": 1793664030.0,
+        "nonce": "n-01JBX3",
+        "key_id": "enclave:owner-1",
+        "alg": "es256",
+        "signature": "c2lnbmF0dXJlLXBsYWNlaG9sZGVy"
+      }
+    }
+  ]
+}

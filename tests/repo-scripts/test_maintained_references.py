@@ -58,7 +58,7 @@ _THIS_FILE = "tests/repo-scripts/test_maintained_references.py"
 # that this file does not match its own patterns.
 OLD_PLUGINS = ("llm-scripting-" + "kit", "content-pipeline-" + "kit", "job-" + "kit")
 MARKETPLACE = "plugins-" + "kit"
-#: The registered skills, agent and workflow of the final llm-kit.
+#: The registered skills, agent and workflow of llm-kit.
 REGISTERED_NAMES = (
     "openrouter-account",
     "content-pipeline-domain",
@@ -67,6 +67,7 @@ REGISTERED_NAMES = (
     "workflow-pipeline",
     "pipeline-worker",
     "run-ready-wave",
+    "direct",
 )
 
 _BOUND_L = r"(?<![\w-])"
@@ -195,7 +196,7 @@ def test_allowlist_owners_are_migration_increments() -> None:
 
 
 def test_registered_names_match_the_final_llm_kit_registrations() -> None:
-    """The seven scanned names are exactly llm-kit's registrations.
+    """The scanned names are exactly llm-kit's registrations.
 
     A registration added to or removed from llm-kit without updating
     REGISTERED_NAMES would let its old qualified spelling go unscanned.

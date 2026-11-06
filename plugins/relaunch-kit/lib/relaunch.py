@@ -6,6 +6,9 @@ directory (RELAUNCH_KIT_DIR) to claude, runs it, and after it exits looks for
 claude again in the same terminal. Token file schema v1 is the interface to the
 plugin's hooks module (plugins/relaunch-kit/hooks/register.ts).
 
+`clauder --relay` (lib/relay_option.py) adds the llm-kit relay channel flags to
+the launch and to every relaunch.
+
 Stdlib only; written for Python 3.8 and later, because a launcher shim may fall
 back to whatever python is on PATH.
 """
@@ -13,6 +16,7 @@ back to whatever python is on PATH.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import datetime
 import json
 import os
@@ -26,6 +30,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, Iterator, List, Mapping, Optional, Sequence
 
 import claude_args
+import relay_option
 
 TOKEN_ENV = "RELAUNCH_KIT_TOKEN"
 DIR_ENV = "RELAUNCH_KIT_DIR"
@@ -531,7 +536,7 @@ def main(
     except LaunchError as exc:
         _say("clauder: %s" % exc)
         return 2
-    except claude_args.ArgsError as exc:
+    except (claude_args.ArgsError, relay_option.RelayError) as exc:
         _say("clauder: %s" % exc)
         return 2
 
@@ -552,14 +557,29 @@ def _main(argv, env, interactive, exec_fn, windows, raw_command_line) -> int:
 
     parsed: Optional[claude_args.Parsed] = None
     reason: Optional[str] = None
+    wants_relay = False
     if not interactive:
         reason = "stdin or stdout is not a terminal"
+        wants_relay = claude_args.RELAY_FLAG in argv
     else:
         parsed = claude_args.parse(argv)
         reason = parsed.pass_through
+        wants_relay = bool(parsed.launcher_positions)
     if reason is not None:
+        if wants_relay:
+            raise LaunchError(
+                "%s loads a channel into an interactive session, and this run is not one (%s)"
+                % (claude_args.RELAY_FLAG, reason)
+            )
         return _pass_through(target, kind, argv, env, exec_fn, windows)
     assert parsed is not None
+    if wants_relay:
+        # Resolved once, like the target: a relaunch carries the same flags and variables.
+        relay = relay_option.relay_launch(env)
+        argv = claude_args.launch_argv(argv, parsed, relay.args)
+        parsed = dataclasses.replace(parsed, carried=parsed.carried + relay.args)
+        env = dict(env)
+        env.update(relay.env)
     return run_loop(target, kind, argv, parsed, env, windows=windows)
 
 

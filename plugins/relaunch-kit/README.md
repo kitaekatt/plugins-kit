@@ -61,6 +61,52 @@ A loop that restarts in under 20 seconds four times in a row stops with a
 message that names the cause. Set `RELAUNCH_KIT_CLAUDE` to an absolute path to
 run a specific `claude` binary.
 
+## `clauder --relay`
+
+`clauder --relay [claude flags]` starts the session with the llm-kit relay
+channel loaded, so messages pushed through the relay reach it and it can reply
+without a permission dialog. The option is clauder's own: it is removed from the
+command line before `claude` sees it, and every relaunch adds the same flags
+and variables again. It is not in `claude --help`.
+
+It adds these to the `claude` command line:
+
+```
+--mcp-config <llm-kit>/channel/mcp.json
+--dangerously-load-development-channels server:relay
+--allowedTools mcp__relay__reply
+```
+
+and these to its environment, which `mcp.json` expands: `BOOTSTRAP_PYTHON` (your
+value when set, else the interpreter running `clauder`) and
+`LLM_KIT_CHANNEL_SCRIPT` (the absolute path of `relay_channel.py`).
+
+This needs the `llm-kit` plugin and is refused without it: `clauder` exits with
+status 2 and starts nothing, and the message tells you whether llm-kit is not
+installed (`claude plugin install llm-kit@plugins-kit`) or older than llm-kit
+0.17.0, the first version to ship the channel (`claude plugin update
+llm-kit@plugins-kit`). relaunch-kit does not
+depend on llm-kit; only this option does. `clauder` finds llm-kit in this order:
+
+1. `LLM_KIT_CHANNEL_SCRIPT`, when you set it to an absolute path of a
+   `relay_channel.py` (its `mcp.json` is read beside it).
+2. Under `claudx`, the llm-kit working copy the session loaded
+   (`CLAUDE_PLUGIN_TEST_DIRS`). The plugin cache is the installed release there,
+   so it is never used; start `claudx --all` to load llm-kit.
+3. The newest llm-kit version in `~/.claude/plugins/cache/plugins-kit/llm-kit/`.
+
+`--relay` needs an interactive session. It is refused, not passed on, with
+`-p`, `--bg` and the other modes listed above, with a claude subcommand, and
+when stdin or stdout is not a terminal.
+
+Claude Code asks you to confirm loading a development channel on every launch,
+including each relaunch. A relaunch under `--relay` therefore waits at that
+dialog until it is answered.
+
+The restart skill (`skills/restart/SKILL.md`, technique `relay_launch`) carries
+the same facts for the session, so it can explain a refusal or a waiting
+relaunch.
+
 ## `/restart` and `/restart hand-off`
 
 `/restart` stops new work, lets running background jobs finish, and checks that

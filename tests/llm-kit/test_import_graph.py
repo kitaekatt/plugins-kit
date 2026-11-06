@@ -1,7 +1,7 @@
 """Import-direction guard for the llm-kit component graph (check C2).
 
 The signed architecture (docs/reference/llm-kit-architecture.md, "Exact
-dependency graph") is the complete inter-component import set for the 17 final
+dependency graph") is the complete inter-component import set for the 18 final
 components. This module parses every ``.py`` file under
 ``packages/katsoft-llm-kit/src/llm_kit`` and reports each import whose
 source component -> target component pair is not in that set.
@@ -59,7 +59,11 @@ ALLOWED: dict[str, frozenset[str]] = {
     "cli": frozenset({
         "schema", "completion", "registry", "adapters", "dispatch", "jobs",
         "pipeline.runtime", "pipeline.execution", "pipeline.analysis",
-        "frontdoor", "scaffold", "graph",
+        "frontdoor", "scaffold", "graph", "relay",
+    }),
+    "relay": frozenset({
+        "completion", "registry", "adapters", "dispatch", "execution", "storage",
+        "jobs", "schema",
     }),
     "graph": frozenset({
         "completion", "dispatch", "registry", "schema", "pipeline.artifacts",
@@ -405,8 +409,8 @@ def test_encoded_graph_equals_the_architecture_document():
     assert _documented_graph() == ALLOWED
 
 
-def test_there_are_seventeen_components():
-    assert len(COMPONENTS) == 17
+def test_there_are_eighteen_components():
+    assert len(COMPONENTS) == 18
     for targets in ALLOWED.values():
         assert targets <= COMPONENTS
 
@@ -677,3 +681,27 @@ def test_any_component_may_import_the_runtime_seam(tmp_path):
 def test_runtime_support_module_rules_can_fail(tmp_path, files, rule):
     found = scan(_tree(tmp_path, files))
     assert rule in {v.rule for v in found}, report(found)
+
+
+@pytest.mark.parametrize("target", ["frontdoor", "graph", "pipeline/runtime", "pipeline/execution", "scaffold"])
+def test_relay_importing_a_component_outside_its_edges_is_caught(tmp_path, target):
+    dotted = target.replace("/", ".")
+    root = _tree(tmp_path, {
+        "pipeline/__init__.py": "",
+        f"{target}/__init__.py": "",
+        "relay/mod.py": f"from llm_kit.{dotted} import x\n",
+    })
+    found = scan(root)
+    assert [(v.rule, v.source, v.target) for v in found] == [
+        ("edge", "relay", dotted)], report(found)
+
+
+def test_relay_edges_are_allowed_and_only_the_cli_may_import_the_relay(tmp_path):
+    allowed = ["completion", "registry", "adapters", "dispatch", "execution", "storage", "jobs", "schema"]
+    files = {f"{c}/__init__.py": "" for c in allowed}
+    files["relay/mod.py"] = "".join(f"from llm_kit.{c} import x\n" for c in allowed)
+    files["cli/mod.py"] = "from llm_kit.relay import y\n"
+    assert scan(_tree(tmp_path, files)) == []
+    (tmp_path / "bad").mkdir()
+    bad = _tree(tmp_path / "bad", {"relay/__init__.py": "", "frontdoor/mod.py": "from llm_kit.relay import y\n"})
+    assert [(v.rule, v.source, v.target) for v in scan(bad)] == [("edge", "frontdoor", "relay")]

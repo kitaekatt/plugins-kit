@@ -16,7 +16,7 @@ import type {
 } from '../types/index'
 
 const PLUGIN = 'relaunch-kit'
-const WRITER = 'relaunch-kit 0.1.0'
+const WRITER = 'relaunch-kit 0.2.0'
 const TOOL_NAME = 'mcp__relaunch-kit__request_restart'
 const COUNTDOWN_MS = 3000
 const EXIT_DELAY_MS = 300

@@ -25,12 +25,13 @@ design that fixes the layout below is `docs/reference/llm-kit-architecture.md`.
 
 ## Layers, imports and release
 
-`llm_kit` has 16 import components. The root `llm_kit` and the grouping package
+`llm_kit` has 18 import components. The root `llm_kit` and the grouping package
 `llm_kit.pipeline` hold no behavior and re-export nothing: import the component
 you need, and take a public symbol from the component that owns it.
 
 ```
-Layer 6  cli
+Layer 7  cli
+Layer 6  graph, relay
 Layer 5  pipeline.execution
 Layer 4  jobs, pipeline.runtime
 Layer 3  dispatch, frontdoor
@@ -66,15 +67,15 @@ The plugin has its own independent version and consumes the released package.
 The library is stdlib-only on its base
 path; third-party packages arrive as extras (`config` and `jobs` and `pipeline`
 need PyYAML, `sdk` the OpenAI SDK, `local` psutil, `frontdoor` FastAPI, Uvicorn
-and httpx) and are imported at the call site, so a missing requested capability
+and httpx, `relay` the MCP SDK, Uvicorn, httpx, psutil, the OpenAI SDK and PyYAML) and are imported at the call site, so a missing requested capability
 refuses at the call rather than at import. The library source and source tests
 belong to the [katsoft-libs source tree](https://github.com/kitaekatt/katsoft-libs/tree/dev/packages/katsoft-llm-kit/src/llm_kit).
 Change library behavior there. This plugin holds no library source and publishes no shared lib. A consumer
 venv installs the package with the extras it reaches (`katsoft-llm-kit[<extras>]>=A.B,<N` in
 its `pyproject.toml`). The plugin's own venv does the same: its `pyproject.toml` is a
-non-package project that requires the released `katsoft-llm-kit[<every extra>]>=1.10,<2` and
+non-package project that requires the released `katsoft-llm-kit[<every extra>]>=1.11,<2` and
 `katsoft-contracts>=1.0,<2`, so the extras flow from that distribution and `bootstrap.json`
-names none. The floor is 1.10 because a consent scope overrides the global defaults from 1.10.0; the per-model output-cap surface
+names none. The floor is 1.11 because the `relay` extra and the `llm-kit relay` command group (which the `/direct` skill and the channel server call from the plugin venv) first shipped in 1.11.0; a consent scope overrides the global defaults from 1.10.0; the per-model output-cap surface
 first shipped in 1.7.0 and the job supervisor in 1.6.0. Codex in package mode, the project model file, `models catalog`, protocol 2 of
 `completion complete`, local selection overrides and the neutral user paths shipped in 1.3.0;
 `custom_bootstrap.py` reads `llm-kit account status --json`, which first shipped in 1.2.0;

@@ -284,6 +284,60 @@ citations.
   Verified by: no automated test (owner config); floor-propagation tests
   exercise the shape indirectly.
 
+## LLM front-door failover (task llm-frontdoor-failover)
+
+The LLM front door (`llm_kit.frontdoor`, router on port 4000) runs on one
+host. Every client request goes through it first, so when that host is down a
+client on another machine also loses its own fallback tiers (its local
+endpoint and its cloud tiers). These requirements amend two statements in
+`declaration-format-design.md`: "a declaration names a group as ONE id, and
+its in-group failover stays inside llm-scripting-kit" (around line 92) and
+"The front door keeps its own HTTP failover inside llm-scripting-kit"
+(around line 296). R39 changes where group expansion happens; R40 and R41
+change what the client does when the front door or a member endpoint is
+not usable. The design doc is not edited.
+
+Code anchors: group membership is the `routing` block (`group`, `order`,
+`max_parallel`) in `llm_kit/registry/model_endpoints.py`; the router-side walk
+is `llm_kit/frontdoor/server.py`; busy classification is
+`classify_backpressure` in `llm_kit/completion/halt.py`. No front-door
+failover test exists in the library test tree, so each "Verified by" below is
+left to the implementing task.
+
+- **R39.** A client expands a front-door group id (for example `qwen38`)
+  into that group's member endpoints, ordered by their `routing.order`, from
+  its own endpoint registry, and can send a unit to a member without the
+  router being reachable.
+  Source: owner ruling 2026-11-03 (task llm-frontdoor-failover); owner
+  preference for client-side ordered-endpoint retry in plugins-kit.
+  Implemented by: task llm-frontdoor-failover (no migration step).
+  Verified by: test to be named by the implementing task; it takes the
+  router down and shows the unit completes on a member endpoint.
+- **R40.** A transport error on one endpoint (connection refused, timeout,
+  or DNS failure) moves the unit to the next ordered group member, and when
+  the group is exhausted to the next entry of the declaration, instead of
+  failing the unit.
+  Source: owner ruling 2026-11-03 (task llm-frontdoor-failover).
+  Implemented by: task llm-frontdoor-failover (no migration step).
+  Verified by: test to be named by the implementing task; it refuses the
+  connection on the first endpoint and shows the second is called.
+- **R41.** An endpoint that reports busy (all slots taken, a 429 or 503
+  that `classify_backpressure` marks as backpressure) is skipped like an
+  unavailable endpoint: the unit moves to the next endpoint without waiting
+  on the busy one and without recording a quota halt.
+  Source: owner ruling 2026-11-03 (task llm-frontdoor-failover).
+  Implemented by: task llm-frontdoor-failover (no migration step).
+  Verified by: test to be named by the implementing task; it returns a busy
+  response from the first endpoint and shows the second is called.
+- **R42.** Open question, recorded and not answered: clients that do not use
+  llm-kit (anything that calls port 4000 directly) cannot apply R39-R41. The
+  owner decides whether they stay router-only, gain a second router, or
+  are moved onto llm-kit.
+  Source: owner ruling 2026-11-03 (task llm-frontdoor-failover).
+  Implemented by: task llm-frontdoor-failover (no migration step);
+  blocked on the owner's decision.
+  Verified by: no test; the decision is recorded in this section when made.
+
 ## Done means
 
 Every step 0-12 of the migration table is published (each with its named

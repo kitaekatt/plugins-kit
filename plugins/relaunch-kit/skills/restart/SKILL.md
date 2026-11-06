@@ -22,6 +22,7 @@ technique_skill:
       - restarting the client (bootstrap changes, plugin updates) and resuming this session
       - handing a task to a fresh session through the task-kit:task hand-off steps
       - reporting each step skipped because the session was not started under clauder
+      - what `clauder --relay` adds to a launch, and how a session reports a relay launch that failed or stalls
     excludes:
       - writing a hand-off document
       - finishing or publishing the current task
@@ -114,4 +115,43 @@ technique_skill:
         - Writing a hand-off document unasked. The baton is the only hand-off text.
         - Calling request_restart to be helpful when a checklist item is YES. Withholding the call is the veto, and the reply names the item.
         - Treating "armed" as proof of a restart. The exit follows only when this turn ends with a normal answer; the launcher then starts the next session.
+    - id: relay_launch
+      name: Account for a clauder --relay launch
+      keywords: [relay, clauder --relay, channel, llm-kit, development channels, mcp-config, relaunch dialog]
+      goal: Tell the user what `clauder --relay` did or refused, and why a relaunched session may wait.
+      steps:
+        - n: 1
+          action: >-
+            Know what `clauder --relay` adds. clauder removes the option before
+            claude sees it and adds it again on every relaunch: the claude flags
+            `--mcp-config <llm-kit>/channel/mcp.json`,
+            `--dangerously-load-development-channels server:relay` and
+            `--allowedTools mcp__relay__reply`, and the variables
+            `BOOTSTRAP_PYTHON` (the caller's value, else clauder's interpreter)
+            and `LLM_KIT_CHANNEL_SCRIPT` (the absolute path of
+            `relay_channel.py`), which `mcp.json` expands. A restart or
+            hand-off from such a session keeps all of it; do not add or remove
+            these flags yourself.
+        - n: 2
+          action: >-
+            When the user reports that `clauder --relay` printed
+            `clauder: ...` and exited with status 2, read the message and pass
+            it on. "none is installed" means `claude plugin install
+            llm-kit@plugins-kit`; "predates the relay channel" means the
+            installed llm-kit is older than 0.17.0, the first version to ship
+            the channel, so run `claude plugin update llm-kit@plugins-kit`. clauder finds llm-kit in this
+            order: `LLM_KIT_CHANNEL_SCRIPT`; under claudx the llm-kit directory
+            in `CLAUDE_PLUGIN_TEST_DIRS` (never the cache; the fix is
+            `claudx --all`); else the newest version in
+            `~/.claude/plugins/cache/plugins-kit/llm-kit/`. `--relay` is also
+            refused with `-p`, `--bg` and the other one-shot modes, a claude
+            subcommand, and a stdin or stdout that is not a terminal.
+        - n: 3
+          action: >-
+            Before a restart or hand-off from a relay session, say in the
+            ending line that the relaunched claude shows the development-channels
+            dialog (shown on every launch) and waits there until someone
+            confirms it, so an unattended relaunch does not proceed on its own.
+      gotchas:
+        - Substituting another llm-kit, or launching without the relay, when the refusal names a missing or old llm-kit. The refusal is the answer.
 ```
