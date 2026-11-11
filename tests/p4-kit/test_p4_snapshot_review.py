@@ -367,3 +367,53 @@ def test_the_script_is_stdlib_only():
     source = Path(sr.__file__).read_text(encoding="utf-8")
     assert "bootstrap_lib" not in source
     assert "from bootstrap_guard import data_dir" in source
+
+
+# ------------------------------------------------- long paths (Windows MAX_PATH)
+
+
+def test_extended_path_forms():
+    # Pure string logic: runs identically on every host.
+    ext = "\\\\?\\"
+    assert sr._extended_path("C:\\a\\b") == ext + "C:\\a\\b"
+    assert sr._extended_path("C:/a/b") == ext + "C:\\a\\b"
+    assert sr._extended_path("\\\\server\\share\\a") == ext + "UNC\\server\\share\\a"
+    # Already-prefixed forms are not prefixed twice.
+    assert sr._extended_path(ext + "C:\\a") == ext + "C:\\a"
+    assert sr._extended_path(ext + "UNC\\s\\sh\\a") == ext + "UNC\\s\\sh\\a"
+    assert sr._extended_path("\\\\.\\C:\\a") == "\\\\.\\C:\\a"
+
+
+def _record_rmtree(monkeypatch):
+    seen = []
+    monkeypatch.setattr(sr.shutil, "rmtree", lambda path, **kw: seen.append(path))
+    return seen
+
+
+def test_rmtree_hands_shutil_the_extended_path_on_windows(tmp_path, monkeypatch):
+    monkeypatch.setattr(sr, "_WINDOWS", True)
+    seen = _record_rmtree(monkeypatch)
+    sr._rmtree(tmp_path / "tree")
+    assert len(seen) == 1
+    assert isinstance(seen[0], str) and seen[0].startswith("\\\\?\\")
+
+
+def test_rmtree_leaves_the_path_alone_off_windows(tmp_path, monkeypatch):
+    monkeypatch.setattr(sr, "_WINDOWS", False)
+    seen = _record_rmtree(monkeypatch)
+    sr._rmtree(tmp_path / "tree")
+    assert seen == [tmp_path / "tree"]
+
+
+def test_drop_removes_a_tree_holding_a_very_long_path(p4):
+    p4.write("//depot/a.py", b"x\n")
+    result = sr.freeze(CL)
+    bundle = Path(result["bundle_dir"])
+    deep = bundle / "tree"
+    for part in ("d" * 60, "e" * 60, "f" * 60, "g" * 60):
+        deep = deep / part
+    deep.mkdir(parents=True)
+    (deep / ("w" * 180 + ".webp")).write_bytes(b"x")
+    assert len(str(deep)) > 260
+    sr.drop(result["record"], tree_only=True)
+    assert not (bundle / "tree").exists() and (bundle / "freeze.json").exists()

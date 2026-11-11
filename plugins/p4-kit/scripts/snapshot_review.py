@@ -54,6 +54,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import ntpath
 import os
 import re
 import shutil
@@ -312,20 +313,45 @@ def load_record(arg: str) -> tuple[dict, Path]:
     return record, path.parent
 
 
+# Windows refuses a path over MAX_PATH (260) unless it carries the extended-length
+# prefix. `shutil.rmtree` builds every child path from the root it is given, so
+# prefixing the root once covers the whole tree. Module-level so a test can run
+# the Windows branch on any host without patching `os.name`.
+_WINDOWS = os.name == "nt"
+_EXTENDED_PREFIX = "\\\\?\\"
+_EXTENDED_UNC_PREFIX = "\\\\?\\UNC\\"
+
+
+def _extended_path(path: str) -> str:
+    r"""Windows extended-length form of `path` (pure string logic, any host).
+
+    `C:\a` -> `\\?\C:\a`; `\\server\share\a` -> `\\?\UNC\server\share\a`.
+    A path already carrying a `\\?\` or `\\.\` prefix is returned unchanged.
+    """
+    path = path.replace("/", "\\")
+    if path.startswith((_EXTENDED_PREFIX, "\\\\.\\")):
+        return path
+    full = ntpath.abspath(path)
+    if full.startswith("\\\\"):
+        return _EXTENDED_UNC_PREFIX + full[2:]
+    return _EXTENDED_PREFIX + full
+
+
 def _rmtree(path: Path) -> None:
     """Remove a tree, clearing the read-only bits `p4 print -o` leaves; failures raise."""
 
-    def _onexc(func, target, exc):  # noqa: ANN001
+    def _onexc(func, p, exc):  # noqa: ANN001
         if isinstance(exc, PermissionError):
-            os.chmod(target, stat.S_IWRITE | stat.S_IREAD)
-            func(target)
+            os.chmod(p, stat.S_IWRITE | stat.S_IREAD)
+            func(p)
             return
         raise exc
 
+    target = _extended_path(str(path)) if _WINDOWS else path
     if sys.version_info >= (3, 12):
-        shutil.rmtree(path, onexc=_onexc)
+        shutil.rmtree(target, onexc=_onexc)
     else:  # pragma: no cover - the repo pins 3.12
-        shutil.rmtree(path, onerror=lambda f, p, e: _onexc(f, p, e[1]))
+        shutil.rmtree(target, onerror=lambda f, p, e: _onexc(f, p, e[1]))
 
 
 # ------------------------------------------------------------------ commands
