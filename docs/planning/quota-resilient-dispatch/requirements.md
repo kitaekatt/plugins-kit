@@ -301,8 +301,8 @@ Code anchors: group membership is the `routing` block (`group`, `order`,
 `max_parallel`) in `llm_kit/registry/model_endpoints.py`; the router-side walk
 is `llm_kit/frontdoor/server.py`; busy classification is
 `classify_backpressure` in `llm_kit/completion/halt.py`. No front-door
-failover test exists in the library test tree, so each "Verified by" below is
-left to the implementing task.
+failover test existed when these requirements were written; the tests are
+named under each requirement below.
 
 - **R39.** A client expands a front-door group id (for example `qwen38`)
   into that group's member endpoints, ordered by their `routing.order`, from
@@ -310,33 +310,37 @@ left to the implementing task.
   router being reachable.
   Source: owner ruling 2026-11-03 (task llm-frontdoor-failover); owner
   preference for client-side ordered-endpoint retry in plugins-kit.
-  Implemented by: task llm-frontdoor-failover (no migration step).
-  Verified by: test to be named by the implementing task; it takes the
-  router down and shows the unit completes on a member endpoint.
+  Implemented by: katsoft-libs commit 23f5044e (katsoft-llm-kit, unreleased as of
+  2026-11-11).
+  Verified by: `tests/llm-kit/test_frontdoor_failover.py` in katsoft-libs, `test_router_down_unit_completes_on_group_member`.
 - **R40.** A transport error on one endpoint (connection refused, timeout,
   or DNS failure) moves the unit to the next ordered group member, and when
   the group is exhausted to the next entry of the declaration, instead of
   failing the unit.
   Source: owner ruling 2026-11-03 (task llm-frontdoor-failover).
-  Implemented by: task llm-frontdoor-failover (no migration step).
-  Verified by: test to be named by the implementing task; it refuses the
-  connection on the first endpoint and shows the second is called.
+  Implemented by: katsoft-libs commit 23f5044e (katsoft-llm-kit, unreleased as of
+  2026-11-11).
+  Verified by: `tests/llm-kit/test_frontdoor_failover.py` in katsoft-libs, `test_connection_refused_moves_to_next_member` and
+  `test_group_exhausted_falls_to_next_declaration_entry`.
 - **R41.** An endpoint that reports busy (all slots taken, a 429 or 503
   that `classify_backpressure` marks as backpressure) is skipped like an
   unavailable endpoint: the unit moves to the next endpoint without waiting
   on the busy one and without recording a quota halt.
   Source: owner ruling 2026-11-03 (task llm-frontdoor-failover).
-  Implemented by: task llm-frontdoor-failover (no migration step).
-  Verified by: test to be named by the implementing task; it returns a busy
-  response from the first endpoint and shows the second is called.
-- **R42.** Open question, recorded and not answered: clients that do not use
-  llm-kit (anything that calls port 4000 directly) cannot apply R39-R41. The
-  owner decides whether they stay router-only, gain a second router, or
-  are moved onto llm-kit.
-  Source: owner ruling 2026-11-03 (task llm-frontdoor-failover).
-  Implemented by: task llm-frontdoor-failover (no migration step);
-  blocked on the owner's decision.
-  Verified by: no test; the decision is recorded in this section when made.
+  Implemented by: katsoft-libs commit 23f5044e (katsoft-llm-kit, unreleased as of
+  2026-11-11).
+  Verified by: `tests/llm-kit/test_frontdoor_failover.py` in katsoft-libs, `test_busy_member_skipped_without_halt_or_wait`.
+- **R42.** Clients that do not use llm-kit cannot apply R39-R41. Owner
+  decision 2026-11-11: a search of the owner's Mac (~/Dev) found two direct
+  router callers, opencode's `frontdoor` provider (unused; removed) and the
+  local-llm-domain skill's documented raw POST (now routed through llm-kit).
+  No direct router callers remain; the router stays for OpenAI-compatible
+  tools that cannot use llm-kit. The Windows machine was not searched.
+  Source: owner ruling 2026-11-03 (task llm-frontdoor-failover); owner
+  decision 2026-11-11.
+  Implemented by: opencode-settings commit c66920a (provider removed) and
+  claude-settings commit 44f955e1 (skill routed through llm-kit).
+  Verified by: no test; the search result is recorded here.
 
 ## Done means
 
