@@ -1,37 +1,62 @@
 #!/usr/bin/env python3
-"""PreToolUse hook (matcher Bash): refuse a relay client call that no live grant covers.
+"""PreToolUse hook (matcher Bash): let an enabled session's relay client calls through, refuse the rest.
+
+Owner ruling 2026-11-11, verbatim: "so i only want to type /direct once" and
+"I don't think sending a message should show a permission prompt. I do think
+messages that are sent should be visible in harness." So once the owner has
+typed /direct in this session (userpromptsubmit/direct_enable.py), every plain
+relay client call of this plugin's launcher is ALLOWED (no permission prompt)
+and a send or an answer shows its exact text and target to the owner. A session
+where the owner never typed /direct, or ran /clear since, is refused.
 
 THIS IS A GUARDRAIL, NOT A SECURITY BOUNDARY (relay alternative A, owner ruling
-2026-11-03). It reads the Bash command string and recognises the plain forms of
-``llm-kit relay client <verb> ...`` (also inside ``bash -c '...'`` and ``$(...)``
-up to a few levels). A model that wants to get around it can: run a script that
-makes the call, abbreviate an option, build the command in a variable, call the
-relay over HTTP with the token it can read, or mint its own grant. The gate
+2026-11-03). It reads the Bash command string. A model that wants to get around
+it can write the enablement record, run a script that makes the call, or call
+the relay over HTTP with the token it can read and mint its own grant. The gate
 stops accidental model-initiated calls and gives the owner a visible refusal.
-The relay enforces the same grant independently at its own ingress.
+The relay still checks a grant at its own ingress: the gate mints one for each
+call it allows, so a relay client call that did not pass the gate is refused
+there.
 
 Behaviour
 ---------
-* A Bash command that does not invoke ``llm-kit relay client`` is ignored
-  (no output, exit 0). The hook never emits ``allow``, so the normal
-  permission flow is untouched.
-* Otherwise the call's session (``--session``, which must equal the hook
-  payload's session_id), client verb and target are extracted and sent to
-  the relay's ``grant_check`` as origin ``direct:<machine>/claude/<session_id>``.
-  grant_check never consumes a use. Not covered -> ``permissionDecision: deny``
-  with a reason telling the owner to type ``/direct <verb> <target>`` themselves.
-* Relay not running: the call is allowed through with additionalContext (the
-  client call will itself fail with "relay not running"); the gate refuses
-  nothing it cannot judge.
-* A command that mentions ``relay client`` but cannot be parsed, or uses an
-  option the gate does not know (argparse prefix abbreviations included), is
-  denied: the gate does not guess.
+* A Bash command that does not invoke ``llm-kit relay client`` is ignored (no
+  output, exit 0): the normal permission flow is untouched.
+* A command that invokes it is allowed only when ALL of these hold; otherwise
+  it is denied with the reason:
+
+  - it is one plain command: this plugin's own launcher (``bin/llm-kit``, the
+    path the skill writes) as the first word, then ``relay client <verb>``,
+    and nothing else -- no pipe, list, redirection, substitution, variable,
+    glob, wrapper (``bash -c``) or second command. Words are bare characters
+    from ``[A-Za-z0-9_./:=@%+,-]`` or single-quoted text, and ``\\'`` outside
+    quotes is a literal quote (the skill's ``'\\''`` idiom). The gate allows
+    only what it can read exactly as the shell will run it;
+  - every option is one the client defines, written in full (argparse prefix
+    abbreviations are refused), and none of ``--grant``, ``--config``,
+    ``--state-dir``, ``--env-json`` (the gate grants each call itself, against
+    the default relay) or ``--body -`` (the owner must see the text);
+  - ``--session`` is this session's id (a session acts only for itself);
+  - this session is enabled (the owner typed /direct in it);
+  - the relay mints the call's grant: ``grant_mint`` for exactly this verb and
+    target, one use, 120 s, with the typed /direct line as its audit
+    ``command``. A relay refusal (an unknown or ambiguous selector, for
+    example) denies with the relay's code.
+
+* An allowed call returns ``permissionDecision: allow`` and a
+  ``permissionDecisionReason`` naming the call. A ``send`` or ``answer`` also
+  returns a ``systemMessage`` with the exact target and text, which Claude Code
+  shows to the owner in the session.
+* Relay not running: an enabled session's plain call is allowed with
+  additionalContext; the client call then fails by itself.
+* ``--help`` or a call with no verb is left to the normal permission flow.
 * Bad hook input (not JSON, no session_id, a Bash call without a command)
   exits 2, a blocking error with the message on stderr.
 """
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import socket
@@ -46,6 +71,10 @@ _MAX_DEPTH = 3
 _PUNCT = set(";&|()<>")
 _TOOL_RE = re.compile(r"^llm[-_]kit(?:\.exe|\.cli|\.__main__)?$")
 _MENTION_RE = re.compile(r"relay\s+client")
+_BARE_RE = re.compile(r"[A-Za-z0-9_./:=@%+,-]")
+
+GRANT_TTL_S = 120
+GRANT_USES = 1
 
 #: options that take a value, per `llm-kit relay client` (cli/relay.py).
 _VALUE_OPTIONS = frozenset({
@@ -55,6 +84,13 @@ _VALUE_OPTIONS = frozenset({
     "--decision", "--input", "--reason",
 })
 _FLAG_OPTIONS = frozenset({"-h", "--help"})
+#: options the gate refuses on an allowed call, with the reason.
+_REFUSED_OPTIONS: Mapping[str, str] = {
+    "--grant": "omit --grant; the gate grants each call itself",
+    "--config": "the gate grants calls against the default relay only; omit --config",
+    "--state-dir": "the gate grants calls against the default relay only; omit --state-dir",
+    "--env-json": "the gate grants calls against the default relay only; omit --env-json",
+}
 
 
 class GateParseError(ValueError):
@@ -62,13 +98,16 @@ class GateParseError(ValueError):
 
 
 class ClientCall:
-    def __init__(self, client_verb: str, session: Optional[str], grant: Optional[str], target: Optional[str]) -> None:
+    def __init__(self, client_verb: str, session: Optional[str], target: Optional[str],
+                 options: Mapping[str, str]) -> None:
         self.client_verb = client_verb
         self.wire_verb = R.CLIENT_VERBS[client_verb]
         self.session = session
-        self.grant = grant
         self.target = target
+        self.options = dict(options)
 
+
+# -- finding relay client calls (any form) ---------------------------------------------------
 
 def _tokenize(command: str) -> list[str]:
     lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
@@ -112,11 +151,62 @@ def find_client_args(command: str, depth: int = 0) -> list[list[str]]:
     return found
 
 
+# -- the one form the gate allows ------------------------------------------------------------
+
+def plain_words(command: str) -> Optional[list[str]]:
+    """The command's words when it is plain (see the module docstring), else None.
+
+    Each word is bare characters from ``[A-Za-z0-9_./:=@%+,-]``, single-quoted
+    text, or ``\\<char>`` (a literal character), concatenated. A word may not
+    start with ``=`` (zsh expands ``=name``). Words are separated by spaces or
+    tabs. Anything else -- double quotes, ``$``, a backtick, a glob, a newline
+    outside single quotes, an operator -- makes the command not plain.
+    """
+    words: list[str] = []
+    i, n = 0, len(command)
+    while i < n:
+        if command[i] in " \t":
+            i += 1
+            continue
+        parts: list[str] = []
+        start = i
+        while i < n and command[i] not in " \t":
+            char = command[i]
+            if char == "'":
+                end = command.find("'", i + 1)
+                if end < 0:
+                    return None
+                parts.append(command[i + 1:end])
+                i = end + 1
+            elif char == "\\":
+                if i + 1 >= n or command[i + 1] == "\n":
+                    return None
+                parts.append(command[i + 1])
+                i += 2
+            elif _BARE_RE.fullmatch(char):
+                if char == "=" and i == start:
+                    return None
+                parts.append(char)
+                i += 1
+            else:
+                return None
+        words.append("".join(parts))
+    return words
+
+
+def plain_client_args(command: str, launcher: Path) -> Optional[list[str]]:
+    """The arguments after ``relay client`` when ``command`` is one plain call of ``launcher``, else None."""
+    words = plain_words(command)
+    if not words or len(words) < 3 or words[1:3] != ["relay", "client"]:
+        return None
+    if not os.path.isabs(words[0]) or os.path.realpath(words[0]) != os.path.realpath(str(launcher)):
+        return None
+    return words[3:]
+
+
 def parse_client_args(args: Sequence[str], machine: Optional[str]) -> Optional[ClientCall]:
-    """The call's verb, session, grant and target; None when there is no verb to judge (help, usage error)."""
+    """The call's verb, session, target and options; None when there is no verb to judge (help, usage error)."""
     verb: Optional[str] = None
-    session: Optional[str] = None
-    grant: Optional[str] = None
     options: dict[str, str] = {}
     positionals: list[str] = []
     i = 0
@@ -143,8 +233,6 @@ def parse_client_args(args: Sequence[str], machine: Optional[str]) -> Optional[C
         i += 1
     if verb is None or verb not in R.CLIENT_VERBS:
         return None
-    session = options.get("--session")
-    grant = options.get("--grant")
     target: Optional[str] = None
     if verb in ("read", "send", "answer"):
         target = positionals[0] if positionals else None
@@ -157,8 +245,10 @@ def parse_client_args(args: Sequence[str], machine: Optional[str]) -> Optional[C
         target = options.get("--machine")
     elif verb == "replies":
         target = options.get("--message-id") or options.get("--address")
-    return ClientCall(verb, session, grant, target)
+    return ClientCall(verb, options.get("--session"), target, options)
 
+
+# -- the decision --------------------------------------------------------------------------
 
 def _deny(reason: str) -> dict[str, Any]:
     return {"hookSpecificOutput": {
@@ -166,9 +256,32 @@ def _deny(reason: str) -> dict[str, Any]:
     }}
 
 
-def _type_it(call: ClientCall) -> str:
-    target = f" {call.target}" if call.target else ""
-    return f"`/direct {call.client_verb}{target}`"
+def _allow(reason: str, *, shown: Optional[str] = None, context: Optional[str] = None) -> dict[str, Any]:
+    specific: dict[str, Any] = {
+        "hookEventName": "PreToolUse", "permissionDecision": "allow", "permissionDecisionReason": reason,
+    }
+    if context is not None:
+        specific["additionalContext"] = context
+    out: dict[str, Any] = {"hookSpecificOutput": specific}
+    if shown is not None:
+        out["systemMessage"] = shown
+    return out
+
+
+def shown_to_owner(call: ClientCall) -> Optional[str]:
+    """The line the owner sees for a call that sends something: the exact target and text."""
+    if call.client_verb == "send":
+        kind = call.options.get("--kind", "?")
+        return f"/direct send to {call.target} ({kind}):\n{call.options.get('--body', '')}"
+    if call.client_verb == "answer":
+        decision = call.options.get("--decision", "?")
+        detail = call.options.get("--input") if decision == "answer" else call.options.get("--reason")
+        return f"/direct answer {call.target}: {decision}" + (f"\n{detail}" if detail else "")
+    return None
+
+
+def _plain_form(launcher: Path) -> str:
+    return f"`{launcher} relay client <verb> --session <this session id> ...`"
 
 
 def run(
@@ -177,6 +290,7 @@ def run(
     *,
     hostname: Optional[Callable[[], str]] = None,
     env_json: Optional[Path] = None,
+    launcher: Optional[Path] = None,
 ) -> Optional[dict[str, Any]]:
     """The hook's JSON output for one payload, or None for "no opinion"."""
     if payload.get("tool_name") != "Bash":
@@ -186,61 +300,70 @@ def run(
     if not isinstance(command, str):
         raise R.HookError("a Bash tool call carries no command string")
     session = payload["session_id"]
+    own = launcher if launcher is not None else R.launcher()
     try:
-        arg_lists = find_client_args(command)
+        found = find_client_args(command)
     except GateParseError as exc:
-        return _deny(f"This command calls the llm-kit relay client, but the grant gate cannot read it ({exc}). "
-                     "Use one plain `llm-kit relay client <verb> ...` command per call.")
-    if not arg_lists:
+        return _deny(f"This command calls the llm-kit relay client, but the /direct gate cannot read it ({exc}). "
+                     f"Use one plain command per call: {_plain_form(own)}.")
+    if not found:
         return None
+    args = plain_client_args(command, own)
+    if args is None:
+        return _deny("Refused: the /direct gate allows only one plain relay client call of this plugin's launcher "
+                     f"per Bash call, {_plain_form(own)}, with every value single-quoted and nothing else "
+                     "(no pipes, variables, substitutions, wrappers or other commands).")
     try:
         machine = R.resolve_machine_label(env_json, hostname=hostname)
     except R.HookError as exc:
-        return _deny(f"The grant gate cannot tell which machine this is ({exc}), so the relay client call is refused.")
-    notes: list[str] = []
-    for args in arg_lists:
-        try:
-            call = parse_client_args(args, machine)
-        except GateParseError as exc:
-            return _deny(f"The grant gate cannot read this llm-kit relay client call ({exc}).")
-        if call is None:
-            continue
-        if call.session is not None and call.session != session:
-            return _deny(
-                f"Refused: --session {call.session} is not this session ({session}). A session acts only for itself; "
-                "the owner must type /direct in the session that should act."
-            )
-        params: dict[str, Any] = {"session": f"{machine}/claude/{session}", "verb": call.wire_verb}
-        if call.target is not None:
-            params["target"] = call.target
-        if call.grant is not None:
-            params["grant_id"] = call.grant
-        try:
-            result = R.call(env, "grant_check", params, origin=f"direct:{machine}/claude/{session}")
-        except R.RelayUnavailable as exc:
-            notes.append(f"grant gate: the relay is not running, so {call.client_verb} could not be checked ({exc}); "
-                         "the client call will fail by itself.")
-            continue
-        except R.RelayRefused as exc:
-            return _deny(f"Refused: the relay could not check a grant for {call.client_verb} ({exc}).")
-        except R.HookError as exc:
-            return _deny(f"Refused: the grant gate cannot reach the relay safely ({exc}).")
-        if result.get("covered") is not True:
-            code = result.get("code") or "grant_required"
-            return _deny(
-                f"Refused ({code}): no live /direct grant covers `llm-kit relay client {call.client_verb}`"
-                + (f" on {call.target}" if call.target else "")
-                + f" for this session. Only the owner should grant it, by typing {_type_it(call)} in this session. "
-                "Do not retry until they have."
-            )
-    if notes:
-        return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": " ".join(notes)}}
-    return None
+        return _deny(f"The /direct gate cannot tell which machine this is ({exc}), so the relay client call is refused.")
+    try:
+        call = parse_client_args(args, machine)
+    except GateParseError as exc:
+        return _deny(f"The /direct gate cannot read this relay client call ({exc}).")
+    if call is None:
+        return None
+    if call.session != session:
+        return _deny(
+            f"Refused: --session must be this session's id ({session}); got {call.session!r}. A session acts only "
+            "for itself; the owner types /direct in the session that should act."
+        )
+    for name, why in _REFUSED_OPTIONS.items():
+        if name in call.options:
+            return _deny(f"Refused: {why}.")
+    if call.client_verb == "send" and call.options.get("--body") == "-":
+        return _deny("Refused: write the message text in --body (single-quoted) so the owner sees what is sent.")
+    try:
+        record = R.enablement(env, session)
+    except R.HookError as exc:
+        return _deny(f"Refused: the /direct gate cannot read this session's enablement ({exc}).")
+    if record is None:
+        return _deny(
+            f"Refused: /direct is not enabled in this session, so `llm-kit relay client {call.client_verb}` may not "
+            "run. Only the owner enables it, by typing /direct in this session. Do not retry until they have."
+        )
+    origin = f"direct:{machine}/claude/{session}"
+    params = {
+        "session": f"{machine}/claude/{session}", "verb": call.wire_verb,
+        "targets": [call.target] if call.target is not None else [],
+        "expires_in_s": GRANT_TTL_S, "uses": GRANT_USES, "origin_proof": {"type": "none"},
+        "command": record["command"],
+    }
+    what = f"/direct {call.client_verb}" + (f" {call.target}" if call.target else "")
+    shown = shown_to_owner(call)
+    try:
+        R.call(env, "grant_mint", params, origin=origin)
+    except R.RelayUnavailable as exc:
+        return _allow(f"{what} (relay not running)", shown=shown,
+                      context=f"/direct gate: the relay is not running ({exc}); the client call will fail by itself.")
+    except R.RelayRefused as exc:
+        return _deny(f"Refused: the relay would not grant {what} ({exc}).")
+    except R.HookError as exc:
+        return _deny(f"Refused: the /direct gate cannot reach the relay safely ({exc}).")
+    return _allow(f"{what}: this session is enabled for /direct", shown=shown)
 
 
 def main(argv: Optional[Sequence[str]] = None, stdin: Any = None, stdout: Any = None, env: Optional[Mapping[str, str]] = None) -> int:
-    import os
-
     stdin = sys.stdin if stdin is None else stdin
     stdout = sys.stdout if stdout is None else stdout
     env = os.environ if env is None else env

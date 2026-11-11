@@ -1,12 +1,13 @@
 [project]
 name = "llm-kit"
-version = "0.17.1"
+version = "0.18.0"
 description = "LLM access, durable agent jobs and batch content pipelines in one library (dev-only consolidation)"
 requires-python = ">=3.12"
 
 # The plugin venv installs the released library as a consumer. Each extra names
 # a capability's third-party packages; the plugin venv enables every extra its
-# bundled commands reach. The floor is 1.11 because the relay extra and `llm-kit relay client`
+# bundled commands reach. The floor is 1.14 because `llm-kit relay client sessions --state live|all`
+# (the /direct skill's default listing) first shipped in 1.14.0; the relay extra and `llm-kit relay client`
 # (used by the /direct skill and the channel server) first shipped in 1.11.0; a consent scope overrides the
 # global defaults from 1.10.0; the per-model output-cap surface
 # first shipped in 1.7.0; the documented public job supervisor first shipped in 1.6.0. Codex in package mode, the project model file,
@@ -15,7 +16,7 @@ requires-python = ">=3.12"
 # the venv at the highest released version the requirement admits
 # (packages/released.json), so a requirement must keep this exact form.
 dependencies = [
-    "katsoft-llm-kit[config,sdk,local,frontdoor,jobs,pipeline,relay]>=1.13,<2",
+    "katsoft-llm-kit[config,sdk,local,frontdoor,jobs,pipeline,relay]>=1.14,<2",
     "katsoft-contracts>=1.0,<2",
 ]
 

@@ -42,7 +42,7 @@ elif [ -n "${BOOTSTRAP_PYTHON:-}" ] && [ -x "$BOOTSTRAP_PYTHON" ]; then
 fi
 
 if [ -z "$_PY" ]; then
-    printf '%s\n' '{"systemMessage": "llm-kit: no approved interpreter was found (the bootstrap standalone install), so the /direct grant hook did nothing. Run bootstrap to provision it."}'
+    printf '%s\n' '{"systemMessage": "llm-kit: no approved interpreter was found (the bootstrap standalone install), so the /direct hook did nothing. Run bootstrap to provision it."}'
     exit 0
 fi
 

@@ -73,9 +73,9 @@ belong to the [katsoft-libs source tree](https://github.com/kitaekatt/katsoft-li
 Change library behavior there. This plugin holds no library source and publishes no shared lib. A consumer
 venv installs the package with the extras it reaches (`katsoft-llm-kit[<extras>]>=A.B,<N` in
 its `pyproject.toml`). The plugin's own venv does the same: its `pyproject.toml` is a
-non-package project that requires the released `katsoft-llm-kit[<every extra>]>=1.11,<2` and
+non-package project that requires the released `katsoft-llm-kit[<every extra>]>=1.14,<2` and
 `katsoft-contracts>=1.0,<2`, so the extras flow from that distribution and `bootstrap.json`
-names none. The floor is 1.11 because the `relay` extra and the `llm-kit relay` command group (which the `/direct` skill and the channel server call from the plugin venv) first shipped in 1.11.0; a consent scope overrides the global defaults from 1.10.0; the per-model output-cap surface
+names none. The floor is 1.14 because the `/direct` skill's default session listing (`sessions --state live|all` of the `llm-kit relay` client) first shipped in 1.14.0; the `relay` extra and the `llm-kit relay` command group (which the `/direct` skill and the channel server call from the plugin venv) first shipped in 1.11.0; a consent scope overrides the global defaults from 1.10.0; the per-model output-cap surface
 first shipped in 1.7.0 and the job supervisor in 1.6.0. Codex in package mode, the project model file, `models catalog`, protocol 2 of
 `completion complete`, local selection overrides and the neutral user paths shipped in 1.3.0;
 `custom_bootstrap.py` reads `llm-kit account status --json`, which first shipped in 1.2.0;
