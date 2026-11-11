@@ -508,7 +508,7 @@ def main(argv=None):
             run_kwargs = {} if observer is None else {"observer": observer}
             result = run(
                 names, request, project_root=project_root, backend_factory=factory,
-                max_attempts=len(names), **run_kwargs,
+                **run_kwargs,
             )
         except NoUsableRoutingTarget as exc:
             print(str(exc), file=sys.stderr)
