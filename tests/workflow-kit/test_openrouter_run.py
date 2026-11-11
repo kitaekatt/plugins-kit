@@ -526,6 +526,9 @@ def kit_transport(monkeypatch, tmp_path):
             )
 
     client = SimpleNamespace(chat=SimpleNamespace(completions=_Completions()))
+    # The real SDK client scopes a per-call max_retries override to a copy
+    # (llm_kit >= 1.13 sets one); the fake is its own copy.
+    client.with_options = lambda **_kwargs: client
     monkeypatch.setattr(backends.OpenRouterBackend, "_ensure_client", lambda self: client)
     return {"requests": requests, "behaviour": behaviour, "reach": reach,
             "declaration": declaration, **modules}

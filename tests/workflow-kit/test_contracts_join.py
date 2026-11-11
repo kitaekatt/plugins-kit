@@ -131,6 +131,9 @@ class _Completions:
 
 
 _client = SimpleNamespace(chat=SimpleNamespace(completions=_Completions()))
+# The real SDK client scopes a per-call max_retries override to a copy
+# (llm_kit >= 1.13 sets one); the fake is its own copy.
+_client.with_options = lambda **_kwargs: _client
 backends.OpenRouterBackend._ensure_client = lambda self: _client
 runpy.run_path({real!r}, run_name="__main__")
 """

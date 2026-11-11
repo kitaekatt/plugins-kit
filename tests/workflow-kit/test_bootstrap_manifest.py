@@ -35,7 +35,7 @@ class TestPackagePins:
     def test_pins_the_released_llm_kit_with_the_extras_its_paths_need(self):
         # config: the registry loader's pyyaml; sdk: the openai SDK the
         # OpenRouter backend imports.
-        assert "katsoft-llm-kit[config,sdk]>=1.1,<2" in self._dependencies()
+        assert "katsoft-llm-kit[config,sdk]>=1.13,<2" in self._dependencies()
 
     def test_pins_the_released_contracts_distribution(self):
         assert "katsoft-contracts>=1.0,<2" in self._dependencies()
