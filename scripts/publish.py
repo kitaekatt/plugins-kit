@@ -38,6 +38,9 @@ Libraries are released independently in katsoft-libs. Publication validates
 shipping plugins against data/package-targets.json, a generated consumer target
 artifact imported after library release verification. It never builds or uploads
 packages. Target changes can ship without bumping individual consumer plugins.
+When a shipping plugin consumes a katsoft package, the publish first imports the
+newest katsoft-libs ledger into that artifact and commits it to dev, before P is
+fixed (adopt_latest_library_targets).
 
 Why a script rather than a checklist -- the footguns it removes:
 
@@ -749,6 +752,119 @@ def _load_rule_module(script_name: str):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+# --- library target adoption -------------------------------------------------
+#
+# A publish that ships a consumer of the user's own PyPI libraries first adopts
+# the newest verified releases of those libraries: it imports katsoft-libs'
+# release ledger at the remote default branch into data/package-targets.json
+# and commits that one path to dev. Only then is P fixed, so the release carries
+# the new targets and every consumer moves to them on its next bootstrap pass.
+
+LIBRARY_REPO_DIRNAME = "katsoft-libs"
+LIBRARY_REF = "origin/HEAD"
+TARGETS_FILE = "data/package-targets.json"
+_LIBRARY_REQUIREMENT = re.compile(r"""["']katsoft-[a-z0-9-]+""")
+
+
+def _library_importer():
+    """scripts/import_package_targets.py as a module (a seam for tests)."""
+    return _load_rule_module("import_package_targets.py")
+
+
+def _library_repo() -> Path:
+    devroot = os.environ.get("DEVROOT", "").strip()
+    if not devroot:
+        raise PublishError(
+            "DEVROOT is not set, so the katsoft-libs checkout cannot be found; "
+            "a publish that ships a katsoft library consumer adopts that "
+            "library's newest release first")
+    repo = Path(devroot) / LIBRARY_REPO_DIRNAME
+    if not (repo / ".git").exists():
+        raise PublishError(
+            f"no katsoft-libs checkout at {repo}; clone "
+            f"https://github.com/kitaekatt/{LIBRARY_REPO_DIRNAME} there")
+    return repo
+
+
+def _content_at(ref: str, path: str) -> str | None:
+    """The text of `path` at `ref`, or None when it does not exist there."""
+    if blob_at(ref, path) is None:
+        return None
+    return git("show", f"{ref}:{path}")
+
+
+def _library_consumers(plugins: set[str]) -> list[str]:
+    """The plugins among `plugins` whose dev pyproject.toml requires a katsoft-* package."""
+    found = []
+    for name in sorted(plugins):
+        text = _content_at(f"refs/heads/{DEV_BRANCH}", f"plugins/{name}/pyproject.toml")
+        if text and _LIBRARY_REQUIREMENT.search(text):
+            found.append(name)
+    return found
+
+
+def _describe_target_change(old: dict, new: dict) -> str:
+    changes = []
+    for dist in sorted(set(old) | set(new)):
+        before = ", ".join(sorted(old.get(dist, {}))) or "none"
+        after = ", ".join(sorted(new.get(dist, {}))) or "none"
+        if before != after:
+            changes.append(f"{dist} {before} -> {after}")
+    return "; ".join(changes)
+
+
+def adopt_latest_library_targets(only: set[str] | None, check: bool) -> None:
+    """Import the newest katsoft-libs releases and commit them to dev when a consumer ships.
+
+    The shipping set is `only` for a partial release, else the published
+    plugins whose files differ from master. Nothing is read from katsoft-libs
+    when no shipping plugin requires a katsoft package. `check` reports what
+    would be adopted and writes nothing.
+    """
+    if git("rev-parse", "--abbrev-ref", "HEAD") != DEV_BRANCH:
+        return   # _preflight refuses this with its own message
+    git("fetch", REMOTE, "--quiet")
+    shipping = set(only) if only else _changed_plugins()
+    consumers = _library_consumers(shipping)
+    if not consumers:
+        return
+    repo = _library_repo()
+    fetched = subprocess.run(["git", "fetch", "--quiet", "origin"], cwd=repo,
+                             capture_output=True, text=True)
+    if fetched.returncode != 0:
+        raise PublishError(f"git fetch in {repo} failed:\n{fetched.stderr.strip()}")
+    with tempfile.TemporaryDirectory() as scratch:
+        try:
+            artifact = _library_importer().import_targets(
+                repo, LIBRARY_REF, Path(scratch) / "package-targets.json")
+        except Exception as exc:
+            raise PublishError(
+                f"importing library targets from {repo} ({LIBRARY_REF}) failed: "
+                f"{type(exc).__name__}: {exc}") from exc
+        text = (Path(scratch) / "package-targets.json").read_text(encoding="ascii")
+    committed = _content_at(f"refs/heads/{DEV_BRANCH}", TARGETS_FILE)
+    old = json.loads(committed)["packages"] if committed else {}
+    change = _describe_target_change(old, artifact["packages"])
+    source = artifact["source"]["commit"][:12]
+    if not change:
+        print(f"  library targets current (katsoft-libs {source}; "
+              f"consumers shipping: {', '.join(consumers)})")
+        return
+    if check:
+        print(f"  would adopt library targets from katsoft-libs {source}: {change}")
+        return
+    if git("status", "--porcelain", "--", TARGETS_FILE):
+        raise PublishError(
+            f"{TARGETS_FILE} has uncommitted changes; commit or discard them "
+            f"so the publish can adopt the newest library targets")
+    (REPO_ROOT / TARGETS_FILE).write_text(text, encoding="ascii", newline="\n")
+    git("commit", "-q", "-m",
+        f"publish: adopt katsoft-libs {source} targets\n\n{change}\n\n"
+        f"Consumers shipping: {', '.join(consumers)}",
+        "--", TARGETS_FILE)
+    print(f"  adopted library targets from katsoft-libs {source}: {change}")
 
 
 def _require_bootstrap_dependency() -> None:
@@ -1733,6 +1849,7 @@ def main(argv: list[str]) -> int:
             print(f"  partial release: {', '.join(sorted(only))} only; "
                   f"holding back: "
                   f"{', '.join(sorted(held_back_for(only))) or '(none)'}")
+        adopt_latest_library_targets(only, args.check)
         flight = _preflight(allow - held_back, only)
         bumps, excluded, plan = flight.bumps, flight.excluded, flight.packages
         for bump in bumps:

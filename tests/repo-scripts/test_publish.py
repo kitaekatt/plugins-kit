@@ -1947,3 +1947,100 @@ class TestBootstrapDependencyGateScope:
         monkeypatch.setattr(publish, "_load_rule_module", loader)
         with pytest.raises(publish.PublishError, match="some-kit"):
             publish._require_bootstrap_dependency()
+
+
+class TestAdoptLatestLibraryTargets:
+    """A publish shipping a katsoft library consumer adopts the newest releases first."""
+
+    @staticmethod
+    def _ledger(*versions: str) -> dict:
+        return {"katsoft-example": {v: {
+            "version": v, "tag": f"katsoft-example-v{v}", "commit": "b" * 40,
+            "wheel_sha256": "c" * 64, "verified_at": "2026-01-01T00:00:00Z",
+            "filename": f"katsoft_example-{v}-py3-none-any.whl"} for v in versions}}
+
+    @pytest.fixture
+    def libs(self, repo, tmp_path, monkeypatch):
+        """A katsoft-libs checkout under DEVROOT whose origin ledger holds 1.0.0 and 1.1.0,
+        while the plugins repo's committed targets still say 1.0.0."""
+        origin = tmp_path / "libs-origin.git"
+        subprocess.run(["git", "init", "--bare", "-q", "-b", "dev", str(origin)], check=True)
+        devroot = tmp_path / "devroot"
+        lib = devroot / "katsoft-libs"
+        lib.mkdir(parents=True)
+        _git(lib, "init", "-q", "-b", "dev")
+        _git(lib, "config", "user.email", "test@example.com")
+        _git(lib, "config", "user.name", "Test")
+        (lib / "packages").mkdir()
+        (lib / "packages" / "registry.toml").write_text(
+            'schema = 1\nrepository = "https://github.com/kitaekatt/katsoft-libs"\n')
+        (lib / "packages" / "released.json").write_text(
+            json.dumps(self._ledger("1.0.0", "1.1.0")))
+        _git(lib, "add", "-A")
+        _git(lib, "commit", "-qm", "ledger")
+        _git(lib, "remote", "add", "origin", str(origin))
+        _git(lib, "push", "-q", "origin", "dev")
+        _git(lib, "remote", "set-head", "origin", "dev")
+        monkeypatch.setenv("DEVROOT", str(devroot))
+
+        importer = publish._load_rule_module("import_package_targets.py")
+        monkeypatch.setattr(importer, "verify_pypi", lambda *a: None)   # no network
+        monkeypatch.setattr(publish, "_library_importer", lambda: importer)
+
+        (repo / "data").mkdir()
+        (repo / "data" / "package-targets.json").write_text(json.dumps(
+            {"schema": 1, "source": {"repository": "x", "commit": "a" * 40},
+             "packages": {"katsoft-example": {"1.0.0": {"version": "1.0.0"}}}}))
+        (repo / "plugins" / "pub-kit" / "pyproject.toml").write_text(
+            '[project]\nname = "pub-kit"\nversion = "1.0.1"\n'
+            'dependencies = ["katsoft-example>=1.0,<2"]\n')
+        _bump(repo, "pub-kit", "1.0.1", "pub-kit 1.0.1: consume katsoft-example")
+        return lib
+
+    @staticmethod
+    def _targets(repo: Path) -> dict:
+        text = _git(repo, "show", "refs/heads/dev:data/package-targets.json")
+        return json.loads(text)["packages"]
+
+    def test_a_shipping_consumer_adopts_the_newest_release(self, repo, libs, capsys):
+        """Remove the adopt step and this is red: dev still targets 1.0.0."""
+        before = _git(repo, "rev-parse", "dev")
+
+        publish.adopt_latest_library_targets(None, check=False)
+
+        assert self._targets(repo) == {"katsoft-example": {"1.1.0": {"version": "1.1.0"}}}
+        assert _git(repo, "rev-parse", "dev~1") == before
+        assert _git(repo, "diff", "--name-only", "dev~1", "dev", "--") == "data/package-targets.json"
+        assert "katsoft-example 1.0.0 -> 1.1.0" in capsys.readouterr().out
+        assert _git(repo, "status", "--porcelain") == ""
+
+    def test_already_current_targets_commit_nothing(self, repo, libs, capsys):
+        publish.adopt_latest_library_targets(None, check=False)
+        tip = _git(repo, "rev-parse", "dev")
+
+        publish.adopt_latest_library_targets(None, check=False)
+
+        assert _git(repo, "rev-parse", "dev") == tip
+        assert "library targets current" in capsys.readouterr().out
+
+    def test_check_reports_and_writes_nothing(self, repo, libs, capsys):
+        tip = _git(repo, "rev-parse", "dev")
+
+        publish.adopt_latest_library_targets(None, check=True)
+
+        assert _git(repo, "rev-parse", "dev") == tip
+        assert self._targets(repo) == {"katsoft-example": {"1.0.0": {"version": "1.0.0"}}}
+        assert "would adopt" in capsys.readouterr().out
+
+    def test_no_shipping_consumer_reads_no_library(self, repo, monkeypatch):
+        """pub-kit ships but requires no katsoft package: DEVROOT is never consulted."""
+        monkeypatch.delenv("DEVROOT", raising=False)
+        _bump(repo, "pub-kit", "1.0.1", "pub-kit 1.0.1")
+
+        publish.adopt_latest_library_targets(None, check=False)   # no raise
+
+    def test_a_shipping_consumer_without_the_library_checkout_is_refused(
+            self, repo, libs, monkeypatch, tmp_path):
+        monkeypatch.setenv("DEVROOT", str(tmp_path / "nowhere"))
+        with pytest.raises(publish.PublishError, match="no katsoft-libs checkout"):
+            publish.adopt_latest_library_targets(None, check=False)

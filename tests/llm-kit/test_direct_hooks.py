@@ -690,3 +690,107 @@ def test_known_limitation_the_gate_reads_command_text_not_behaviour(relay, home,
         rc, out, _ = run_hook(GATE_HOOK, bash_payload(command), home)
         assert (rc, out) == (0, None), command
     assert relay.requests == []
+
+
+# -- the gate engages on an invocation, not on a mention ------------------------------------------------
+
+PHRASE = "llm-kit relay client"
+
+MENTIONS = [
+    f'git commit -m "gate: narrow {PHRASE} matching"',
+    f"git commit -m 'it is the {PHRASE} gate'",
+    f'git commit -m "$(cat <<\'MSG\'\nfix: the {PHRASE} gate\n\nit\'s a "quoted" mention\nMSG\n)"',
+    f"python3 - <<'EOF'\nprint(\"it's the {PHRASE} gate\")\nEOF",
+    f"cat <<EOF > /tmp/notes.txt\nthe {PHRASE} gate's body\nEOF",
+    f"echo '{PHRASE} send'",
+    f'echo "{PHRASE} send" >> /tmp/log',
+    f"printf '%s\\n' \"{PHRASE}\"",
+    f"grep -rn '{PHRASE}' docs",
+    f"grep -rn \"{PHRASE}\" docs | head",
+    f"# {PHRASE} is mentioned in a comment\nls",
+    f"ls # {PHRASE}",
+    f"echo hi 2> /tmp/{PHRASE.replace(' ', '_')}.err",
+    "tail -f /tmp/x.log  # relay client note",
+    f'gh pr create --title "t" --body "uses {PHRASE} send"',
+]
+
+
+@pytest.mark.parametrize("command", MENTIONS)
+def test_a_mention_of_the_relay_client_does_not_engage_the_gate(relay, home, command):
+    rc, out, err = run_hook(GATE_HOOK, bash_payload(command), home)
+    assert (rc, out, err) == (0, None, ""), command
+    assert relay.requests == []
+
+
+REAL_FORMS = [
+    client(f"read {TARGET} --limit 5"),
+    client("machines"),
+    f"{LAUNCHER} relay client sessions --session {SESSION} --state live",
+    f"{LAUNCHER} relay client send {TARGET} --session {SESSION} --kind note --body 'it'\\''s text'",
+    f"{LAUNCHER} relay client ask {TARGET} --session {SESSION} --prompt 'hi'",
+    f"{LAUNCHER} relay client replies --session {SESSION} --message-id m1",
+    f"{LAUNCHER} relay client questions --session {SESSION}",
+    f"{LAUNCHER} relay client answer q1 --session {SESSION} --decision reject --reason 'no'",
+]
+
+
+@pytest.mark.parametrize("command", REAL_FORMS)
+def test_every_real_invocation_form_engages_the_gate_and_is_refused_when_not_enabled(relay, home, command):
+    verdict, reason = decision(run_hook(GATE_HOOK, bash_payload(command), home)[1])
+    assert verdict == "deny" and "/direct is not enabled in this session" in reason, command
+    assert relay.requests == []
+
+
+@pytest.mark.parametrize("command", [
+    f"cd /tmp && {client('machines')}",
+    f"cd /tmp; {client('machines')}",
+    f"false || {client('machines')}",
+    f"echo hi\n{client('machines')}",
+    f"echo $({client('machines')})",
+    f'echo "$({client("machines")})"',
+    f"echo `{client('machines')}`",
+    f"cat <<EOF\n$({client('machines')})\nEOF",
+    f"bash -c '{client('machines')}'",
+    f"sh -c \"cd /tmp && {client('machines')}\"",
+    f"eval '{client('machines')}'",
+    f"FOO=1 {client('machines')}",
+    f"env FOO=1 {client('machines')}",
+    f"( {client('machines')} )",
+    f"{client('machines')} | head",
+    f"{client('machines')} > /tmp/out",
+    f"echo hi | xargs {client('machines')}",
+    f"python -m llm_kit relay client machines --session {SESSION}",
+    f"uv run llm-kit relay client machines --session {SESSION}",
+    f"llm-kit relay client machines --session {SESSION}",
+    f"git commit -m 'x' && {client('machines')}",
+    f"nohup bash -c '{client('machines')}'",
+    f"env bash -c '{client('machines')}'",
+    f"timeout 30 sh -c '{client('machines')}'",
+    f"sudo bash -c '{client('machines')}'",
+    f"env FOO=1 nohup bash -c '{client('machines')}'",
+])
+def test_a_chained_or_wrapped_real_invocation_still_engages_the_gate(relay, home, command):
+    verdict, reason = decision(run_hook(GATE_HOOK, bash_payload(command), home)[1])
+    assert verdict == "deny", command
+    assert relay.requests == []
+
+
+@pytest.mark.parametrize("command", [
+    f'$CLI relay client machines --session {SESSION}',
+    f'"$LAUNCHER" relay client machines --session {SESSION}',
+    f"$(which llm-kit) relay client machines --session {SESSION}",
+    f"{LAUNCHER} relay client read 'unterminated",
+    f"git commit -m \"it's\" && {LAUNCHER} relay client read 'unterminated",
+])
+def test_an_unreadable_or_ambiguous_real_invocation_fails_closed(relay, home, command):
+    enable(home)
+    verdict, _ = decision(run_hook(GATE_HOOK, bash_payload(command), home)[1])
+    assert verdict == "deny", command
+    assert relay.requests == []
+
+
+def test_the_enabled_plain_call_is_still_allowed_after_the_matcher_change(relay, home):
+    enable(home)
+    assert decision(run_hook(GATE_HOOK, bash_payload(client("machines")), home)[1])[0] == "allow"
+    # a mention in an enabled session stays ignored, not allowed
+    assert run_hook(GATE_HOOK, bash_payload(f'git commit -m "{PHRASE}"'), home)[1] is None
