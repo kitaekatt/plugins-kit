@@ -652,7 +652,11 @@ def ensure_venv(
         return _finish(result)
 
     extra_flags = " ".join(f"--extra {e}" for e in extras)
-    pin_flags = " ".join(f"-P {dist}=={version}" for dist, version, _ in behind)
+    # Every target is pinned on every sync, not only the ones behind: uv
+    # re-resolves without a lockfile, so an unpinned sync triggered by a
+    # declaration change would move a package already AT its target to the
+    # newest release on the index, past the ledger.
+    pin_flags = " ".join(f"-P {dist}=={version}" for dist, version in targets)
     uv_cmd = (f"uv sync --project {project_dir}" + (f" {extra_flags}" if extra_flags else "")
               + (f" {pin_flags}" if pin_flags else ""))
     if not result.passed:
@@ -680,7 +684,7 @@ def ensure_venv(
     cmd = [uv_bin, "sync", "--project", project_dir]
     for e in extras:
         cmd.extend(["--extra", e])
-    for dist, version, _installed in behind:
+    for dist, version in targets:
         cmd.extend(["-P", f"{dist}=={version}"])
     env = dict(os.environ, UV_PROJECT_ENVIRONMENT=venv_path)
     # Ensure ~/.local/bin is on PATH for uv's own child processes.

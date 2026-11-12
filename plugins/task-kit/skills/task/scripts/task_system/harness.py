@@ -20,7 +20,6 @@ from __future__ import annotations
 import glob
 import os
 import re
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
@@ -35,14 +34,6 @@ AGENT_DEPTH_ENV = "TASK_KIT_AGENT_DEPTH"
 CONFIG_DIR_ENV = "CLAUDE_CONFIG_DIR"
 HARNESS = "claude-code"
 _SESSION_ID_SAFE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
-
-
-UNMEASURED_PLATFORMS = ("win32", "cygwin", "msys")
-WINDOWS_REFUSAL = (
-    "working-session registration is not supported on Windows: the CLAUDE_PID ancestry check from Git Bash and "
-    "PowerShell, and the process creation-time stamp that decides running or not running, have not been "
-    "measured there, so a record could name the wrong process. Nothing is registered; "
-    "run /task work from macOS or Linux to register")
 
 
 class IdentityError(RuntimeError):
@@ -102,15 +93,13 @@ def claude_process(env: Mapping[str, str] | None = None, start_pid: int | None =
     return process
 
 
-def resolve_identity(env: Mapping[str, str] | None = None, start_pid: int | None = None, *,
-                     platform: str | None = None) -> Identity:
+def resolve_identity(env: Mapping[str, str] | None = None, start_pid: int | None = None) -> Identity:
     """The caller's session id, harness process and process stamp; raises :class:`IdentityError` when any is missing.
 
-    Refuses on Windows (:data:`WINDOWS_REFUSAL`): the process verification below was never measured there.
-    ``platform`` exists so a test can compose the refusal on any host.
+    Windows was measured on 2026-11-12 (Claude Code on Windows 11, Git Bash and PowerShell tool commands):
+    ``CLAUDE_PID`` names ``claude.exe`` as a live ancestor of both, and psutil's creation time of that process
+    read bit-identically across 200 reads, so the same checks apply on every platform.
     """
-    if (sys.platform if platform is None else platform) in UNMEASURED_PLATFORMS:
-        raise IdentityError(WINDOWS_REFUSAL)
     env = _environ(env)
     sid = session_id(env)
     if sid is None:

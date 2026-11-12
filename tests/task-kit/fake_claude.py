@@ -42,7 +42,8 @@ def _main(argv: list[str]) -> int:
     os.environ["CLAUDE_PID"] = str(os.getpid())
     os.environ["CLAUDE_CODE_SESSION_ID"] = session_id
     done = subprocess.run(["bash", "-c", tool_shell_script(command)], capture_output=True, text=True)
-    print(json.dumps({"returncode": done.returncode, "stdout": done.stdout, "stderr": done.stderr}), flush=True)
+    print(json.dumps({"returncode": done.returncode, "stdout": done.stdout, "stderr": done.stderr,
+                      "pid": os.getpid()}), flush=True)
     sys.stdin.read()
     return 0
 
@@ -66,7 +67,11 @@ class FakeClaude:
 
     @property
     def pid(self) -> int:
-        return self.process.pid
+        """The pid the fake exported as ``CLAUDE_PID``.
+
+        Not ``Popen.pid``: on Windows a venv ``python.exe`` is a launcher that runs the interpreter as its child.
+        """
+        return self.result["pid"]
 
     def close(self) -> None:
         if self.process.poll() is None:
