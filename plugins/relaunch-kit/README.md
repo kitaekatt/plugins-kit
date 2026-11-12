@@ -95,6 +95,13 @@ depend on llm-kit; only this option does. `clauder` finds llm-kit in this order:
    so it is never used; start `claudx --all` to load llm-kit.
 3. The newest llm-kit version in `~/.claude/plugins/cache/plugins-kit/llm-kit/`.
 
+The relay is off by default. `--relay` is also refused, with status 2 and
+nothing started, until you turn the llm-kit relay on in your own settings file:
+put `enabled: true` in `$XDG_CONFIG_HOME/llm-kit/relay.yaml` (else
+`~/.config/llm-kit/relay.yaml`). The message names the file and the key. An
+llm-kit older than 0.21.0, the first version whose relay is off until you turn
+it on, is refused with the update command.
+
 `--relay` needs an interactive session. It is refused, not passed on, with
 `-p`, `--bg` and the other modes listed above, with a claude subcommand, and
 when stdin or stdout is not a terminal.

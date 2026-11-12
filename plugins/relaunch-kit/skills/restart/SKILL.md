@@ -139,7 +139,12 @@ technique_skill:
             it on. "none is installed" means `claude plugin install
             llm-kit@plugins-kit`; "predates the relay channel" means the
             installed llm-kit is older than 0.17.0, the first version to ship
-            the channel, so run `claude plugin update llm-kit@plugins-kit`. clauder finds llm-kit in this
+            the channel, so run `claude plugin update llm-kit@plugins-kit`; "predates
+            that" means llm-kit is older than 0.21.0, so update it the same way.
+            "--relay refused: the llm-kit relay is not enabled" means the user
+            has not turned the relay on; the message names the file and the key
+            (`enabled: true` in llm-kit's `relay.yaml`). Turning it on is the
+            user's decision: report it and do not edit that file. clauder finds llm-kit in this
             order: `LLM_KIT_CHANNEL_SCRIPT`; under claudx the llm-kit directory
             in `CLAUDE_PLUGIN_TEST_DIRS` (never the cache; the fix is
             `claudx --all`); else the newest version in

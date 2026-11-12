@@ -104,8 +104,11 @@ class Stack:
         self.xdg_state = tmp_path / "xdg-state"
         env_json = tmp_path / "env.json"
         env_json.write_text(json.dumps(ENV_JSON), encoding="utf-8")
+        self.xdg_config = tmp_path / "config"
+        (self.xdg_config / "llm-kit").mkdir(parents=True)
+        (self.xdg_config / "llm-kit" / "relay.yaml").write_text("enabled: true\n", encoding="utf-8")
         self.config = C.load_config(env_json=env_json, environ={}, hostname=lambda: "m5pro.local",
-                                    config_path=tmp_path / "config" / "relay.yaml",
+                                    config_path=self.xdg_config / "llm-kit" / "relay.yaml",
                                     state_root=self.xdg_state / "llm-kit" / "relay")
         self.port = _free_port()
         self.server = None
@@ -192,6 +195,7 @@ class Peer:
             "LLM_KIT_CHANNEL_BACKOFF": "0.1,0.4",
             "LLM_KIT_CHANNEL_SESSION_POLL_S": "0.1",
             "XDG_STATE_HOME": str(stack.xdg_state),
+            "XDG_CONFIG_HOME": str(stack.xdg_config),
             "CLAUDE_CONFIG_DIR": str(stack.claude_home),
         })
         if accepts is not None:
