@@ -327,6 +327,34 @@ def test_counterfactual_sent_line() -> None:
     assert sent_line_problems(real.replace("Sent to <message.to>", "Delivered")) != []
 
 
+def codex_notes_problems(text: str) -> list[str]:
+    """The skill must say how a Codex session is reached, what its reply is, and that no verb continues one."""
+    start = text.find("## Codex sessions")
+    if start < 0:
+        return ["no 'Codex sessions' section"]
+    end = text.find("\n## ", start + 1)
+    section = text[start:end if end > 0 else len(text)]
+    needles = ("llm-kit relay codex --cd", "sessions --harness codex", "`live-accepting`", "`answered`", "`declined`",
+               "8192 bytes", "not acknowledged", "do not send it again", "no `/direct` verb that starts or continues")
+    problems = [f"the Codex section does not say {n!r}" for n in needles if n not in section]
+    if re.search(r"^\| `/direct continue", text, re.MULTILINE):
+        problems.append("the verb table has a continue row, which needs a hook verb that does not exist")
+    return problems
+
+
+def test_skill_states_how_codex_sessions_are_reached(skill_text: str) -> None:
+    """Edit that turns it red: delete the "## Codex sessions" section, or add a `/direct continue` table row."""
+    assert codex_notes_problems(skill_text) == []
+
+
+def test_counterfactual_codex_notes() -> None:
+    real = SKILL.read_text(encoding="utf-8")
+    assert codex_notes_problems(real) == []
+    assert codex_notes_problems(real.replace("8192 bytes", "a cap")) != []
+    assert codex_notes_problems(real.replace("sessions --harness codex", "sessions")) != []
+    assert codex_notes_problems(real + "\n| `/direct continue <address>` | x | y |\n") != []
+
+
 def test_skill_is_ascii_and_has_no_bare_python(skill_text: str) -> None:
     assert interpreter_problems(skill_text) == []
 

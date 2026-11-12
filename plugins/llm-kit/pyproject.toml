@@ -1,12 +1,12 @@
 [project]
 name = "llm-kit"
-version = "0.22.2"
+version = "0.23.0"
 description = "LLM access, durable agent jobs and batch content pipelines in one library (dev-only consolidation)"
 requires-python = ">=3.12"
 
 # The plugin venv installs the released library as a consumer. Each extra names
 # a capability's third-party packages; the plugin venv enables every extra its
-# bundled commands reach. The floor is 1.17 because the contract listing names `OpenAICompatBackend`
+# bundled commands reach. The floor is 1.20 because the channel schemas vendored in channel/schemas and the Windows access-control copy in hooks/winacl.py track the 1.20.0 library, and `llm-kit relay codex` first shipped in 1.20.0; the floor was 1.17 because the contract listing names `OpenAICompatBackend`
 # (the transport adapter's class, named `openai-compat`), which first shipped in 1.17.0; the floor was 1.14 because `llm-kit relay client sessions --state live|all`
 # (the /direct skill's default listing) first shipped in 1.14.0; the relay extra and `llm-kit relay client`
 # (used by the /direct skill and the channel server) first shipped in 1.11.0; a consent scope overrides the
@@ -17,7 +17,7 @@ requires-python = ">=3.12"
 # the venv at the highest released version the requirement admits
 # (packages/released.json), so a requirement must keep this exact form.
 dependencies = [
-    "katsoft-llm-kit[config,sdk,local,frontdoor,jobs,pipeline,relay]>=1.19.1,<2",
+    "katsoft-llm-kit[config,sdk,local,frontdoor,jobs,pipeline,relay]>=1.20,<2",
     "katsoft-contracts>=1.0,<2",
 ]
 

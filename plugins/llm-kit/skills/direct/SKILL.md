@@ -157,6 +157,21 @@ object on stderr: exit 1 means the relay refused or did not answer, exit 2 means
 usage or configuration (including a `relay` command the installed llm-kit
 library does not have).
 
+## Codex sessions
+
+A Codex session accepts a `send` only while its owner runs `llm-kit relay codex --cd <dir>` in a terminal on
+that machine. The session then appears as `<machine>/codex/<thread>` and, in `sessions --harness codex`, as
+`live-accepting`. A Codex session without that channel does not accept messages.
+
+- The channel runs one Codex turn per message. Its reply to your `send` is `answered` with the turn's final
+  answer, or `declined` with the reason (a failed turn, or an approval or input request, which the channel
+  never approves). An answer over 8192 bytes ends with a marker that names `read` for the rest.
+- A message sent while that thread is still running a turn is not acknowledged and the relay delivers it
+  again later, so `replies --wait` can return nothing for a while. Report that and do not send it again.
+- The owner fixed the sandbox, network and approval settings when starting the channel. Do not offer to
+  change them.
+- There is no `/direct` verb that starts or continues a Codex session.
+
 ## Showing what was sent
 
 Every message sent must be visible to the owner in this session. The gate

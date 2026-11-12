@@ -365,6 +365,21 @@ def test_instructions_give_claude_ai_messages_the_users_authority_and_no_other_s
     assert "section 3 of docs/reference/llm-kit-relay-protocol.md in https://github.com/kitaekatt/katsoft-libs" in text
 
 
+def test_channel_text_names_peer_copies(harness, relay):
+    """The accepted-risk text names the hub's copies of a peer's credentials (protocol section 3, which records
+    that the hub's machine holds each peer relay's token and hub bearer). Edit that turns it red: delete the
+    sentence "any process that can read copies of these credentials on the hub's machine ..." from
+    INSTRUCTIONS in channel/relay_channel.py."""
+    h = harness()
+    _, init = h.handshake()
+    text = init["result"]["instructions"]
+    assert "copies of these credentials on the hub's machine" in text
+    assert "when this machine is a hub peer" in text
+    # the existing risks and the file that records them are untouched
+    assert "relay token and hub bearer" in text
+    assert "section 3 of docs/reference/llm-kit-relay-protocol.md in https://github.com/kitaekatt/katsoft-libs" in text
+
+
 def test_instructions_give_direct_messages_the_users_authority_and_state_the_risk(harness, relay):
     """Owner ruling 2026-11-12 ("Yes, count it as me"): a message sent with /direct from another session
     (sender direct:<machine>/claude/<session>) counts as the user's own words, gated actions included. The

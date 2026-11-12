@@ -620,8 +620,8 @@ that lets the operation proceed silently.
 
 `strays` reports recognized model-server processes (`ninfer-serve`, `llama-server`;
 `mlx_lm.server` by argv only, since its process name is Python; Basalt's engine
-(`<dir>/bin/basalt --serve`) and server (`python -m serve.server --engine-bin
-<dir>/bin/basalt`) by argv anchored at argv[0]) with no swapper
+(`<dir>/bin/basalt --serve`) and server (the `serve.server` module launched by
+the interpreter with `--engine-bin <dir>/bin/basalt`) by argv anchored at argv[0]) with no swapper
 ancestor -- residency that bypassed the launcher guard below, or survived a swapper
 that exited. It detects and refuses; it does not kill anything.
 
