@@ -8,7 +8,7 @@ pin guarantees the API). The dispatch tests use the REAL llm_kit
 (its lib/ is put on sys.path, standing in for the katsoft-llm-kit install in
 the plugin venv)
 against the shipped registry, with HOME isolated, the reachability probe
-answered, and OpenRouterBackend.complete replaced -- so no network is touched
+answered, and OpenAICompatBackend.complete replaced -- so no network is touched
 and no openai SDK is needed.
 """
 
@@ -138,7 +138,7 @@ def _real_kit(monkeypatch, tmp_path):
 
 @pytest.fixture
 def kit(monkeypatch, tmp_path):
-    """The real llm_kit with OpenRouterBackend.complete REPLACED.
+    """The real llm_kit with OpenAICompatBackend.complete REPLACED.
 
     Valid only for dispatch and non-contract assertions: a replaced
     ``complete`` never runs prepare_contract/finalize_contract, so no
@@ -159,9 +159,9 @@ def kit(monkeypatch, tmp_path):
             setattr(resp, field, value)
         return resp
 
-    monkeypatch.setattr(backends.OpenRouterBackend, "complete", complete)
+    monkeypatch.setattr(backends.OpenAICompatBackend, "complete", complete)
     monkeypatch.setattr(
-        backends.OpenRouterBackend, "classify_halt",
+        backends.OpenAICompatBackend, "classify_halt",
         lambda self, exc: behaviour["halt"] if behaviour["raise"] else None,
     )
     return {"calls": calls, "behaviour": behaviour, "reach": reach,
@@ -485,7 +485,7 @@ def test_no_events_flag_passes_no_observer(kit, tmp_path, monkeypatch):
 #
 # Every assertion that touches the output contract (sent, delivered,
 # validated, reported) uses ``kit_transport``, which fakes the transport BELOW
-# OpenRouterBackend.complete, so prepare_contract and finalize_contract really
+# OpenAICompatBackend.complete, so prepare_contract and finalize_contract really
 # run. The ``kit`` fixture replaces complete wholesale and could never show a
 # contract failure.
 # --------------------------------------------------------------------------- #
@@ -508,7 +508,7 @@ def _digest(schema):
 
 @pytest.fixture
 def kit_transport(monkeypatch, tmp_path):
-    """The real llm_kit, including OpenRouterBackend.complete; only
+    """The real llm_kit, including OpenAICompatBackend.complete; only
     the OpenAI-compatible client beneath it is faked (``_ensure_client``)."""
     modules, declaration, reach = _real_kit(monkeypatch, tmp_path)
     backends = modules["backends"]
@@ -529,7 +529,7 @@ def kit_transport(monkeypatch, tmp_path):
     # The real SDK client scopes a per-call max_retries override to a copy
     # (llm_kit >= 1.13 sets one); the fake is its own copy.
     client.with_options = lambda **_kwargs: client
-    monkeypatch.setattr(backends.OpenRouterBackend, "_ensure_client", lambda self: client)
+    monkeypatch.setattr(backends.OpenAICompatBackend, "_ensure_client", lambda self: client)
     return {"requests": requests, "behaviour": behaviour, "reach": reach,
             "declaration": declaration, **modules}
 
@@ -680,13 +680,13 @@ def test_provider_completed_without_contract_report_is_missing(kit, tmp_path, ca
 
 def test_no_provides_sends_no_output_contract(kit_transport, tmp_path, monkeypatch):
     seen = []
-    real_complete = kit_transport["backends"].OpenRouterBackend.complete
+    real_complete = kit_transport["backends"].OpenAICompatBackend.complete
 
     def spy(self, system, user, *, model, options=None):
         seen.append(getattr(options, "output_contract", None))
         return real_complete(self, system, user, model=model, options=options)
 
-    monkeypatch.setattr(kit_transport["backends"].OpenRouterBackend, "complete", spy)
+    monkeypatch.setattr(kit_transport["backends"].OpenAICompatBackend, "complete", spy)
     kit_transport["behaviour"]["text"] = '{"lines": 1}'
     rc, out, _payload = _run(tmp_path, "--model", "or-qwen")
     assert rc == 0
