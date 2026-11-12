@@ -9,6 +9,17 @@ This repository consumes released wheels. `scripts/publish.py` validates plugin
 requirements and publishes the marketplace; it does not build libraries, create
 package tags, upload to PyPI or update the authoritative release ledger.
 
+## Adoption at publish
+
+A publish whose shipping plugins include a consumer of a `katsoft-*` package
+adopts the newest verified releases first. Before preflight, `publish.py`
+fetches `$DEVROOT/katsoft-libs`, imports its ledger at `origin/HEAD` with
+`import_package_targets.py`, and commits `data/package-targets.json` to dev
+when the targets changed. The release then carries the new targets, and every
+consumer moves to them on its next bootstrap pass. `--check` reports what would
+be adopted and writes nothing. The publish refuses when the checkout is
+missing, the fetch fails, or a selected wheel does not verify on PyPI.
+
 ## Consumer targets
 
 `data/package-targets.json` is the committed, generated consumer artifact.
@@ -36,11 +47,10 @@ so consumers can advance within their existing ranges without plugin bumps.
 
 1. Change and test library behavior in katsoft-libs.
 2. Release the library through that repository's approved release procedure.
-3. Import its verified targets into this repository.
-4. Review and commit the artifact with any consumer changes.
-5. Publish the marketplace through its normal approval gate.
+3. Publish the marketplace through its normal approval gate. A publish that
+   ships a consumer adopts the newest targets itself (see "Adoption at publish").
 
-From this repository, import a verified library commit:
+To import a specific library commit by hand instead:
 
 ```bash
 uv run --extra dev python scripts/import_package_targets.py \

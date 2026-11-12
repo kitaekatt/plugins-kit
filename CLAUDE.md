@@ -194,7 +194,9 @@ releases. Edit library behavior there; this repository consumes released wheels.
 from the installed `katsoft_contracts` package; edit the canonical library instead.
 `data/package-targets.json` is a generated consumer artifact imported from a fixed
 katsoft-libs release-ledger commit. Bootstrap reads it offline; `publish.py`
-validates plugin requirements against it and publishes plugins only.
+validates plugin requirements against it and publishes plugins only. A publish
+that ships a `katsoft-*` consumer first imports the newest katsoft-libs releases
+into it and commits that to dev, so consumers always move to the latest release.
 Library versions are independent of plugin versions. Import and publication order:
 [docs/reference/package-release.md](docs/reference/package-release.md).
 
