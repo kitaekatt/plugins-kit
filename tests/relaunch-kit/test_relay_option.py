@@ -320,6 +320,42 @@ def test_an_llm_kit_without_the_channel_launches_nothing(fake_claude, capsys):
     assert fake_claude.calls() == []
 
 
+# Off by default. Shown red when written: in relay_option.relay_launch delete the
+# ``require_opt_in(channel, env)`` call: the three tests below go red.
+
+def test_relay_is_refused_while_the_relay_is_off_and_launches_nothing(fake_claude, capsys):
+    fake_claude.install_llm_kit(opt_in="the llm-kit relay is not enabled on this machine; to turn it on, put X")
+    fake_claude.script([{}])
+    assert run(fake_claude, ["--relay"]) == 2
+    err = capsys.readouterr().err
+    assert err == "clauder: --relay refused: the llm-kit relay is not enabled on this machine; to turn it on, put X.\n"
+    assert fake_claude.calls() == [] and not fake_claude.rendezvous().exists()
+
+
+def test_an_llm_kit_whose_channel_predates_the_opt_in_launches_nothing(fake_claude, capsys):
+    fake_claude.install_llm_kit("0.20.0", opt_in=False)
+    fake_claude.script([{}])
+    assert run(fake_claude, ["--relay"]) == 2
+    err = capsys.readouterr().err
+    assert "predates that" in err and "claude plugin update llm-kit@plugins-kit" in err
+    assert fake_claude.calls() == []
+
+
+def test_the_real_channel_refuses_until_relay_yaml_turns_the_relay_on(tmp_path):
+    script = REPO / "plugins" / "llm-kit" / "channel" / relay_option.SCRIPT_NAME
+    env = {"HOME": str(tmp_path), "XDG_CONFIG_HOME": str(tmp_path / "cfg"), "LLM_KIT_CHANNEL_SCRIPT": str(script)}
+    path = tmp_path / "cfg" / "llm-kit" / "relay.yaml"
+    with pytest.raises(RelayError, match=r"--relay refused: the llm-kit relay is not enabled on this machine"):
+        relay_option.relay_launch(env)
+    path.parent.mkdir(parents=True)
+    path.write_text("enabled: false\n", encoding="utf-8")
+    with pytest.raises(RelayError) as off:
+        relay_option.relay_launch(env)
+    assert "put `enabled: true` in %s" % path in str(off.value)
+    path.write_text("enabled: true\n", encoding="utf-8")
+    assert relay_option.relay_launch(env).env[relay_option.CHANNEL_SCRIPT_ENV] == str(script)
+
+
 @pytest.mark.parametrize("args", [["--relay", "-p", "hi"], ["--relay", "--bg"], ["--relay", "mcp", "list"]])
 def test_relay_is_refused_for_a_run_that_is_not_an_interactive_session(fake_claude, capsys, args):
     fake_claude.install_llm_kit()
