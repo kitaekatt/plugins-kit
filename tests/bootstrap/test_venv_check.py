@@ -1012,6 +1012,20 @@ class TestEnsureVenvReleasedTargets:
 
         assert result.passed and ran == [] and entries == []
 
+    def test_declaration_change_sync_pins_a_target_already_met(self, tmp_path, monkeypatch):
+        """Pinning only the targets that are behind turns this red: the venv is AT
+        its target, the stamp is stale, and the sync must still carry the pin."""
+        project, ledger, venv_path, ran = self._wire(tmp_path, monkeypatch)
+        _install(venv_path, _LLM, "1.2.0")
+        assert not _venv_sync_stamp_path(venv_path).exists()   # stale: content_changed
+
+        result, entries = ensure_venv(str(project), venv_path, released_ledger=ledger)
+
+        assert result.passed, result.message
+        assert len(ran) == 1 and ran[0][4:] == ["-P", f"{_LLM}==1.2.0"]
+        assert any("dependency declarations changed" in e and f"-P {_LLM}==1.2.0" in e
+                   for e in entries)
+
     def test_target_miss_is_failed_no_stamp(self, tmp_path, monkeypatch):
         """Treating a failed pinned sync as the old passing venv turns this red."""
         project, ledger, venv_path, ran = self._wire(
@@ -1147,6 +1161,69 @@ class TestEnsureVenvReleasedTargets:
         assert result.passed, entries
         assert installed_version(venv_path, "relprobe") == "1.2.0", entries
         assert "re-synced" in entries
+
+    def test_real_uv_holds_a_met_target_when_a_newer_release_is_on_the_index(
+            self, tmp_path, monkeypatch):
+        """End to end: the venv holds the ledger target 1.1.0, the index also offers
+        1.2.0, and a declaration change forces a sync. Without the pin, uv resolves
+        1.2.0 and the target check fails (the 2026-11-12 task-kit 0.22.0 pass)."""
+        if not find_uv():
+            pytest.skip("uv not available")
+        project, venv_path = _relprobe_project(tmp_path, monkeypatch)
+        ledger = _ledger(tmp_path / "mkt" / "released.json", relprobe=["1.1.0"])
+        first, entries = ensure_venv(str(project), venv_path, released_ledger=ledger)
+        assert first.passed, entries
+        assert installed_version(venv_path, "relprobe") == "1.1.0"
+        # A new plugin version is a fresh cache directory: no uv.lock carries the
+        # old resolution over, so uv resolves from the index again.
+        (project / "uv.lock").unlink()
+        with open(project / "pyproject.toml", "a", encoding="utf-8") as f:
+            f.write("# a declaration change\n")
+
+        result, entries = ensure_venv(str(project), venv_path, released_ledger=ledger)
+
+        assert result.passed, entries
+        assert installed_version(venv_path, "relprobe") == "1.1.0", entries
+
+    def test_real_uv_moves_a_venv_ahead_of_its_target_back_to_it(self, tmp_path, monkeypatch):
+        """A venv already past the ledger (what the unpinned sync left) returns to the target."""
+        if not find_uv():
+            pytest.skip("uv not available")
+        project, venv_path = _relprobe_project(tmp_path, monkeypatch)
+        first, entries = ensure_venv(str(project), venv_path)
+        assert first.passed, entries
+        assert installed_version(venv_path, "relprobe") == "1.2.0"
+        ledger = _ledger(tmp_path / "mkt" / "released.json", relprobe=["1.1.0"])
+
+        result, entries = ensure_venv(str(project), venv_path, released_ledger=ledger)
+
+        assert result.passed, entries
+        assert installed_version(venv_path, "relprobe") == "1.1.0", entries
+
+
+def _relprobe_project(tmp_path, monkeypatch):
+    """A project requiring relprobe>=1.1,<2 and a local index offering 1.1.0 and 1.2.0."""
+    import zipfile
+    wheels = tmp_path / "wheels"
+    wheels.mkdir()
+    for version in ("1.1.0", "1.2.0"):
+        info = f"relprobe-{version}.dist-info"
+        with zipfile.ZipFile(wheels / f"relprobe-{version}-py3-none-any.whl", "w") as z:
+            z.writestr("relprobe/__init__.py", f"VERSION = '{version}'\n")
+            z.writestr(f"{info}/METADATA",
+                       f"Metadata-Version: 2.1\nName: relprobe\nVersion: {version}\n")
+            z.writestr(f"{info}/WHEEL",
+                       "Wheel-Version: 1.0\nGenerator: t\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
+            z.writestr(f"{info}/RECORD", "")
+    project = tmp_path / "proj"
+    project.mkdir()
+    (project / "pyproject.toml").write_text(
+        "[project]\nname = 'demo'\nversion = '0'\nrequires-python = '>=3.12'\n"
+        "dependencies = ['relprobe>=1.1,<2']\n[tool.uv]\npackage = false\n",
+        encoding="utf-8")
+    monkeypatch.setenv("UV_NO_INDEX", "1")
+    monkeypatch.setenv("UV_FIND_LINKS", str(wheels))
+    return project, str(tmp_path / "data" / ".venv")
 
 
 class TestPhaseVenvLedgerPlumbing:
