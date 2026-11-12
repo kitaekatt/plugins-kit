@@ -654,6 +654,31 @@ class TestMentionPrefixIsSegmented:
         assert rx.search("see notes.md.bak") is None
         assert rx.search("see docs/notes.md.").group(2) == "notes.md"  # sentence period
 
+    def test_nested_paths_with_both_separators_still_match(self):
+        from discover_project_doc import _compile_mention_regex
+        rx = _compile_mention_regex({"cited.md", "notes.md"})
+        m = rx.search("see docs/cited.md.")
+        assert (m.group(1), m.group(2)) == ("docs/", "cited.md")
+        m = rx.search("a\\b\\notes.md")
+        assert (m.group(1), m.group(2)) == ("a\\b\\", "notes.md")
+        m = rx.search("x/y/notes.md")
+        assert (m.group(1), m.group(2)) == ("x/y/", "notes.md")
+        m = rx.search("../ref/cited.md")
+        assert (m.group(1), m.group(2)) == ("../ref/", "cited.md")
+        assert rx.search("x/y/notes.md.bak") is None
+
+    def test_long_unicode_escape_run_does_not_backtrack_exponentially(self):
+        """A JSON file with a long run of \\uXXXX escapes made the old prefix
+        (backslash in both the segment class and the separator class) cost
+        2**n. The scan must return in well under half a second."""
+        import time
+        from discover_project_doc import _compile_mention_regex
+        rx = _compile_mention_regex({"cited.md"})
+        text = "\\u88ab" * 26  # old prefix: ~4 s; at 200 it never returns
+        start = time.perf_counter()
+        assert rx.search(text) is None
+        assert time.perf_counter() - start < 0.5
+
 
 class TestSkippedDirsReporting:
     """discover_project_doc.py gets the same --include-dir / MD_DOMAIN_INCLUDE_DIRS

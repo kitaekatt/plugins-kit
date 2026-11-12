@@ -471,7 +471,10 @@ def _compile_mention_regex(basenames: set[str]):
     # separator means a basename can only match where a basename starts.
     # The trailing lookahead stops "notes.md" matching inside "notes.md.bak"
     # while still allowing a sentence-ending period ("see docs/cited.md.").
-    prefix = r"((?:[\w.\\-]+[/\\])*)"
+    # The segment class must not contain a separator: with a backslash in both
+    # the segment class and the separator class, a run of "\\uXXXX" escapes
+    # (JSON) can be split in 2**n ways and the match backtracks exponentially.
+    prefix = r"((?:[\w.-]+[/\\])*)"
     return re.compile(rf"(?<!{_MENTION_CHARS}){prefix}({alts})(?![\w-]|\.\w)")
 
 
