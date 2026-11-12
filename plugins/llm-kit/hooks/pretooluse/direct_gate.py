@@ -21,7 +21,11 @@ there.
 Behaviour
 ---------
 * A Bash command that does not invoke ``llm-kit relay client`` is ignored (no
-  output, exit 0): the normal permission flow is untouched.
+  output, exit 0): the normal permission flow is untouched. Invoking means a
+  command word (after separators, substitutions and ``bash -c`` strings are
+  read as the shell reads them) that runs the launcher followed by ``relay
+  client``; the same words in a quoted string, commit message, heredoc body,
+  comment, or echo/grep argument are text and do not engage the gate.
 * A command that invokes it is allowed only when ALL of these hold; otherwise
   it is denied with the reason:
 
@@ -61,7 +65,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shlex
 import socket
 import sys
 from pathlib import Path
@@ -71,7 +74,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import direct_relay as R  # noqa: E402
 
 _MAX_DEPTH = 3
-_PUNCT = set(";&|()<>")
 _TOOL_RE = re.compile(r"^llm[-_]kit(?:\.exe|\.cli|\.__main__)?$")
 _MENTION_RE = re.compile(r"relay\s+client")
 _BARE_RE = re.compile(r"[A-Za-z0-9_./:=@%+,-]")
@@ -112,46 +114,355 @@ class ClientCall:
 
 # -- finding relay client calls (any form) ---------------------------------------------------
 
-def _tokenize(command: str) -> list[str]:
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
-    lexer.whitespace_split = True
-    return list(lexer)
+class _Word:
+    """One shell word: its literal text and whether a shell would expand it (variable, glob, substitution)."""
+
+    __slots__ = ("text", "dynamic")
+
+    def __init__(self, text: str, dynamic: bool) -> None:
+        self.text = text
+        self.dynamic = dynamic
 
 
-def _segments(tokens: Sequence[str]) -> list[list[str]]:
-    segments: list[list[str]] = [[]]
-    for token in tokens:
-        if token and set(token) <= _PUNCT:
-            segments.append([])
-        else:
-            segments[-1].append(token)
-    return [s for s in segments if s]
+_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=")
+_KEYWORDS = frozenset({"{", "}", "!", "if", "then", "else", "elif", "do", "while", "until", "time", "coproc",
+                       "function"})
+_SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh", "eval"})
+#: command words that run another command given as their arguments.
+_WRAPPERS = _SHELLS | frozenset({
+    "env", "sudo", "doas", "command", "builtin", "exec", "nohup", "nice", "ionice", "timeout", "xargs", "stdbuf",
+    "setsid", "caffeinate", "watch", "uv", "uvx", "pipx", "npx", "script",
+})
+_PYTHON_RE = re.compile(r"^python[0-9.]*(?:\.exe)?$")
+
+
+def _mentions(text: str) -> bool:
+    """Cheap pre-filter: could ``text`` spell ``relay client`` once quotes and escapes are removed?"""
+    return _MENTION_RE.search(re.sub(r"['\"\\]", "", text)) is not None
+
+
+class _Scanner:
+    """Splits a shell command line into simple commands (lists of words), the way a shell reads it.
+
+    Quoted text, comments, redirection targets and heredoc bodies are never command words. Command
+    substitutions ($( ), backticks, <( ), >( )) found in unquoted text, double quotes or an unquoted-delimiter
+    heredoc body are scanned as commands of their own. Raises GateParseError for text it cannot read.
+    """
+
+    def __init__(self, text: str, depth: int) -> None:
+        if depth > _MAX_DEPTH:
+            raise GateParseError("the command nests substitutions or wrappers too deeply to read")
+        self.s = text.replace("\\\n", "")
+        self.depth = depth
+        self.commands: list[list[_Word]] = []
+        self.pending_heredocs: list[tuple[str, bool, bool]] = []  # (delimiter, quoted, strip tabs)
+
+    def scan(self) -> list[list[_Word]]:
+        end = self._run(0, stop_paren=False)
+        assert end == len(self.s)
+        return self.commands
+
+    # -- nested text -------------------------------------------------------------------------
+    def _nested(self, text: str) -> None:
+        self.commands.extend(_Scanner(text, self.depth + 1).scan())
+
+    def _paren_substitution(self, i: int) -> int:
+        """``i`` is just past ``$(``; scan to the matching ``)``; returns the index past it."""
+        sub = _Scanner.__new__(_Scanner)
+        sub.s, sub.depth, sub.commands, sub.pending_heredocs = self.s, self.depth + 1, self.commands, []
+        if sub.depth > _MAX_DEPTH:
+            raise GateParseError("the command nests substitutions or wrappers too deeply to read")
+        return sub._run(i, stop_paren=True)
+
+    def _backtick(self, i: int) -> int:
+        """``i`` is just past an opening backtick; returns the index past the closing one."""
+        j, buf = i, []
+        while j < len(self.s):
+            c = self.s[j]
+            if c == "\\" and j + 1 < len(self.s):
+                nxt = self.s[j + 1]
+                buf.append(nxt if nxt in "`\\$" else c + nxt)
+                j += 2
+                continue
+            if c == "`":
+                self._nested("".join(buf))
+                return j + 1
+            buf.append(c)
+            j += 1
+        raise GateParseError("the command has an unterminated backtick")
+
+    def _double_quoted(self, i: int, closing: Optional[str] = '"') -> tuple[str, bool, int]:
+        """``i`` is just past an opening double quote. Returns (text, dynamic, index past the closing quote).
+
+        ``closing=None`` scans to the end of the text (a heredoc body)."""
+        out: list[str] = []
+        dynamic = False
+        n = len(self.s)
+        while i < n:
+            c = self.s[i]
+            if closing is not None and c == closing:
+                return "".join(out), dynamic, i + 1
+            if c == "\\" and i + 1 < n:
+                nxt = self.s[i + 1]
+                out.append(nxt if nxt in '"\\$`' else c + nxt)
+                i += 2
+            elif c == "$" and self.s.startswith("(", i + 1):
+                dynamic = True
+                i = self._paren_substitution(i + 2)
+            elif c == "$":
+                dynamic = dynamic or re.match(r"[A-Za-z0-9_{@*#?!$-]", self.s[i + 1:i + 2]) is not None
+                out.append(c)
+                i += 1
+            elif c == "`":
+                dynamic = True
+                i = self._backtick(i + 1)
+            else:
+                out.append(c)
+                i += 1
+        if closing is None:
+            return "".join(out), dynamic, i
+        raise GateParseError("the command has an unterminated double quote")
+
+    # -- heredocs ----------------------------------------------------------------------------
+    def _read_heredoc_bodies(self, i: int) -> int:
+        """``i`` is just past a newline; consume the body of each pending heredoc."""
+        n = len(self.s)
+        for delimiter, quoted, strip in self.pending_heredocs:
+            body: list[str] = []
+            while i < n:
+                eol = self.s.find("\n", i)
+                line = self.s[i:] if eol < 0 else self.s[i:eol]
+                i = n if eol < 0 else eol + 1
+                if (line.lstrip("\t") if strip else line) == delimiter:
+                    break
+                body.append(line)
+            if not quoted:
+                self._expand_heredoc_body("\n".join(body))
+        self.pending_heredocs = []
+        return i
+
+    def _expand_heredoc_body(self, body: str) -> None:
+        """An unquoted-delimiter body is double-quote-like text: only its substitutions run."""
+        probe = _Scanner.__new__(_Scanner)
+        probe.s, probe.depth, probe.commands, probe.pending_heredocs = body, self.depth + 1, self.commands, []
+        probe._double_quoted(0, None)
+
+    def _heredoc_delimiter(self, i: int) -> tuple[str, bool, int]:
+        n = len(self.s)
+        while i < n and self.s[i] in " \t":
+            i += 1
+        raw_start = i
+        while i < n and self.s[i] not in " \t\n;&|()<>":
+            if self.s[i] in "'\"":
+                close = self.s.find(self.s[i], i + 1)
+                if close < 0:
+                    raise GateParseError("the command has an unterminated quote in a heredoc delimiter")
+                i = close
+            i += 1
+        raw = self.s[raw_start:i]
+        if not raw:
+            raise GateParseError("the command has a heredoc with no delimiter")
+        quoted = any(ch in raw for ch in "'\"\\")
+        return re.sub(r"['\"\\]", "", raw), quoted, i
+
+    # -- the main loop -----------------------------------------------------------------------
+    def _run(self, i: int, *, stop_paren: bool) -> int:
+        s, n = self.s, len(self.s)
+        words: list[_Word] = []
+        parts: list[str] = []
+        dynamic = False
+        in_word = False
+        skip_next = False  # the next word is a redirection target
+        depth = 0
+
+        def end_word() -> None:
+            nonlocal parts, dynamic, in_word, skip_next
+            if in_word:
+                if skip_next:
+                    skip_next = False
+                else:
+                    words.append(_Word("".join(parts), dynamic))
+            parts, dynamic, in_word = [], False, False
+
+        def end_command() -> None:
+            nonlocal words, skip_next
+            end_word()
+            if words:
+                self.commands.append(words)
+            words, skip_next = [], False
+
+        while i < n:
+            c = s[i]
+            if c in " \t":
+                end_word()
+                i += 1
+            elif c == "\n":
+                end_command()
+                i += 1
+                if self.pending_heredocs:
+                    i = self._read_heredoc_bodies(i)
+            elif c == "#" and not in_word:
+                eol = s.find("\n", i)
+                i = n if eol < 0 else eol
+            elif c in ";&|":
+                end_command()
+                i += 1
+            elif c == "(":
+                end_command()
+                depth += 1
+                i += 1
+            elif c == ")":
+                end_command()
+                if depth > 0:
+                    depth -= 1
+                    i += 1
+                elif stop_paren:
+                    return i + 1
+                else:
+                    raise GateParseError("the command has an unbalanced parenthesis")
+            elif c in "<>":
+                if s.startswith("(", i + 1):
+                    in_word, dynamic = True, True
+                    i = self._paren_substitution(i + 2)
+                    continue
+                if in_word and "".join(parts).isdigit() and not dynamic:
+                    parts, in_word = [], False  # a file descriptor prefix such as 2>
+                end_word()
+                if s.startswith("<<", i) and not s.startswith("<<<", i):
+                    i += 2
+                    strip = s.startswith("-", i)
+                    i += 1 if strip else 0
+                    delimiter, quoted, i = self._heredoc_delimiter(i)
+                    self.pending_heredocs.append((delimiter, quoted, strip))
+                else:
+                    i += 3 if s.startswith("<<<", i) else (2 if s.startswith(">>", i) or s.startswith(">&", i)
+                                                          or s.startswith("<&", i) or s.startswith(">|", i) else 1)
+                    skip_next = True
+            elif c == "'":
+                close = s.find("'", i + 1)
+                if close < 0:
+                    raise GateParseError("the command has an unterminated single quote")
+                parts.append(s[i + 1:close])
+                in_word = True
+                i = close + 1
+            elif c == '"':
+                text, dyn, i = self._double_quoted(i + 1)
+                parts.append(text)
+                dynamic, in_word = dynamic or dyn, True
+            elif c == "`":
+                dynamic, in_word = True, True
+                i = self._backtick(i + 1)
+            elif c == "$" and s.startswith("(", i + 1):
+                dynamic, in_word = True, True
+                i = self._paren_substitution(i + 2)
+            elif c == "$" and s.startswith("'", i + 1):
+                j = i + 2
+                while j < n and s[j] != "'":
+                    j += 2 if s[j] == "\\" else 1
+                if j >= n:
+                    raise GateParseError("the command has an unterminated $'...' string")
+                parts.append(s[i + 2:j])
+                dynamic, in_word = True, True  # escapes are decoded by the shell: not the literal text
+                i = j + 1
+            elif c == "$":
+                parts.append(c)
+                dynamic, in_word = True, True
+                i += 1
+            elif c == "\\":
+                if i + 1 >= n:
+                    raise GateParseError("the command ends in a backslash")
+                parts.append(s[i + 1])
+                in_word = True
+                i += 2
+            else:
+                if c in "*?[~" and (c != "~" or not in_word):
+                    dynamic = True
+                parts.append(c)
+                in_word = True
+                i += 1
+        if stop_paren:
+            raise GateParseError("the command has an unterminated $( substitution")
+        end_command()
+        return i
+
+
+def _relay_client_index(words: Sequence[_Word], start: int = 0) -> int:
+    """The index of the ``relay`` word of the first literal ``relay client`` pair at or after ``start``, or -1."""
+    for i in range(start, len(words) - 1):
+        if words[i].text == "relay" and words[i + 1].text == "client" and not (words[i].dynamic or words[i + 1].dynamic):
+            return i
+    return -1
+
+
+def _is_tool(word: _Word) -> bool:
+    return not word.dynamic and _TOOL_RE.match(Path(word.text).name) is not None
+
+
+def _invocations(words: Sequence[_Word], depth: int) -> list[list[str]]:
+    """The arguments after ``relay client`` when this simple command runs the client, in command position."""
+    k = 0
+    while k < len(words) and (_ASSIGN_RE.match(words[k].text) or words[k].text in _KEYWORDS):
+        k += 1
+    words = words[k:]
+    if not words:
+        return []
+    head, rest = words[0], words[1:]
+    pair = _relay_client_index(words)
+    if pair < 0:
+        # No literal ``relay client`` pair here. A shell or eval may still carry one inside a string argument.
+        base = Path(head.text).name
+        if not head.dynamic and base in _SHELLS:
+            return _from_strings(rest, depth)
+        return []
+    if head.dynamic:
+        raise GateParseError("a command word is built by the shell (variable, glob or substitution) before "
+                             "`relay client`")
+    base = Path(head.text).name
+    if _TOOL_RE.match(base):
+        return [[w.text for w in words[pair + 2:]]]
+    if base in _WRAPPERS or _PYTHON_RE.match(base):
+        # Wrapper or interpreter: the tool word may follow, after options.
+        if any(_is_tool(w) for w in words[:pair]):
+            return [[w.text for w in words[pair + 2:]]]
+        if any(w.dynamic for w in words[:pair]):
+            raise GateParseError("a word before `relay client` is built by the shell, so the command word is unknown")
+        if base in _SHELLS:
+            return _from_strings(rest, depth)
+        return []
+    return []
+
+
+def _from_strings(words: Sequence[_Word], depth: int) -> list[list[str]]:
+    """Invocations inside string arguments of a shell or eval (``bash -c '...'``)."""
+    found: list[list[str]] = []
+    for word in words:
+        if _mentions(word.text):
+            found.extend(_find(word.text, depth + 1))
+    return found
+
+
+def _find(command: str, depth: int) -> list[list[str]]:
+    found: list[list[str]] = []
+    for words in _Scanner(command, depth).scan():
+        found.extend(_invocations(words, depth))
+    return found
 
 
 def find_client_args(command: str, depth: int = 0) -> list[list[str]]:
     """The argument list after ``relay client`` for each invocation in ``command``.
 
-    Raises GateParseError when the command mentions ``relay client`` but cannot be tokenized.
+    An invocation is a simple command, in command position, whose command word is this tool
+    (``llm-kit``, ``llm_kit``) or a wrapper, interpreter or shell that runs it, followed by the words ``relay
+    client``. The same words inside a quoted string, a commit message, a heredoc body, a comment, an echo or grep
+    argument or a redirection target are text, not an invocation. Command substitutions and ``bash -c`` strings
+    are read as commands.
+
+    Raises GateParseError when the command mentions ``relay client`` and cannot be read, or when a real
+    invocation's command word is built by the shell: an ambiguous invocation is refused, never ignored.
     """
-    if not _MENTION_RE.search(command):
+    if not _mentions(command):
         return []
-    if depth > _MAX_DEPTH:
-        raise GateParseError("the command nests the relay client call too deeply to read")
-    try:
-        tokens = _tokenize(command)
-    except ValueError as exc:
-        raise GateParseError(f"the command cannot be parsed ({exc})") from exc
-    found: list[list[str]] = []
-    for token in tokens:
-        if re.search(r"\s", token) and _MENTION_RE.search(token):
-            found.extend(find_client_args(token, depth + 1))
-    for segment in _segments(tokens):
-        for i, token in enumerate(segment[:-1]):
-            if token == "relay" and segment[i + 1] == "client":
-                if any(_TOOL_RE.match(Path(t).name) for t in segment[:i]):
-                    found.append(segment[i + 2:])
-                break
-    return found
+    return _find(command, depth)
 
 
 # -- the one form the gate allows ------------------------------------------------------------
