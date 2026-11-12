@@ -105,8 +105,7 @@ task sessions publish                                             publish this m
 The export carries each task's registrations (`tasks[].sessions[]`), so databench shows them.
 
 `~/.claude/task.local.yaml` takes `sessions: {record: false}` to turn registration off and `sessions: {host: <id>}` to
-replace the derived host id. Registration is refused on Windows: the process verification (`CLAUDE_PID` ancestry and the
-process start stamp) has not been measured there, and `work` says so on a `session:` line. The contract is in
+replace the derived host id. Registration works on macOS, Linux and Windows. The contract is in
 `skills/task/SKILL.md`.
 
 ## Install

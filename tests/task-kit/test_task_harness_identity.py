@@ -52,7 +52,7 @@ def probe_env() -> dict:
 @needs_bash
 def test_identity_inside_a_tool_shell_is_the_claude_process_not_the_shell():
     """The shell's command line mentions claude (the snapshot path) and the old walk stopped there."""
-    command = f"{sys.executable} -c \"{PROBE}\""
+    command = f"'{Path(sys.executable).as_posix()}' -c \"{PROBE}\""
     with FakeClaude("sess-0001", command, env=probe_env()) as fake:
         assert fake.result["returncode"] == 0, fake.result["stderr"]
         seen = json.loads(fake.result["stdout"])
@@ -249,7 +249,12 @@ def test_a_killed_process_and_an_unreaped_zombie_are_not_running(sleeper):
     stamp = procstamp.stamp_of(sleeper.pid)
     sleeper.kill()
     deadline = time.monotonic() + 10
-    while time.monotonic() < deadline and psutil.Process(sleeper.pid).status() != psutil.STATUS_ZOMBIE:
+    while time.monotonic() < deadline:  # Windows has no zombies: the process is simply gone
+        try:
+            if psutil.Process(sleeper.pid).status() == psutil.STATUS_ZOMBIE:
+                break
+        except psutil.NoSuchProcess:
+            break
         time.sleep(0.01)
     assert not procstamp.is_running(stamp)  # a zombie: killed but not yet waited for
     sleeper.wait()
@@ -338,39 +343,18 @@ def test_try_lock_reports_a_held_lock_without_waiting(tmp_path):
         oslock.unlock(second)
 
 
-# -- Windows gate: registration is refused until process verification is measured there ---------------------
+# -- Windows: registration is not gated by platform ----------------------------------------------------------
 
 
-@pytest.mark.parametrize("platform", ["win32", "cygwin", "msys"])
-def test_identity_is_refused_on_windows_with_a_stated_reason(platform, sleeper):
-    """Revert: drop the platform check in resolve_identity -> the call proceeds past the gate (red)."""
-    env = {"CLAUDE_CODE_SESSION_ID": "sid-1", "CLAUDE_PID": str(os.getpid())}
-    with pytest.raises(harness.IdentityError) as caught:
-        harness.resolve_identity(env, platform=platform)
-    assert str(caught.value) == harness.WINDOWS_REFUSAL
-    assert "not supported on Windows" in str(caught.value) and "CLAUDE_PID" in str(caught.value)
-
-
-def test_the_windows_refusal_precedes_every_other_identity_check():
-    """A Windows caller with no session id still gets the platform reason, never a misleading env message."""
-    with pytest.raises(harness.IdentityError) as caught:
-        harness.resolve_identity({}, platform="win32")
-    assert str(caught.value) == harness.WINDOWS_REFUSAL
-
-
-def test_other_platforms_pass_the_gate_and_reach_the_ordinary_checks():
-    with pytest.raises(harness.IdentityError) as caught:
-        harness.resolve_identity({"CLAUDE_CODE_SESSION_ID": "sid-1"}, platform="darwin")
-    assert "CLAUDE_PID is not set" in str(caught.value)
-
-
-def test_work_reports_a_windows_refusal_on_the_session_line_and_writes_nothing(monkeypatch, tmp_path):
-    """Revert: drop the gate -> registration is attempted on Windows (red on both assertions)."""
+def test_work_registers_on_windows_rather_than_refusing(monkeypatch, tmp_path):
+    """Revert: restore a Windows platform gate in resolve_identity -> the session line names it (red)."""
     from task_system import sessions_cli
 
     monkeypatch.setattr(sys, "platform", "win32")
     env = {"CLAUDE_CODE_SESSION_ID": "sid-1", "CLAUDE_PID": str(os.getpid())}
     lines = sessions_cli.register_for_work(tmp_path, "alpha", env=env, config_path=tmp_path / "none.yaml",
                                            data_dir=tmp_path / "data")
-    assert lines == [f"session: not registered: {harness.WINDOWS_REFUSAL}"]
-    assert not (tmp_path / "data").exists() and not (tmp_path / "dev").exists()
+    joined = "\n".join(lines)
+    assert "Windows" not in joined
+    # The gate is gone, so the ordinary checks run: this process is not its own ancestor.
+    assert "not an ancestor" in joined
