@@ -340,21 +340,27 @@ unconfigurable opinion whose test passes is a finding.
   off. I don't think sending a message should show a permission prompt. I do think
   messages that are sent should be visible in harness."
 
-- **llm-kit's channel server tells a session that a `claude.ai/<user>` message is the
-  owner's own words, gated actions included.** The instruction text in
+- **llm-kit's channel server tells a session that a `claude.ai/<user>` or `direct:` message
+  is the owner's own words, gated actions included.** The instruction text in
   `llm-kit/channel/relay_channel.py` (`INSTRUCTIONS`) gives a relay message whose sender
-  starts with `claude.ai/` the authority of a prompt typed in the session; every other
-  sender (another session's `direct:` origin, `operator:`) stays another session's
-  request. Under relay alternative A this is forgeable: any process that can read the
-  machine's relay token and hub bearer (any Claude session running as the owner) can send
-  a message as `claude.ai/<user>` and so impersonate the owner. A team will reasonably
-  want remote messages kept advisory; we decline a flag because the owner chose this
-  knowing the risk, and a session launched without the channel (`clauder` without
-  `--relay`) receives no messages at all. Such a team does not launch sessions with the
-  channel. Owner rulings 2026-11-11 (decision 7): "Let remote count as you" (a message the
-  owner sends from claude.ai counts as the owner's own words, gated actions included),
-  then "Switch it on now": "Treat claude.ai messages as your words today, accepting that
-  a local session could impersonate you." The protocol side is
+  starts with `claude.ai/` (the claude.ai connector, through the hub) or `direct:` (a
+  Claude Code session on the same machine where the owner typed `/direct`) the authority of
+  a prompt typed in the session; any other sender stays an untrusted request. Under relay
+  alternative A both are forgeable: any process that can read the machine's relay token and
+  hub bearer (any Claude session running as the owner) can send a message as
+  `claude.ai/<user>`, and any process that can read the relay token can mint a grant for,
+  and send as, the `direct:` origin of any Claude session on the machine without `/direct`
+  being typed. The Claude in a `/direct` session can also send a message the owner did not
+  write. A team will reasonably want remote and session-to-session messages kept advisory;
+  we decline a flag because the owner chose this knowing the risk, and a session launched
+  without the channel (`clauder` without `--relay`) receives no messages at all. Such a
+  team does not launch sessions with the channel. Owner rulings 2026-11-11 (decision 7):
+  "Let remote count as you" (a message the owner sends from claude.ai counts as the
+  owner's own words, gated actions included), then "Switch it on now": "Treat claude.ai
+  messages as your words today, accepting that a local session could impersonate you."
+  Owner ruling 2026-11-12, "Yes, count it as me": "Any session where you've typed /direct
+  can send messages that carry your authority. The risk: that session's Claude could send
+  one without you writing it." The protocol side is
   `docs/reference/llm-kit-relay-protocol.md` section 3 in katsoft-libs.
 
 An opinion that FAILS the test needs neither a register entry nor a seam -- it is simply a
