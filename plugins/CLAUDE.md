@@ -340,6 +340,23 @@ unconfigurable opinion whose test passes is a finding.
   off. I don't think sending a message should show a permission prompt. I do think
   messages that are sent should be visible in harness."
 
+- **llm-kit's channel server tells a session that a `claude.ai/<user>` message is the
+  owner's own words, gated actions included.** The instruction text in
+  `llm-kit/channel/relay_channel.py` (`INSTRUCTIONS`) gives a relay message whose sender
+  starts with `claude.ai/` the authority of a prompt typed in the session; every other
+  sender (another session's `direct:` origin, `operator:`) stays another session's
+  request. Under relay alternative A this is forgeable: any process that can read the
+  machine's relay token and hub bearer (any Claude session running as the owner) can send
+  a message as `claude.ai/<user>` and so impersonate the owner. A team will reasonably
+  want remote messages kept advisory; we decline a flag because the owner chose this
+  knowing the risk, and a session launched without the channel (`clauder` without
+  `--relay`) receives no messages at all. Such a team does not launch sessions with the
+  channel. Owner rulings 2026-11-11 (decision 7): "Let remote count as you" (a message the
+  owner sends from claude.ai counts as the owner's own words, gated actions included),
+  then "Switch it on now": "Treat claude.ai messages as your words today, accepting that
+  a local session could impersonate you." The protocol side is
+  `docs/reference/llm-kit-relay-protocol.md` section 3 in katsoft-libs.
+
 An opinion that FAILS the test needs neither a register entry nor a seam -- it is simply a
 good default. Opinions that PASS and are still unconfigurable are findings, tracked with
 per-finding verdicts in the reference above; known examples are the task system's durability
