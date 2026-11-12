@@ -12,7 +12,8 @@ Edits that turn each test red (each shown red when this file was written):
 * byte copy -- change one character in hooks/winacl.py (or delete the file): test_winacl_vendored_bytes_equal_source.
 * token read on nt -- in direct_relay.read_token delete the ``_read_validated_nt`` branch (back to the mode check):
   test_hook_token_read_nt_policy goes red.
-* enablement record on nt -- in direct_relay.enablement and direct_relay.enable delete the ``_on_nt()`` branches:
+* enablement record on nt -- in direct_relay.enablement and direct_relay.enable delete the ``_on_nt()`` branches (or
+  delete the ``refuse_writable_ancestors`` call in _write_private_nt):
   test_enablement_record_nt_policy goes red.
 * loading the copy -- drop the ``llm_kit.relay.config`` stand-in in direct_relay.load_winacl:
   test_load_winacl_runs_without_llm_kit goes red.
@@ -75,6 +76,9 @@ class FakeWinacl:
         self.calls.append((what, os.path.basename(str(path))))
         if any(str(path).endswith(name) for name in self.bad):
             raise self.R.HookError("grants access to S-1-1-0; only the current user and SYSTEM may have it")
+
+    def refuse_writable_ancestors(self, path: Any) -> None:
+        self._judge("refuse_writable_ancestors", path)
 
     def validate_fd(self, fd: int, path: Any) -> None:
         self._judge("validate_fd", path)
@@ -151,7 +155,8 @@ def test_enablement_record_nt_policy(tmp_path, monkeypatch, R):
 
     path = R.enable(env, SESSION, "/direct", now=1.0)
     kinds = [what for what, _ in fake.calls]
-    assert kinds[:5] == ["create_private_dir", "provision_dir", "validate", "create_private_file", "provision_fd"]
+    assert kinds[:6] == ["refuse_writable_ancestors", "create_private_dir", "provision_dir", "validate",
+                         "create_private_file", "provision_fd"]
     assert kinds.index("validate_fd") < len(kinds) - 1 and kinds[-1] == "validate", kinds  # the temp file is judged before the final path
     assert fake.calls[-1] == ("validate", path.name)
     assert json.loads(path.read_text(encoding="ascii"))["session_id"] == SESSION
@@ -172,6 +177,13 @@ def test_enablement_record_nt_policy(tmp_path, monkeypatch, R):
     _fake_nt(monkeypatch, R, gone)
     path.unlink()
     assert R.enablement(env, SESSION) is None  # no record: not enabled, not an error
+
+    shared = FakeWinacl(R, bad=("enabled",))  # a writable ancestor refuses the directory before anything is created
+    _fake_nt(monkeypatch, R, shared)
+    with pytest.raises(R.HookError, match="only the current user and SYSTEM"):
+        R.enable(env, SESSION, "/direct", now=2.0)
+    assert [what for what, _ in shared.calls] == ["refuse_writable_ancestors"]
+    assert not path.parent.exists() or not list(path.parent.iterdir())
 
     broken = FakeWinacl(R, bad=(".tmp",))  # a temp file the ACL refuses is never written to
     _fake_nt(monkeypatch, R, broken)

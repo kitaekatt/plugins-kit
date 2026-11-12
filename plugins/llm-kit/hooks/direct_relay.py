@@ -185,6 +185,7 @@ def _write_private_nt(path: Path, data: bytes, kind: str) -> None:
     winacl = load_winacl()
     parent = path.parent
     parent.parent.mkdir(parents=True, exist_ok=True)
+    winacl.refuse_writable_ancestors(parent)  # strict container chain, lenient above, as for the library's state root
     try:
         winacl.create_private_dir(parent)
     except FileExistsError:
