@@ -763,6 +763,11 @@ def test_every_real_invocation_form_engages_the_gate_and_is_refused_when_not_ena
     f"uv run llm-kit relay client machines --session {SESSION}",
     f"llm-kit relay client machines --session {SESSION}",
     f"git commit -m 'x' && {client('machines')}",
+    f"nohup bash -c '{client('machines')}'",
+    f"env bash -c '{client('machines')}'",
+    f"timeout 30 sh -c '{client('machines')}'",
+    f"sudo bash -c '{client('machines')}'",
+    f"env FOO=1 nohup bash -c '{client('machines')}'",
 ])
 def test_a_chained_or_wrapped_real_invocation_still_engages_the_gate(relay, home, command):
     verdict, reason = decision(run_hook(GATE_HOOK, bash_payload(command), home)[1])

@@ -411,8 +411,12 @@ def _invocations(words: Sequence[_Word], depth: int) -> list[list[str]]:
     if pair < 0:
         # No literal ``relay client`` pair here. A shell or eval may still carry one inside a string argument.
         base = Path(head.text).name
-        if not head.dynamic and base in _SHELLS:
-            return _from_strings(rest, depth)
+        if not head.dynamic and base in _WRAPPERS:
+            # Behind any wrapper chain (``nohup``, ``timeout 30``, ``env FOO=1 ...``), a shell or eval
+            # carries the command in a string argument.
+            for j, word in enumerate(words):
+                if not word.dynamic and Path(word.text).name in _SHELLS:
+                    return _from_strings(words[j + 1:], depth)
         return []
     if head.dynamic:
         raise GateParseError("a command word is built by the shell (variable, glob or substitution) before "
