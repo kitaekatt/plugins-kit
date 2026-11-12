@@ -87,7 +87,7 @@ import pytest
 
 from llm_kit.pipeline.runtime.platform import submit_validated
 from llm_kit.pipeline.runtime.backends import route
-from llm_kit.adapters.backends import ClaudeCliBackend, OpenRouterBackend
+from llm_kit.adapters.backends import ClaudeCliBackend, OpenAICompatBackend
 
 from yaml_data_editor_kit.comments import Comment
 from yaml_data_editor_kit.dispatch.adapter import SYSTEM_PROMPT
@@ -219,7 +219,7 @@ class _RecordingBackend:
     def __init__(self, backend_name: str) -> None:
         self.name = backend_name
         if backend_name == "openrouter":
-            self._delegate = OpenRouterBackend()
+            self._delegate = OpenAICompatBackend()
         elif backend_name == "claude-cli":
             self._delegate = ClaudeCliBackend()
         else:

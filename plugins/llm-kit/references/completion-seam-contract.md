@@ -91,7 +91,7 @@ same call.
 **`extras` is reported per KEY, and dropped is not the only verdict.** The
 `extras` map is where the seam's inequality is sharpest: codex reads a named
 set, advertised as `extras.<key>` params in `llm_kit.adapters.capabilities`
-and pinned against the argv builder's own list by a capability test; openrouter copies EVERY key
+and pinned against the argv builder's own list by a capability test; openai-compat (named `openrouter` before 1.17.0) copies EVERY key
 into the request as a top-level parameter without validating it; and claude-cli
 and opencode-cli read none. So the report answers per key,
 via `derive_extras_report`, and the bare field name `extras` never survives into
@@ -99,7 +99,7 @@ a response -- on codex it would have no single answer, and on the others it
 would not say WHICH key went nowhere.
 
 The third verdict is the one that is easy to get wrong. An unadvertised
-openrouter extra is FORWARDED, not dropped: reporting it as dropped would be a
+openai-compat extra is FORWARDED, not dropped: reporting it as dropped would be a
 fresh overclaim in place of the old silence, since the key really is sent and
 the adapter's only claim is that it did not check it. `dropped_params` and
 `forwarded_params` therefore stay separate fields, because they carry opposite
@@ -113,7 +113,7 @@ claude-cli's `--disallowedTools` is the only real DENY channel across the four:
 `allowed_tools` is an ALLOW-list and cannot express denying an arbitrary tool
 without a complete tool universe, which no adapter has. codex constrains
 RESOURCES (sandbox, network) rather than tools, opencode injects fixed scalar
-permission denials of its own, and openrouter has no tool surface at all. So
+permission denials of its own, and openai-compat has no tool surface at all. So
 the honest answer differs per adapter, which is why there is no flat
 `tool_deny` enum -- one word would be false for at least two of them.
 
@@ -250,13 +250,13 @@ schema_digest, schema_version)` and never carries the schema body.
   | --- | --- | --- | --- |
   | `codex-cli` | `native`: `--output-schema <temp schema file>` | all three | `openai-strict` |
   | `claude-cli` | `native`: `--json-schema <canonical schema json>` inline; the answer is read from the envelope's `structured_output` field (compact JSON), else from `result` | all three | `json-schema-subset` |
-  | `openrouter`, `opencode-cli` | `prompt`: an exact schema instruction (`Respond with only one JSON value, with no prose and no code fence, that conforms to this JSON Schema:` plus the canonical schema) appended to the system text | `validated-result`, `text-only` | `json-schema-subset` |
+  | `openai-compat`, `opencode-cli` | `prompt`: an exact schema instruction (`Respond with only one JSON value, with no prose and no code fence, that conforms to this JSON Schema:` plus the canonical schema) appended to the system text | `validated-result`, `text-only` | `json-schema-subset` |
 
   `openai-strict` means OpenAI strict mode: every object schema has
   `additionalProperties` false and lists exactly its property keys in
   `required`; codex refuses a schema that does not, before it spawns anything,
   naming the offending JSON pointers. The prompt-delivering adapters never list
-  `native-required`, and openrouter never sends `response_format`.
+  `native-required`, and openai-compat never sends `response_format`.
 - **Selection.** `contract_requirements(contract)` returns the requirement a
   contract implies: the policy, plus `contract_schema_class:
   json-schema-subset` for a schema that is not strict-compatible, so codex is
@@ -305,13 +305,13 @@ nothing is loaded on demand.
 
   | Adapter | `params.skill_context` | `skill_context` block |
   | --- | --- | --- |
-  | `openrouter` | read; `emits: "messages[system] leading skill context block"` | `{"delivery": "system-message", "emits": "messages[system] leading skill context block"}` |
+  | `openai-compat` | read; `emits: "messages[system] leading skill context block"` | `{"delivery": "system-message", "emits": "messages[system] leading skill context block"}` |
   | `claude-cli`, `codex-cli`, `opencode-cli` | read and refused before dispatch (`SkillContextUnsatisfiable`) | none |
 
   A harness adapter refuses because a harness loads skills itself and the seam
   cannot see what it loaded; the message names the two remedies, a transport
   entry or your own text in `system`. `endpoint_capabilities` keeps the block.
-- **Ordering with the contract.** openrouter's system message is `[block]`,
+- **Ordering with the contract.** openai-compat's system message is `[block]`,
   `"\n\n"`, `[caller system]`, then the output-contract instruction, whose
   bytes and suffix position do not change. With an empty caller system the
   block stands alone, with no separator. The block is the library's text,
@@ -464,7 +464,7 @@ consumer can tell those apart without parsing prose.
 **An empty answer is CLASSIFIED, not raised -- except on an exhausted budget.**
 A reasoning model can end its turn having emitted no content at all:
 `finish_reason` is `stop`, not `length`, the token budget is nowhere near spent,
-and `message.content` is the empty string. `OpenRouterBackend` returns that as an
+and `message.content` is the empty string. `OpenAICompatBackend` returns that as an
 ordinary response carrying `reasoning` and `finish_reason`, and leaves the halt
 decision to the caller, per this layer's altitude. Only `finish_reason ==
 "length"` raises `EmptyCompletionError` (a `RuntimeError`, so existing
