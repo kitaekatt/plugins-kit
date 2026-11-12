@@ -22,6 +22,10 @@ credentials, configuration), `llm_kit.completion` (the call contracts),
 > llm-kit seeds no competing layer of its own. The name *OpenRouter* survives
 > where it names the service itself (`OPENROUTER_API_KEY`, the `openrouter`
 > endpoint, openrouter.ai).
+>
+> The transport adapter that serves every non-harness entry is named `openai-compat` (class
+> `OpenAICompatBackend`) from `katsoft-llm-kit` 1.17.0; `openrouter` and `OpenRouterBackend` are
+> still read as deprecated aliases through 1.19.0.
 
 ## Invoking the CLI
 
@@ -178,7 +182,7 @@ llm-kit models probe --endpoint local; echo $?
 Both share one code path (`llm_kit.dispatch.reachability`) and **never issue
 a completion, ever** -- verification costs zero LLM tokens:
 
-- **transport** endpoints (the `openrouter` adapter, including a self-hosted
+- **transport** endpoints (the `openai-compat` adapter, including a self-hosted
   OpenAI-compatible server): a `GET {base_url}/models` metadata request. This
   proves the server is up and answering HTTP -- it does **not** prove a
   completion would succeed. A model can be unloaded or a worker wedged behind
@@ -500,12 +504,12 @@ a pipeline can switch between a paid HTTP endpoint and local CLIs --
 `claude -p`, `codex exec`, or `opencode run` -- purely by configuration:
 
 ```python
-from llm_kit.adapters.backends import ClaudeCliBackend, OpenRouterBackend
+from llm_kit.adapters.backends import ClaudeCliBackend, OpenAICompatBackend
 from llm_kit.adapters.codex_backend import CodexCliBackend
 from llm_kit.adapters.opencode_backend import OpencodeCliBackend
 from llm_kit.completion.types import BackendOptions
 
-backend = ClaudeCliBackend()                       # or OpenRouterBackend(endpoint="local")
+backend = ClaudeCliBackend()                       # or OpenAICompatBackend(endpoint="local")
 resp = backend.complete("system prompt", "user prompt", model="claude-opus-4-8")
 print(resp.text, resp.input_tokens, resp.output_tokens)
 ```
@@ -523,7 +527,7 @@ usage envelope, and injects a workspace-confining policy around required `--auto
 permissions because `--dir` alone does not confine writes. Persistent failures classify
 into one halt taxonomy (`classify_halt_text`, `HaltError`, `HALT_*`) so an
 orchestrator can halt-and-resume identically regardless of provider. The seam
-types and the runner are stdlib-only; only `OpenRouterBackend` reaches for the
+types and the runner are stdlib-only; only `OpenAICompatBackend` reaches for the
 `openai` SDK, and only lazily.
 
 #### Backpressure halts
@@ -535,7 +539,7 @@ rules, in [CLAUDE.md](../CLAUDE.md) ("Backpressure is a halt that clears itself"
 
 #### Reasoning effort on transport entries
 
-`OpenRouterBackend` sends `BackendOptions.effort` (and the registry's
+`OpenAICompatBackend` sends `BackendOptions.effort` (and the registry's
 `reasoning_effort` default, which the factory, the `complete` verb and
 `declaration.run` fill into it) only to a transport entry that resolves an
 effort style. The style says where this server takes the effort:
@@ -562,10 +566,10 @@ null when the entry cannot deliver it), `declared_effort` and
 `effort_delivery`; `endpoints` reports `reasoning_effort` and
 `effort_delivery` for each transport entry. Registry loading rejects a
 transport entry whose declared `reasoning_effort` has no style that can deliver
-it. The openrouter capability record
+it. The openai-compat capability record
 keeps `effort` in `dropped_params` (the truth for an unknown endpoint) and
 names it under `conditional_params`; `BackendSelection.capabilities` and
-`OpenRouterBackend.endpoint_capabilities()` are the record specialized to one
+`OpenAICompatBackend.endpoint_capabilities()` are the record specialized to one
 endpoint.
 
 The `claude-cli` backend needs the `claude` executable on PATH, and the
@@ -666,9 +670,9 @@ schema is a stdlib JSON Schema subset; a keyword outside it (`pattern`,
 - `claude-cli` delivers the schema natively (`--json-schema`), reads the
   answer from the envelope's `structured_output` field, and lists all three
   policies. It accepts any schema in the stdlib subset.
-- `openrouter` and `opencode-cli` append an exact schema instruction to the
+- `openai-compat` and `opencode-cli` append an exact schema instruction to the
   system text, list `validated-result` and `text-only`, and never
-  `native-required`. `openrouter` sends no `response_format`.
+  `native-required`. `openai-compat` sends no `response_format`.
 - `contract_requirements(contract)` gives the selection requirement, and
   `declaration.run` applies it before choosing a model, so an entry that cannot
   satisfy the policy is skipped.
@@ -697,7 +701,7 @@ and a token budget; the seam puts the rendered block first in the system
 message of the one adapter that can deliver it.
 
 ```python
-from llm_kit.adapters.backends import OpenRouterBackend
+from llm_kit.adapters.backends import OpenAICompatBackend
 from llm_kit.completion.skill_context import materialize_skill_context
 from llm_kit.completion.types import BackendOptions
 
@@ -710,7 +714,7 @@ context = materialize_skill_context({
     ],
     "token_budget": 20000,
 })
-resp = OpenRouterBackend().complete(
+resp = OpenAICompatBackend().complete(
     "Review this diff.", diff_text, model="provider/model",
     options=BackendOptions(skill_context=context),
 )
@@ -739,7 +743,7 @@ is truncated.
 
 Which adapters deliver or refuse:
 
-- `openrouter` delivers it: the system message is the block, a blank line,
+- `openai-compat` delivers it: the system message is the block, a blank line,
   your `system` text, then any output-contract instruction. Its record carries
   `skill_context: {"delivery": "system-message", "emits": "messages[system]
   leading skill context block"}`.

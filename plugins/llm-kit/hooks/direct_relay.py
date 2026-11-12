@@ -40,6 +40,12 @@ here, reading the same files the same way:
   and optionally ``X-Relay-Grant``.
 * launcher: this plugin's own ``bin/llm-kit``, found from this file's location
   (``hooks/`` is a child of the plugin root).
+* opt-in: ``llm_kit.relay.config.relay_enabled`` -- the relay is on only when
+  relay.yaml holds a top-level ``enabled: true``; a missing file or key is off
+  and a malformed file is an error. See relay_opt_in for the subset read here.
+  The /direct hooks and the channel server (channel/relay_channel.py) all ask
+  relay_opt_in, so nothing in this plugin reaches a relay the user did not turn
+  on in their own settings file.
 
 Errors are raised, never swallowed (plugin standard: fail loudly).
 """
@@ -256,6 +262,78 @@ def read_token(env: Mapping[str, str]) -> str:
     if not value:
         raise HookError(f"relay token {path} is empty")
     return value
+
+
+#: the relay.yaml top-level keys llm_kit.relay.config accepts (its _CONFIG_KEYS).
+CONFIG_KEYS = frozenset({"enabled", "relay", "hub", "ledgers", "llm_endpoints"})
+#: plain scalars PyYAML's safe loader reads as booleans (the YAML 1.1 bool set).
+_YAML_TRUE = frozenset({"true", "True", "TRUE", "yes", "Yes", "YES", "on", "On", "ON"})
+_YAML_FALSE = frozenset({"false", "False", "FALSE", "no", "No", "NO", "off", "Off", "OFF"})
+_TOP_KEY_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)[ \t]*:(?:[ \t]|$)")
+OPT_IN_KEY = "enabled: true"
+
+
+def relay_opt_in(env: Mapping[str, str]) -> bool:
+    """Whether this machine's relay.yaml turns the relay on (``llm_kit.relay.config.relay_enabled``).
+
+    True only for a top-level ``enabled: true``. No file, an empty file, or no
+    top-level ``enabled`` key is False, as in the library. A top-level key the
+    library does not know, a top-level ``enabled`` that is not a YAML boolean
+    (quoted, empty, null, anything else) and an unreadable file raise HookError,
+    as the library raises RelayConfigError.
+
+    This reader handles block-style YAML only, the shape the library's own
+    messages write. Where it cannot read a line exactly it raises HookError
+    rather than guess, so it can refuse a file the library reads, never the
+    reverse: a document marker or directive (``---``, ``...``, ``%``), a
+    top-level line that is not ``<plain key>:`` (flow mappings, sequences,
+    quoted keys), a duplicate top-level key, and an ``enabled:`` whose value is
+    on the next line. Nested blocks (``relay:``, ``hub:``, ...) are not read
+    here; the library validates them and refuses to start a relay from a file
+    whose blocks are malformed.
+    """
+    path = config_file(env)
+    if not path.is_file():
+        return False
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, ValueError) as exc:
+        raise HookError(f"cannot read relay config {path}: {exc}") from exc
+    seen: set[str] = set()
+    value: Optional[bool] = None
+    for number, line in enumerate(lines, 1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or line[0].isspace():
+            continue
+        if line.startswith(("---", "...", "%")):
+            raise HookError(f"relay config {path} line {number}: document markers and directives are not read "
+                            "by the llm-kit plugin; write the file as one block-style YAML mapping")
+        match = _TOP_KEY_RE.match(line)
+        if match is None:
+            raise HookError(f"relay config {path} line {number}: the llm-kit plugin reads block-style "
+                            f"top-level keys only (`key: value`), got {stripped[:80]!r}")
+        key = match.group(1)
+        if key not in CONFIG_KEYS:
+            raise HookError(f"relay config {path} has unknown keys: {key}")
+        if key in seen:
+            raise HookError(f"relay config {path}: top-level key {key!r} appears more than once")
+        seen.add(key)
+        if key != "enabled":
+            continue
+        rest = line[match.end():]
+        text = re.split(r"[ \t]#", " " + rest, maxsplit=1)[0].strip()
+        if text in _YAML_TRUE:
+            value = True
+        elif text in _YAML_FALSE:
+            value = False
+        else:
+            raise HookError(f"relay config {path}: 'enabled' must be true or false, not {text!r}")
+    return bool(value)
+
+
+def opt_in_hint(env: Mapping[str, str]) -> str:
+    """Where and how the user turns the relay on: the file and the key."""
+    return f"put `{OPT_IN_KEY}` in {config_file(env)}"
 
 
 def _scalar(text: str) -> str:

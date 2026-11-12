@@ -73,9 +73,9 @@ belong to the [katsoft-libs source tree](https://github.com/kitaekatt/katsoft-li
 Change library behavior there. This plugin holds no library source and publishes no shared lib. A consumer
 venv installs the package with the extras it reaches (`katsoft-llm-kit[<extras>]>=A.B,<N` in
 its `pyproject.toml`). The plugin's own venv does the same: its `pyproject.toml` is a
-non-package project that requires the released `katsoft-llm-kit[<every extra>]>=1.15,<2` and
+non-package project that requires the released `katsoft-llm-kit[<every extra>]>=1.17,<2` and
 `katsoft-contracts>=1.0,<2`, so the extras flow from that distribution and `bootstrap.json`
-names none. The floor is 1.15 because a hub `answer_question` (answering any question from claude.ai) is first accepted by the relay in 1.15.0; the `/direct` skill's default session listing (`sessions --state live|all` of the `llm-kit relay` client) first shipped in 1.14.0; the `relay` extra and the `llm-kit relay` command group (which the `/direct` skill and the channel server call from the plugin venv) first shipped in 1.11.0; a consent scope overrides the global defaults from 1.10.0; the per-model output-cap surface
+names none. The floor is 1.17 because the transport adapter is named `openai-compat` (class `OpenAICompatBackend`, listed in `contract/public-surface.json`; `openrouter` and `OpenRouterBackend` remain as deprecated aliases through 1.19.0) from 1.17.0; before that, 1.16 because the relay and hub first refuse to start unless this machine's `relay.yaml` opts in (`enabled: true`) in 1.16.0; a hub `answer_question` (answering any question from claude.ai) is first accepted by the relay in 1.15.0; the `/direct` skill's default session listing (`sessions --state live|all` of the `llm-kit relay` client) first shipped in 1.14.0; the `relay` extra and the `llm-kit relay` command group (which the `/direct` skill and the channel server call from the plugin venv) first shipped in 1.11.0; a consent scope overrides the global defaults from 1.10.0; the per-model output-cap surface
 first shipped in 1.7.0 and the job supervisor in 1.6.0. Codex in package mode, the project model file, `models catalog`, protocol 2 of
 `completion complete`, local selection overrides and the neutral user paths shipped in 1.3.0;
 `custom_bootstrap.py` reads `llm-kit account status --json`, which first shipped in 1.2.0;
@@ -353,7 +353,7 @@ usage, halt, capability, requirement and output-contract types, the prompt-cache
 message shaping, and a shared halt taxonomy (`classify_halt_text`, `HaltError` in
 `llm_kit.completion.halt`) so a persistent failure classifies identically
 whichever transport produced it. Four transports implement the one `complete()`
-(in `llm_kit.adapters`): `OpenRouterBackend` over HTTP, `ClaudeCliBackend` driving
+(in `llm_kit.adapters`): `OpenAICompatBackend` over HTTP (named `OpenRouterBackend` before 1.17.0), `ClaudeCliBackend` driving
 the local `claude -p` CLI, `CodexCliBackend` driving `codex exec`, and
 `OpencodeCliBackend` driving `opencode run`.
 
@@ -369,7 +369,7 @@ taxonomy rather than invent one.
 narrow.** `HALT_BACKPRESSURE` (`"backpressure"`) marks transient endpoint overload:
 retry after a wait, do not stop the run. `classify_backpressure(exc)` returns
 `Backpressure(status, retry_after_s)` or `None`, and `classify_openai_exception`
-checks it FIRST, so `OpenRouterBackend.classify_halt` reports it. A 503 counts only
+checks it FIRST, so `OpenAICompatBackend.classify_halt` reports it. A 503 counts only
 with queue/overload/busy/timeout wording or a server code such as
 `request_queue_timeout`; a bare 503 is an outage, not a halt. A 429 counts only
 with a positive signal (a `Retry-After` header, a "try again in N s" hint,
@@ -399,14 +399,14 @@ believes it is clean will get burned:
   `llm_kit.pipeline.runtime.backends.routed_model` is the in-library compensation,
   and its existence is the evidence: a genuinely uniform seam would not need it.
 - **`BackendOptions` is a union, not a neutral description of the work.**
-  `user_cache_prefix` is OpenRouter-only; `allowed_tools`, `disallowed_tools` and
+  `user_cache_prefix` is openai-compat-only; `allowed_tools`, `disallowed_tools` and
   `system_prompt_mode` are claude-cli-only; `effort` reaches claude-cli, codex and
-  opencode, and reaches OpenRouter only on a transport entry that resolves an
-  `effort_style`; `cwd` reaches the three CLI backends and not OpenRouter, which is
+  opencode, and reaches openai-compat only on a transport entry that resolves an
+  `effort_style`; `cwd` reaches the three CLI backends and not openai-compat, which is
   why `cwd` is not a core param of this seam. `temperature` and `max_tokens` (default unset;
   cap rule: `references/completion-seam-contract.md`, "Output cap") are
   accepted and then dropped by all CLI backends -- dropped and REPORTED, not
-  ignored. `skill_context` is read by all four and delivered by OpenRouter alone,
+  ignored. `skill_context` is read by all four and delivered by openai-compat alone,
   as the leading block of its system message; the three CLI backends refuse it
   before dispatch, because a harness loads skills itself and the seam cannot see
   what it loaded.
@@ -414,7 +414,7 @@ believes it is clean will get burned:
   accounting (codex reports one undifferentiated `total_tokens` and no input/output
   split at all; opencode's default output reports no usage), cost (flat zero for the
   subscription CLIs, unavailable from opencode's default output, real money for
-  OpenRouter) and prompt delivery all differ -- the CLI transports have one stdin
+  a metered openai-compat endpoint) and prompt delivery all differ -- the CLI transports have one stdin
   prompt rather than a separate system channel.
 
 So: uniform CALL SHAPE and uniform FAILURE VOCABULARY, not interchangeable
@@ -501,7 +501,7 @@ consumer driving only `claude-cli` installs no SDK.
 `ClaudeCliBackend` CAN retry a transient 5xx envelope (`retry_max_attempts`,
 `retry_cooldown_s`) and enforces a per-call timeout -- both are properties of the
 subprocess it spawns, not run-level policy, and 429 / 401 never retry because they
-persist. `OpenRouterBackend` makes exactly one attempt and leaves retry to the
+persist. `OpenAICompatBackend` makes exactly one attempt and leaves retry to the
 caller, which holds the run-level context that decision needs.
 
 ## `llm_kit.execution`: shared bootstrap contracts
@@ -550,10 +550,10 @@ algorithm rather than only similar syntax.
   detection and command construction. `bootstrap_lib.codex` is an exact alias of that
   module for older callers and never a second implementation.
 
-**Effort delivery is specialized per endpoint and reported per call.** The openrouter
-family record keeps `effort` in `dropped_params` (the truth for an unknown endpoint) and
+**Effort delivery is specialized per endpoint and reported per call.** The openai-compat
+family record (named `openrouter` before 1.17.0) keeps `effort` in `dropped_params` (the truth for an unknown endpoint) and
 lists it in `conditional_params`; `llm_kit.adapters.endpoint_profile.endpoint_capabilities`
-specializes the record per endpoint, and `OpenRouterBackend.params_report` derives the
+specializes the record per endpoint, and `OpenAICompatBackend.params_report` derives the
 per-call report from the effort plan -- the CLI failure envelope calls it too, so a failed
 call never reports an overridden or suppressed effort as delivered. The factory
 (`BackendSelection.effort`), the `complete` verb and `declaration.run` fill the registry
@@ -674,7 +674,7 @@ surfaces are opt-in / explicit-target only: a bare `endpoints` call must never
 start paying for a network or subprocess call silently.
 
 Verification costs zero LLM calls, on either endpoint kind. A **transport** entry
-(the `openrouter` adapter, including a self-hosted OpenAI-compatible server) gets a
+(the `openai-compat` adapter, including a self-hosted OpenAI-compatible server and OpenRouter) gets a
 `GET {base_url}/models` metadata probe -- proof the server answers HTTP, not that a
 completion would succeed, which is why a passing verdict is `status: "reachable"`
 rather than `available` or `healthy`. A **harness** entry (claude-cli, codex-cli,
@@ -842,7 +842,7 @@ layer, not an exported env var.
 **Reported cost has one read point and a trust gate.** The front door strips upstream
 `usage.cost` / `usage.cost_source` unless the serving deployment is
 `provider-reported`, and injects `cost: 0.0` + `cost_source: registry-unmetered` only
-for `unmetered`. `OpenRouterBackend` reads native `usage.cost` once and accepts it
+for `unmetered`. `OpenAICompatBackend` reads native `usage.cost` once and accepts it
 only for a `frontdoor: true` or `provider-reported` endpoint (an unmarked provider
 cannot opt in via response content). The paired `LLMResponse.reported_cost_usd` /
 `reported_cost_source` are both present or both `None`, finite and non-negative;

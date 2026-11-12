@@ -1207,8 +1207,15 @@
       "status": "public"
     },
     {
-      "name": "llm_kit.pipeline.runtime.OpenRouterBackend",
+      "name": "llm_kit.pipeline.runtime.OpenAICompatBackend",
       "status": "public"
+    },
+    {
+      "name": "llm_kit.pipeline.runtime.OpenRouterBackend",
+      "status": "deprecated",
+      "since": "1.17.0",
+      "remove_after": "1.19.0",
+      "replacement": "llm_kit.pipeline.runtime.OpenAICompatBackend"
     },
     {
       "name": "llm_kit.pipeline.runtime.OpencodeCliBackend",
@@ -1255,8 +1262,15 @@
       "status": "public"
     },
     {
-      "name": "llm_kit.pipeline.runtime.backends.OpenRouterBackend",
+      "name": "llm_kit.pipeline.runtime.backends.OpenAICompatBackend",
       "status": "public"
+    },
+    {
+      "name": "llm_kit.pipeline.runtime.backends.OpenRouterBackend",
+      "status": "deprecated",
+      "since": "1.17.0",
+      "remove_after": "1.19.0",
+      "replacement": "llm_kit.pipeline.runtime.backends.OpenAICompatBackend"
     },
     {
       "name": "llm_kit.pipeline.runtime.backends.OpencodeCliBackend",

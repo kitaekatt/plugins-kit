@@ -172,7 +172,7 @@ class Stack:
         add_waiting_job(self.ledger, "run-b")
         self.port = _free_port()
         (self.cfg / "llm-kit" / "relay.yaml").write_text(
-            f"relay:\n  host: 127.0.0.1\n  port: {self.port}\nledgers:\n  - {self.ledger}\n")
+            f"enabled: true\nrelay:\n  host: 127.0.0.1\n  port: {self.port}\nledgers:\n  - {self.ledger}\n")
         claude_home, codex_home = tmp_path / "claude-home", tmp_path / "codex-home"
         (claude_home / "sessions").mkdir(parents=True)
         (claude_home / "projects" / "-tmp-proj").mkdir(parents=True)

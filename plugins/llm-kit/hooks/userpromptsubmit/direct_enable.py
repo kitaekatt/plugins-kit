@@ -26,8 +26,13 @@ Behaviour
 * The typed line is not parsed here: the skill runs the verb it names. The
   first line (whitespace collapsed, at most 1024 characters) is kept in the
   record, and the gate sends it as the audit ``command`` of each grant it mints.
-* The record is written whether or not the relay is running; the relay is not
-  asked. A failure to write it is reported (additionalContext and a
+* Off by default: the record is written only when this machine's relay.yaml
+  turns the relay on (top-level ``enabled: true``, direct_relay.relay_opt_in).
+  Otherwise no record is written and the hook adds one context line saying
+  /direct is off and naming the file and the key. An unreadable or malformed
+  relay.yaml is reported the same way as a write failure, with no record.
+* With the opt-in set, the record is written whether or not the relay is
+  running; the relay is not asked. A failure to write it is reported (additionalContext and a
   systemMessage) and never blocks the prompt.
 * Bad hook input (not JSON, no usable session_id) exits 1 with a message on
   stderr (a visible, non-blocking hook error).
@@ -69,6 +74,16 @@ def run(payload: Mapping[str, Any], env: Mapping[str, str], *, now: Callable[[],
     if command is None:
         return None
     session = payload["session_id"]
+    try:
+        opted_in = R.relay_opt_in(env)
+    except R.HookError as exc:
+        out = _context(f"/direct: the relay settings could not be read ({exc}), so this session was not enabled. "
+                       "Relay client calls stay refused.")
+        out["systemMessage"] = out["hookSpecificOutput"]["additionalContext"]
+        return out
+    if not opted_in:
+        return _context(f"/direct is off on this machine: the llm-kit relay is not enabled. To turn it on, "
+                        f"{R.opt_in_hint(env)}. This session was not enabled; relay client calls stay refused.")
     try:
         R.enable(env, session, command, now=now())
     except R.HookError as exc:

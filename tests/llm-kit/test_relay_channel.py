@@ -232,6 +232,8 @@ class Harness:
         state = tmp_path / "state" / "llm-kit" / "relay"
         state.mkdir(parents=True)
         (state / "relay.token").write_text(TOKEN + "\n", encoding="utf-8")
+        (tmp_path / "config" / "llm-kit").mkdir(parents=True)
+        (tmp_path / "config" / "llm-kit" / "relay.yaml").write_text("enabled: true\n", encoding="utf-8")
         env = {k: v for k, v in os.environ.items() if not k.startswith(("LLM_KIT_", "XDG_", "CLAUDE"))}
         env.update({
             "LLM_KIT_RELAY_URL": relay_url,
@@ -239,6 +241,7 @@ class Harness:
             "LLM_KIT_CHANNEL_BACKOFF": "0.1,0.4",
             "LLM_KIT_CHANNEL_SESSION_POLL_S": "0.1",
             "XDG_STATE_HOME": str(tmp_path / "state"),
+            "XDG_CONFIG_HOME": str(tmp_path / "config"),
             "CLAUDE_CONFIG_DIR": str(self.home),
         })
         env.update(extra_env or {})
@@ -618,3 +621,44 @@ def test_mcp_json_template_names_the_server_and_both_environment_expansions():
     server = config["mcpServers"]["relay"]
     assert server["command"] == "${BOOTSTRAP_PYTHON}"
     assert server["args"] == ["${LLM_KIT_CHANNEL_SCRIPT}"]
+
+
+# -- off by default: the channel starts only when the owner's relay.yaml turns the relay on -----------
+# Shown red when written: in relay_channel.main delete the ``if refusal is not None:`` block:
+# test_the_channel_does_not_start_while_the_relay_is_off goes red.
+
+def _channel_env(tmp_path, opt_in):
+    cfg = tmp_path / "cfg"
+    (cfg / "llm-kit").mkdir(parents=True)
+    if opt_in is not None:
+        (cfg / "llm-kit" / "relay.yaml").write_text(opt_in, encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("LLM_KIT_", "XDG_", "CLAUDE"))}
+    env.update({"XDG_CONFIG_HOME": str(cfg), "XDG_STATE_HOME": str(tmp_path / "state"),
+                "CLAUDE_CONFIG_DIR": str(tmp_path / "claude-home"), "LLM_KIT_RELAY_URL": "http://127.0.0.1:9"})
+    return env, cfg / "llm-kit" / "relay.yaml"
+
+
+@pytest.mark.parametrize("opt_in", [None, "", "enabled: false\n"])
+def test_the_channel_does_not_start_while_the_relay_is_off(tmp_path, opt_in):
+    env, path = _channel_env(tmp_path, opt_in)
+    done = subprocess.run([sys.executable, str(SCRIPT)], input="", capture_output=True, text=True, env=env,
+                          timeout=30)
+    assert done.returncode == 2 and done.stdout == ""
+    assert done.stderr == ("relay-channel: not starting: the llm-kit relay is not enabled on this machine; "
+                           "to turn it on, put `enabled: true` in %s\n" % path)
+
+
+def test_a_malformed_opt_in_is_a_refusal_not_on(tmp_path):
+    env, _path = _channel_env(tmp_path, 'enabled: "true"\n')
+    done = subprocess.run([sys.executable, str(SCRIPT)], input="", capture_output=True, text=True, env=env,
+                          timeout=30)
+    assert done.returncode == 2 and done.stdout == ""
+    assert "not starting: the relay settings cannot be read" in done.stderr
+
+
+def test_opt_in_refusal_is_none_only_when_the_relay_is_on(tmp_path):
+    channel = _load_channel_module()
+    env, path = _channel_env(tmp_path, "enabled: true\n")
+    assert channel.opt_in_refusal(env) is None
+    path.write_text("enabled: no\n", encoding="utf-8")
+    assert "put `enabled: true` in %s" % path in channel.opt_in_refusal(env)

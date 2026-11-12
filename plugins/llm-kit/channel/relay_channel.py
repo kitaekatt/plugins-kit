@@ -25,6 +25,14 @@ MCP behaviour measured on Claude Code 2.1.x:
   stays alive, so the file is polled about once a second and a change is sent
   as a heartbeat carrying ``previous_session_id``.
 
+Off by default. The server starts only when this machine's relay.yaml turns
+the relay on (top-level ``enabled: true`` in ``$XDG_CONFIG_HOME/llm-kit/relay.yaml``,
+else ``~/.config/llm-kit/relay.yaml``). Otherwise it writes one line to stderr
+naming the file and the key and exits 2 before it speaks MCP. The check is
+``relay_opt_in`` in this plugin's ``hooks/direct_relay.py``, the reader the
+/direct hooks use (``opt_in_refusal`` below); relaunch-kit's ``clauder --relay``
+asks the same function before it loads this server.
+
 The relay being unreachable never ends this process: every relay failure is
 logged to stderr and retried with backoff. Standard output carries protocol
 messages only.
@@ -43,12 +51,14 @@ Environment (all optional):
                               every poll is an audit row, so a pause is polled slowly;
                               delivery resumes within this gap after resume)
     XDG_STATE_HOME            holds llm-kit/relay/relay.token
+    XDG_CONFIG_HOME           holds llm-kit/relay.yaml (the opt-in)
     CLAUDE_CONFIG_DIR         claude home, default ~/.claude
 """
 from __future__ import annotations
 
 import collections
 import http.client
+import importlib.util
 import json
 import os
 import re
@@ -141,6 +151,39 @@ class Registration:
 # --------------------------------------------------------------------------
 # configuration and local facts
 # --------------------------------------------------------------------------
+
+#: The /direct hooks' shared helper, which owns the relay opt-in reader.
+DIRECT_RELAY = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hooks", "direct_relay.py")
+
+
+def _direct_relay():
+    name = "llm_kit_plugin_direct_relay"
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, DIRECT_RELAY)
+    if spec is None or spec.loader is None:
+        raise ImportError("cannot load %s" % DIRECT_RELAY)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def opt_in_refusal(environ=None):
+    """None when this machine's relay.yaml turns the relay on; else why the channel does not start.
+
+    The relay is off by default (no file, or no top-level ``enabled: true``).
+    A relay.yaml that cannot be read is a refusal too, never read as on.
+    """
+    env = os.environ if environ is None else environ
+    relay = _direct_relay()
+    try:
+        if relay.relay_opt_in(env):
+            return None
+    except relay.HookError as exc:
+        return "the relay settings cannot be read (%s)" % exc
+    return "the llm-kit relay is not enabled on this machine; to turn it on, %s" % relay.opt_in_hint(env)
+
 
 class Config:
     def __init__(self, environ=None):
@@ -651,6 +694,10 @@ class ChannelServer:
 
 
 def main():
+    refusal = opt_in_refusal()
+    if refusal is not None:
+        sys.stderr.write("relay-channel: not starting: %s\n" % refusal)
+        return 2
     try:
         config = Config()
     except ValueError as exc:

@@ -36,7 +36,7 @@ technique_skill:
       goal: Map the user's request to one relay client call, run it, and show the result as data.
       steps:
         - n: 1
-          action: Check the session is enabled (see "Enabled once per session"); otherwise report and stop.
+          action: Check the relay is on and the session is enabled (see "Off until the owner turns the relay on" and "Enabled once per session"); otherwise report and stop.
         - n: 2
           action: Build exactly one call from the verb table, quoting every typed value.
         - n: 3
@@ -48,7 +48,21 @@ technique_skill:
         - One plain command per Bash call; the gate refuses pipes, variables, wrappers and abbreviated options.
         - Report the relay's answer as given and do not infer that a message was delivered.
         - After a refusal, a gate denial or a relay error, report and stop; do not retry or route around the gate.
+        - Never create or edit the relay's relay.yaml; the owner turns the relay on.
 ```
+
+## Off until the owner turns the relay on
+
+The relay is off by default on every machine. `/direct` works only after the
+owner turns it on in their own settings file: `enabled: true` at the top level
+of `$XDG_CONFIG_HOME/llm-kit/relay.yaml` (else `~/.config/llm-kit/relay.yaml`).
+Until then the hook adds a context line that starts `/direct is off on this
+machine`, records nothing, and the gate refuses every relay client call. The
+relay channel server does not start either.
+
+When you see that line or that refusal, tell the owner which file and key turn
+it on, and stop. Do not create or edit that file: turning the relay on is the
+owner's decision.
 
 ## Enabled once per session
 

@@ -102,7 +102,7 @@ domain_skill:
 
 ## Requirements: the live LLM backends
 
-The library's LIVE backends (`openrouter`, `model-endpoint`, `claude-cli`,
+The library's LIVE backends (`openai-compat`, `model-endpoint`, `claude-cli`,
 `codex-cli`, `opencode-cli`) need the
 `llm_kit` library, the `katsoft-llm-kit` package: installed in the `llm-kit`
 plugin's own venv, and in a consumer project's own venv from its

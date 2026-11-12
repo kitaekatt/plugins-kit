@@ -239,7 +239,9 @@ of this.
 `llm.backends` ships five live transports, a `MockBackend`, and a process-level
 `route`:
 
-- **`OpenRouterBackend`** -- the real completion transport (uses
+- **`OpenAICompatBackend`** -- the real completion transport for any OpenAI-compatible
+  endpoint, OpenRouter included (named `OpenRouterBackend` before 1.17.0; the old name warns
+  and is removable after 1.19.0) (uses
   `llm_kit.registry` and `llm_kit.adapters` for key + model + client).
 - **`ClaudeCliBackend`** -- an agent-loop transport.
 - **`CodexCliBackend`** -- an agent-loop transport over `codex exec`.
@@ -252,9 +254,9 @@ of this.
 `route(openrouter=, mock=)` reads the `CONTENT_PIPELINE_LLM_MODELS` model
 declaration (llm-kit registry ids, comma-separated) and returns the
 backend for its first usable entry: a `claude`, `codex` or `opencode` harness
-entry gets that CLI backend, the `openrouter` entry gets `OpenRouterBackend`,
+entry gets that CLI backend, the `openrouter` entry gets `OpenAICompatBackend`,
 and any other transport entry gets `ModelEndpointBackend`. Unset, it returns
-`OpenRouterBackend`. A supplied `mock` always wins so tests never reach a live
+`OpenAICompatBackend`. A supplied `mock` always wins so tests never reach a live
 transport. `CONTENT_PIPELINE_LLM_MODELS` is the only routing environment setting (a per-pipeline `models` argument overrides it; see the next paragraph). `CONTENT_PIPELINE_LLM_BACKEND`, `CONTENT_PIPELINE_LLM_MODEL` and `CONTENT_PIPELINE_LLM_ENDPOINT` select nothing; if one is set while `CONTENT_PIPELINE_LLM_MODELS` is not, routing raises `ConfigurationError` naming it, rather than falling back to OpenRouter. When `CONTENT_PIPELINE_LLM_MODELS` is set, any of those three is ignored.
 
 Routing is per pipeline when you pass the declaration: `route(models=[...])`, `routed_model(requested, models=[...])` and `declared_model_names(models)` take an ordered list of ids that wins over the environment, so two pipelines in one process can route differently. The environment variable is only the process-wide default when `models` is `None`; an empty explicit list raises `ConfigurationError`.
@@ -1042,5 +1044,5 @@ is data-only, and the LLM and VCS seams are injected, a full run through the
 tracked inline driver (`prepare_run`, `run_wave`, `finalize_run`) is testable
 end to end in memory.
 
-Reserve `OpenRouterBackend` / `ClaudeCliBackend` and a real `GitVcs` for
+Reserve `OpenAICompatBackend` / `ClaudeCliBackend` and a real `GitVcs` for
 actual runs.
