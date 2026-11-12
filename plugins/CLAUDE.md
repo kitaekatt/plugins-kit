@@ -325,6 +325,21 @@ unconfigurable opinion whose test passes is a finding.
   multiple machines" (the dashboard was retired in task-kit 0.16.0) and "No it definitely changes it in git. Why wouldn't it. We need a
   way of reconciling truth that is git."
 
+- **llm-kit's `/direct` is enabled once per session, with no permission prompt and no
+  expiry.** Typing `/direct` once enables every `/direct` verb, `send` and `answer`
+  included, for the rest of the Claude Code session; the PreToolUse gate
+  (`llm-kit/hooks/pretooluse/direct_gate.py`) then allows each plain relay client call
+  without a permission prompt, and only SessionEnd (the session exiting, or `/clear`)
+  ends it (`llm-kit/hooks/sessionend/direct_revoke.py`). A user will reasonably want to
+  approve each message before it goes, or want the enablement to lapse after a while; we
+  decline a flag because the owner ruled the per-verb 300 s grants and the per-send prompt
+  away as friction, and every send and answer instead shows its exact target and text in
+  the session (the gate's `systemMessage`). Such a user does not type `/direct` in that
+  session, where every relay client call stays refused, or runs `/clear` to end it. Owner
+  ruling 2026-11-11: "so i only want to type /direct once" and "sure /clear can turn it
+  off. I don't think sending a message should show a permission prompt. I do think
+  messages that are sent should be visible in harness."
+
 An opinion that FAILS the test needs neither a register entry nor a seam -- it is simply a
 good default. Opinions that PASS and are still unconfigurable are findings, tracked with
 per-finding verdicts in the reference above; known examples are the task system's durability

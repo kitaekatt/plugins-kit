@@ -17,7 +17,7 @@ dev = [
     "packaging>=24.0",
     # Integration tests use the same released libraries as plugin venvs.
     "katsoft-contracts>=1.0,<2",
-    "katsoft-llm-kit[config,sdk,local,frontdoor,jobs,pipeline,relay]>=1.13,<2",
+    "katsoft-llm-kit[config,sdk,local,frontdoor,jobs,pipeline,relay]>=1.14,<2",
 ]
 
 [tool.pytest.ini_options]

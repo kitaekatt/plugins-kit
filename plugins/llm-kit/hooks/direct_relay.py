@@ -1,13 +1,22 @@
-"""Shared stdlib-only helpers for the /direct grant hooks.
+"""Shared stdlib-only helpers for the /direct hooks.
 
-Used by userpromptsubmit/direct_grant.py (mints a grant for a typed /direct
-command) and pretooluse/direct_gate.py (refuses a Bash call to the relay client
-that no live grant covers).
+Used by userpromptsubmit/direct_enable.py (a typed /direct enables the session),
+pretooluse/direct_gate.py (lets a relay client call of an enabled session
+through, minting the one-use relay grant it needs, and refuses every other) and
+sessionend/direct_revoke.py (the session ended or the owner ran /clear).
+
+Enablement (owner ruling 2026-11-11: "so i only want to type /direct once";
+"sure /clear can turn it off"): typing /direct once enables every /direct verb
+for the rest of that session. The record is one file per Claude Code session
+id, ``<plugin data dir>/direct/enabled/<session id>.json`` (see
+plugin_data_dir; directory 0700, file 0600), written by the UserPromptSubmit
+hook and deleted by the SessionEnd hook. It has no expiry and no use count.
 
 THIS IS A GUARDRAIL, NOT A SECURITY BOUNDARY (relay alternative A, owner
 ruling 2026-11-03). A model that can run Bash as the same user can read the
-relay token file, forge hook input, or call the relay over HTTP and mint a
-grant for itself. The hooks stop accidental model-initiated relay calls and
+relay token file, write an enablement record, forge hook input, or call the
+relay over HTTP and mint a grant for itself. The hooks stop accidental
+model-initiated relay calls and
 give the owner a visible refusal; they do not stop a model that is trying to
 get around them. Nothing here may be described to a user as protection against
 a same-user process.
@@ -29,6 +38,8 @@ here, reading the same files the same way:
   error here rather than a guess. The host must be a literal loopback address.
 * wire format: ``relay-protocol/1``, ``POST /v1/<verb>`` with ``X-Relay-Token``
   and optionally ``X-Relay-Grant``.
+* launcher: this plugin's own ``bin/llm-kit``, found from this file's location
+  (``hooks/`` is a child of the plugin root).
 
 Errors are raised, never swallowed (plugin standard: fail loudly).
 """
@@ -131,9 +142,94 @@ def _absolute_env(env: Mapping[str, str], name: str) -> Optional[Path]:
     return Path(value) if value and os.path.isabs(value) else None
 
 
+def _state_home(env: Mapping[str, str]) -> Path:
+    return _absolute_env(env, "XDG_STATE_HOME") or Path.home() / ".local" / "state"
+
+
 def state_dir(env: Mapping[str, str]) -> Path:
-    home = _absolute_env(env, "XDG_STATE_HOME") or Path.home() / ".local" / "state"
-    return home / "llm-kit" / "relay"
+    return _state_home(env) / "llm-kit" / "relay"
+
+
+def launcher() -> Path:
+    """This plugin's own launcher shim, ``<plugin root>/bin/llm-kit``."""
+    return Path(__file__).resolve().parents[1] / "bin" / "llm-kit"
+
+
+# -- session enablement --------------------------------------------------------------------
+
+def plugin_data_dir(env: Mapping[str, str]) -> Path:
+    """This plugin's user-scoped data directory, the root bin/llm-kit uses for its venv.
+
+    ``$CLAUDE_BOOTSTRAP_DATA_ROOT/plugins-kit/llm-kit`` when that variable is set
+    (a claude-plugin-test session redirects bootstrap's data tree), else
+    ``~/.claude/plugins/data/plugins-kit/llm-kit``. The enablement records are
+    about the user's Claude Code sessions, not a project, so they live here
+    (bootstrap durable-project-data reference, "Data that is not the project's").
+    """
+    root = _absolute_env(env, "CLAUDE_BOOTSTRAP_DATA_ROOT") or Path.home() / ".claude" / "plugins" / "data"
+    return root / "plugins-kit" / "llm-kit"
+
+
+def enabled_dir(env: Mapping[str, str]) -> Path:
+    """Where the per-session enablement records live: ``<plugin data dir>/direct/enabled``."""
+    return plugin_data_dir(env) / "direct" / "enabled"
+
+
+def _record_path(env: Mapping[str, str], session: str) -> Path:
+    if not valid_session_id(session):
+        raise HookError(f"{session!r} is not a session id")
+    return enabled_dir(env) / f"{session}.json"
+
+
+def enable(env: Mapping[str, str], session: str, command: str, *, now: float) -> Path:
+    """Record that the owner typed /direct in ``session``; returns the record's path. Idempotent."""
+    path = _record_path(env, session)
+    try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(path.parent, 0o700)
+        record = {"session_id": session, "enabled_at": now, "command": command[:1024]}
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="ascii") as handle:
+            handle.write(json.dumps(record, ensure_ascii=True))
+        os.replace(tmp, path)
+    except OSError as exc:
+        raise HookError(f"cannot write the /direct enablement record {path}: {exc}") from exc
+    return path
+
+
+def enablement(env: Mapping[str, str], session: str) -> Optional[dict[str, Any]]:
+    """The session's enablement record, or None when the owner has not typed /direct in it."""
+    path = _record_path(env, session)
+    try:
+        info = path.stat()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise HookError(f"cannot stat the /direct enablement record {path}: {exc}") from exc
+    if info.st_mode & (stat.S_IRWXG | stat.S_IRWXO):
+        raise HookError(f"/direct enablement record {path} has a loose mode {stat.S_IMODE(info.st_mode):o}")
+    if hasattr(os, "getuid") and info.st_uid != os.getuid():
+        raise HookError(f"/direct enablement record {path} is owned by another user")
+    try:
+        record = json.loads(path.read_text(encoding="ascii"))
+    except (OSError, ValueError) as exc:
+        raise HookError(f"cannot read the /direct enablement record {path}: {exc}") from exc
+    if not isinstance(record, dict) or record.get("session_id") != session or not isinstance(record.get("command"), str):
+        raise HookError(f"/direct enablement record {path} is not a record for session {session}")
+    return record
+
+
+def revoke(env: Mapping[str, str], session: str) -> bool:
+    """Delete the session's enablement record; whether one existed."""
+    path = _record_path(env, session)
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise HookError(f"cannot delete the /direct enablement record {path}: {exc}") from exc
+    return True
 
 
 def config_file(env: Mapping[str, str]) -> Path:

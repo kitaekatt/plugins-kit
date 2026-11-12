@@ -1,7 +1,7 @@
-"""The /direct skill (skills/direct/SKILL.md) stays user-invocable only and matches the grant hook.
+"""The /direct skill (skills/direct/SKILL.md) stays user-invocable only and matches the hooks.
 
 Owner rule: /direct must stay unreachable by the model on its own -- frontmatter
-``disable-model-invocation: true`` plus the grant hook. Never weaken either to make a
+``disable-model-invocation: true`` plus the gate hook. Never weaken either to make a
 test or demo pass.
 
 The checks are pure functions of the skill text, so each has a counterfactual test that
@@ -13,10 +13,10 @@ the edit to SKILL.md that turns it red:
 * no preload -- add a line ``!`llm-kit relay client machines --session S``` (or a ```!
   fence): test_skill_has_no_preload goes red. A preload would run before Claude sees the
   skill, and the design (design.md 7b, P0) refuted interpolating typed arguments into one.
-* verbs match the grant hook -- change ``relay client sessions`` to ``relay client lookup``
-  in a command line: test_named_verbs_are_accepted_by_the_grant_hook goes red.
-* every verb the hook accepts is documented -- delete the ``answer`` row:
-  test_every_grant_hook_verb_is_documented goes red.
+* verbs match the hooks -- change ``relay client sessions`` to ``relay client lookup``
+  in a command line: test_named_verbs_are_accepted_by_the_hooks goes red.
+* every verb the hooks accept is documented -- delete the ``answer`` row:
+  test_every_hook_verb_is_documented goes red.
 * the session reaches each call -- delete ``--session S`` from one command line:
   test_every_command_carries_the_session goes red.
 * literal command -- put ``"${CLAUDE_BOOTSTRAP_DATA_ROOT:-$HOME/...}"/llm-kit`` (a braced
@@ -25,6 +25,11 @@ the edit to SKILL.md that turns it red:
   covers the command: test_allow_rule_covers_the_command goes red.
 * gate parses it -- change the command word to a name the gate's tool pattern rejects
   (e.g. ``llmkit``): test_gate_recognizes_the_command_form goes red.
+* enabled once (owner ruling 2026-11-11) -- delete "for the rest of the session" or
+  "`/clear`" from the "Enabled once per session" section:
+  test_skill_states_one_direct_enables_the_session goes red.
+* visible sends -- delete the ``Sent to <message.to>`` line:
+  test_skill_shows_what_was_sent goes red.
 * honesty (AD-5) -- delete "not a security boundary": test_skill_states_the_gate_is_a_guardrail
   goes red.
 """
@@ -41,7 +46,7 @@ REPO = Path(__file__).resolve().parents[2]
 PLUGIN = REPO / "plugins" / "llm-kit"
 SKILL = PLUGIN / "skills" / "direct" / "SKILL.md"
 HOOKS = PLUGIN / "hooks"
-GRANT_HOOK = HOOKS / "userpromptsubmit" / "direct_grant.py"
+RELAY_HELPERS = HOOKS / "direct_relay.py"
 GATE_HOOK = HOOKS / "pretooluse" / "direct_gate.py"
 
 #: A client call as the skill writes it. The verb must be a lowercase word, so the
@@ -51,16 +56,12 @@ _INLINE_PRELOAD_RE = re.compile(r"(?:^|(?<=\s))!`([^`\n]+)`")
 _PRELOAD_FENCE_OPEN_RE = re.compile(r"^\s*```!")
 
 
-def grant_hook_verbs() -> frozenset[str]:
-    """The client verbs direct_grant.py accepts, taken from the hook module itself."""
-    sys.path.insert(0, str(HOOKS))
-    try:
-        spec = importlib.util.spec_from_file_location("direct_grant_under_test", GRANT_HOOK)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-    finally:
-        sys.path.remove(str(HOOKS))
-    return frozenset(module.R.CLIENT_VERBS)
+def hook_verbs() -> frozenset[str]:
+    """The client verbs the hooks know (direct_relay.CLIENT_VERBS), taken from the module itself."""
+    spec = importlib.util.spec_from_file_location("direct_relay_under_test", RELAY_HELPERS)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return frozenset(module.CLIENT_VERBS)
 
 
 def frontmatter(text: str) -> dict[str, str]:
@@ -182,6 +183,9 @@ def gate_problems(text: str, gate) -> list[str]:
         if len(args) != 1:
             problems.append(f"gate finds {len(args)} client calls in {command!r}")
             continue
+        if gate.plain_client_args(command, Path(shim)) != args[0]:
+            problems.append(f"gate does not read {command!r} as one plain call of the shim")
+            continue
         call = gate.parse_client_args(args[0], "m")
         if call is None or call.client_verb != verb:
             problems.append(f"gate does not parse verb {verb!r} from {command!r}")
@@ -216,15 +220,15 @@ def test_skill_has_no_preload(skill_text: str) -> None:
     assert preload_lines(skill_text) == []
 
 
-def test_named_verbs_are_accepted_by_the_grant_hook(skill_text: str) -> None:
-    accepted = grant_hook_verbs()
-    assert accepted, "the grant hook exposes no client verbs"
+def test_named_verbs_are_accepted_by_the_hooks(skill_text: str) -> None:
+    accepted = hook_verbs()
+    assert accepted, "the hooks expose no client verbs"
     assert named_verbs(skill_text), "the skill names no `llm-kit relay client <verb>` call"
     assert verbs_not_accepted(skill_text, accepted) == set()
 
 
-def test_every_grant_hook_verb_is_documented(skill_text: str) -> None:
-    assert verbs_not_documented(skill_text, grant_hook_verbs()) == set()
+def test_every_hook_verb_is_documented(skill_text: str) -> None:
+    assert verbs_not_documented(skill_text, hook_verbs()) == set()
 
 
 def test_every_command_carries_the_session(skill_text: str) -> None:
@@ -279,6 +283,50 @@ def test_skill_states_the_gate_is_a_guardrail(skill_text: str) -> None:
     assert guardrail_problems(skill_text) == []
 
 
+def enablement_problems(text: str) -> list[str]:
+    """The skill must say one typed /direct enables the session, /clear ends it, and no grant prompt remains."""
+    start = text.find("## Enabled once per session")
+    if start < 0:
+        return ["no 'Enabled once per session' section"]
+    end = text.find("\n## ", start + 1)
+    section = text[start:end if end > 0 else len(text)]
+    needles = ("types `/direct` once", "for the rest of the session", "`/clear`", "no permission prompt",
+               "Later prompts in the same session need no new `/direct`", "/direct is not enabled in this session")
+    problems = [f"the enablement section does not say {n!r}" for n in needles if n not in section]
+    for stale in ("300 s", "8 uses", "one use"):
+        if stale in text:
+            problems.append(f"the skill still states the per-verb grant rule {stale!r}")
+    return problems
+
+
+def test_skill_states_one_direct_enables_the_session(skill_text: str) -> None:
+    assert enablement_problems(skill_text) == []
+
+
+def test_counterfactual_enablement() -> None:
+    real = SKILL.read_text(encoding="utf-8")
+    assert enablement_problems(real) == []
+    assert enablement_problems(real.replace("for the rest of the session", "for 300 s")) != []
+    assert enablement_problems(real.replace("`/clear`", "a restart")) != []
+
+
+def sent_line_problems(text: str) -> list[str]:
+    """After a send or an answer the skill must have Claude show what was sent, verbatim."""
+    needles = ("## Showing what was sent", "Sent to <message.to> (<message.kind>, <message.state>): <message.body>",
+               "Answered <id>: <decision>", "The gate\nshows the target and the exact text")
+    return [f"the skill does not say {n!r}" for n in needles if n not in text]
+
+
+def test_skill_shows_what_was_sent(skill_text: str) -> None:
+    assert sent_line_problems(skill_text) == []
+
+
+def test_counterfactual_sent_line() -> None:
+    real = SKILL.read_text(encoding="utf-8")
+    assert sent_line_problems(real) == []
+    assert sent_line_problems(real.replace("Sent to <message.to>", "Delivered")) != []
+
+
 def test_skill_is_ascii_and_has_no_bare_python(skill_text: str) -> None:
     assert interpreter_problems(skill_text) == []
 
@@ -317,13 +365,13 @@ def test_counterfactual_preload() -> None:
 
 
 def test_counterfactual_verbs_not_accepted() -> None:
-    accepted = grant_hook_verbs()
+    accepted = hook_verbs()
     assert verbs_not_accepted(GOOD, accepted) == set()
     assert verbs_not_accepted(GOOD.replace("machines", "lookup"), accepted) == {"lookup"}
 
 
 def test_counterfactual_verbs_not_documented() -> None:
-    accepted = grant_hook_verbs()
+    accepted = hook_verbs()
     assert verbs_not_documented(GOOD, accepted) == set(accepted) - {"machines"}
     # the real skill, with one verb's mentions removed, reports exactly that verb
     real = SKILL.read_text(encoding="utf-8").replace("relay client answer", "relay client")
