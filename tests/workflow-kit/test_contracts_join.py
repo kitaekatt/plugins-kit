@@ -4,7 +4,7 @@ A compiled contract workflow runs under `node` exactly as the native Workflow
 tool would run it, with `agent()` stubbed to do the executor's job: run the
 node's COMMAND in `bash` and return the metadata object. Nothing between the
 compiled script and the files on disk is faked except the two things that must
-be: the OpenAI-compatible client BELOW ``OpenRouterBackend.complete`` (so
+be: the OpenAI-compatible client BELOW ``OpenAICompatBackend.complete`` (so
 prepare_contract and finalize_contract really run) and the reachability probe.
 Those are installed by shim scripts standing in for the plugin's ``scripts/``
 directory, which run the real ``openrouter_run.py`` / ``check_artifact.py`` /
@@ -94,7 +94,7 @@ AsyncFunction('args', src)(cfg.args).then(
 """
 
 # What the `scripts/` shims run. The openrouter shim fakes only what is BELOW
-# OpenRouterBackend.complete (the client) and the reachability probe.
+# OpenAICompatBackend.complete (the client) and the reachability probe.
 _SHIM_COMMON = """
 import os, runpy, sys
 for _p in ({paths!r}):
@@ -134,7 +134,7 @@ _client = SimpleNamespace(chat=SimpleNamespace(completions=_Completions()))
 # The real SDK client scopes a per-call max_retries override to a copy
 # (llm_kit >= 1.13 sets one); the fake is its own copy.
 _client.with_options = lambda **_kwargs: _client
-backends.OpenRouterBackend._ensure_client = lambda self: _client
+backends.OpenAICompatBackend._ensure_client = lambda self: _client
 runpy.run_path({real!r}, run_name="__main__")
 """
 
