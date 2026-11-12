@@ -55,7 +55,7 @@
       "type": "string",
       "minLength": 3,
       "maxLength": 300,
-      "description": "channel:<address> | direct:<address> (harness claude) | operator:<machine> | relay:<machine> | claude.ai/<user>."
+      "description": "channel:<address> (harness claude or codex) | direct:<address> (harness claude only) | operator:<machine> | relay:<machine> | claude.ai/<user>."
     },
     "machine_label": {
       "type": "string",
