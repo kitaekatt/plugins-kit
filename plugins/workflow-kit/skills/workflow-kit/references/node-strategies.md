@@ -43,7 +43,7 @@ code. Anything `bash -c` can run is a script node.
 
 One non-Claude model call via llm-kit's completion seam
 (`scripts/openrouter_run.py`, which uses
-`llm_kit.adapters.backends.OpenRouterBackend.complete`), writing the reply
+`llm_kit.adapters.backends.OpenAICompatBackend.complete`), writing the reply
 text to `$OUT`. The script does not build an `openai` client or call
 `chat.completions.create` itself -- the seam owns the transport, response
 normalization, and halt classification (auth / rate limit / insufficient

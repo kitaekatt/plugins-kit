@@ -26,7 +26,7 @@ Run this with WORKFLOW-KIT's OWN venv python, which bootstrap provisions with:
     bootstrap shared-libs .pth because workflow-kit declares it in
     `shared_lib_imports`.
   - the `openai` SDK -- the `sdk` extra of katsoft-llm-kit, used lazily inside
-    llm-kit's OpenRouterBackend.
+    llm-kit's OpenAICompatBackend.
 
     <workflow-kit-venv-python> scripts/openrouter_run.py \\
         [--model <entry>[,<entry>...]] [--cheap] --prompt-file <req.txt> --out <OUT> \\
