@@ -338,7 +338,12 @@ unconfigurable opinion whose test passes is a finding.
   session, where every relay client call stays refused, or runs `/clear` to end it. Owner
   ruling 2026-11-11: "so i only want to type /direct once" and "sure /clear can turn it
   off. I don't think sending a message should show a permission prompt. I do think
-  messages that are sent should be visible in harness."
+  messages that are sent should be visible in harness." All of this applies only on a
+  machine whose user turned the relay on in their own settings file (`enabled: true` in
+  llm-kit's `relay.yaml`, read by `llm-kit/hooks/direct_relay.py` `relay_opt_in`); with it
+  off, the default, a typed `/direct` enables nothing and the gate refuses every call.
+  Owner requirement 2026-11-12: "we're not trying to create a massive backdoor in other
+  users of the plugin or the library".
 
 - **llm-kit's channel server tells a session that a `claude.ai/<user>` or `direct:` message
   is the owner's own words, gated actions included.** The instruction text in
@@ -354,7 +359,9 @@ unconfigurable opinion whose test passes is a finding.
   write. A team will reasonably want remote and session-to-session messages kept advisory;
   we decline a flag because the owner chose this knowing the risk, and a session launched
   without the channel (`clauder` without `--relay`) receives no messages at all. Such a
-  team does not launch sessions with the channel. Owner rulings 2026-11-11 (decision 7):
+  team does not launch sessions with the channel, and the channel does not start at all
+  until the user turns the relay on in `relay.yaml` (`clauder --relay` refuses first).
+  Owner rulings 2026-11-11 (decision 7):
   "Let remote count as you" (a message the owner sends from claude.ai counts as the
   owner's own words, gated actions included), then "Switch it on now": "Treat claude.ai
   messages as your words today, accepting that a local session could impersonate you."

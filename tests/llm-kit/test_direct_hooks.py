@@ -25,6 +25,13 @@ Each guard test names the edit that turns it red (each shown red when this file 
   test_a_send_shows_the_owner_its_exact_target_and_text goes red.
 * /clear and session end revoke -- in sessionend/direct_revoke.run return ``False`` without calling
   ``R.revoke``: test_session_end_revokes_only_that_session goes red.
+* off by default, enable hook -- in userpromptsubmit/direct_enable.run change ``if not opted_in:`` to
+  ``if False:``: test_a_typed_direct_enables_nothing_until_the_owner_turns_the_relay_on goes red.
+* off by default, gate -- in pretooluse/direct_gate.run change ``if not opted_in:`` to ``if False:``:
+  test_the_gate_refuses_every_call_while_the_relay_is_off goes red.
+* a malformed opt-in is not read as on -- in direct_relay.relay_opt_in replace the final ``raise HookError``
+  of the ``enabled`` branch with ``value = True``: test_an_unreadable_opt_in_enables_nothing_and_the_gate_refuses
+  goes red.
 """
 from __future__ import annotations
 
@@ -128,11 +135,12 @@ def relay():
 
 @pytest.fixture()
 def home(tmp_path, relay):
-    """A scratch HOME with env.json, a relay token (0600) and relay.yaml pointing at the fake relay."""
+    """A scratch HOME with env.json, a relay token (0600) and relay.yaml turning the relay on at the fake relay."""
     return make_home(tmp_path, relay.port)
 
 
-def make_home(tmp_path: Path, port: int, *, token: Optional[str] = TOKEN) -> dict[str, str]:
+def make_home(tmp_path: Path, port: int, *, token: Optional[str] = TOKEN, opt_in: Optional[str] = "enabled: true\n",
+              ) -> dict[str, str]:
     root = tmp_path / "home"
     (root / ".claude").mkdir(parents=True)
     (root / ".claude" / "env.json").write_text(json.dumps(
@@ -144,7 +152,7 @@ def make_home(tmp_path: Path, port: int, *, token: Optional[str] = TOKEN) -> dic
         (state / "relay.token").chmod(0o600)
     cfg = root / "cfg" / "llm-kit"
     cfg.mkdir(parents=True)
-    (cfg / "relay.yaml").write_text(f"relay:\n  host: 127.0.0.1\n  port: {port}\n")
+    (cfg / "relay.yaml").write_text(f"{opt_in or ''}relay:\n  host: 127.0.0.1\n  port: {port}\n")
     env = {k: v for k, v in os.environ.items()
            if k not in ("XDG_STATE_HOME", "XDG_CONFIG_HOME", "HOME", "CLAUDE_BOOTSTRAP_DATA_ROOT")}
     env.update({"HOME": str(root), "XDG_STATE_HOME": str(root / "state"), "XDG_CONFIG_HOME": str(root / "cfg"),
@@ -270,6 +278,74 @@ def test_a_record_that_cannot_be_written_is_reported_and_does_not_block(relay, h
 def test_bad_hook_input_fails_loudly(relay, home, stdin):
     rc, out, err = run_hook(ENABLE_HOOK, stdin, home)
     assert rc == 1 and out is None and "direct_enable.py:" in err
+
+
+# -- off by default: the owner's relay.yaml turns the relay on --------------------------------------
+
+def set_opt_in(env: dict[str, str], text: Optional[str]) -> Path:
+    """Rewrite relay.yaml with ``text`` (None deletes the file), keeping the fake relay's listener block."""
+    path = Path(env["XDG_CONFIG_HOME"]) / "llm-kit" / "relay.yaml"
+    listener = path.read_text().split("relay:\n", 1)[1]
+    if text is None:
+        path.unlink()
+    else:
+        path.write_text(f"{text}relay:\n{listener}")
+    return path
+
+
+OFF_STATES = {
+    "no file": None,
+    "no key": "",
+    "enabled false": "enabled: false\n",
+    "enabled off": "enabled: off  # not yet\n",
+}
+
+
+@pytest.mark.parametrize("state", sorted(OFF_STATES))
+def test_a_typed_direct_enables_nothing_until_the_owner_turns_the_relay_on(relay, home, state):
+    path = set_opt_in(home, OFF_STATES[state])
+    rc, out, err = run_hook(ENABLE_HOOK, prompt_payload("/direct machines"), home)
+    assert (rc, err) == (0, "")
+    text = context(out)
+    assert text.startswith("/direct is off on this machine") and "systemMessage" not in out
+    assert f"put `enabled: true` in {path}" in text and "is enabled" not in text
+    assert not record_path(home).exists() and relay.requests == []
+
+
+@pytest.mark.parametrize("state", sorted(OFF_STATES))
+def test_the_gate_refuses_every_call_while_the_relay_is_off(relay, home, state):
+    enable(home)  # a record from when the relay was on does not outlive turning it off
+    path = set_opt_in(home, OFF_STATES[state])
+    for args in ("machines", f"read {TARGET}", f"send {TARGET} --kind note --body 'hi'"):
+        rc, out, _ = run_hook(GATE_HOOK, bash_payload(client(args)), home)
+        verdict, reason = decision(out)
+        assert rc == 0 and verdict == "deny" and "/direct is off on this machine" in reason
+        assert f"put `enabled: true` in {path}" in reason and "Do not change that file yourself" in reason
+    assert relay.requests == []
+
+
+@pytest.mark.parametrize("text", ['enabled: "true"\n', "enabled: maybe\n", "enabled:\n", "enabled: 1\n",
+                                  "enable: true\n", "{enabled: true}\n", "---\nenabled: true\n",
+                                  "enabled: true\nenabled: true\n"])
+def test_an_unreadable_opt_in_enables_nothing_and_the_gate_refuses(relay, home, text):
+    enable(home)
+    record_path(home).unlink()
+    set_opt_in(home, text)
+    rc, out, err = run_hook(ENABLE_HOOK, prompt_payload("/direct"), home)
+    assert (rc, err) == (0, "")
+    assert "relay settings could not be read" in context(out) and "could not be read" in out["systemMessage"]
+    assert not record_path(home).exists()
+    verdict, reason = decision(run_hook(GATE_HOOK, bash_payload(client("machines")), home)[1])
+    assert verdict == "deny" and "cannot read the relay settings" in reason
+    assert relay.requests == []
+
+
+def test_the_opt_in_is_read_from_the_default_config_path_without_xdg(relay, home):
+    env = {k: v for k, v in home.items() if k != "XDG_CONFIG_HOME"}
+    rc, out, _ = run_hook(ENABLE_HOOK, prompt_payload("/direct"), env)
+    default = Path(home["HOME"]) / ".config" / "llm-kit" / "relay.yaml"
+    assert rc == 0 and f"put `enabled: true` in {default}" in context(out)
+    assert not record_path(env).exists()
 
 
 # -- PreToolUse: the gate ---------------------------------------------------------------------------

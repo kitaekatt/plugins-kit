@@ -71,13 +71,21 @@ class FakeClaude:
             return []
         return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
-    def install_llm_kit(self, version: str = "0.17.0", *, channel: bool = True) -> Path:
-        """A fake cached llm-kit under this launch's HOME; `channel` False models a release without it."""
+    def install_llm_kit(self, version: str = "0.21.0", *, channel: bool = True, opt_in=True) -> Path:
+        """A fake cached llm-kit under this launch's HOME; `channel` False models a release without it.
+
+        `opt_in` is what the fake channel's opt_in_refusal answers: True (the relay is on), a refusal
+        string (the relay is off), or False for a release whose channel predates the opt-in.
+        """
         root = self.root / ".claude" / "plugins" / "cache" / "plugins-kit" / "llm-kit" / version
         root.mkdir(parents=True)
         if channel:
             (root / "channel").mkdir()
-            (root / "channel" / "relay_channel.py").write_text("# fake channel\n", encoding="utf-8")
+            if opt_in is False:
+                source = "# fake channel that predates the opt-in\n"
+            else:
+                source = "def opt_in_refusal(environ):\n    return %r\n" % (None if opt_in is True else opt_in)
+            (root / "channel" / "relay_channel.py").write_text(source, encoding="utf-8")
             (root / "channel" / "mcp.json").write_text("{}\n", encoding="utf-8")
         return root
 

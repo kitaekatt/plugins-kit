@@ -17,6 +17,15 @@ carry the relay but does not would be read as one that does, so with no usable
 llm-kit the launch is refused with a diagnosis, and nothing is substituted. The
 absent and the too-old states name different `claude plugin` commands.
 
+Off by default (owner requirement: no open relay on a machine by default). The
+relay must be turned on in the user's own settings file, llm-kit's relay.yaml
+(top-level `enabled: true`). `relay_launch` asks the channel script it resolved
+(`opt_in_refusal` in relay_channel.py, which reads that file through llm-kit's
+hooks/direct_relay.py) and refuses `--relay`, naming the file and the key, when
+the relay is not on. A relay_channel.py without `opt_in_refusal` predates the
+opt-in and is refused with the update command; nothing is substituted. The
+channel server makes the same check when it starts.
+
 Where llm-kit's files are found (first match decides; a match that fails is an
 error, never a reason to look further):
 
@@ -34,6 +43,7 @@ Stdlib only; written for Python 3.8 and later (the channel script needs 3.9, see
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import re
 import sys
@@ -161,15 +171,44 @@ def resolve_python(env: Mapping[str, str]) -> str:
     return sys.executable
 
 
+def require_opt_in(channel: Channel, env: Mapping[str, str]) -> None:
+    """Refuse --relay unless the user's relay.yaml turns the relay on; asks the channel script itself.
+
+    Raises RelayError when the relay is off, when its settings cannot be read,
+    and when the channel script predates the opt-in. A channel script that
+    fails to load raises its own error.
+    """
+    name = "relaunch_kit_relay_channel"
+    spec = importlib.util.spec_from_file_location(name, channel.script)
+    if spec is None or spec.loader is None:
+        raise RelayError("--relay cannot load llm-kit's channel server %s" % channel.script)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(name, None)
+    check = getattr(module, "opt_in_refusal", None)
+    if check is None:
+        raise RelayError(
+            "--relay needs an llm-kit whose relay is off until the user turns it on, and %s predates that. "
+            "Update it with `%s` and restart." % (channel.script, _UPDATE)
+        )
+    refusal = check(env)
+    if refusal is not None:
+        raise RelayError("--relay refused: %s." % refusal)
+
+
 def relay_launch(env: Mapping[str, str]) -> RelayLaunch:
     """The flags and variables `clauder --relay` adds; raises RelayError."""
     channel = resolve_channel(env)
-    python = resolve_python(env)
+    require_opt_in(channel, env)
+    interpreter = resolve_python(env)
     return RelayLaunch(
         args=(
             "--mcp-config", channel.mcp_config,
             "--dangerously-load-development-channels", "server:" + SERVER_NAME,
             "--allowedTools", "mcp__%s__reply" % SERVER_NAME,
         ),
-        env={PYTHON_ENV: python, CHANNEL_SCRIPT_ENV: channel.script},
+        env={PYTHON_ENV: interpreter, CHANNEL_SCRIPT_ENV: channel.script},
     )

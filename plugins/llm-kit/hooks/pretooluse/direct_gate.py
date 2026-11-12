@@ -36,6 +36,9 @@ Behaviour
     abbreviations are refused), and none of ``--grant``, ``--config``,
     ``--state-dir``, ``--env-json`` (the gate grants each call itself, against
     the default relay) or ``--body -`` (the owner must see the text);
+  - this machine's relay.yaml turns the relay on (top-level ``enabled:
+    true``, direct_relay.relay_opt_in); the relay is off by default and the
+    denial names the file and the key;
   - ``--session`` is this session's id (a session acts only for itself);
   - this session is enabled (the owner typed /direct in it);
   - the relay mints the call's grant: ``grant_mint`` for exactly this verb and
@@ -323,6 +326,16 @@ def run(
         return _deny(f"The /direct gate cannot read this relay client call ({exc}).")
     if call is None:
         return None
+    try:
+        opted_in = R.relay_opt_in(env)
+    except R.HookError as exc:
+        return _deny(f"Refused: the /direct gate cannot read the relay settings ({exc}).")
+    if not opted_in:
+        return _deny(
+            f"Refused: /direct is off on this machine because the llm-kit relay is not enabled, so "
+            f"`llm-kit relay client {call.client_verb}` may not run. Only the owner turns it on: "
+            f"{R.opt_in_hint(env)}. Do not change that file yourself and do not retry."
+        )
     if call.session != session:
         return _deny(
             f"Refused: --session must be this session's id ({session}); got {call.session!r}. A session acts only "
