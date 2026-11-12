@@ -472,13 +472,13 @@ wheels = [
 
 [[package]]
 name = "katsoft-llm-kit"
-version = "1.17.0"
+version = "1.19.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "katsoft-contracts" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/cb/89/f48db99b6b510cf1d6f8cb14f59f9d09db0b804e7b664eab90cba00a67b9/katsoft_llm_kit-1.17.0-py3-none-any.whl", hash = "sha256:5311669800aedbdbe112dca15f64098da6cbcbee9bbcdbf9bc43049ae30448d2", size = 1214934, upload-time = "2026-11-12T18:29:45.027Z" },
+    { url = "https://files.pythonhosted.org/packages/1d/62/86a8def62d6dc7a857d4623a09b0e6e7fcdc1157a657db7786337c12dedb/katsoft_llm_kit-1.19.1-py3-none-any.whl", hash = "sha256:29ed08b84cda42359f24c8323a0e6da18edcf8e539432f945b9c1c00da0d008e", size = 1245550, upload-time = "2026-11-12T22:51:44.49Z" },
 ]
 
 [package.optional-dependencies]
@@ -643,7 +643,7 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'dev'", specifier = ">=0.110" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
     { name = "katsoft-contracts", marker = "extra == 'dev'", specifier = ">=1.0,<2" },
-    { name = "katsoft-llm-kit", extras = ["config", "sdk", "local", "frontdoor", "jobs", "pipeline", "relay"], marker = "extra == 'dev'", specifier = ">=1.17,<2" },
+    { name = "katsoft-llm-kit", extras = ["config", "sdk", "local", "frontdoor", "jobs", "pipeline", "relay"], marker = "extra == 'dev'", specifier = ">=1.19.1,<2" },
     { name = "markdown-it-py", marker = "extra == 'dev'" },
     { name = "packaging", marker = "extra == 'dev'", specifier = ">=24.0" },
     { name = "psutil", marker = "extra == 'dev'", specifier = ">=6.0" },
