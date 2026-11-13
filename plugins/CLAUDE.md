@@ -360,7 +360,19 @@ unconfigurable opinion whose test passes is a finding.
   peer key this machine issued to another of the owner's machines can also send as
   `claude.ai/<user>` to this machine's opted-in sessions without the hub bearer, and as the
   `direct:` origin of any Claude session on the holding machine (shown as `forwarded_by`).
-  The Claude in a `/direct` session can also send a message the owner did not write. A team will reasonably want remote and session-to-session messages kept advisory;
+  The Claude in a `/direct` session can also send a message the owner did not write.
+  On a machine whose `relay.yaml` also sets `resume: {enabled: true}` (relay protocol
+  amendment 3; off by default), each of these senders can also start a turn in an ended,
+  idle session on that machine that once opted in through the channel, with no per-call
+  confirmation and the owner not at the keyboard: a `/direct` session through the
+  `continue` verb (`llm-kit/hooks/pretooluse/direct_gate.py` mints its `continue_session`
+  grant for one full address on this machine and shows the text), the hub through
+  `continue_session`. A resumed Claude turn runs `claude -p` in the default permission mode
+  and runs the owner's Claude Code hooks; a resumed Codex turn runs with Codex hooks off.
+  The seam for a user who wants none of this is `resume.enabled`, default false. Owner
+  ruling 2026-11-13 on plan-codex Q2 (option (a), sessions that once opted in, off unless
+  relay.yaml says so, default permission mode): "i agree wiht your recommendations on
+  those 4". A team will reasonably want remote and session-to-session messages kept advisory;
   we decline a flag because the owner chose this knowing the risk, and a session launched
   without the channel (`clauder` without `--relay`) receives no messages at all. Such a
   team does not launch sessions with the channel, and the channel does not start at all
@@ -373,7 +385,8 @@ unconfigurable opinion whose test passes is a finding.
   can send messages that carry your authority. The risk: that session's Claude could send
   one without you writing it." A forwarded `direct:` sender carries the same authority
   (amendment 2). The protocol side is `docs/reference/llm-kit-relay-protocol.md` section 3
-  ("Principals", "Peer credentials") and amendment 2 in section 1, in katsoft-libs.
+  ("Principals", "Peer credentials"), amendments 2 and 3 in section 1, and section 20
+  ("Remote resume"), in katsoft-libs.
 
 An opinion that FAILS the test needs neither a register entry nor a seam -- it is simply a
 good default. Opinions that PASS and are still unconfigurable are findings, tracked with
