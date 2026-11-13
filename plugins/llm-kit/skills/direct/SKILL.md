@@ -3,7 +3,7 @@ _schema_version: 1
 name: direct
 author: christina
 skill-type: technique-skill
-description: Use when the user types /direct to list machines, read, message or resume a session, or ask a local LLM via the llm-kit relay. Do NOT use on the model's own initiative.
+description: Use when the user types /direct to list machines, read, message or resume a session, or ask a local LLM via the relay. Do NOT use on the model's own initiative.
 disable-model-invocation: true
 user-invocable: true
 allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/bin/llm-kit relay client *)
