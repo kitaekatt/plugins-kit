@@ -154,3 +154,12 @@ def test_the_standalone_reader_imports_neither_yaml_nor_llm_kit():
     imports = [line.strip() for line in DIRECT_RELAY.read_text(encoding="utf-8").splitlines()
                if line.startswith(("import ", "from "))]
     assert imports and not [line for line in imports if "yaml" in line or "llm_kit" in line]
+
+
+def test_plugin_config_keys_equal_the_library_key_set():
+    """The only plugin-side copy of the top-level relay.yaml key set is direct_relay.CONFIG_KEYS.
+
+    The channel server and relaunch-kit's `--relay` reach it through direct_relay, so one equality
+    covers every consumer. Shown red: with "resume" missing from CONFIG_KEYS this fails.
+    """
+    assert R.CONFIG_KEYS == C._CONFIG_KEYS

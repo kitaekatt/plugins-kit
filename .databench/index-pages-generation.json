@@ -3,25 +3,18 @@
   "state": "in-progress",
   "finished": {
     "plugins/skills-kit/skills/md-domain/references/skill-domain": "d3aa0da2b950411852245430f2928732f1825b1645c2c5d99b25dc3b173df6ce",
-    "plugins/task-kit/skills/task/scripts/task_system": "0c54c44231f3e1d481f88768b1c160b74568e39a4278ff9b1f5c2e3ce90ff261",
+    "plugins/task-kit/skills/task/scripts/task_system": "af0c7347238ba3f6a3017683fbeb521ec4747557dcd4c3ea9b47c727e0cb8b12",
     "plugins/skills-kit/skills/md-domain/references": "77499068cac12057babc1817f8f041d4df4f41de5009b628e359ab7424046afc",
+    "plugins/skills-kit/skills/md-domain/scripts": "615e756794b1e1a6a575201246390ec3078278f1b0f1e9239a130034f768ed2a",
     "plugins/unreal-kit/skills/fix-up-redirectors/scripts": "b52b0ce51f6de48e4e956d38950bcfae3706e788a0781a2a2a6eef963d34bda9",
     "plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/comments": "5827be4558f31b34178408511a5fc483d465ca6d70400924477cba39883762f6",
-    "plugins/awesome-kit/skills/orchestrate": "026c869b54f5dd4d69f493de85e7599f32c19e77ecc4729d727501a4f6d7639e",
-    "plugins/bootstrap/skills/bootstrap": "6acd45481affcee9720ac1593f0839c20605ed45832ecc469b3e652af51a05f4",
-    "plugins/git-kit/skills/git-code-review": "247c16af92c2c82ab4935a84996440af08d46375d99c6fc89348b50c98f707d0",
-    "plugins/secrets-kit/lib/secrets_kit": "3845b1bfbfbb7f693f21cb1b098431918aaf3b7435cd11b37e834104d7907afb",
-    "plugins/task-kit/skills/task": "0b3a056bf7b7d7c8211161dc27ef0113733915141bc99c87b689ab7abaf1ffb1",
-    "plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit": "dfa5e2f0af92b4211404c7468fd3173c0b6c77d6dec3d86f76345b41c33ab1ff",
     "docs/planning/md-domain-coverage-lane": "643430ad260d90d81863881a7f46e0f47fd350765e6c249e2edc3fe221a8afdf",
     "docs/planning/task-kit-dashboard": "8350c1e742144f1717677bd5458dd25026aeda7d86e737521e378851431b5541",
-    "plugins/bootstrap/bootstrap_lib": "c63c883baefe04c40de4adb7fc025d11d9ce02687db49de93c7fe486c1732f10",
     "plugins/skills-kit/scripts": "25d46305f06ff00eabd1c2723ea24bb627c7aa98bc156311a0f0f706eba9e807",
     "plugins/skills-kit/skills_kit_lib": "7be65e8be7c2dd1b13fbbf1d67f1b351544688d8b26a7f17288558d25aa89329",
-    "plugins/unreal-kit/skills": "749db73944345c08ac1e516d4025a2e53b111c1952e4204fba2d98f6550776e2",
-    "docs/planning": "4f2750c05f9d67e0359fec9ab44bf219d344c6e7093e901462b52076f222d665",
-    "plugins/workflow-kit": "c2ac30f07f875e65bbc74846c2be01c36f984e82a744798370d7b485d2df0acc",
+    "docs/planning": "e6a3d628070340420e10563432bb1f75ebe3a3b49c382114e8379bd06d750ad9",
+    "docs/reference": "20ac4401d505bb25b29e2a5ff3baf2bad919a5fe1e9a1cff0b8c0b57bc49090a",
     "tests/secrets-kit": "bc90dea27ffe85664f6d0ed00cc6798f57d715745f0a8c401877231b703af7e7",
-    "scripts": "84b0a782b6b77ae92af1e7069366933794debf7ea9d349d2a95c0eb14a853bf7"
+    "scripts": "823659551bbfbe07281f7c579fa39ab58d7f8e80541272f2b150c8a5986799f8"
   }
 }

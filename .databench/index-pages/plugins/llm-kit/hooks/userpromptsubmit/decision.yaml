@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/llm-kit/hooks/userpromptsubmit",
+  "decision": "none",
+  "source_sha": "baee83cf79d93b37754488b65c328b0b5e658d8b",
+  "input_sha256": "2e7e0a153a05ded2fa37c94f88acd26fc22bbbc0b0ea273f907ae5236ba15de7",
+  "input_shape_sha256": "ed14bd809aa627937814bf780c85b4514f13302f834eda3f832fb81db1327297",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

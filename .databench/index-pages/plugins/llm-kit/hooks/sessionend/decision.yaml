@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/llm-kit/hooks/sessionend",
+  "decision": "none",
+  "source_sha": "38c557c36e4aded5ffebbfe8609ef2e2b6ad4688",
+  "input_sha256": "f698fb4504300eb95a46a23057ee5f9f88f6c1c2c71ebb36ec3ab193276ec03a",
+  "input_shape_sha256": "7386a09343d89baae6496e5843c1ba8f4223dda190f85bced263fa2ff0105ef0",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}
