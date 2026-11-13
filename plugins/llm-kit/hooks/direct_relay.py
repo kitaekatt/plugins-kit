@@ -391,7 +391,7 @@ def read_token(env: Mapping[str, str]) -> str:
 
 
 #: the relay.yaml top-level keys llm_kit.relay.config accepts (its _CONFIG_KEYS).
-CONFIG_KEYS = frozenset({"enabled", "relay", "hub", "ledgers", "llm_endpoints"})
+CONFIG_KEYS = frozenset({"enabled", "relay", "hub", "ledgers", "llm_endpoints", "resume"})
 #: plain scalars PyYAML's safe loader reads as booleans (the YAML 1.1 bool set).
 _YAML_TRUE = frozenset({"true", "True", "TRUE", "yes", "Yes", "YES", "on", "On", "ON"})
 _YAML_FALSE = frozenset({"false", "False", "FALSE", "no", "No", "NO", "off", "Off", "OFF"})
