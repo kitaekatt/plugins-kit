@@ -1507,6 +1507,97 @@ class TestPerPluginBumpGate:
             "pub-kit: 1.0.0 -> 1.1.0"]
 
 
+class TestDocsOnlyChangesNeedNoBump:
+    """A plugin whose only changes are files no session loads (any *.html, a
+    *.md that is not runtime-loaded) is neither unbumped nor dirty. Anything a
+    session can load, and every other file type, still needs the bump."""
+
+    BASE_FILES = {
+        "plugins/pub-kit/CLAUDE.md": "See [l](docs/linked.md).\n",
+        "plugins/pub-kit/README.md": "readme\n",
+        "plugins/pub-kit/docs/design.md": "design notes\n",
+        "plugins/pub-kit/docs/linked.md": "linked from CLAUDE.md\n",
+        "plugins/pub-kit/data/prompt.md": "read by plugin code\n",
+        "plugins/pub-kit/skills/s/SKILL.md": "skill\n",
+        "plugins/pub-kit/skills/s/references/x.md": "ref\n",
+        "plugins/pub-kit/skills/s/scripts/index.html": "<html>1</html>\n",
+        "plugins/pub-kit/engine.py": "x = 1\n",
+    }
+
+    @pytest.fixture
+    def two(self, repo):
+        """pub-kit with a file of every kind, plus a second published plugin
+        whose bump is the release's reason to exist. Master == dev."""
+        _write_manifest(repo, "other-kit", "0.1.0")
+        for rel, text in self.BASE_FILES.items():
+            target = repo / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text)
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "seed")
+        _git(repo, "push", "-q", "origin", "dev")
+        _git(repo, "checkout", "-q", "master")
+        _git(repo, "merge", "-q", "--ff-only", "dev")
+        _git(repo, "push", "-q", "origin", "master")
+        _git(repo, "checkout", "-q", "dev")
+        return repo
+
+    def _change(self, repo, *rels):
+        for rel in rels:
+            (repo / rel).write_text("changed\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "change " + " ".join(rels))
+        _bump(repo, "other-kit", "0.2.0", "other-kit 0.2.0")
+
+    @pytest.mark.parametrize("rel", [
+        "plugins/pub-kit/skills/s/scripts/index.html",
+        "plugins/pub-kit/README.md",
+        "plugins/pub-kit/docs/design.md",
+    ])
+    def test_docs_only_change_does_not_refuse(self, two, rel):
+        self._change(two, rel)
+        assert publish.preflight()[0] == ["other-kit: 0.1.0 -> 0.2.0"]
+        assert publish._changed_plugins() == {"other-kit"}
+
+    @pytest.mark.parametrize("rels", [
+        ("plugins/pub-kit/skills/s/SKILL.md",),
+        ("plugins/pub-kit/skills/s/references/x.md",),
+        ("plugins/pub-kit/CLAUDE.md",),
+        ("plugins/pub-kit/docs/linked.md",),   # linked from CLAUDE.md
+        ("plugins/pub-kit/data/prompt.md",),   # not recognisably docs
+        ("plugins/pub-kit/engine.py",),
+        ("plugins/pub-kit/skills/s/scripts/index.html",
+         "plugins/pub-kit/engine.py"),
+        ("plugins/pub-kit/README.md", "plugins/pub-kit/skills/s/SKILL.md"),
+    ])
+    def test_anything_loadable_still_refuses(self, two, rels):
+        self._change(two, *rels)
+        with pytest.raises(publish.PublishError,
+                           match="pub-kit: files changed, still 1.0.0"):
+            publish.preflight()
+
+    def test_deleting_a_linked_markdown_still_refuses(self, two):
+        (two / "plugins/pub-kit/docs/linked.md").unlink()
+        _git(two, "add", "-A")
+        _git(two, "commit", "-qm", "drop notes")
+        _bump(two, "other-kit", "0.2.0", "other-kit 0.2.0")
+        with pytest.raises(publish.PublishError, match="pub-kit"):
+            publish.preflight()
+
+    def test_uncommitted_docs_do_not_make_the_tree_dirty(self, two):
+        (two / "plugins/pub-kit/skills/s/scripts/index.html").write_text("new\n")
+        (two / "plugins/pub-kit/docs").mkdir(exist_ok=True)
+        (two / "plugins/pub-kit/docs/NEW.md").write_text("untracked\n")
+        assert publish._shippable_dirty_paths() == []
+
+    def test_uncommitted_loadable_file_still_makes_the_tree_dirty(self, two):
+        (two / "plugins/pub-kit/docs").mkdir(exist_ok=True)
+        (two / "plugins/pub-kit/docs/NEW.md").write_text("untracked\n")
+        (two / "plugins/pub-kit/skills/s/SKILL.md").write_text("edited\n")
+        dirty = publish._shippable_dirty_paths()
+        assert len(dirty) == 1 and dirty[0].endswith("SKILL.md")
+
+
 class TestVersionReads:
     def test_version_at_ref(self, repo):
         _bump(repo, "pub-kit", "2.0.0", "pub-kit 2.0.0")
@@ -1576,8 +1667,12 @@ class TestChangedPluginsUsesNetDiff:
         monkeypatch.setattr(publish, "_commit_files",
                             lambda sha: ["plugins/alpha/file.py"])
         # exit 1 -> the trees differ, so the bump rule must still bite.
-        monkeypatch.setattr(publish.subprocess, "run",
-                            lambda *a, **k: SimpleNamespace(returncode=1))
+        def fake_run(argv, **kwargs):
+            quiet = "--quiet" in argv
+            listing = "plugins/alpha/file.py\n" if "--name-only" in argv else ""
+            return SimpleNamespace(returncode=1 if quiet else 0,
+                                   stdout=listing, stderr="")
+        monkeypatch.setattr(publish.subprocess, "run", fake_run)
         assert publish._changed_plugins() == {"alpha"}
 
 

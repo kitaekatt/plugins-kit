@@ -480,6 +480,7 @@ Read every line and confirm the staged set is exactly your files, even after a t
 **Recovery: how to retract.** A bad publish on master is fixed forward, never with `push --force` to master. Push a follow-up commit that either (a) reverts the bad commit and patch-bumps the affected plugins past the burned version, or (b) re-implements correctly under a new version. Never rewrite master history -- other machines have already fetched it.
 
 **Submit gate:** Verify every changed plugin is version-bumped since the last publish, each stated pyproject version matches plugin.json, and marketplace derived data matches the manifests.
+A change confined to files no session loads (any `*.html`, README-style or `docs/` markdown) needs no bump: [docs/reference/publish-reconcile.md](docs/reference/publish-reconcile.md), "Files that need no bump".
 Applies to:
 - plugins/
 - .claude-plugin/marketplace.json

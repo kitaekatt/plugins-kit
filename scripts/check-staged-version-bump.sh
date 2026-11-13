@@ -63,10 +63,6 @@ cd "$(git rev-parse --show-toplevel)"
 staged=$(git diff --cached --name-only)
 [ -n "$staged" ] || exit 0
 
-# Plugin names with staged changes anywhere under plugins/<name>/
-names=$(printf '%s\n' "$staged" | sed -n 's|^plugins/\([^/][^/]*\)/.*|\1|p' | sort -u)
-[ -n "$names" ] || exit 0
-
 # Version stated by a staged (index) file. Reads the index, not the worktree,
 # because the index is what the commit will actually contain.
 version_of_stream() {
@@ -123,6 +119,22 @@ else
         base=""
     fi
 fi
+
+# Files that need no bump (generated index pages, READMEs and other docs no
+# session loads) are dropped here, by the rule publish.py's preflight applies,
+# so the two gates cannot disagree. Unfiltered when the rule cannot be asked:
+# every failure direction blocks rather than passes.
+if [ -n "$plain_python" ] && [ -f "scripts/publish.py" ]; then
+    if relevant=$(printf '%s\n' "$staged" \
+                  | "$plain_python" scripts/publish.py --bump-relevant-paths 2>/dev/null); then
+        staged="$relevant"
+        [ -n "$staged" ] || exit 0
+    fi
+fi
+
+# Plugin names with staged changes anywhere under plugins/<name>/
+names=$(printf '%s\n' "$staged" | sed -n 's|^plugins/\([^/][^/]*\)/.*|\1|p' | sort -u)
+[ -n "$names" ] || exit 0
 
 if [ -n "$degraded_reason" ]; then
     echo "check-staged-version-bump: $degraded_reason; falling back to the" >&2

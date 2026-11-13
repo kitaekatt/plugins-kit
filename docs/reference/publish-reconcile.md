@@ -14,6 +14,31 @@ local working copy. Develop on `dev` and publish releases to `master`.
 Plugin content changes require version bumps. `master` is the cache source, so this branch policy
 prevents same-version divergence between the cache and the working copy.
 
+**Files that need no bump.** The cache keys on version, so a bump matters only
+for content a session loads. A plugin whose changed files are ALL docs is not
+"changed": it needs no bump, and its uncommitted docs do not make the tree
+dirty. The rule is extension plus location and fails toward requiring a bump:
+
+- any `*.html` (generated Databench index pages, design diagrams) is exempt;
+- a `*.md` is exempt only when it is recognisably documentation (README,
+  CHANGELOG, CHANGES, HISTORY, CONTRIBUTING, LICENSE by name, or anything under a
+  `docs/`, `design/` or `planning/` directory) and no session can load it:
+  never `SKILL.md`, `CLAUDE.md` or `AGENTS.md` (a plugin's own `CLAUDE.md` ships
+  to consumers), never anything under a `skills/`, `commands/`, `agents/`,
+  `output-styles/` or `hooks/` directory, and never a `*.md` that a `SKILL.md`
+  or `CLAUDE.md` of the same plugin links (`](path)`) or `@`-imports;
+- every other file, including `references/`, `templates/` and `defaults/`
+  markdown, still requires the bump.
+
+A docs-only plugin is not published in its own right: with no bump there is no
+reason for consumers to refetch. Its exempt files are in dev's tree, so they
+travel with the next release that projects dev (and are held at master's content
+by `--only`, like the rest of a held-back plugin); they strand nothing, because
+no session loads them. One rule, in `scripts/publish.py`
+(`_DocsClassifier`), serves the preflight bump gate, the dirty-tree gate and the
+pre-commit gate `scripts/check-staged-version-bump.sh` (which asks
+`publish.py --bump-relevant-paths`; without `publish.py` it stays unfiltered).
+
 **How.** Commit the reviewed changes and required plugin version bumps on `dev`, then:
 
 ```bash
