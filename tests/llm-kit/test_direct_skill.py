@@ -30,6 +30,9 @@ the edit to SKILL.md that turns it red:
   test_skill_states_one_direct_enables_the_session goes red.
 * visible sends -- delete the ``Sent to <message.to>`` line:
   test_skill_shows_what_was_sent goes red.
+* continue (remote resume, relay protocol amendment 3) -- delete "resume.enabled", "default permission mode" or
+  "runs the owner's hooks" from the continue row: test_continue_row_states_when_it_works_and_how_the_turn_runs
+  goes red.
 * honesty (AD-5) -- delete "not a security boundary": test_skill_states_the_gate_is_a_guardrail
   goes red.
 """
@@ -328,22 +331,20 @@ def test_counterfactual_sent_line() -> None:
 
 
 def codex_notes_problems(text: str) -> list[str]:
-    """The skill must say how a Codex session is reached, what its reply is, and that no verb continues one."""
+    """The skill must say how a Codex session is reached, what its reply is, and that only `continue` resumes one."""
     start = text.find("## Codex sessions")
     if start < 0:
         return ["no 'Codex sessions' section"]
     end = text.find("\n## ", start + 1)
     section = text[start:end if end > 0 else len(text)]
     needles = ("llm-kit relay codex --cd", "sessions --harness codex", "`live-accepting`", "`answered`", "`declined`",
-               "8192 bytes", "not acknowledged", "do not send it again", "no `/direct` verb that starts or continues")
-    problems = [f"the Codex section does not say {n!r}" for n in needles if n not in section]
-    if re.search(r"^\| `/direct continue", text, re.MULTILINE):
-        problems.append("the verb table has a continue row, which needs a hook verb that does not exist")
-    return problems
+               "8192 bytes", "not acknowledged", "do not send it again", "no `/direct` verb that starts",
+               "`/direct continue`")
+    return [f"the Codex section does not say {n!r}" for n in needles if n not in section]
 
 
 def test_skill_states_how_codex_sessions_are_reached(skill_text: str) -> None:
-    """Edit that turns it red: delete the "## Codex sessions" section, or add a `/direct continue` table row."""
+    """Edit that turns it red: delete the "## Codex sessions" section."""
     assert codex_notes_problems(skill_text) == []
 
 
@@ -352,7 +353,38 @@ def test_counterfactual_codex_notes() -> None:
     assert codex_notes_problems(real) == []
     assert codex_notes_problems(real.replace("8192 bytes", "a cap")) != []
     assert codex_notes_problems(real.replace("sessions --harness codex", "sessions")) != []
-    assert codex_notes_problems(real + "\n| `/direct continue <address>` | x | y |\n") != []
+
+
+def continue_row_problems(text: str) -> list[str]:
+    """The continue row must say it works only where the machine set resume.enabled, on a full address, and that a
+    resumed Claude turn runs in the default permission mode with the owner's hooks (owner ruling on Q2,
+    2026-11-13)."""
+    rows = [ln for ln in text.splitlines() if ln.startswith("| `/direct continue")]
+    if len(rows) != 1:
+        return [f"expected one continue row, found {len(rows)}"]
+    row = rows[0]
+    needles = ("resume.enabled", "once opted in", "full address", "default permission mode", "runs the owner's hooks",
+               "`replies --message-id`", "refused call spends nothing", "use `send`")
+    problems = [f"the continue row does not say {n!r}" for n in needles if n not in row]
+    if "after a send, an answer or a continue" not in text.lower():
+        problems.append("the skill does not show the owner what a continue sent")
+    if "Continued <message.to>" not in text:
+        problems.append("the 'Showing what was sent' section has no continue line")
+    return problems
+
+
+def test_continue_row_states_when_it_works_and_how_the_turn_runs(skill_text: str) -> None:
+    assert continue_row_problems(skill_text) == []
+
+
+def test_counterfactual_continue_row() -> None:
+    real = SKILL.read_text(encoding="utf-8")
+    assert continue_row_problems(real) == []
+    assert continue_row_problems(real.replace("resume.enabled", "resume")) != []
+    assert continue_row_problems(real.replace("default permission mode", "auto mode")) != []
+    assert continue_row_problems(real.replace("runs the owner's hooks", "runs no hooks")) != []
+    no_row = "\n".join(ln for ln in real.splitlines() if not ln.startswith("| `/direct continue"))
+    assert continue_row_problems(no_row) != []
 
 
 def test_skill_is_ascii_and_has_no_bare_python(skill_text: str) -> None:

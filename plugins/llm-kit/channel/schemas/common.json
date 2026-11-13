@@ -30,6 +30,7 @@
         "get_replies",
         "list_questions",
         "answer_question",
+        "continue_session",
         "grant_mint",
         "grant_check",
         "pause",
@@ -47,7 +48,8 @@
         "send_message",
         "get_replies",
         "list_questions",
-        "answer_question"
+        "answer_question",
+        "continue_session"
       ],
       "description": "A verb a grant may name."
     },
@@ -953,6 +955,7 @@
             "get_replies",
             "list_questions",
             "answer_question",
+            "continue_session",
             "grant_mint",
             "grant_check",
             "pause",

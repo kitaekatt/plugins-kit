@@ -39,7 +39,12 @@ Behaviour
   - every option is one the client defines, written in full (argparse prefix
     abbreviations are refused), and none of ``--grant``, ``--config``,
     ``--state-dir``, ``--env-json`` (the gate grants each call itself, against
-    the default relay) or ``--body -`` (the owner must see the text);
+    the default relay) or ``--body -`` on a ``send`` or ``continue`` (the owner
+    must see the text);
+  - a ``continue`` (``continue_session``, relay protocol amendment 3: one
+    resumed turn in an idle session that once opted in) names a full address
+    ``<this machine>/<claude|codex>/<session id>``: no selector, no other
+    machine;
   - this machine's relay.yaml turns the relay on (top-level ``enabled:
     true``, direct_relay.relay_opt_in); the relay is off by default and the
     denial names the file and the key;
@@ -51,9 +56,9 @@ Behaviour
     example) denies with the relay's code.
 
 * An allowed call returns ``permissionDecision: allow`` and a
-  ``permissionDecisionReason`` naming the call. A ``send`` or ``answer`` also
-  returns a ``systemMessage`` with the exact target and text, which Claude Code
-  shows to the owner in the session.
+  ``permissionDecisionReason`` naming the call. A ``send``, ``answer`` or
+  ``continue`` also returns a ``systemMessage`` with the exact target and text,
+  which Claude Code shows to the owner in the session.
 * Relay not running: an enabled session's plain call is allowed with
   additionalContext; the client call then fails by itself.
 * ``--help`` or a call with no verb is left to the normal permission flow.
@@ -552,7 +557,7 @@ def parse_client_args(args: Sequence[str], machine: Optional[str]) -> Optional[C
     if verb is None or verb not in R.CLIENT_VERBS:
         return None
     target: Optional[str] = None
-    if verb in ("read", "send", "answer"):
+    if verb in ("read", "send", "answer", "continue"):
         target = positionals[0] if positionals else None
     elif verb == "ask":
         if positionals:
@@ -595,6 +600,27 @@ def shown_to_owner(call: ClientCall) -> Optional[str]:
         decision = call.options.get("--decision", "?")
         detail = call.options.get("--input") if decision == "answer" else call.options.get("--reason")
         return f"/direct answer {call.target}: {decision}" + (f"\n{detail}" if detail else "")
+    if call.client_verb == "continue":
+        kind = call.options.get("--kind", "?")
+        return f"/direct continue {call.target} ({kind}), one resumed turn:\n{call.options.get('--body', '')}"
+    return None
+
+
+_CONTINUE_HARNESSES = ("claude", "codex")
+
+
+def continue_target_problem(target: Optional[str], machine: str) -> Optional[str]:
+    """Why ``target`` is not a ``continue`` target, or None.
+
+    ``continue_session`` takes a full address of a session on this machine's relay, never a selector
+    (selectors resolve only live sessions) and never another machine (the relay does not forward it),
+    so the gate mints its grant for exactly that address.
+    """
+    parts = target.split("/") if target else []
+    if (len(parts) != 3 or parts[0] != machine or parts[1] not in _CONTINUE_HARNESSES
+            or not R.valid_session_id(parts[2])):
+        return (f"`continue` takes a full session address on this machine, {machine}/<claude|codex>/<session id>, "
+                f"not a selector or another machine's address; got {target!r}")
     return None
 
 
@@ -659,8 +685,12 @@ def run(
     for name, why in _REFUSED_OPTIONS.items():
         if name in call.options:
             return _deny(f"Refused: {why}.")
-    if call.client_verb == "send" and call.options.get("--body") == "-":
+    if call.client_verb in ("send", "continue") and call.options.get("--body") == "-":
         return _deny("Refused: write the message text in --body (single-quoted) so the owner sees what is sent.")
+    if call.client_verb == "continue":
+        problem = continue_target_problem(call.target, machine)
+        if problem is not None:
+            return _deny(f"Refused: {problem}.")
     try:
         record = R.enablement(env, session)
     except R.HookError as exc:

@@ -32,6 +32,10 @@ Each guard test names the edit that turns it red (each shown red when this file 
 * a malformed opt-in is not read as on -- in direct_relay.relay_opt_in replace the final ``raise HookError``
   of the ``enabled`` branch with ``value = True``: test_an_unreadable_opt_in_enables_nothing_and_the_gate_refuses
   goes red.
+* continue (remote resume, relay protocol amendment 3) -- delete ``"continue"`` from direct_relay.CLIENT_VERBS:
+  test_an_enabled_continue_is_allowed_shown_and_granted_for_its_full_address goes red; in direct_gate.shown_to_owner
+  return ``None`` for ``continue``: the same test goes red; in direct_gate.run delete the ``continue_target_problem``
+  check: test_a_continue_must_name_a_full_address_on_this_machine goes red.
 """
 from __future__ import annotations
 
@@ -62,6 +66,7 @@ SESSION = "b91e0c44-2f8a-4d3b-8c6e-71a5d0e3f2a9"
 OTHER = "7f3c2a10-5b7e-4c1d-9a8e-0d6f4b2c9e11"
 TOKEN = "tok-" + "a" * 40
 TARGET = f"{MACHINE}/claude/{OTHER}"
+IDLE = f"{MACHINE}/codex/019a6f2e-7c41-7d20-9b3e-5f8a1c2d4e60"
 
 
 # -- fake relay -------------------------------------------------------------------------------
@@ -388,6 +393,7 @@ def test_gate_allows_an_enabled_call_and_mints_its_one_use_grant(relay, home):
     ("questions --state all", "list_questions", []),
     (f"answer q:{MACHINE}/jobs:run:7 --decision reject --reason 'not now'", "answer_question",
      [f"q:{MACHINE}/jobs:run:7"]),
+    (f"continue {IDLE} --kind instruction --body hi", "continue_session", [IDLE]),
 ])
 def test_one_enablement_covers_every_verb_each_with_its_own_grant(relay, home, args, verb, targets):
     enable(home)
@@ -414,6 +420,82 @@ def test_an_answer_shows_the_owner_the_decision_and_input(relay, home):
                          home)
     assert decision(out)[0] == "allow"
     assert out["systemMessage"] == f'/direct answer {qid}: answer\n{{"ok": true}}'
+
+
+def test_an_enabled_continue_is_allowed_shown_and_granted_for_its_full_address(relay, home):
+    enable(home)
+    body = "Rerun the failing test; it's in `tests/` and $HOME is fine."
+    quoted = "'" + body.replace("'", "'\\''") + "'"
+    rc, out, err = run_hook(GATE_HOOK, bash_payload(client(f"continue {IDLE} --kind instruction --body {quoted}")),
+                            home)
+    assert (rc, err) == (0, "")
+    verdict, reason = decision(out)
+    assert verdict == "allow" and reason.startswith(f"/direct continue {IDLE}")
+    assert out["systemMessage"] == f"/direct continue {IDLE} (instruction), one resumed turn:\n{body}"
+    (request,) = relay.requests
+    assert request["origin"] == f"direct:{MACHINE}/claude/{SESSION}"
+    assert request["params"] == {
+        "session": f"{MACHINE}/claude/{SESSION}", "verb": "continue_session", "targets": [IDLE],
+        "expires_in_s": 120, "uses": 1, "origin_proof": {"type": "none"}, "command": "/direct",
+    }
+
+
+def test_a_continue_is_refused_in_a_session_that_is_not_enabled(relay, home):
+    verdict, reason = decision(run_hook(GATE_HOOK, bash_payload(client(f"continue {IDLE} --kind note --body hi")),
+                                        home)[1])
+    assert verdict == "deny" and "/direct is not enabled in this session" in reason
+    assert relay.requests == []
+
+
+@pytest.mark.parametrize("args", [
+    "continue latest --kind note --body hi",
+    "continue task:relay --kind note --body hi",
+    "continue cwd:/tmp --kind note --body hi",
+    f"continue {OTHER} --kind note --body hi",
+    f"continue {MACHINE}/llm/qwen38 --kind note --body hi",
+    f"continue {MACHINE}/claude/latest --kind note --body hi",
+    f"continue otherbox/claude/{OTHER} --kind note --body hi",
+    "continue --kind note --body hi",
+])
+def test_a_continue_must_name_a_full_address_on_this_machine(relay, home, args):
+    enable(home)
+    verdict, reason = decision(run_hook(GATE_HOOK, bash_payload(client(args)), home)[1])
+    assert verdict == "deny" and "full session address on this machine" in reason, args
+    assert relay.requests == []
+
+
+def test_a_continue_must_carry_its_text_in_body(relay, home):
+    enable(home)
+    verdict, reason = decision(run_hook(GATE_HOOK, bash_payload(client(f"continue {IDLE} --kind note --body -")),
+                                        home)[1])
+    assert verdict == "deny" and "so the owner sees what is sent" in reason
+    assert relay.requests == []
+
+
+_CONT = f"continue {IDLE} --kind note --body hi"
+
+
+@pytest.mark.parametrize("command", [
+    f"bash -c '{client(_CONT)}'",
+    f"sh -c \"cd /tmp && {client(_CONT)}\"",
+    f"nohup bash -c '{client(_CONT)}'",
+    f"env FOO=1 nohup bash -c '{client(_CONT)}'",
+    f"timeout 30 sh -c '{client(_CONT)}'",
+    f"sudo bash -c '{client(_CONT)}'",
+    f"eval '{client(_CONT)}'",
+    f"env FOO=1 {client(_CONT)}",
+    f"cd /tmp && {client(_CONT)}",
+    f"echo $({client(_CONT)})",
+    f"{client(_CONT)} | head",
+    client(f'continue {IDLE} --kind note --body "$(id)"'),
+])
+@pytest.mark.parametrize("enabled", [True, False])
+def test_a_wrapped_or_shell_c_continue_is_refused(relay, home, command, enabled):
+    if enabled:
+        enable(home)
+    verdict, _ = decision(run_hook(GATE_HOOK, bash_payload(command), home)[1])
+    assert verdict == "deny", command
+    assert relay.requests == []
 
 
 def test_gate_refuses_another_sessions_id_or_a_missing_one_without_asking_the_relay(relay, home):
@@ -731,6 +813,7 @@ REAL_FORMS = [
     f"{LAUNCHER} relay client replies --session {SESSION} --message-id m1",
     f"{LAUNCHER} relay client questions --session {SESSION}",
     f"{LAUNCHER} relay client answer q1 --session {SESSION} --decision reject --reason 'no'",
+    f"{LAUNCHER} relay client continue {IDLE} --session {SESSION} --kind note --body 'go on'",
 ]
 
 

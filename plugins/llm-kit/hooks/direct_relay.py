@@ -87,6 +87,7 @@ CLIENT_VERBS: Mapping[str, str] = {
     "replies": "get_replies",
     "questions": "list_questions",
     "answer": "answer_question",
+    "continue": "continue_session",  # amendment 3; relay.yaml resume.enabled on the target machine
 }
 
 
