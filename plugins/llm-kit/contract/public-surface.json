@@ -1246,6 +1246,10 @@
       "status": "public"
     },
     {
+      "name": "llm_kit.pipeline.runtime.backends.DeclarationBackend",
+      "status": "public"
+    },
+    {
       "name": "llm_kit.pipeline.runtime.backends.MODELS_ENV",
       "status": "public"
     },

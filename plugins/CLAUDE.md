@@ -349,14 +349,18 @@ unconfigurable opinion whose test passes is a finding.
   is the owner's own words, gated actions included.** The instruction text in
   `llm-kit/channel/relay_channel.py` (`INSTRUCTIONS`) gives a relay message whose sender
   starts with `claude.ai/` (the claude.ai connector, through the hub) or `direct:` (a
-  Claude Code session on the same machine where the owner typed `/direct`) the authority of
-  a prompt typed in the session; any other sender stays an untrusted request. Under relay
-  alternative A both are forgeable: any process that can read the machine's relay token and
-  hub bearer (any Claude session running as the owner) can send a message as
-  `claude.ai/<user>`, and any process that can read the relay token can mint a grant for,
-  and send as, the `direct:` origin of any Claude session on the machine without `/direct`
-  being typed. The Claude in a `/direct` session can also send a message the owner did not
-  write. A team will reasonably want remote and session-to-session messages kept advisory;
+  Claude Code session where the owner typed `/direct`, on the same machine or, when the
+  message carries `forwarded_by`, on another of the owner's machines whose relay forwarded
+  it; relay protocol amendment 2) the authority of a prompt typed in the session; any other
+  sender stays an untrusted request. Under relay alternative A both are forgeable: any
+  process that can read the machine's relay token and hub bearer (any Claude session
+  running as the owner) can send a message as `claude.ai/<user>`, and any process that can
+  read the relay token can mint a grant for, and send as, the `direct:` origin of any
+  Claude session on the machine without `/direct` being typed. Any process that can read a
+  peer key this machine issued to another of the owner's machines can also send as
+  `claude.ai/<user>` to this machine's opted-in sessions without the hub bearer, and as the
+  `direct:` origin of any Claude session on the holding machine (shown as `forwarded_by`).
+  The Claude in a `/direct` session can also send a message the owner did not write. A team will reasonably want remote and session-to-session messages kept advisory;
   we decline a flag because the owner chose this knowing the risk, and a session launched
   without the channel (`clauder` without `--relay`) receives no messages at all. Such a
   team does not launch sessions with the channel, and the channel does not start at all
@@ -367,8 +371,9 @@ unconfigurable opinion whose test passes is a finding.
   messages as your words today, accepting that a local session could impersonate you."
   Owner ruling 2026-11-12, "Yes, count it as me": "Any session where you've typed /direct
   can send messages that carry your authority. The risk: that session's Claude could send
-  one without you writing it." The protocol side is
-  `docs/reference/llm-kit-relay-protocol.md` section 3 in katsoft-libs.
+  one without you writing it." A forwarded `direct:` sender carries the same authority
+  (amendment 2). The protocol side is `docs/reference/llm-kit-relay-protocol.md` section 3
+  ("Principals", "Peer credentials") and amendment 2 in section 1, in katsoft-libs.
 
 An opinion that FAILS the test needs neither a register entry nor a seam -- it is simply a
 good default. Opinions that PASS and are still unconfigurable are findings, tracked with

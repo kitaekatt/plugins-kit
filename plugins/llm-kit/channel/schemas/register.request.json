@@ -10,8 +10,10 @@
     },
     "harness": {
       "enum": [
-        "claude"
-      ]
+        "claude",
+        "codex"
+      ],
+      "description": "The harness the channel serves. codex was added by amendment 1 (katsoft-llm-kit 1.19.0); a relay without the amendment refuses it bad_request."
     },
     "pid": {
       "type": "integer",
@@ -68,6 +70,21 @@
       "channel_nonce": "c2hhbm5lbC1ub25jZS0wMDAx",
       "title": "relay F0",
       "task": "plugins-kit/harness-messaging"
+    },
+    {
+      "session_id": "019f3c2a-10b7-7e4c-9d1a-8e0d6f4b2c9e",
+      "harness": "codex",
+      "pid": 51877,
+      "cwd": "/Users/christina/Dev/katsoft-libs",
+      "version": "codex-cli 0.164.0",
+      "accepts": [
+        "note",
+        "instruction",
+        "question"
+      ],
+      "channel_nonce": "Y29kZXgtbm9uY2UtMDAwMDE=",
+      "title": "codex channel",
+      "transcript_path": "/Users/christina/.codex/sessions/2026/11/12/rollout-2026-11-12T10-00-00-019f3c2a-10b7-7e4c-9d1a-8e0d6f4b2c9e.jsonl"
     },
     {
       "session_id": "7f3c2a10-5b7e-4c1d-9a8e-0d6f4b2c9e11",

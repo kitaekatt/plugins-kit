@@ -140,7 +140,8 @@ RELAY_FLAG = "--relay"
 # that help by design or not claude's at all. The lexer reads both tables.
 HIDDEN_FLAGS: Tuple[Flag, ...] = (
     # `<servers...>` in claude's own registration; relay_option.py passes it
-    # `server:relay`. Present in the 2.1.318 binary, absent from its help.
+    # `server:relay`. Present in the 2.1.318 and 2.1.323 binaries (the
+    # Windows claude.exe included), absent from their help.
     Flag(("--dangerously-load-development-channels",), VARIADIC),
     Flag((RELAY_FLAG,), NONE, LAUNCHER),
 )

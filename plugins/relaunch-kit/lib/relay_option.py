@@ -102,7 +102,7 @@ def _in_plugin_dir(root: str, how: str) -> Channel:
             "relay channel. Update it with `%s` and restart, or pass an llm-kit that has it."
             % (root, os.path.relpath(missing[0], root), how, _UPDATE)
         )
-    return Channel(script, mcp_config)
+    return Channel(os.path.normpath(script), os.path.normpath(mcp_config))
 
 
 def resolve_channel(env: Mapping[str, str]) -> Channel:
@@ -119,11 +119,13 @@ def resolve_channel(env: Mapping[str, str]) -> Channel:
             raise RelayError(
                 "%s names %s, but there is no %s beside it" % (CHANNEL_SCRIPT_ENV, pinned, MCP_NAME)
             )
-        return Channel(pinned, mcp_config)
+        return Channel(os.path.normpath(pinned), os.path.normpath(mcp_config))
 
     if env.get("CLAUDE_PLUGIN_TEST"):
         dirs = [d for d in env.get("CLAUDE_PLUGIN_TEST_DIRS", "").split(os.pathsep) if d]
-        found: List[str] = [d for d in dirs if os.path.basename(d.rstrip("/\\")) == OWNER]
+        found: List[str] = [
+            d for d in dirs if os.path.normcase(os.path.basename(d.rstrip("/\\"))) == os.path.normcase(OWNER)
+        ]
         if not found:
             raise RelayError(
                 "--relay needs llm-kit's channel server, and this claudx session did not load llm-kit "
@@ -153,7 +155,10 @@ def resolve_python(env: Mapping[str, str]) -> str:
     """The interpreter mcp.json's ${BOOTSTRAP_PYTHON} runs the channel script with.
 
     The caller's BOOTSTRAP_PYTHON when set (it must exist); otherwise the
-    interpreter running this launcher, which the clauder shim chose.
+    interpreter running this launcher, which the clauder shim chose. Paths are
+    normalised, so a Windows BOOTSTRAP_PYTHON inherited with forward slashes
+    (C:/Users/x/python.exe, measured on 5090W) reaches claude and mcp.json with
+    one separator style.
     """
     pinned = env.get(PYTHON_ENV)
     if pinned:
@@ -162,7 +167,7 @@ def resolve_python(env: Mapping[str, str]) -> str:
                 "%s must be the absolute path of an existing Python interpreter, got %r. "
                 "Unset it to use the interpreter running clauder." % (PYTHON_ENV, pinned)
             )
-        return pinned
+        return os.path.normpath(pinned)
     if sys.version_info < MIN_PYTHON:
         raise RelayError(
             "the relay channel needs Python %d.%d or later and clauder is running under %d.%d. "
