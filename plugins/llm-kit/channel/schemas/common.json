@@ -55,7 +55,7 @@
       "type": "string",
       "minLength": 3,
       "maxLength": 300,
-      "description": "channel:<address> (harness claude or codex) | direct:<address> (harness claude only) | operator:<machine> | relay:<machine> | claude.ai/<user>."
+      "description": "channel:<address> (harness claude or codex) | direct:<address> (harness claude only) | operator:<machine> | relay:<machine> (a peer relay forwarding for a direct session, amendment 2) | claude.ai/<user>."
     },
     "machine_label": {
       "type": "string",
@@ -479,6 +479,10 @@
         },
         "reply": {
           "$ref": "#/$defs/reply_record"
+        },
+        "forwarded_by": {
+          "$ref": "#/$defs/identity",
+          "description": "relay:<M> when relay <M> forwarded this message for its direct session (amendment 2, katsoft-llm-kit 1.21.0); the sender is then direct:<M>/claude/<S>. Set only by the receiving relay, on a send it accepted from that authenticated peer; absent otherwise."
         }
       },
       "required": [
@@ -531,6 +535,10 @@
         },
         "signed": {
           "$ref": "#/$defs/signed"
+        },
+        "forwarded_by": {
+          "$ref": "#/$defs/identity",
+          "description": "relay:<M> when relay <M> forwarded this message for its direct session (amendment 2, katsoft-llm-kit 1.21.0); the sender is then direct:<M>/claude/<S>. Set only by the receiving relay, on a send it accepted from that authenticated peer; absent otherwise."
         }
       },
       "required": [
@@ -1042,6 +1050,17 @@
               "type": "null"
             }
           ]
+        },
+        "on_behalf_of": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/identity"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The direct session a relay-origin call was forwarded for (amendment 2); null otherwise."
         }
       },
       "required": [

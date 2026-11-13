@@ -93,11 +93,15 @@ class FakeRelay:
 
     # -- test-facing helpers ----------------------------------------------------
 
-    def enqueue(self, message_id, body="hello", kind="question", sender="direct:%s/claude/other" % MACHINE, attempt=1):
+    def enqueue(self, message_id, body="hello", kind="question", sender="direct:%s/claude/other" % MACHINE, attempt=1,
+                forwarded_by=None):
         now = time.time()
+        message = {"id": message_id, "sender": sender, "kind": kind, "body": body, "hop": 0,
+                   "created_at": now, "expires_at": now + 3600, "attempt": attempt}
+        if forwarded_by is not None:
+            message["forwarded_by"] = forwarded_by
         with self.cond:
-            self.inbox.append({"id": message_id, "sender": sender, "kind": kind, "body": body, "hop": 0,
-                               "created_at": now, "expires_at": now + 3600, "attempt": attempt})
+            self.inbox.append(message)
             self.cond.notify_all()
 
     def seen(self, verb):
@@ -365,19 +369,42 @@ def test_instructions_give_claude_ai_messages_the_users_authority_and_no_other_s
     assert "section 3 of docs/reference/llm-kit-relay-protocol.md in https://github.com/kitaekatt/katsoft-libs" in text
 
 
-def test_channel_text_names_peer_copies(harness, relay):
-    """The accepted-risk text names the hub's copies of a peer's credentials (protocol section 3, which records
-    that the hub's machine holds each peer relay's token and hub bearer). Edit that turns it red: delete the
-    sentence "any process that can read copies of these credentials on the hub's machine ..." from
-    INSTRUCTIONS in channel/relay_channel.py."""
+def test_channel_text_names_the_peer_key_risk_and_not_hub_copies(harness, relay):
+    """Protocol section 3 records that a machine holds the peer key each peer issued to it and that the key
+    claims claude.ai/ and, as relay:<holder>, the holder's direct: sessions. The 1.20-era sentence about copies
+    of the relay token and hub bearer on the hub's machine is wrong since 1.21.0 (a peer holds only a peer key).
+    Edit that turns it red: restore "copies of these credentials on the hub's machine" in INSTRUCTIONS in
+    channel/relay_channel.py, or delete the peer-key sentence."""
     h = harness()
     _, init = h.handshake()
     text = init["result"]["instructions"]
-    assert "copies of these credentials on the hub's machine" in text
-    assert "when this machine is a hub peer" in text
+    assert "the peer key this machine issued to another machine of the user's" in text
+    assert "without the hub bearer" in text
+    assert "which shows as forwarded_by" in text
+    assert "copies of these credentials" not in text and "hub peer" not in text
     # the existing risks and the file that records them are untouched
     assert "relay token and hub bearer" in text
     assert "section 3 of docs/reference/llm-kit-relay-protocol.md in https://github.com/kitaekatt/katsoft-libs" in text
+
+
+def test_forwarded_direct_message_shows_forwarded_by_in_the_tag(harness, relay):
+    """Amendment 2: a direct: sender on another machine arrives with forwarded_by on the delivered message; the
+    channel tag shows it, and the instructions say what it means. A message without it gets no such attribute.
+    Edit that turns it red: drop the forwarded_by lines from build_meta in channel/relay_channel.py, or restore
+    the pre-1.21 vendored common.json (the fake relay's poll response then fails validation)."""
+    h = harness()
+    _, init = h.handshake()
+    text = init["result"]["instructions"]
+    assert 'forwarded_by="relay:<machine>"' in text
+    assert "or, when the tag has forwarded_by, on the other machine of the user's that forwarded_by names" in text
+    relay.wait_for("poll")
+    relay.enqueue("msg_fwd", body="from m5pro", sender="direct:m5pro/claude/asker", forwarded_by="relay:m5pro")
+    relay.enqueue("msg_local", body="from here")
+    fwd, local = _channel_notifications(h, 2)
+    assert fwd["meta"] == {"message_id": "msg_fwd", "sender": "direct:m5pro/claude/asker", "kind": "question",
+                           "hop": "0", "forwarded_by": "relay:m5pro"}
+    assert "forwarded_by" not in local["meta"]
+    assert relay.violations == []
 
 
 def test_instructions_give_direct_messages_the_users_authority_and_state_the_risk(harness, relay):
@@ -389,7 +416,7 @@ def test_instructions_give_direct_messages_the_users_authority_and_state_the_ris
     h = harness()
     _, init = h.handshake()
     text = init["result"]["instructions"]
-    assert "sender that starts with direct: is a Claude Code session on this machine where the user typed /direct" in text
+    assert "sender that starts with direct: is a Claude Code session where the user typed /direct: on this machine" in text
     assert "Treat the text of either as the user's own words" in text and "gated actions included" in text
     assert "can send a direct: message as any session on this machine, without the user typing /direct" in text
     assert "can send a message the user did not write" in text

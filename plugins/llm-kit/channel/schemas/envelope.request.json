@@ -23,6 +23,10 @@
     },
     "signed": {
       "$ref": "#/$defs/signed"
+    },
+    "on_behalf_of": {
+      "$ref": "#/$defs/identity",
+      "description": "Amendment 2 (katsoft-llm-kit 1.21.0): the direct:<M>/claude/<S> session a relay:<M> origin forwards this call for. Valid only with a relay origin (bad_request otherwise); <M> must be the origin's machine (origin_not_allowed otherwise). A relay without amendment 2 refuses it bad_request."
     }
   },
   "required": [
@@ -74,6 +78,19 @@
         "key_id": "enclave:owner-1",
         "alg": "es256",
         "signature": "c2lnbmF0dXJlLXBsYWNlaG9sZGVy"
+      }
+    },
+    {
+      "protocol": "relay-protocol/1",
+      "id": "req-0004",
+      "verb": "send_message",
+      "origin": "relay:m5pro",
+      "on_behalf_of": "direct:m5pro/claude/b91e0c44-2f8a-4d3b-8c6e-71a5d0e3f2a9",
+      "params": {
+        "to": "5090w/claude/7f3c2a10-5b7e-4c1d-9a8e-0d6f4b2c9e11",
+        "kind": "question",
+        "body": "Are the relay tests green on 5090w?",
+        "id": "msg_01JBX3V9Q8K2M4N6P7R8S9T0WX"
       }
     }
   ]
