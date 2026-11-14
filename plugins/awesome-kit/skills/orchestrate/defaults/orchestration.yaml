@@ -489,7 +489,10 @@ backends:
     detect:
       always: true
     capabilities:
-      isolation: 'The Agent tool accepts an `isolation: "worktree"` parameter.'
+      isolation: >-
+        The Agent tool accepts an `isolation: "worktree"` parameter. The worktree is made from the
+        repository of the session's current working directory at dispatch time: change directory to
+        the target repository before dispatching, and have the brief confirm `git remote -v`.
       effort: >-
         Per call via `subagent_type: awesome-kit:orchestrate-lane-<low|medium|high|xhigh|max>`,
         with the model in `model`; Workflow's `agent()` takes `opts.effort`. Without either,

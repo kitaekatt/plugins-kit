@@ -139,10 +139,15 @@ Covers one non-agent job. Start a background Agent whose model is the
 show). The agent runs this until exit 0, 2 or 3, reports one line, and changes
 nothing; its completion wakes the main session:
 
-    "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${PRESENCE_KIT_ROOT:?presence-kit is not provisioned}/scripts/wait.py" --output <task output file> --stall-minutes <n>
+    "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${PRESENCE_KIT_ROOT:?presence-kit is not provisioned}/scripts/wait.py" --output <task output file> --stall-minutes <n> --slice-seconds 150
 
 Use `--file <path> --pattern <regex>` instead of `--output` to wait for a
-pattern in a file. `--slice-seconds <s>` defaults to 540.
+pattern in a file. `--slice-seconds <s>` defaults to 540; the waiter passes
+`--slice-seconds 150` and runs wait.py in a foreground Bash call with
+`timeout: 170000` (the default Bash timeout is 120000 ms, below a 150 s slice). A
+call that runs past about 180 s is moved to the background and the waiter goes
+idle, so the terminal shows idle. The waiter runs it again on exit 4. The brief names the job's exact output file (its task output path);
+the waiter never picks a file by recency, because it can then watch another job.
 
 | Exit | Meaning |
 |---|---|
