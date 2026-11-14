@@ -355,9 +355,15 @@ class TestEngineWiring:
         )
         with open(engine_src, "r", encoding="utf-8") as fh:
             src = fh.read()
-        repair_at = src.index("from .registry_repair import")
-        layered_at = src.index("# Step 3c: Process layered bootstrap manifests")
+        # _main_pass is a sequence of phase calls; the repair phase must come
+        # before the first phase that loads (and later runs) the layered
+        # manifests' plugins phase.
+        body = src[src.index("def _main_pass():"):src.index("class _PassState:")]
+        repair_at = body.index("_pass_registry_repair(st)")
+        layered_at = body.index("_pass_load_layered(st)")
         assert repair_at < layered_at, "repair must run before any plugins phase"
+        assert "from .registry_repair import" in src[
+            src.index("def _pass_registry_repair("):src.index("def _pass_snapshot_installed(")]
 
 
 if __name__ == "__main__":
