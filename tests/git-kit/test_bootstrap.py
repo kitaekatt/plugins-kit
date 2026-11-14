@@ -5,6 +5,17 @@ import subprocess
 from unittest.mock import patch
 
 import git_kit_bootstrap as gb
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def isolated_home(tmp_path, monkeypatch):
+    """Bootstrap now provisions opted-in worktrees; never inspect live settings."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / ".claude"))
 
 
 class FakeCtx:

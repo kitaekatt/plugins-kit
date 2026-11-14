@@ -13,8 +13,10 @@ remediate (typically by running `! gh auth login --web` in their terminal).
 """
 
 import json
+import importlib.util
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 try:
@@ -44,6 +46,7 @@ def _resolve_gh() -> str | None:
 
 
 def bootstrap(ctx) -> None:
+    _bootstrap_worktrees(ctx)
     gh = _resolve_gh()
     if not gh:
         ctx.log("gh: not found via tool_paths or PATH after install phase, skipping auth check")
@@ -121,6 +124,22 @@ def bootstrap(ctx) -> None:
         user_msg=user_msg,
         agent_msg=" ".join(agent_msg_parts),
     )
+
+
+def _bootstrap_worktrees(ctx) -> None:
+    """Load beside this file even when the engine imports us by spec."""
+    path = Path(__file__).with_name("worktrees.py")
+    spec = importlib.util.spec_from_file_location("_git_kit_worktrees", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    settings = module.resolve_settings(ctx.project_dir)
+    if not settings.enabled:
+        return
+    if module.ensure_permissions(settings.root):
+        ctx.log(f"worktrees: provisioned root and Claude access: {settings.root}")
+    else:
+        ctx.log_ok(f"worktrees: root and Claude access ready: {settings.root}")
 
 
 def _check_auth(gh: str):

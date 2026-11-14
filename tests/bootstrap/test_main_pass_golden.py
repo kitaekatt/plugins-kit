@@ -499,6 +499,8 @@ class _Harness:
         self.fake(engine, "_process_project_npm", npm)
         self.fake(engine, "_run_agent_skills_link_check",
                   lambda d, v: (["agent_skills: linked"], ["agent_skills: ok"], [{"type": "asl"}]))
+        self.fake(engine, "_run_project_links_check",
+                  lambda d, v: (["project_links: created"], ["project_links: ok"], [{"type": "pl"}]))
 
         def env_pass(_d, _os, _dd, _r, a, o, engine_version, quiet_entries, project_key,
                      write_stamp):

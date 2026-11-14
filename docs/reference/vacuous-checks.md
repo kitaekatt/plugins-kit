@@ -19,8 +19,8 @@ literal is loosened, the assertion deleted, the allowlist widened. Its red
 result is at least visible, but the habit of dismissing it is what the next
 real regression meets.
 
-Nine shapes have been observed in this repo, of two kinds. Shapes 1 to 3 and
-5 to 9 are checks that PASS when they should fail, or that offer evidence which
+Ten shapes have been observed in this repo, of two kinds. Shapes 1 to 3 and
+5 to 10 are checks that PASS when they should fail, or that offer evidence which
 cannot be trusted; the remedy is to assert the PROPERTY and demonstrate the
 failure before believing the check. Shape 4 is a check that FAILS when nothing
 is broken; the remedy is to re-point it at the producer and show it still goes
@@ -316,9 +316,37 @@ DIFF-CLEAN even though it used the false paragraph in that file as its ground
 truth. A hand join across the sites caught that third one. Each found what the
 other missed.
 
+## Shape 10: a constant merged across callers loses a member, and a golden test built from well-formed inputs stays green
+
+Splitting two functions into shared helpers invites merging the sets and
+literals each original held separately. If the originals differed, the merged
+constant silently loses a member one caller needed. A golden (characterization)
+test recorded from the original code does not catch this, because it proves
+equivalence only over the inputs it holds. When every row is built from a
+well-formed record, no row reaches the branch the lost member guarded.
+
+Worked example (secrets-kit 0.8.45, commit `2c46d251`, 2026-11-14).
+`_load_entry_operation` treated `"unchanged"` as an advanced phase; the rotation
+loader did not. The split's shared `_ADVANCED_PHASES` dropped it, so a malformed
+entry record in the `unchanged` phase skipped two refusal checks. Every golden
+row for that phase used a well-formed record, so the golden test stayed green.
+Code review found it. The fix gave each loader its own set
+(`_ENTRY_ADVANCED_PHASES`) and added 8 golden rows that corrupt an `unchanged`
+record; they fail on the first split and pass after.
+
+What to do:
+
+- When merging per-caller sets or literals into a shared helper, diff every
+  merged set and literal against EACH original caller, and list what was
+  checked.
+- Add golden rows that exercise the branch each member guards, not only
+  well-formed inputs.
+- Show it red: run the new rows against the merged version and confirm they
+  fail.
+
 ## Why every shape needs a named revert-check
 
-Shapes 1 to 3 and 5 to 9 are checks that PASS when they should fail (or whose
+Shapes 1 to 3 and 5 to 10 are checks that PASS when they should fail (or whose
 evidence is unreliable). Shape 1 and Shape 2
 are not detectable by reading the test, and shape 3 often is not either -- the
 fake looks complete until a new command exposes what it was never taught to
