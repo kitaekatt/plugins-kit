@@ -84,7 +84,7 @@
     {
       "name": "claude-ui-kit",
       "description": "Claude Code status line with context-window and rate-limit threshold colors, plus the /statusline skill to inspect and customize it.",
-      "version": "0.12.6",
+      "version": "0.12.7",
       "author": {
         "name": "Christina"
       },
@@ -230,7 +230,7 @@
     {
       "name": "clean-code-kit",
       "description": "Which code in a git repository is duplicated or most complex: runs pinned metric tools over a snapshot of the repository and writes a ranked findings report for the developer to act on.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "author": {
         "name": "Christina"
       },

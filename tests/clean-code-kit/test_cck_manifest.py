@@ -43,8 +43,21 @@ def test_bootstrap_manifest():
     assert manifest["venv"]["check_imports"] == ["dryer", "crapper", "yaml", "tree_sitter_language_pack"]
 
 
+# Distribution names whose import name is not the normalized distribution name.
+_IMPORT_NAMES = {"pyyaml": "yaml"}
+
+
+def _import_name(requirement: str) -> str:
+    """Import name for one PEP 508 requirement string (extras, markers, versions, URL refs)."""
+    dist = re.split(r"[\s;@\[<>=!~(]", requirement.strip(), maxsplit=1)[0]
+    normalized = re.sub(r"[-_.]+", "-", dist).lower()
+    return _IMPORT_NAMES.get(normalized, normalized.replace("-", "_"))
+
+
 def test_check_imports_covers_every_declared_dependency():
     manifest = json.loads((PLUGIN_ROOT / "bootstrap.json").read_text())
     check_imports = manifest["venv"]["check_imports"]
-    for name in ["dryer", "crapper", "yaml", "tree_sitter_language_pack"]:
-        assert name in check_imports
+    dependencies = _pyproject()["project"]["dependencies"]
+    assert dependencies  # an empty list would make the loop below vacuous
+    for requirement in dependencies:
+        assert _import_name(requirement) in check_imports, requirement

@@ -530,3 +530,74 @@ class TestNoTimeoutBinaryIsVisible:
             extra_env={"STATUSLINE_SEGMENTS_DIR": str(segs),
                        "BOOTSTRAP_BIN_TIMEOUT": ""})
         assert result.stdout.count("segments off") == 1
+
+
+_RELAY_ICON = "\U0001F4E1"
+_DIRECT_ICON = "\U0001F4E4"
+_NEITHER_ICON = "\u26aa"
+
+
+@pytest.mark.skipif(not _HAS_TOOLS, reason="bash + jq required")
+class TestRelayDirectCell:
+    SID = "11111111-2222-3333-4444-555555555555"
+    CPID = "4242"
+
+    def _run(self, tmp_path, *, relay, direct, relay_env=None):
+        home = tmp_path / "home"
+        sessions = home / ".claude" / "sessions"
+        sessions.mkdir(parents=True)
+        (sessions / f"{self.CPID}.json").write_text(
+            json.dumps({"pid": int(self.CPID), "sessionId": self.SID}, separators=(",", ":")), encoding="utf-8")
+        (sessions / "999.json").write_text(
+            json.dumps({"pid": 999, "sessionId": "other"}), encoding="utf-8")
+        # Fake `ps -o args= -p <pid>`: only the session's claude pid answers.
+        bindir = tmp_path / "fakebin"
+        bindir.mkdir()
+        args = ("claude --dangerously-load-development-channels server:relay"
+                if relay else "claude --model x")
+        ps = bindir / "ps"
+        ps.write_text(
+            '#!/bin/sh\n[ "$4" = "%s" ] && echo "%s"\nexit 0\n' % (self.CPID, args),
+            encoding="utf-8")
+        ps.chmod(0o755)
+        root = tmp_path / "dataroot"
+        if direct:
+            enabled = root / "plugins-kit" / "llm-kit" / "direct" / "enabled"
+            enabled.mkdir(parents=True)
+            (enabled / f"{self.SID}.json").write_text("{}", encoding="utf-8")
+        env = {
+            "HOME": str(home),
+            "CLAUDE_BOOTSTRAP_DATA_ROOT": str(root),
+            "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}",
+        }
+        env.update(relay_env or {})
+        payload = json.dumps({"model": {"display_name": "M", "id": "m"},
+                              "cwd": str(tmp_path), "session_id": self.SID})
+        return run_statusline(payload, tmp_path, extra_env=env).stdout
+
+    def test_relay_only(self, tmp_path):
+        out = self._run(tmp_path, relay=True, direct=False)
+        assert out.startswith(_RELAY_ICON) and _DIRECT_ICON not in out
+
+    def test_direct_only(self, tmp_path):
+        out = self._run(tmp_path, relay=False, direct=True)
+        assert out.startswith(_DIRECT_ICON) and _RELAY_ICON not in out
+
+    def test_neither(self, tmp_path):
+        out = self._run(tmp_path, relay=False, direct=False)
+        assert out.startswith(_NEITHER_ICON)
+        assert _RELAY_ICON not in out and _DIRECT_ICON not in out
+
+    def test_both_show_both_icons_leftmost(self, tmp_path):
+        out = self._run(tmp_path, relay=True, direct=True)
+        assert out.startswith(_RELAY_ICON + " " + _DIRECT_ICON)
+        assert out.index("\U0001F4C1") > out.index(_DIRECT_ICON)
+
+    def test_cell_is_leftmost_before_directory(self, tmp_path):
+        out = self._run(tmp_path, relay=False, direct=False)
+        assert out.index(_NEITHER_ICON) < out.index("\U0001F4C1")
+
+    def test_can_be_hidden(self, tmp_path):
+        out = self._run(tmp_path, relay=True, direct=True,
+                        relay_env={"STATUSLINE_SHOW_RELAY": "0"})
+        assert _RELAY_ICON not in out and _NEITHER_ICON not in out

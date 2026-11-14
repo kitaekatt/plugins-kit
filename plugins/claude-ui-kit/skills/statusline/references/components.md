@@ -60,3 +60,15 @@ specific model's usage is spent.
 - Time of day -- `date +%H:%M`
 
 These can be added; they cost a fork+exec per render. Keep the script fast; users notice slowness.
+
+## Built-in relay/direct cell
+
+The default statusline starts with one cell showing the session's relay state, always leftmost (contributed segments cannot precede it). Hide it with `STATUSLINE_SHOW_RELAY=0` in the settings.json `env`.
+
+| Icon | State | Detected by |
+|------|-------|-------------|
+| U+1F4E1 satellite antenna | relay mode: launched with `clauder --relay` | The claude process for `.session_id` (found via the `sessionId` field of `~/.claude/sessions/<pid>.json`) has `server:relay` in its argv |
+| U+1F4E4 outbox tray | direct mode: `/direct` enabled in this session | File `<data root>/plugins-kit/llm-kit/direct/enabled/<session_id>.json` exists (data root: `$CLAUDE_BOOTSTRAP_DATA_ROOT`, else `~/.claude/plugins/data`) |
+| U+26AA white circle | neither | Neither of the above |
+
+When both hold, the relay and direct icons appear together. Test overrides: `STATUSLINE_SESSIONS_DIR` replaces `~/.claude/sessions`.
