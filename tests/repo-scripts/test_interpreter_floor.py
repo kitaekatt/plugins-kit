@@ -47,9 +47,9 @@ def _callers() -> set[str]:
     return plugins
 
 
-def _llm_kit_is_tracked() -> bool:
-    """llm-kit is a dev-only plugin whose source master does not carry."""
-    out = subprocess.run(["git", "-C", str(REPO_ROOT), "ls-files", "--", "plugins/llm-kit/bootstrap.json"],
+def _is_tracked(plugin: str) -> bool:
+    """A dev-only plugin's source is absent where master's tree is checked out."""
+    out = subprocess.run(["git", "-C", str(REPO_ROOT), "ls-files", "--", f"plugins/{plugin}/bootstrap.json"],
                          capture_output=True, text=True, check=False).stdout
     return bool(out.strip())
 
@@ -60,8 +60,10 @@ def test_the_caller_set_is_the_known_one():
         "awesome-kit", "cache-kit", "git-kit", "hue-kit",
         "p4-kit", "presence-kit", "skills-kit", "task-kit", "unreal-kit",
     }
-    if _llm_kit_is_tracked():
+    if _is_tracked("llm-kit"):
         known.add("llm-kit")        # its skills and README use the guarded launch form
+    if _is_tracked("clean-code-kit"):
+        known.add("clean-code-kit")  # dev-only; its code-audit skill uses the guarded launch form
     assert _callers() == known
 
 

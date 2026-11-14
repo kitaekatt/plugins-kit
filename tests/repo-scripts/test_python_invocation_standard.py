@@ -843,9 +843,27 @@ _LLM_KIT_PYTHON_ALLOWLIST: dict[str, AllowlistEntry] = {
         "process-name classification (psutil name of an mlx_lm.server "
         "host process), not an interpreter spawn"),
 }
+# clean-code-kit is a dev-only plugin (published: false), so master does not carry
+# its source either; the same tracked-only rule applies to its guard copy.
+_CLEAN_CODE_KIT_PYTHON_ALLOWLIST: dict[str, AllowlistEntry] = {
+    "plugins/clean-code-kit/scripts/bootstrap_guard.py": AllowlistEntry(
+        'for rel in (("Scripts", "python.exe"), ("bin", "python"), ("bin", "python3")):',
+        _BOOTSTRAP_GUARD_REASON),
+    "plugins/clean-code-kit/custom_bootstrap.py": AllowlistEntry(
+        'data_dir / ".venv" / "Scripts" / "python.exe",',
+        "resolves the plugin-data venv python path, then subprocess.run "
+        "under that resolved absolute path -- not a bare spawn (pdf-kit's "
+        "custom_bootstrap.py pattern)"),
+    "plugins/clean-code-kit/scripts/clean_code_kit/parsers.py": AllowlistEntry(
+        'GRAMMARS = ("python", "typescript")',
+        "tree-sitter grammar names passed to tree_sitter_language_pack.download, "
+        "not an interpreter"),
+}
 _TRACKED_PYTHON = frozenset(_git_ls_files("*.py"))
 _PYTHON_ALLOWLIST.update({
-    path: entry for path, entry in _LLM_KIT_PYTHON_ALLOWLIST.items()
+    path: entry
+    for allowlist in (_LLM_KIT_PYTHON_ALLOWLIST, _CLEAN_CODE_KIT_PYTHON_ALLOWLIST)
+    for path, entry in allowlist.items()
     if path in _TRACKED_PYTHON
 })
 

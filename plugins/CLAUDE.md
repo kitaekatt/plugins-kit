@@ -841,7 +841,7 @@ safe with nothing to remember:
 os.environ.setdefault("_BOOTSTRAP_GUARD_SKIP_REEXEC", "1")
 ```
 
-Current setters: `tests/awesome-kit`, `tests/git-kit`,
+Current setters: `tests/awesome-kit`, `tests/clean-code-kit`, `tests/git-kit`,
 `tests/llm-kit`, `tests/p4-kit`, `tests/pdf-kit`, `tests/skills-kit`, `tests/task-kit`,
 `tests/unreal-kit`, `tests/workflow-kit`. A dir whose tests import a re-execing script and which does
 NOT set this is a latent false green, and the failure hides itself: in a
@@ -867,7 +867,7 @@ copies: `git-kit/scripts`, `p4-kit/scripts`, `skills-kit/scripts`,
 `task-kit/skills/task/scripts`,
 `awesome-kit/skills/orchestrate/scripts`,
 `llm-kit/bin`, `workflow-kit/scripts`,
-`pdf-kit/skills/html-pdf/scripts`.
+`pdf-kit/skills/html-pdf/scripts`, `clean-code-kit/scripts`.
 
 **The test globs `plugins/**/bootstrap_guard.py`, so it is the authority on that
 list and this prose is not.** Library copies are maintained in katsoft-libs.

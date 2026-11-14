@@ -1,0 +1,29 @@
+{
+  "$comment": "requires_bootstrap is the call shape this plugin needs: shipped skill text launches scripts as \"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}\", which only bootstrap 0.120.0's SessionStart hook exports. The venv carries the dryer and crapper console scripts from the git commits pyproject.toml pins; the runner refuses a venv whose installed commit differs. git is declared because the runner snapshots the target with git archive and git ls-files. The custom bootstrap script fetches the tree-sitter parser bundle (about 26 MB) into the plugin data directory, so installing clean-code-kit opts into that download.",
+  "requires_bootstrap": "0.120.0",
+  "tools": [
+    {
+      "name": "git"
+    },
+    {
+      "name": "uv",
+      "install": {
+        "macos": "curl -LsSf https://astral.sh/uv/install.sh | sh",
+        "windows": "powershell -ExecutionPolicy ByPass -c \"irm https://astral.sh/uv/install.ps1 | iex\"",
+        "ubuntu": "curl -LsSf https://astral.sh/uv/install.sh | sh"
+      }
+    }
+  ],
+  "venv": {
+    "check_imports": [
+      "dryer",
+      "crapper",
+      "yaml",
+      "tree_sitter_language_pack"
+    ]
+  },
+  "script": {
+    "path": "custom_bootstrap.py",
+    "entry_point": "bootstrap"
+  }
+}
