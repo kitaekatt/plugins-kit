@@ -25,7 +25,7 @@ def test_head_snapshot_holds_committed_content_only_and_counts_dirty(target_repo
     assert not (dest / ".git").exists()
     assert (dest / ".claude" / "clean-code-kit" / "config.yaml").is_file()
     # one modified tracked file plus one untracked file; the ignored file is not listed
-    assert snapshot.dirty_paths(target_repo) == 2
+    assert len(snapshot.dirty_paths(target_repo)) == 2
 
 
 def test_working_tree_snapshot_holds_edits_and_untracked_but_not_ignored(target_repo, tmp_path):

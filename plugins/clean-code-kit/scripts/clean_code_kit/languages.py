@@ -17,3 +17,21 @@ EXTENSIONS: dict[str, tuple[str, ...]] = dict(
 def unconfigured_extensions(languages: list[str]) -> set[str]:
     """Extensions owned by a language that is not in ``languages``."""
     return {ext for lang, exts in EXTENSIONS.items() if lang not in languages for ext in exts}
+
+
+# The extensions each lane's tool reads, for the languages in EXTENSIONS. crapper
+# scores the JavaScript extensions (as TypeScript); dryer ignores them.
+LANE_LANGUAGES: dict[str, tuple[str, ...]] = dict(
+    duplication=("python", "typescript"),
+    complexity=("python", "typescript", "javascript"),
+)
+
+
+def lane_extensions(lane: str) -> set[str]:
+    """Extensions the tool behind ``lane`` reads among the table's languages."""
+    return {ext for lang in LANE_LANGUAGES[lane] for ext in EXTENSIONS[lang]}
+
+
+def supported_extensions() -> set[str]:
+    """Extensions at least one lane reads."""
+    return {ext for lane in LANE_LANGUAGES for ext in lane_extensions(lane)}

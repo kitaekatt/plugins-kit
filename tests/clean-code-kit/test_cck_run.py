@@ -77,8 +77,9 @@ def test_run_writes_the_report_under_local_data(target_repo, fake_venv, fake_too
     assert re.fullmatch(r"\d{8}T\d{6}Z-" + head[:8], rel.name)
     doc = json.loads((out_dir / "findings.json").read_text())
     assert doc["schema"] == "clean-code-kit.findings/v1"
-    assert doc["target"] == {"repo": str(target_repo.resolve()), "head": head,
-                             "snapshot": "head", "dirty_paths": 0}
+    assert {k: doc["target"][k] for k in ("repo", "head", "snapshot", "dirty_paths", "dirty_path_names")} == {
+        "repo": str(target_repo.resolve()), "head": head, "snapshot": "head",
+        "dirty_paths": 0, "dirty_path_names": []}
     assert [lane["name"] for lane in doc["lanes"]] == ["duplication", "complexity"]
     pins = environment.read_pins()
     assert [lane["tool_commit"] for lane in doc["lanes"]] == [pins["dryer"], pins["crapper"]]
@@ -245,3 +246,180 @@ def test_report_write_refuses_an_existing_directory(tmp_path):
     with pytest.raises(Refusal, match="already exists"):
         report.write(out, {"schema": "x"}, "text\n")
     assert (out / "findings.json").read_text() == "old\n"
+
+
+# --- client feedback: coverage, applicability, listings, dirty paths, preconditions, init ---
+
+CONFIG_REL = Path(".claude") / "clean-code-kit" / "config.yaml"
+
+
+def _commit_all(repo, message="more"):
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", message)
+
+
+def _run_doc(repo, capsys, *extra):
+    assert _run(repo, *extra) == 0
+    out_dir = _report_dir(capsys.readouterr().out)
+    return json.loads((out_dir / "findings.json").read_text()), (out_dir / "report.md").read_text()
+
+
+def test_report_counts_tracked_vs_measured_files_by_extension(target_repo, fake_venv, fake_tools, capsys):
+    (target_repo / "tools").mkdir()
+    for n in range(3):
+        (target_repo / "tools" / f"x{n}.gd").write_text("extends Node\n")
+    (target_repo / "src" / "pkg" / "empty.py").write_text("X = 1\n")
+    _commit_all(target_repo)
+    doc, text = _run_doc(target_repo, capsys)
+    by_ext = doc["target"]["coverage"]["by_extension"]
+    assert by_ext[".gd"] == {"tracked": 3, "supported": False,
+                             "measured": {"duplication": 0, "complexity": 0}}
+    # a.py, b.py, empty.py under src; bootstrap_guard.py is excluded; tests/test_a.py is outside source_roots
+    assert by_ext[".py"] == {"tracked": 5, "supported": True,
+                             "measured": {"duplication": 3, "complexity": 3}}
+    assert by_ext[".ts"]["tracked"] == 1 and by_ext[".ts"]["measured"] == {"duplication": 0, "complexity": 0}
+    assert "| .gd | 3 | 0 | 0 | no |" in text
+    assert "| .py | 5 | 3 | 3 | yes |" in text
+
+
+def test_duplication_is_not_applicable_when_dryer_reads_fewer_than_two_files(
+        target_repo, fake_venv, fake_tools, capsys):
+    cfg = target_repo / CONFIG_REL
+    cfg.write_text(cfg.read_text().replace("languages: [python]", "languages: [javascript]"))
+    (target_repo / "src" / "pkg" / "app.js").write_text("export const f = () => 1;\n")
+    (target_repo / "src" / "pkg" / "lib.js").write_text("export const g = () => 2;\n")
+    _commit_all(target_repo)
+    doc, text = _run_doc(target_repo, capsys)
+    dup, cpx = doc["lanes"]
+    assert dup["status"] == "no-comparable-source" and cpx["status"] == "ok"
+    assert dup["detail"]["comparable_files"] == 0
+    assert dup["detail"]["ignored_extensions"] == {".js": 2}
+    assert [tool for tool, _cwd in fake_tools["calls"]] == ["crapper"]
+    assert "Status: no-comparable-source" in text and ".js" in text
+
+
+def test_duplication_with_one_readable_file_is_not_applicable(target_repo, fake_venv, fake_tools, capsys):
+    cfg = target_repo / CONFIG_REL
+    cfg.write_text(cfg.read_text().replace('- "**/bootstrap_guard.py"', '- "**/bootstrap_guard.py"\n  - "src/pkg/b.py"'))
+    _commit_all(target_repo)
+    doc, _text = _run_doc(target_repo, capsys)
+    assert doc["lanes"][0]["status"] == "no-comparable-source"
+    assert doc["lanes"][0]["detail"]["comparable_files"] == 1
+
+
+def test_duplication_notes_ignored_extensions_even_when_it_runs(target_repo, fake_venv, fake_tools, capsys):
+    cfg = target_repo / CONFIG_REL
+    cfg.write_text(cfg.read_text().replace("languages: [python]", "languages: [python, javascript]"))
+    (target_repo / "src" / "pkg" / "app.js").write_text("export const f = () => 1;\n")
+    _commit_all(target_repo)
+    doc, text = _run_doc(target_repo, capsys)
+    assert doc["lanes"][0]["status"] == "ok"
+    assert doc["lanes"][0]["detail"]["ignored_extensions"] == {".js": 1}
+    assert "dryer ignores" in text
+
+
+def test_files_with_no_scored_functions_are_listed(target_repo, fake_venv, fake_tools, capsys):
+    (target_repo / "src" / "pkg" / "empty.py").write_text("X = 1\n")
+    _commit_all(target_repo)
+    doc, text = _run_doc(target_repo, capsys)
+    cpx = doc["lanes"][1]
+    assert cpx["detail"]["files_without_scored_functions"] == ["src/pkg/empty.py"]
+    assert "Files with no scored functions: 1" in text and "`src/pkg/empty.py`" in text
+
+
+def test_unscored_listing_in_report_is_capped_but_json_is_complete(target_repo, fake_venv, fake_tools, capsys):
+    for n in range(25):
+        (target_repo / "src" / "pkg" / f"z{n:02d}.py").write_text("X = 1\n")
+    _commit_all(target_repo)
+    doc, text = _run_doc(target_repo, capsys)
+    assert len(doc["lanes"][1]["detail"]["files_without_scored_functions"]) == 25
+    assert "Files with no scored functions: 25" in text
+    assert "`src/pkg/z19.py`" in text and "`src/pkg/z20.py`" not in text
+    assert "5 more are in findings.json" in text
+
+
+def test_dirty_paths_are_named_and_the_config_is_not_counted(target_repo, fake_venv, fake_tools, capsys):
+    git(target_repo, "rm", "-q", "--cached", str(CONFIG_REL))
+    git(target_repo, "commit", "-q", "-m", "untrack the config")
+    (target_repo / "src" / "pkg" / "extra.py").write_text("def x():\n    return 1\n")
+    doc, text = _run_doc(target_repo, capsys)
+    assert doc["target"]["dirty_paths"] == 1
+    assert doc["target"]["dirty_path_names"] == ["src/pkg/extra.py"]
+    assert "Dirty paths in the working tree at run time: 1 (`src/pkg/extra.py`)" in text
+
+
+def test_every_failed_precondition_is_reported_together(target_repo, tmp_path, fake_venv, fake_tools,
+                                                        monkeypatch, capsys):
+    (target_repo / CONFIG_REL).unlink()
+    (target_repo / ".gitignore").write_text("ignored.txt\n")
+    git(target_repo, "commit", "-q", "-am", "stop ignoring local data")
+    monkeypatch.setattr(environment, "venv_prefix", lambda: tmp_path / "nowhere")
+    assert _run(target_repo) == 2
+    err = capsys.readouterr().err
+    assert "4 preconditions failed" in err
+    assert "no config at" in err and "is not git-ignored" in err and "is not installed at" in err
+    assert fake_tools["calls"] == []
+    assert not (target_repo / ".local-data").exists()
+
+
+def test_a_single_failed_precondition_keeps_its_plain_message(target_repo, fake_venv, fake_tools, capsys):
+    (target_repo / CONFIG_REL).unlink()
+    assert _run(target_repo) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("clean-code-kit: no config at") and "preconditions failed" not in err
+
+
+def test_init_prints_a_valid_config_and_writes_nothing(target_repo, capsys):
+    from clean_code_kit import config as config_mod
+
+    (target_repo / CONFIG_REL).unlink()
+    (target_repo / "tools").mkdir()
+    (target_repo / "tools" / "x.gd").write_text("extends Node\n")
+    _commit_all(target_repo)
+    assert cli.main(["init", "--target", str(target_repo)]) == 0
+    text = capsys.readouterr().out
+    assert not (target_repo / CONFIG_REL).exists()
+    import yaml
+
+    cfg = config_mod.parse(Path("proposed"), yaml.safe_load(text))
+    assert cfg.languages == ["python", "typescript"]
+    assert cfg.source_roots == ["src"] and cfg.test_roots == ["tests"]
+    assert "# .gd: 1 file" in text and "no lane reads" in text
+
+
+def test_init_refuses_a_repository_with_no_supported_source(tmp_path, capsys):
+    repo = tmp_path / "plain"
+    repo.mkdir()
+    (repo / "a.gd").write_text("extends Node\n")
+    git(repo, "init", "-q")
+    _commit_all(repo)
+    assert cli.main(["init", "--target", str(repo)]) == 2
+    assert "no tracked file has an extension a lane reads" in capsys.readouterr().err
+
+
+def test_report_summarizes_the_complexity_distribution(target_repo, fake_venv, fake_tools, capsys):
+    doc, text = _run_doc(target_repo, capsys)
+    assert doc["lanes"][1]["detail"]["complexity_distribution"] == {
+        "1": 0, "2-5": 4, "6-10": 1, "11-20": 0, "21-50": 0, ">50": 0}
+    assert "| 2-5 | 4 |" in text and "| 6-10 | 1 |" in text
+
+
+def test_min_complexity_filters_the_table_but_not_findings_json(target_repo, fake_venv, fake_tools, capsys):
+    cfg = target_repo / CONFIG_REL
+    cfg.write_text(cfg.read_text().replace("top: 50}", "top: 50, min_complexity: 4}"))
+    _commit_all(target_repo)
+    doc, text = _run_doc(target_repo, capsys)
+    assert sum(1 for f in doc["findings"] if f["lane"] == "complexity") == 5
+    assert "with complexity >= 4" in text
+    assert "`branchy`" in text and "`total_price`" not in text
+
+
+def test_empty_selection_stays_no_source_files_not_no_comparable_source(
+        target_repo, fake_venv, fake_tools, capsys):
+    cfg = target_repo / CONFIG_REL
+    cfg.write_text(cfg.read_text().replace('- "**/bootstrap_guard.py"', '- "src/*"'))
+    _commit_all(target_repo)
+    fake_tools["mode"] = "empty"
+    doc, _text = _run_doc(target_repo, capsys)
+    assert [lane["status"] for lane in doc["lanes"]] == ["no-source-files", "no-source-files"]
+    assert [tool for tool, _cwd in fake_tools["calls"]] == ["dryer", "crapper"]

@@ -14,7 +14,8 @@ Path, relative to the top level of the target repository:
 The runner reads it from disk, so in `head` mode too an uncommitted edit to
 the config takes effect.
 
-The file is YAML. Every key below is required and none has a default: a
+The file is YAML. Every key below is required and none has a default, except
+`lanes.complexity.min_complexity`, which is optional (default 1): a
 missing key is an error (exit 2), and so is an unknown one, so a misspelled key
 is never a silently ignored setting. A missing file is also exit 2, and the
 message names the path the runner looked for.
@@ -50,6 +51,7 @@ lanes:
 | `lanes.duplication.min_lines` | A non-negative integer: the minimum number of source lines in a form for it to be compared at all. |
 | `lanes.duplication.group_identical` | `true` or `false`. When true, structurally identical forms (score 1.00) are reported once as a group rather than as every pair. |
 | `lanes.complexity.coverage` | Must be `false`. `true` is refused with exit 2: "coverage-backed complexity is not implemented in this version". |
+| `lanes.complexity.min_complexity` | Optional; a positive integer, default 1. `report.md`'s complexity table lists only functions with at least this complexity. `findings.json` is never filtered. |
 | `lanes.complexity.top` | A positive integer: how many functions the complexity table in `report.md` lists, highest complexity first. `findings.json` holds every function regardless. |
 
 The exact command line each lane ran is recorded as `argv` in the run's
@@ -99,8 +101,26 @@ writes beside the code it scans land in that copy, not in the target.
 | `head` | The committed content of HEAD (`git archive HEAD`). Uncommitted edits and untracked files are not measured. |
 | `working-tree` | Every file `git ls-files --cached --others --exclude-standard` lists that exists on disk: tracked files with their uncommitted edits, plus untracked files that are not git-ignored. Ignored files are not measured. |
 
-Every report records the mode, the HEAD sha, and how many entries
-`git status --porcelain` listed, so a `head` report on a dirty tree says so.
+Every report records the mode, the HEAD sha, and the paths `git status --porcelain`
+lists (the config file itself is not counted; `report.md` names the paths), so a `head` report on a dirty tree says so.
+
+## Proposing a config: `init`
+
+`code_audit.py init --target <dir>` prints a proposed config.yaml to stdout and
+writes nothing. It counts `git ls-files` extensions, proposes the languages the
+lanes read, the top-level directories holding such files (except test and
+vendored directories) as `source_roots`, any `test`/`tests`/`spec` directories
+as `test_roots`, and comments the extensions no lane reads. It exits 2 when no
+tracked file has an extension a lane reads or none sits below a top-level
+directory. Review the output with the user, then save it as the config.
+
+## What a report says about coverage
+
+`report.md` and `findings.json` (`target.coverage`) tabulate, per extension, the
+files tracked in the target (all of git's file list, not only the source
+roots) against the files handed to each lane, and mark extensions no lane
+reads. A lane's status is `no-comparable-source` when dryer would get fewer than
+two readable files.
 
 ## Where a run writes
 
@@ -163,6 +183,11 @@ On success stdout carries one line per lane run, in registry order
 | 0 | The report was written. The last stdout line is `REPORT <absolute report directory>`. |
 | 1 | A tool failed: its stderr is shown verbatim, then `clean-code-kit: <lane> lane: <tool> exited <code>`; a parser download failure adds `clean-code-kit: parsers are fetched on first use and need network once (tree-sitter-language-pack, cached in <cache>)`. Also exit 1: a tool that exited 0 without writing its EDN file (`... exited 0 but wrote no .metrics/<file>.edn`), and EDN whose shape the plugin's reader does not accept (a Python traceback naming the file). |
 | 2 | A usage, config or environment refusal, printed as `clean-code-kit: <message>`; the message names the file or path at fault. The refusals are listed below. |
+
+Before any tool runs, the runner checks every precondition (config, tools,
+report directory ignored and unused) and reports all failures together as
+`N preconditions failed:` with one `- <message>` line each; one failure prints
+its plain message. Exit status is 2 either way.
 
 A lane whose selection holds no source files is not a failure: it reports
 zero findings with status `no-source-files`.

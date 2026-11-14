@@ -55,6 +55,7 @@ class LaneResult:
     seconds: float
     status: str
     findings: list[Finding]
+    detail: dict[str, Any] = field(default_factory=dict)
 
     def record(self) -> dict[str, Any]:
         return {
@@ -65,4 +66,5 @@ class LaneResult:
             "exit": self.exit,
             "seconds": self.seconds,
             "status": self.status,
+            "detail": self.detail,
         }

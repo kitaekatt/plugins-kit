@@ -83,7 +83,7 @@ domain_skill:
           The copy of the target the tools actually read. `head` holds the
           committed HEAD only; `working-tree` holds tracked and untracked,
           non-ignored files as they are on disk. The report records the mode,
-          the HEAD sha and how many paths were dirty.
+          the HEAD sha and which paths were dirty (the config file excluded).
       - term: finding
         definition: >-
           One measured item in a lane's output -- a duplicate set or a ranked
@@ -119,7 +119,7 @@ domain_skill:
       - >-
         When the config file is missing (exit 2 naming
         `.claude/clean-code-kit/config.yaml`), help the user write one from
-        references/configuring.md: propose `source_roots`, `test_roots`,
+        references/configuring.md: start from `code_audit.py init` output and adjust `source_roots`, `test_roots`,
         `languages` and `exclude` from what the repository actually contains,
         say what you proposed and why, and wait for confirmation. Do not guess
         the source roots silently, and do not run the audit on an unconfirmed
@@ -208,6 +208,16 @@ domain_skill:
       tool: scripts/code_audit.py
       scope_axes: [lanes, snapshot]
       reference_section: configuring.md
+    - id: propose_config
+      keywords: [init, propose config, write config, missing config, source_roots guess]
+      description: >-
+        Print a proposed config.yaml for a repository from its `git ls-files`
+        extension counts. It writes nothing; review it with the user and save
+        it only after they confirm.
+      operation: >-
+        "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/code_audit.py" init --target <dir>
+      tool: scripts/code_audit.py
+      reference_section: configuring.md
     - id: list_lanes
       keywords: [list lanes, which lanes, available lanes, what can it
                  measure, lane names]
@@ -223,8 +233,10 @@ domain_skill:
                  findings.json, what did it find, worst offenders, ranked]
       description: >-
         Read a report the audit wrote: `report.md` in the report directory
-        gives per-lane counts and a ranked table (the complexity table only
-        the first `top` functions); `findings.json` holds every finding with
+        gives a coverage table (tracked vs measured files per extension), per-lane
+        counts and a ranked table (the complexity table only the first `top`
+        functions at or above `min_complexity`, plus a complexity distribution
+        and the files with no scored function); `findings.json` holds every finding with
         exact values plus the run's provenance (target
         repo, HEAD, snapshot mode, dirty paths, each lane's tool commit, argv,
         exit, seconds and status). Explain columns from the lane's reference;
@@ -237,7 +249,7 @@ domain_skill:
   tools:
     - name: code_audit.py
       command: >-
-        "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/code_audit.py" <run|lanes> ...
+        "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/code_audit.py" <run|init|lanes> ...
       description: >-
         The audit runner. It re-execs under the plugin's bootstrap-provisioned
         venv and refuses (exit 2) when an installed tool's commit differs from

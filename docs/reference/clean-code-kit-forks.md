@@ -43,6 +43,7 @@ for all three).
 | crapper | `feat/python-installer` | Adds `--python-installer` (pip or uv) for installing Python test tools. |
 | crapper | `feat/python-subprocess-coverage` | Adds `--python-subprocess-coverage` to measure Python child processes. |
 | crapper | `feat/function-location` | Adds `:path` (POSIX, relative to the scanned root) and `:line` (1-based start line) to every `.metrics/crap.edn` entry. |
+| crapper | `feat/score-default-export` | Scores JS/TS `export default` anonymous functions as name `<default>` with `:path` and `:line`. |
 | mutator | `fix/overlay-test-symlink-escape` | Keeps Python files that read `__file__` inside the worker overlay. |
 
 The crapper branches serve the coverage-backed complexity lane of a later
@@ -71,9 +72,10 @@ State as of 2026-11-14:
   of `feat/exclude-paths` and `feat/group-identical-candidates` over upstream
   `master`, plus one commit on the branch itself (`ad6a0ce`, a test exercising
   both options together).
-- crapper `clean-code-kit` = `fbb99e01e979f28c8e3e433046e304188c54b305`:
-  merges of all five crapper fix branches (the last, `feat/function-location`,
-  at `a37c041da931047d0e1bc3a24323408cdcde3226`), plus two commits on the branch
+- crapper `clean-code-kit` = `50236c15b469e6fb37175474c2ab472df92e6282`:
+  merges of all six crapper fix branches (`feat/function-location` at
+  `a37c041da931047d0e1bc3a24323408cdcde3226`, then `feat/score-default-export` at
+  `44a1af23131b519dea07955fdd9b6c1d21fd3585`), plus two commits on the branch
   itself (earlier than that merge): `e6379aa` (refuse installing outside a project venv with either
   installer -- it corrects the interaction of
   `fix/no-implicit-global-pip-install` and `feat/python-installer`, and is on
@@ -92,7 +94,7 @@ references to the forks:
 
 ```
 dryer @ git+https://github.com/kitaekatt/dryer@ad6a0cec33f8e9d0a26e217edf2c881f55d8654c
-crapper @ git+https://github.com/kitaekatt/crapper@fbb99e01e979f28c8e3e433046e304188c54b305
+crapper @ git+https://github.com/kitaekatt/crapper@50236c15b469e6fb37175474c2ab472df92e6282
 tree-sitter-language-pack==1.25.0
 ```
 

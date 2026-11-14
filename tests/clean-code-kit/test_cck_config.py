@@ -82,3 +82,17 @@ def test_lane_registry_names_match_config_lane_keys():
     assert list(yaml.safe_load(CONFIG_TEXT)["lanes"]) == list(LANES)
     for name, lane in LANES.items():
         assert lane.name == name
+
+
+def test_min_complexity_is_optional_and_defaults_to_one(tmp_path):
+    cfg = config.parse(tmp_path / "c.yaml", yaml.safe_load(CONFIG_TEXT))
+    assert cfg.lanes["complexity"]["min_complexity"] == 1
+    data = yaml.safe_load(CONFIG_TEXT.replace("top: 50}", "top: 50, min_complexity: 4}"))
+    assert config.parse(tmp_path / "c.yaml", data).lanes["complexity"]["min_complexity"] == 4
+
+
+@pytest.mark.parametrize("value", ["0", "true", "2.5"])
+def test_min_complexity_bad_values_are_rejected(tmp_path, value):
+    data = yaml.safe_load(CONFIG_TEXT.replace("top: 50}", f"top: 50, min_complexity: {value}}}"))
+    with pytest.raises(Refusal, match="lanes.complexity.min_complexity"):
+        config.parse(tmp_path / "c.yaml", data)

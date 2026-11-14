@@ -28,6 +28,13 @@ _LANE_KEYS: dict[str, dict[str, tuple[tuple[type, ...], Any, str]]] = {
         "top": ((int,), lambda v: v >= 1, "a positive integer"),
     },
 }
+# Optional per-lane settings: key -> (accepted types, check, description, default).
+_OPTIONAL_LANE_KEYS: dict[str, dict[str, tuple[tuple[type, ...], Any, str, Any]]] = {
+    "duplication": {},
+    "complexity": {
+        "min_complexity": ((int,), lambda v: v >= 1, "a positive integer", 1),
+    },
+}
 _TOP_KEYS = ("schema", "snapshot", "languages", "source_roots", "test_roots", "exclude", "lanes")
 
 
@@ -53,12 +60,14 @@ def _fail(path: Path, message: str) -> Refusal:
     return Refusal(f"{path}: {message}")
 
 
-def _check_keys(path: Path, where: str, value: Any, allowed: tuple[str, ...] | list[str]) -> None:
+def _check_keys(path: Path, where: str, value: Any, allowed: tuple[str, ...] | list[str],
+                optional: tuple[str, ...] = ()) -> None:
     if not isinstance(value, dict):
         raise _fail(path, f"{where} must be a mapping")
-    unknown = [k for k in value if k not in allowed]
+    every = [*allowed, *optional]
+    unknown = [k for k in value if k not in every]
     if unknown:
-        raise _fail(path, f"unknown key {unknown[0]!r} in {where}; allowed keys: {', '.join(allowed)}")
+        raise _fail(path, f"unknown key {unknown[0]!r} in {where}; allowed keys: {', '.join(every)}")
     missing = [k for k in allowed if k not in value]
     if missing:
         raise _fail(path, f"missing key {missing[0]!r} in {where}")
@@ -101,13 +110,16 @@ def parse(path: Path, data: Any) -> Config:
     lanes: dict[str, dict[str, Any]] = {}
     for lane, spec in _LANE_KEYS.items():
         settings = data["lanes"][lane]
-        _check_keys(path, f"lanes.{lane}", settings, tuple(spec))
-        for key, (types, check, description) in spec.items():
+        optional = _OPTIONAL_LANE_KEYS[lane]
+        _check_keys(path, f"lanes.{lane}", settings, tuple(spec), tuple(optional))
+        full = {key: (*rule, True) for key, rule in spec.items()}
+        full.update({key: rule[:3] + (False,) for key, rule in optional.items() if key in settings})
+        for key, (types, check, description, _required) in full.items():
             value = settings[key]
             bad_bool = isinstance(value, bool) and bool not in types
             if bad_bool or not isinstance(value, types) or (check is not None and not check(value)):
                 raise _fail(path, f"lanes.{lane}.{key} must be {description}, got {value!r}")
-        lanes[lane] = dict(settings)
+        lanes[lane] = {key: rule[3] for key, rule in optional.items()} | dict(settings)
     if lanes["complexity"]["coverage"]:
         raise _fail(path, COVERAGE_REFUSAL)
     return Config(path, data["snapshot"], languages, source_roots, test_roots, exclude, lanes)
