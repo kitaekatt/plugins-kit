@@ -135,9 +135,11 @@ from the main checkout, including when invoked inside a linked checkout:
 ```
 
 `new` creates `<root>/<main-checkout-folder>/<task>` and a branch named
-`<task>`. It fetches remotes with pruning and starts from the main checkout's
-upstream. `--from origin/main` selects another remote branch; local branches
-and commit IDs are rejected. A missing upstream or failed fetch is an error.
+`<task>`. By default it fetches remotes with pruning and starts from the main
+checkout's fresh upstream. `--from <ref>` accepts a remote-tracking branch,
+local branch, tag or commit that Git resolves to a commit. Remote-tracking
+sources such as `origin/main` trigger a fetch; local sources need no network.
+A missing default upstream, invalid source or failed fetch is an error.
 Fetches explicitly refresh and prune every remote branch head, including heads
 outside a remote's configured fetch subset. Remote configuration is unchanged.
 The task branch starts without inheriting the base branch's tracking
@@ -150,13 +152,19 @@ branches. `merged` means HEAD is contained in the main checkout's upstream;
 a pushed task branch alone is insufficient. `gone` means the configured
 tracking branch disappeared. These flags can overlap. Unregistered leftovers
 and failed Git commands stop the helper with a diagnostic.
+`dirty` reports modified tracked files and untracked files; `ignored` reports
+ignored files separately. A checkout containing only ignored `.venv` or build
+files has `dirty: false` and `ignored: true`.
 
 With user opt-in, `list` also works outside a Git repository. `remove <path>`
 resolves that entry's repository and project settings, so it can retire an
 entry listed for another repository. Run it outside the target directory.
 After the task is pushed or merged, `remove` runs Git's worktree removal and
-pruning. It refuses unpublished commits and dirty entries, including ignored
-files. Git also refuses locked entries. It does not delete branches.
+pruning. It refuses unpublished commits, modified tracked files and untracked
+files. Ignored files also block removal by default because they can contain
+local secrets or state. `remove <path> --include-ignored` deletes those ignored
+files with the worktree; it still refuses unpublished commits and dirty files.
+Git also refuses locked entries. It does not delete branches.
 The script uses Python and Git argument arrays without shell commands and is
 intended for macOS, Linux and Windows Git Bash.
 

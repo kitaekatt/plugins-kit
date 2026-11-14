@@ -164,7 +164,6 @@ def test_unpublished_dirty_and_outside_refused(wt, remote_repo):
     assert cli(repo, "remove", str(task), check=False).returncode != 0
     assert cli(repo, "remove", str(repo.path), check=False).returncode != 0
     assert cli(repo, "new", "../escape", check=False).returncode != 0
-    assert cli(repo, "new", "local", "--from", "main", check=False).returncode != 0
 
 
 def test_cli_off_loud(wt, git_repo):
@@ -268,11 +267,80 @@ def test_ignored_files_block_removal(wt, remote_repo):
     (repo.path / ".git/info/exclude").write_text("*.secret\n", encoding="utf-8")
     valuable = task / "only-copy.secret"
     valuable.write_text("unique ignored content", encoding="utf-8")
-    assert cli(repo, "list")[0]["dirty"] is True
+    row = cli(repo, "list")[0]
+    assert row["dirty"] is False
+    assert row["ignored"] is True
     failure = cli(repo, "remove", str(task), check=False)
     assert failure.returncode != 0
-    assert "including ignored" in failure.stderr
+    assert "--include-ignored" in failure.stderr
     assert valuable.read_text() == "unique ignored content"
+
+
+def test_local_branch_source_without_reachable_remote(wt, remote_repo) -> None:
+    repo = remote_repo
+    repo.commit_file("stack.txt", "unpublished base")
+    repo.git("branch", "local-base")
+    repo.git("remote", "set-url", "origin", str(Path.home() / "missing.git"))
+    result = cli(repo, "new", "stacked", "--from", "local-base")
+    task = Path(result["path"])
+    assert (task / "stack.txt").read_text() == "unpublished base"
+    assert type(repo)(task).git("rev-parse", "HEAD").stdout == repo.git("rev-parse", "local-base").stdout
+
+
+@pytest.mark.parametrize("source_kind", ["commit", "tag"])
+def test_commit_and_tag_sources_without_remote(wt, remote_repo, source_kind) -> None:
+    repo = remote_repo
+    commit = repo.git("rev-parse", "HEAD").stdout.strip()
+    repo.git("tag", "-a", "base-tag", "-m", "base")
+    repo.git("remote", "remove", "origin")
+    source = commit if source_kind == "commit" else "base-tag"
+    task = Path(cli(repo, "new", "pinned", "--from", source)["path"])
+    assert type(repo)(task).git("rev-parse", "HEAD").stdout.strip() == commit
+
+
+def test_list_separates_dirty_and_ignored(wt, remote_repo) -> None:
+    repo = remote_repo
+    task = Path(cli(repo, "new", "status")["path"])
+    (repo.path / ".git/info/exclude").write_text(".venv/\n", encoding="utf-8")
+    (task / ".venv").mkdir()
+    (task / ".venv/state").write_text("local state", encoding="utf-8")
+    (task / "file.txt").write_text("modified", encoding="utf-8")
+    row = cli(repo, "list")[0]
+    assert row["dirty"] is True
+    assert row["ignored"] is True
+
+
+def test_remove_include_ignored(wt, remote_repo) -> None:
+    repo = remote_repo
+    task = Path(cli(repo, "new", "disposable")["path"])
+    (repo.path / ".git/info/exclude").write_text(".venv/\n", encoding="utf-8")
+    (task / ".venv").mkdir()
+    (task / ".venv/state").write_text("disposable", encoding="utf-8")
+    assert cli(repo, "remove", str(task), "--include-ignored") == {"removed": str(task)}
+    assert not task.exists()
+    assert str(task) not in repo.git("worktree", "list").stdout
+
+
+@pytest.mark.parametrize("unsafe", ["untracked", "modified", "unpublished", "locked"])
+def test_include_ignored_preserves_other_removal_guards(wt, remote_repo, unsafe) -> None:
+    repo = remote_repo
+    task = Path(cli(repo, "new", "protected")["path"])
+    task_repo = type(repo)(task)
+    (repo.path / ".git/info/exclude").write_text("*.secret\n", encoding="utf-8")
+    valuable = task / "local.secret"
+    valuable.write_text("preserve", encoding="utf-8")
+    if unsafe == "untracked":
+        (task / "new.txt").write_text("untracked", encoding="utf-8")
+    elif unsafe == "modified":
+        (task / "file.txt").write_text("modified", encoding="utf-8")
+    elif unsafe == "unpublished":
+        task_repo.commit_file("new.txt", "unpublished")
+    else:
+        repo.git("worktree", "lock", str(task))
+    failure = cli(repo, "remove", str(task), "--include-ignored", check=False)
+    assert failure.returncode != 0
+    assert "unrecognized arguments" not in failure.stderr
+    assert valuable.read_text() == "preserve"
 
 
 def test_remove_from_inside_target_refused(wt, remote_repo):

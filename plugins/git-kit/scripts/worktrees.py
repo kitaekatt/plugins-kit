@@ -180,17 +180,25 @@ def new(repo: Path, settings: WorktreeSettings, task: str, source: str | None) -
     git(repo, "check-ref-format", "--branch", task)
     main = project_root(repo)
     destination = contained_task(settings.root, settings.root / main.name / task)
-    refresh(repo)
-    refs = remote_refs(repo)
     if source is None:
         source = main_upstream(main)
-    elif not source.startswith("refs/remotes/"):
-        source = "refs/remotes/" + source
-    if source not in refs or source.endswith("/HEAD"):
-        raise ValueError(f"--from must name a fetched remote branch, such as origin/main: {source}")
+        refresh(repo)
+    else:
+        resolved = git(repo, "rev-parse", "--symbolic-full-name", "--verify", "--end-of-options", source)
+        if resolved.startswith("refs/remotes/"):
+            source = resolved
+            refresh(repo)
+    commit = git(repo, "rev-parse", "--verify", "--end-of-options", f"{source}^{{commit}}")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    git(repo, "worktree", "add", "--no-track", "-b", task, str(destination), source)
+    git(repo, "worktree", "add", "--no-track", "-b", task, str(destination), commit)
     return {"path": str(destination), "branch": task, "from": source}
+
+
+def worktree_status(task: Path) -> tuple[bool, bool]:
+    """Report tracked/untracked changes separately from ignored local data."""
+    dirty = bool(git(task, "status", "--porcelain", "--ignored=no", "--untracked-files=all"))
+    ignored = bool(git(task, "ls-files", "--others", "--ignored", "--exclude-standard", "-z"))
+    return dirty, ignored
 
 
 def list_worktrees(settings: WorktreeSettings) -> list[dict[str, Any]]:
@@ -219,16 +227,17 @@ def list_worktrees(settings: WorktreeSettings) -> list[dict[str, Any]]:
             base = main_upstream(main)
             containing = set(git(task, "for-each-ref", f"--contains={head}", "--format=%(refname)", "refs/remotes").splitlines())
             merged = base in containing
+            dirty, ignored = worktree_status(task)
             result.append({
                 "path": str(task), "branch": branch.removeprefix("refs/heads/"),
                 "no_unpublished_commits": not unpublished(task, head),
                 "merged": merged, "gone": bool(upstream and upstream not in refs),
-                "dirty": bool(git(task, "status", "--porcelain", "--ignored=matching", "--untracked-files=all")),
+                "dirty": dirty, "ignored": ignored,
             })
     return result
 
 
-def remove(repo: Path, settings: WorktreeSettings, path: Path) -> dict[str, str]:
+def remove(repo: Path, settings: WorktreeSettings, path: Path, include_ignored: bool = False) -> dict[str, str]:
     task = contained_task(settings.root, path)
     entry = next((r for r in records(repo) if Path(r["worktree"]).resolve() == task), None)
     if entry is None or task == project_root(repo):
@@ -238,9 +247,13 @@ def remove(repo: Path, settings: WorktreeSettings, path: Path) -> dict[str, str]
     refresh(repo)
     if unpublished(repo, entry["HEAD"]):
         raise ValueError(f"Refusing to remove worktree with unpublished commits: {task}")
-    if git(task, "status", "--porcelain", "--ignored=matching", "--untracked-files=all"):
-        raise ValueError(f"Refusing to remove dirty worktree (including ignored files): {task}")
-    git(repo, "worktree", "remove", str(task))
+    dirty, ignored = worktree_status(task)
+    if dirty:
+        raise ValueError(f"Refusing to remove dirty worktree: {task}")
+    if ignored and not include_ignored:
+        raise ValueError(f"Refusing to remove worktree with ignored files; use --include-ignored to delete them: {task}")
+    flags = ["--force"] if ignored and include_ignored else []
+    git(repo, "worktree", "remove", *flags, str(task))
     git(repo, "worktree", "prune")
     return {"removed": str(task)}
 
@@ -255,6 +268,7 @@ def main() -> int:
     commands.add_parser("config", help="Read effective settings without changing files")
     delete = commands.add_parser("remove")
     delete.add_argument("path", type=Path)
+    delete.add_argument("--include-ignored", action="store_true", help="Delete ignored files with the worktree")
     args = parser.parse_args()
     try:
         repo = Path.cwd()
@@ -275,7 +289,7 @@ def main() -> int:
         elif args.command == "list":
             output = list_worktrees(settings)
         else:
-            output = remove(repo, settings, args.path)
+            output = remove(repo, settings, args.path, args.include_ignored)
         print(json.dumps(output, indent=2))
         return 0
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
