@@ -139,6 +139,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -970,6 +971,118 @@ def _commit_files(sha: str) -> list[str]:
     return [f for f in git("show", "--name-only", "--format=", sha).split("\n") if f]
 
 
+# --- files that need no version bump ----------------------------------------
+#
+# The plugin cache keys on version, so a bump only matters for content a
+# consumer's session LOADS. A generated index page (*.html) or a README never
+# reaches a running session, so a change confined to such files strands
+# nothing: requiring a bump for it only burns a version number and forces a
+# no-op refetch on every consumer. Generated Databench index pages changing
+# under a plugin whenever their source moves is what made this a rule.
+#
+# The rule is extension plus location, and it fails toward requiring a bump:
+#   * any *.html is exempt;
+#   * a *.md is exempt only when it is recognisably documentation (README,
+#     CHANGELOG and similar by name, or anything under a docs/, design/ or
+#     planning/ directory) AND no session can load it: never a SKILL.md,
+#     CLAUDE.md or AGENTS.md, never anything under a skills/, commands/,
+#     agents/, output-styles/ or hooks/ directory, and never a *.md that a
+#     SKILL.md or CLAUDE.md of the same plugin links or @-imports.
+# Every other *.md (references/, templates/, defaults/ and any other
+# directory a plugin's own code might read) needs the bump. A plugin's own
+# CLAUDE.md ships to consumers inside the plugin directory, so it counts as
+# loaded. Every non-html, non-md file keeps today's behaviour.
+
+_RUNTIME_MD_DIRS = frozenset(
+    {"skills", "commands", "agents", "output-styles", "hooks"})
+_RUNTIME_MD_NAMES = frozenset({"skill.md", "claude.md", "agents.md"})
+_DOC_MD_STEMS = frozenset(
+    {"readme", "changelog", "changes", "history", "contributing", "license"})
+_DOC_MD_DIRS = frozenset({"docs", "doc", "design", "planning"})
+_MD_LINK_RE = re.compile(r"\]\(\s*<?([^)\s>#]+)")
+_MD_IMPORT_RE = re.compile(r"(?<![\w/.@])@([^\s)`\"'<>]+\.md)(?![\w])", re.I)
+_ROOT_VAR_RE = re.compile(r"^\$\{(CLAUDE_PLUGIN_ROOT|CLAUDE_SKILL_DIR)\}/")
+
+
+def _tree_files(ref: str, prefix: str) -> list[str]:
+    """Repo-relative files under `prefix` at `ref`; ref "" is the index."""
+    if ref == "":
+        out = git("ls-files", "--", prefix, check=False)
+    else:
+        out = git("ls-tree", "-r", "--name-only", ref, "--", prefix, check=False)
+    return [line for line in out.splitlines() if line]
+
+
+def _read_blob(ref: str, path: str) -> str:
+    spec = f":{path}" if ref == "" else f"{ref}:{path}"
+    return git("show", spec, check=False)
+
+
+def _linked_markdown(name: str, refs: list[str]) -> set[str]:
+    """Plugin-relative .md paths that a SKILL.md or CLAUDE.md of `name` links
+    (`](target)`) or @-imports, read at every ref given."""
+    prefix = f"plugins/{name}/"
+    linked: set[str] = set()
+    for ref in refs:
+        for path in _tree_files(ref, prefix):
+            if path.rsplit("/", 1)[-1].lower() not in ("skill.md", "claude.md"):
+                continue
+            rel = path[len(prefix):]
+            text = _read_blob(ref, path)
+            for target in (_MD_LINK_RE.findall(text) + _MD_IMPORT_RE.findall(text)):
+                if "://" in target or target.startswith("mailto:"):
+                    continue
+                base = posixpath.dirname(rel)
+                match = _ROOT_VAR_RE.match(target)
+                if match:
+                    if match.group(1) == "CLAUDE_PLUGIN_ROOT":
+                        base = ""
+                    target = target[match.end():]
+                if "$" in target or not target.lower().endswith(".md"):
+                    continue
+                resolved = posixpath.normpath(posixpath.join(base, target))
+                if not resolved.startswith(".."):
+                    linked.add(resolved)
+    return linked
+
+
+class _DocsClassifier:
+    """Answers "does a change to this path need a plugin version bump?".
+
+    `refs` are the trees whose SKILL.md / CLAUDE.md links decide whether a .md
+    is loaded ("" is the index); more than one so a deleted file is judged by
+    the links it had."""
+
+    def __init__(self, refs: list[str]):
+        self._refs = refs
+        self._linked: dict[str, set[str]] = {}
+
+    def is_docs_only(self, path: str) -> bool:
+        parts = path.split("/")
+        if len(parts) < 3 or parts[0] != "plugins":
+            return False
+        name, rel = parts[1], parts[2:]
+        leaf = rel[-1].lower()
+        if leaf.endswith(".html"):
+            return True
+        if not leaf.endswith(".md"):
+            return False
+        if leaf in _RUNTIME_MD_NAMES or _RUNTIME_MD_DIRS & set(rel[:-1]):
+            return False
+        if (leaf[:-3] not in _DOC_MD_STEMS
+                and not _DOC_MD_DIRS & set(rel[:-1])):
+            return False
+        if name not in self._linked:
+            self._linked[name] = _linked_markdown(name, self._refs)
+        return "/".join(rel) not in self._linked[name]
+
+
+def bump_relevant_paths(paths: list[str], refs: list[str]) -> list[str]:
+    """The paths that still require a version bump (everything not docs-only)."""
+    classifier = _DocsClassifier(refs)
+    return [p for p in paths if not classifier.is_docs_only(p)]
+
+
 def excluded_dev_only_commits(allow: set[str],
                               ref: str | None = None) -> dict[str, set[str]]:
     """Which commits in the range touch a dev-only plugin, so must NOT ship.
@@ -1067,6 +1180,10 @@ def _shippable_dirty_paths(held_back: set[str] | None = None) -> list[str]:
     """
     dev_only = {name for name, m in local_plugins().items() if not is_published(m)}
     dev_only |= held_back or set()
+    # Uncommitted work confined to files that need no bump (see "files that
+    # need no version bump") is not dirt either: it cannot change what a
+    # consumer loads, and a regenerated index page is routinely uncommitted.
+    docs = _DocsClassifier([f"refs/heads/{DEV_BRANCH}", ""])
     kept = []
     for line in git("status", "--porcelain", "-uall").splitlines():
         if not line.strip():
@@ -1087,6 +1204,8 @@ def _shippable_dirty_paths(held_back: set[str] | None = None) -> list[str]:
         if " -> " in path:
             path = path.split(" -> ", 1)[1].strip().strip('"')
         if _dev_only_owned(path, dev_only):
+            continue
+        if docs.is_docs_only(path):
             continue
         kept.append(line)
     return kept
@@ -1169,6 +1288,19 @@ def _require_version_bump(only: set[str] | None = None, ref: str | None = None,
     return bumps
 
 
+def _bump_relevant_changes(name: str, tip: str) -> bool:
+    """True unless every net-changed file of the plugin is docs-only (see
+    "files that need no version bump"). An empty or unreadable file listing
+    is answered True: the bump is required whenever this cannot show it is not."""
+    master = f"{REMOTE}/{MASTER_BRANCH}"
+    listing = git("diff", "--name-only", "--no-renames", f"{master}..{tip}",
+                  "--", f"plugins/{name}", check=False).splitlines()
+    paths = [p for p in listing if p]
+    if not paths:
+        return True
+    return bool(bump_relevant_paths(paths, [tip, master]))
+
+
 def _changed_plugins(ref: str | None = None) -> set[str]:
     """Published plugins whose files DIFFER between master and the dev tip.
 
@@ -1183,6 +1315,12 @@ def _changed_plugins(ref: str | None = None) -> set[str]:
 
     So a plugin is "changed" only when master would actually receive different
     bytes. `git diff --quiet` exits 1 when they differ, 0 when they do not.
+
+    A difference confined to files that need no bump (generated index pages,
+    READMEs: see "files that need no version bump") does not count. Those files
+    still travel with the tree of whichever release next projects dev, under
+    whatever version the plugin then carries; they strand nothing because no
+    session loads them.
     """
     tip = ref or DEV_BRANCH
     known = set(local_plugins(**_at(ref)))
@@ -1198,7 +1336,7 @@ def _changed_plugins(ref: str | None = None) -> set[str]:
             ["git", "diff", "--quiet",
              f"{REMOTE}/{MASTER_BRANCH}..{tip}", "--", f"plugins/{name}"],
             cwd=REPO_ROOT, capture_output=True, text=True).returncode != 0
-        if differs:
+        if differs and _bump_relevant_changes(name, tip):
             changed.add(name)
     return changed
 
@@ -1813,10 +1951,24 @@ def main(argv: list[str]) -> int:
              "writes and no network calls. scripts/check-staged-version-bump.sh "
              "asks this so both gates measure a bump from the same publish "
              "point rather than each deriving one")
+    parser.add_argument(
+        "--bump-relevant-paths", action="store_true",
+        help="read repo-relative paths on stdin, print those that still "
+             "require a plugin version bump (all but generated index pages, "
+             "READMEs and other docs no session loads), and exit. "
+             "scripts/check-staged-version-bump.sh asks this so the pre-commit "
+             "gate and the publish gate share one rule")
     args = parser.parse_args(argv)
 
     # Answered before anything else, because the caller is a pre-commit hook on
     # a possibly unprovisioned clone: no preflight, no manifest reads, no writes.
+    if args.bump_relevant_paths:
+        paths = [line.strip() for line in sys.stdin.read().splitlines()
+                 if line.strip()]
+        for path in bump_relevant_paths(paths, ["", "HEAD"]):
+            print(path)
+        return 0
+
     if args.print_range_base:
         try:
             print(range_base())

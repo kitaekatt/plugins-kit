@@ -377,3 +377,38 @@ class TestDegraded:
         stage(repo)
         result = run_check(repo, env_extra={"PLUGINS_KIT_SKIP_BUMP_CHECK": "1"})
         assert result.returncode == 0
+
+
+class TestDocsOnlyFilesNeedNoBump:
+    """Generated index pages and docs no session loads are not code: the same
+    rule publish.py's preflight applies (publish.py --bump-relevant-paths)."""
+
+    def _stage(self, repo, files):
+        for rel, text in files.items():
+            target = repo / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text)
+        stage(repo)
+
+    def test_html_and_readme_only_pass(self, published_repo):
+        self._stage(published_repo, {
+            "plugins/foo/skills/s/scripts/index.html": "<html></html>\n",
+            "plugins/foo/README.md": "docs\n"})
+        assert run_check(published_repo).returncode == 0
+
+    def test_skill_md_blocks(self, published_repo):
+        self._stage(published_repo, {"plugins/foo/skills/s/SKILL.md": "x\n"})
+        assert run_check(published_repo).returncode == 1
+
+    def test_reference_md_blocks(self, published_repo):
+        self._stage(published_repo,
+                    {"plugins/foo/skills/s/references/x.md": "x\n"})
+        assert run_check(published_repo).returncode == 1
+
+    def test_html_beside_code_blocks(self, published_repo):
+        self._stage(published_repo, {
+            "plugins/foo/skills/s/scripts/index.html": "<html></html>\n",
+            "plugins/foo/code.py": "x = 2\n"})
+        result = run_check(published_repo)
+        assert result.returncode == 1
+        assert "foo" in result.stderr
