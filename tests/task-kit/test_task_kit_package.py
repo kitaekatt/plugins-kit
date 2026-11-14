@@ -23,7 +23,7 @@ PYPROJECT = tomllib.loads((PLUGIN_ROOT / "pyproject.toml").read_text(encoding="u
 SKILL = (PLUGIN_ROOT / "skills" / "task" / "SKILL.md").read_text(encoding="utf-8")
 
 EXPECTED_CAPABILITY_IDS = (
-    "init", "validate", "work", "update", "hand_off", "close", "reopen", "archive", "delete", "move",
+    "init", "validate", "work", "update", "refresh", "hand_off", "close", "reopen", "archive", "delete", "move",
     "list", "triage", "review", "answers", "dashboard", "queue", "show", "items", "status", "sessions",
 )
 
@@ -57,6 +57,21 @@ def test_skill_keeps_the_exact_capability_surface_and_resolvable_details():
         path = skill_dir / path_text
         assert path.is_file(), (capability_id, details)
         assert heading in markdown_heading_ids(path.read_text(encoding="utf-8")), (capability_id, details)
+
+
+def test_refresh_is_agent_side_keeps_the_registration_and_emits_no_baton():
+    """Red: delete the ``## refresh`` section from work-and-hand-off.md (the anchor test above goes red too) or
+    let it name the release operation or the baton as something to run."""
+    cap = skill_capabilities()["refresh"]
+    assert cap["details"] == "references/work-and-hand-off.md#refresh"
+    assert "no CLI verb" in cap["operation"]
+    assert "Never release the session registration" in cap["steps"][0]["action"]
+    ref = (PLUGIN_ROOT / "skills" / "task" / "references" / "work-and-hand-off.md").read_text(encoding="utf-8")
+    section = ref.split("\n## refresh\n", 1)[1].split("\n## ", 1)[0]
+    assert "Do NOT run `task.py sessions release`" in section
+    assert "stays registered" in section
+    assert "bring_current" in section
+    assert "bring_current" in ref.split("\n## hand_off\n", 1)[1].split("\n## ", 1)[0]
 
 
 def test_plugin_json_and_pyproject_state_one_version():

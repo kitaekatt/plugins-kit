@@ -1,7 +1,8 @@
 # Work and hand-off
 
-Load `work` for initialization and session registration. Load `hand_off` only
-after the complete user-invocation gate in the capability record passes.
+Load `work` for initialization and session registration. Load `refresh` only
+when the user invokes it. Load `hand_off` only after the complete
+user-invocation gate in the capability record passes.
 
 ## work
 
@@ -60,6 +61,48 @@ The failure pattern is treating the initialization block as informational:
 invoking only task-declared skills, skipping orchestrate, and implementing
 inline. Invoke every line, then follow the dispatch directive.
 
+## bring_current
+
+The passes that `refresh` and `hand_off` share. Both cite this section; the
+variants differ only in what follows it.
+
+### Rotate and update
+
+Run the update rotation, starting with pre-contract conversion when needed.
+The four passes are in `handoff-template.md`, "Rotation discipline (the update
+passes)". Then run `task.py update <ref>` to append the dated log entry and
+re-validate. Findings block; fix forward until clean.
+
+### Self-verify
+
+Read CLAUDE.md and plan.md cold, as the next agent, and fix anything a cold
+reader cannot resolve.
+
+### Commit and push the task folder
+
+In a git task root, commit AND push the task folder under the standing
+task-record authorization. Outside a git task root there is nothing to publish.
+
+## refresh
+
+Operation signature: `/task refresh <ref>`. There is no CLI verb: do not pass
+`refresh` to task.py. The script operation is update.
+
+Refresh brings the folder fully current so the session can compact or continue.
+Typical use is just before compaction. Unlike `hand_off`, it keeps this
+session's registration and emits no baton.
+
+The user invokes it with `/task refresh <ref>` or says in plain words to
+refresh the task. The agent does not start it on its own initiative. It needs
+no hand-off gate beyond that invocation: it is safe whenever the user asks.
+
+1. Run the three steps of `bring_current`: rotate and update, self-verify, then
+   commit and push the task folder in a git task root.
+2. Do NOT run `task.py sessions release`. Do NOT emit the `CWD:` and
+   `Continue:` baton. The session stays registered as working the task.
+3. End the turn with a short report: what changed in the folder, and that the
+   task is current. No baton.
+
 ## hand_off
 
 The gate remains in the capability record because it must run before this
@@ -70,23 +113,19 @@ sessions release, plus sessions publish when the release reports
 
 ### Step 2: rotate and update
 
-Run the update rotation, starting with pre-contract conversion when needed.
-Then run update to append the dated log entry and re-validate. Findings block;
-fix forward until clean.
+Run `bring_current`, "Rotate and update".
 
 ### Step 3: self-verify
 
-Read CLAUDE.md and plan.md cold, as the next agent, and fix anything a cold
-reader cannot resolve.
+Run `bring_current`, "Self-verify".
 
 ### Step 4: publish task state and release
 
 Release is the last state change, after update is clean and self-verification
-is complete. In a git task root, first commit AND push the task folder under
-the standing task-record authorization. Otherwise release can print
-`committed; not published: unpushed commits outside this machine's session
-records` because it publishes only when the net upstream change is session
-files.
+is complete. First run `bring_current`, "Commit and push the task folder".
+Otherwise release can print `committed; not published: unpushed commits outside
+this machine's session records` because it publishes only when the net upstream
+change is session files.
 
 Then run the release operation for `<ref>`. In a reference document, the
 agent-shell form is:

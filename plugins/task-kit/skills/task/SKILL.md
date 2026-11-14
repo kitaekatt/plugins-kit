@@ -8,7 +8,7 @@ description: Use when creating, listing, working, queueing, closing, archiving o
 
 # Task
 
-Routes 16 task.py verbs plus queue, status, dashboard, triage, and hand-off.
+Routes 16 task.py verbs plus queue, status, dashboard, triage, refresh, and hand-off.
 
 ## Data model and CLI
 
@@ -41,7 +41,7 @@ capability_skill:
     description: "CLI over task folders, records, items, answers, and sessions."
   layering:
     claude_md: []
-    skill_md: [data model, CLI invocation, 20 capability routes, immediate agent gates]
+    skill_md: [data model, CLI invocation, 21 capability routes, immediate agent gates]
     references: [procedures, edge cases, authoring and review protocols]
   capabilities:
     - id: init
@@ -70,7 +70,15 @@ capability_skill:
       operation: task.py update <ref> [--status S] [--priority P] [--description D] [--depends-on PATH ...] [--blocked-by PATH ...] [--agent-hint H] [--skill-to-invoke NAME ...] [--durable-output PATH ...] [--summary S] [--root PATH]
       details: references/lifecycle-operations.md#update
       gotchas:
-        - "For substantive progress, run handoff-template.md's four update passes; convert a pre-contract folder first."
+        - "update refreshes the folder record only; for substantive progress, run /task refresh <ref>, which applies handoff-template.md's four update passes."
+    - id: refresh
+      keywords: [refresh task, refresh, before compaction, compact, save progress, checkpoint task, update before compact]
+      user_objective: "Bring the task folder fully current (record plus the four update passes) so the session can compact or continue, keeping this session's registration."
+      operation: "/task refresh <ref> -- agent-side; no CLI verb. Dispatches onto task.py update <ref> plus the handoff-template update passes; no release, no baton."
+      details: references/work-and-hand-off.md#refresh
+      steps:
+        - n: 1
+          action: "Load references/work-and-hand-off.md and follow its refresh procedure. Never release the session registration or emit the hand-off baton."
     - id: hand_off
       keywords: [hand-off, hand off, package for a fresh session, resume in a new session, baton, continue in a new session]
       user_objective: "Package the folder so a fresh session resumes with one paste -- ONLY when the user invokes /task hand-off or /restart hand-off."
