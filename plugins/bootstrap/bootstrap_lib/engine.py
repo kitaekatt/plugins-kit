@@ -1378,7 +1378,7 @@ def _pass_export_venv_python(st, project_venv_def, pv_ok):
 
 
 def _pass_project_npm_and_links(st):
-    """Step 3d2 (project_npm), then Step 3d3 (agent_skills_link)."""
+    """Step 3d2 (project_npm), Step 3d3 (agent_skills_link), Step 3d4 (links)."""
     args = st.args
     lm = st.layered_manifest
     # Step 3d2: Process project_npm from layered manifest (needs --project-dir).
@@ -1407,6 +1407,18 @@ def _pass_project_npm_and_links(st):
     st.boot_ok.extend(asl_ok)
     if asl_failures:
         st.all_failures.extend(asl_failures)
+
+    # Step 3d4: project links -- the project layer's `links` list (path ->
+    # target symlinks into ignored paths such as dev/tasks). Reads only
+    # <project>/.claude/bootstrap.json; the merged value is passed solely so
+    # a `links` declared in another layer is reported as ignored.
+    pl_action, pl_ok, pl_failures = _run_project_links_check(
+        args.project_dir, lm.get("links") if lm else None,
+    )
+    st.boot_action.extend(pl_action)
+    st.boot_ok.extend(pl_ok)
+    if pl_failures:
+        st.all_failures.extend(pl_failures)
 
 
 def _pass_env_json(st):
@@ -6919,6 +6931,98 @@ def _resolve_agent_skills_fix(ctx, root_label, project_dir,
         "agent skills link (%s): created .agents/skills -> %s using %s; %s"
         % (root_label, SOURCE_DISPLAY, fix.mechanism, fix.vcs_result)
     )
+
+
+_PROJECT_LINKS_FAILURE_KWARGS = {
+    "type": "project_links",
+    "persist_across_sessions": True,
+    "ask_reason": "action",
+}
+
+
+def _run_project_links_check(project_dir, merged_links_value):
+    """links: make each declared project path a link to its target, once per pass.
+
+    Provenance: declarations come ONLY from <project>/.claude/bootstrap.json
+    (bootstrap_lib.project_links_check.read_project_links). ``merged_links_value``
+    is the merged layered manifest's ``links`` and is used only to notice a
+    value that did not come from that file (user layer, .local layers), which
+    is reported as ignored. Deliberately NOT in _MANIFEST_PHASES: that table
+    dispatches the merged manifest, which cannot say which layer a value came
+    from. Returns (action_entries, ok_entries, failures); every declaration
+    yields exactly one entry.
+    """
+    from .project_links_check import (
+        check_project_link, create_project_link, read_project_links,
+    )
+
+    ctx = _ManifestContext(
+        {}, None, None, None,
+        [], [], "bootstrap", project_dir, True,
+        marketplace="bootstrap",
+    )
+    if not project_dir:
+        ctx.ok("project links: skipped (no project directory)")
+        return ctx.action_entries, ctx.ok_entries, ctx.failures
+
+    label = "project:%s" % os.path.abspath(project_dir)
+    declared = read_project_links(project_dir)
+
+    if merged_links_value is not None and merged_links_value != declared.links_value:
+        ctx.action(
+            "project links (%s): ignored `links` declared outside "
+            "<project>/.claude/bootstrap.json; only that tracked file may "
+            "declare links" % label
+        )
+
+    if declared.status == "absent":
+        ctx.ok("project links (%s): none declared; no project manifest" % label)
+        return ctx.action_entries, ctx.ok_entries, ctx.failures
+    if declared.status == "unreadable":
+        ctx.ok("project links (%s): skipped; project manifest unreadable (%s)"
+               % (label, declared.detail))
+        return ctx.action_entries, ctx.ok_entries, ctx.failures
+    if declared.status == "no_links":
+        ctx.ok("project links (%s): none declared" % label)
+        return ctx.action_entries, ctx.ok_entries, ctx.failures
+
+    def _fail(path, message):
+        ctx.fail(
+            "project links (%s): %s: failed; %s" % (label, path, message),
+            message=message, **_PROJECT_LINKS_FAILURE_KWARGS,
+        )
+
+    if not declared.declarations and not declared.invalid:
+        ctx.ok("project links (%s): none declared; links list is empty" % label)
+
+    for bad in declared.invalid:
+        _fail(bad.path, "invalid declaration; %s" % bad.detail)
+
+    for decl in declared.declarations:
+        outcome = check_project_link(project_dir, decl)
+        status = outcome.status
+        if status == "ok_same":
+            ctx.ok("project links (%s): %s -> %s: already linked"
+                   % (label, decl.path, decl.target))
+        elif status == "fixable":
+            fix = create_project_link(project_dir, decl)
+            if not fix.ok:
+                _fail(decl.path, "could not create link (%s)%s" % (
+                    fix.status, "; " + fix.detail if fix.detail else ""))
+                continue
+            recheck = check_project_link(project_dir, decl)
+            if recheck.status != "ok_same":
+                _fail(decl.path, "link not in place after creation (%s: %s)"
+                      % (recheck.status, recheck.detail))
+                continue
+            ctx.action("project links (%s): created %s -> %s using %s"
+                       % (label, decl.path, decl.target, fix.mechanism))
+        elif status == "invalid":
+            _fail(decl.path, "invalid; %s" % outcome.detail)
+        else:   # wrong_target, not_link, target_missing, not_ignored
+            _fail(decl.path, "%s; %s" % (status, outcome.detail))
+
+    return ctx.action_entries, ctx.ok_entries, ctx.failures
 
 
 def _phase_sync_to_data(ctx):

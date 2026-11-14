@@ -393,6 +393,59 @@ See `plugins/bootstrap/skills/bootstrap/references/engine-internals.md` for
 the check/fix/re-check flow and `remediation-reference.md` for failure
 handling.
 
+## `links` -- Project Links to Ignored Paths
+
+A **project-layer** list. Bootstrap makes each declared project path a
+directory symlink (an NTFS junction on Windows when a symlink cannot be
+created) to a target outside the project. The case it exists for is a Git
+worktree: a path such as `dev/tasks` is an ignored link into a private
+repository, so a fresh checkout or worktree has no such link until something
+makes it.
+
+```json
+{
+  "links": [
+    {"path": "dev/tasks", "target": "$DEVROOT/tasks/plugins-kit"}
+  ]
+}
+```
+
+- `path`: relative POSIX path inside the project. No empty, `.` or `..`
+  component, no backslash, colon or `.git` component.
+- `target`: absolute directory, expanded with `$VARS` and `~`
+  (`env_features.expand_env_path`). An unresolved variable is an `invalid`
+  failure, never a guess. The target must be outside the project.
+- Unknown keys in an entry are `invalid`.
+- **Provenance.** Only `<project>/.claude/bootstrap.json` is read. A `links`
+  value in `~/.claude/bootstrap.json`, in a `.local` layer, or in a plugin
+  manifest is ignored, and the pass logs one action entry saying so. The
+  merged manifest cannot say which layer a value came from, so the engine
+  step (`_run_project_links_check`, Step 3d4) reads the project file
+  directly. The step is not in `_MANIFEST_PHASES`.
+- **Duplicates are rejected.** Two entries naming the same path (compared
+  case-insensitively), or one path inside another, make every entry involved
+  `invalid`; none of them is created.
+- **Ignored paths only.** Bootstrap creates a link only where
+  `git check-ignore` reports the path ignored. A path git does not ignore (or
+  a project that is not a Git work tree) is `not_ignored` and untouched.
+- **Containment.** Every existing parent directory must be a real directory;
+  a parent that is a symlink or junction is `invalid`. Missing parents are
+  created and removed again if the link then fails.
+- **Nothing is replaced.** A path that links elsewhere is `wrong_target`; a
+  path that exists and is not a link is `not_link`. Both are reported and left
+  untouched.
+
+Check statuses (`bootstrap_lib/project_links_check.py`): `ok_same`
+(already linked; a verbose-only ok entry), `fixable` (created; an action
+entry, then re-checked), and the failures `wrong_target`, `not_link`,
+`target_missing`, `not_ignored`, `invalid`. Each failure is
+`type="project_links"` with `persist_across_sessions=True`, so a declaration
+that cannot be satisfied is shown every session until fixed. Every
+declaration produces exactly one log entry per pass.
+
+An older bootstrap ignores the `links` key (only `_MANIFEST_PHASES` keys are
+dispatched), so a declaration is inert until bootstrap 0.169.0 is installed.
+
 ## `shared_libs` / `shared_lib_imports` — Cross-Plugin First-Party Libraries
 
 These two keys let one plugin reuse another plugin's first-party Python library **without declaring a dependency on the owning plugin** (reuse-by-availability). The engine shares the library SOURCE via a `.pth` file; it does NOT install third-party dependencies — each importing plugin declares those itself in its own `pyproject.toml` (a static test, `tests/bootstrap/test_dependency_completeness.py`, catches omissions).

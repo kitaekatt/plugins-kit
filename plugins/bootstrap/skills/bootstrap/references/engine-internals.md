@@ -319,6 +319,18 @@ unread profile-prompt directive is lost along with it. The 10-minute
 directory-wide guard in `should_prompt` bounds how often this can recur for
 the same session, but does not prevent the loss on the pass it happens to.
 
+### Step 3d4: `links` -- project links to ignored paths
+
+Runs once per pass, directly after Step 3d3 in `_pass_project_npm_and_links`.
+Implementation: `bootstrap_lib/project_links_check.py` (declaration reader,
+side-effect-free check, fixer) plus `bootstrap_lib/engine.py::_run_project_links_check`
+(owns every message). Declarations are read from `<project>/.claude/bootstrap.json`
+only; the merged `links` value is passed in solely to report a declaration made
+in another layer as ignored. Check, fix and re-check follow Step 3d3: the fixer
+re-runs the check first (the check/fix window is closed), and the engine
+re-checks after the fix, so only an `ok_same` re-check is logged as `created`.
+Field semantics and statuses: `manifest-reference.md`, "`links`".
+
 ### Step 3d3: `agent_skills_link` — Codex skill discovery link
 
 Runs once per pass, right after the layered `project_venv`/`project_npm`
