@@ -212,7 +212,7 @@ domain_skill:
       keywords: [init, propose config, write config, missing config, source_roots guess]
       description: >-
         Print a proposed config.yaml for a repository from its `git ls-files`
-        extension counts. It writes nothing; review it with the user and save
+        extension counts (a top-level directory with fewer than 3 supported files is narrowed to the deepest directory holding them; a lone file is listed, not rooted). It writes nothing; review it with the user and save
         it only after they confirm.
       operation: >-
         "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/code_audit.py" init --target <dir>
@@ -233,7 +233,7 @@ domain_skill:
                  findings.json, what did it find, worst offenders, ranked]
       description: >-
         Read a report the audit wrote: `report.md` in the report directory
-        gives a coverage table (tracked vs measured files per extension), per-lane
+        gives a coverage table (tracked vs measured files per extension; measured and unread source languages listed, all other files one count), per-lane
         counts and a ranked table (the complexity table only the first `top`
         functions at or above `min_complexity`, plus a complexity distribution
         and the files with no scored function); `findings.json` holds every finding with

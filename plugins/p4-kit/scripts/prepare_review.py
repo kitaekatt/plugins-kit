@@ -1694,6 +1694,567 @@ def materialize_preimage(
     return str(dest)
 
 
+@dataclass
+class _ShelfState:
+    """Describe and shelf observations that build_bundle's phases share.
+
+    Several phases read the shelf lazily and record what they saw, so a later
+    phase reuses an earlier observation instead of querying P4 again.
+    """
+
+    describe: str = ""
+    is_shelved: bool = False
+    shelf_observed: Optional[ShelfScanResult] = None
+    auto_shelved: bool = False
+    shelf_fingerprint: dict[str, str] = field(default_factory=dict)
+    shelf_scan_incomplete: list[dict[str, str]] = field(default_factory=list)
+    opened: Optional[dict[str, str]] = None
+    opened_incomplete: list[dict[str, str]] = field(default_factory=list)
+
+    @property
+    def pending(self) -> bool:
+        return _is_pending(self.describe)
+
+    @property
+    def shelf_not_yet_visible(self) -> bool:
+        """A pending shelved describe whose shelf fingerprint was still empty."""
+        return self.pending and self.is_shelved and not self.shelf_observed.digests
+
+
+def _foreign_skip(scan: str, foreign_change: dict[str, str]) -> dict[str, str]:
+    """The hygiene_incomplete entry for a scan skipped on a foreign client's CL."""
+    return {
+        "scan": scan,
+        "reason": f"skipped for foreign client {foreign_change['client']}",
+    }
+
+
+def _capture_change(
+    cl: str, bundle_dir: Path, workspace_view: Optional[WorkspaceView]
+) -> _ShelfState:
+    """Phase 1: read the describe and the first shelf fingerprint (F0)."""
+    state = _ShelfState()
+    if workspace_view is not None:
+        state.shelf_observed = ShelfScanResult(
+            digests=workspace_view.digests, actions=workspace_view.actions
+        )
+        state.describe, state.is_shelved = workspace_view.describe, False
+        return state
+    # F0 precedes the describe so one Seam B attempt is genuinely bracketed:
+    # fingerprint -> describe/actions/content/queries -> fingerprint. Pending
+    # unshelved changes replace this empty observation with the post-shelve F0.
+    state.shelf_observed = fetch_shelf_fingerprint(cl)
+    try:
+        state.describe, state.is_shelved = fetch_describe(cl)
+    except PendingUnshelvedError:
+        _shelve_unshelved_change(cl, bundle_dir, state)
+    return state
+
+
+def _shelve_unshelved_change(cl: str, bundle_dir: Path, state: _ShelfState) -> None:
+    """Auto-shelve a pending CL with no shelf, unless one appeared meanwhile."""
+    # A shelf can appear after fetch_describe reports an unshelved CL.
+    # Recheck at that boundary, preserve a shelf created by another
+    # process, and use this observation as F0 for the accepted describe.
+    state.shelf_observed = fetch_shelf_fingerprint(cl)
+    if not state.shelf_observed.scan_ok:
+        raise ValueError(
+            f"could not check CL {cl} for a shelf before auto-shelve: "
+            f"{state.shelf_observed.scan_reason}"
+        )
+    if state.shelf_observed.digests:
+        state.describe, state.is_shelved = fetch_describe(cl)
+        return
+    # auto_shelve_cl fetches and validates the post-shelve fingerprint;
+    # capture that result instead of making another post-shelve query.
+    state.shelf_observed = auto_shelve_cl(cl)
+    state.shelf_fingerprint = state.shelf_observed.digests
+    review_shelf.record_created(
+        _review_cl_dir(bundle_dir), cl, state.shelf_observed.digests, state.shelf_observed.actions
+    )
+    state.describe, state.is_shelved = fetch_describe(cl)
+    state.auto_shelved = True
+
+
+def _foreign_owner(describe: str, client_name: Optional[str]) -> Optional[dict[str, str]]:
+    """The CL's owner when it belongs to a client other than this workspace's."""
+    change_owner = _parse_change_owner(describe)
+    if (
+        change_owner is not None
+        and client_name is not None
+        and change_owner["client"] != client_name
+    ):
+        return change_owner
+    return None
+
+
+def _refuse_foreign_claims(
+    cl: str, claim_globs: list[str], foreign_change: Optional[dict[str, str]]
+) -> None:
+    if claim_globs and foreign_change is not None:
+        raise ValueError(
+            f"CL {cl} belongs to foreign client {foreign_change['client']}; "
+            f"claim pre-images require its client workspace -- "
+            f"re-run without --claim for a plain informational review"
+        )
+
+
+def _check_shelf_divergence(
+    cl: str, state: _ShelfState, foreign_change: Optional[dict[str, str]]
+) -> None:
+    """Refuse a pending shelf whose membership or actions differ from its open files."""
+    if not (state.pending and state.is_shelved and not state.auto_shelved):
+        return
+    if state.shelf_observed is None:
+        state.shelf_observed = fetch_shelf_fingerprint(cl)
+    divergence = []
+    if foreign_change is not None:
+        state.opened_incomplete = [_foreign_skip("shelf_opened", foreign_change)]
+    if state.shelf_observed.scan_ok and foreign_change is None:
+        state.opened, state.opened_incomplete = fetch_opened_files(cl)
+        if not state.opened_incomplete:
+            divergence, divergence_incomplete = shelf_divergence(
+                cl, state.shelf_observed, state.opened
+            )
+            state.opened_incomplete += divergence_incomplete
+    elif not state.shelf_observed.scan_ok:
+        state.shelf_scan_incomplete = [
+            {
+                "scan": "shelf_fingerprint",
+                "reason": state.shelf_observed.scan_reason,
+            }
+        ]
+    if divergence:
+        details = "; ".join(
+            f"{item['depot']} ({item['kind']})" for item in divergence
+        )
+        raise ValueError(
+            f"CL {cl} shelf does not match its open files: {details}; "
+            f"repair with p4 shelve -f -c {cl}"
+        )
+
+
+def _refuse_submitted_claims(cl: str, claim_globs: list[str], state: _ShelfState) -> None:
+    # Claim pre-images are materialized from the workspace's #have revision,
+    # which for a SUBMITTED CL is POST-change once the workspace has synced past
+    # it -- so attribution silently inverts. The skill's scope already excludes
+    # submitted CLs; guard the --claim path explicitly with an actionable error.
+    # Without --claim, submitted CLs remain reviewable as plain informational
+    # reviews (behavior untouched).
+    if claim_globs and not state.pending:
+        raise ValueError(
+            f"CL {cl} is submitted; claim pre-images require a pending CL -- "
+            f"re-run without --claim for a plain informational review"
+        )
+
+
+def _shelf_drift_scan(
+    cl: str,
+    state: _ShelfState,
+    foreign_change: Optional[dict[str, str]],
+    local_map: dict[str, Optional[str]],
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Warn when a pending shelf's content differs from the workspace files."""
+    if foreign_change is not None:
+        return [], [_foreign_skip("shelf_drift", foreign_change)]
+    shelf_drift: list[dict[str, str]] = []
+    shelf_drift_incomplete: list[dict[str, str]] = []
+    if not (state.pending and state.is_shelved):
+        return shelf_drift, shelf_drift_incomplete
+    if state.shelf_observed is not None and state.shelf_observed.scan_ok:
+        if state.opened is None:
+            state.opened, state.opened_incomplete = fetch_opened_files(cl)
+        if not state.opened_incomplete:
+            shelf_drift, shelf_drift_incomplete = _shelf_content_drift(
+                state.shelf_observed.digests, state.opened, local_map
+            )
+    if shelf_drift:
+        paths = ", ".join(item["depot"] for item in shelf_drift)
+        print(
+            f"prepare_review: shelf content differs from the workspace for {paths}",
+            file=sys.stderr,
+        )
+    return shelf_drift, shelf_drift_incomplete
+
+
+def _repository_path(
+    depot: str, local_map: dict[str, Optional[str]], workspace_root: Optional[Path]
+) -> str:
+    local = local_map.get(depot)
+    if workspace_root is None or not local:
+        return depot
+    try:
+        return Path(local).resolve().relative_to(workspace_root.resolve()).as_posix()
+    except (OSError, ValueError):
+        return depot
+
+
+def _changed_file_records(
+    depot_files: list[str],
+    local_map: dict[str, Optional[str]],
+    workspace_root: Optional[Path],
+) -> list[dict]:
+    return [
+        {
+            "identifier": depot,
+            "depot": depot,
+            "local": local_map.get(depot),
+            "repository_path": _repository_path(depot, local_map, workspace_root),
+        }
+        for depot in depot_files
+    ]
+
+
+def _materialize_pre_images(
+    files: list[dict],
+    actions: dict[str, tuple[str, str]],
+    claim_globs: list[str],
+    bundle_dir: Path,
+) -> None:
+    """Attach immutable pre-images to the files of a locally owned pending CL.
+
+    A submitted or foreign-client review has no supported pinned base view, so
+    the caller deliberately leaves the post-image precondition unmet there.
+    For a locally owned pending shelf, use each describe record's exact base
+    revision. Within that set, a claimed file always needs one (the triviality
+    guard reads it) and every other file needs one only when a registered
+    mechanical check reads the post-image -- each costs a `p4 print`, so on a
+    large CL the difference is one round-trip per file. Asking the registry
+    rather than assuming means this widens by itself when the first
+    structured-parse check lands. `action` remains an output field only for
+    claims; assemble_bundle strips it from generic changed-file records.
+    """
+    scan_needs_pre_image = requires_pre_image()
+    for f in files:
+        if not (
+            scan_needs_pre_image
+            or matches_claim(f["identifier"], claim_globs)
+        ):
+            continue
+        action = actions.get(f["identifier"], ("", ""))[1]
+        base_revision = actions.get(f["identifier"], ("", ""))[0]
+        f["action"] = action
+        f["pre_image"] = materialize_preimage(
+            f["depot"], action, bundle_dir, base_revision
+        )
+        f["pre_image_is_empty"] = action in _ADD_ACTIONS
+
+
+def _snapshot_seed(
+    client_name: Optional[str],
+    actions: dict[str, tuple[str, str]],
+    shelf: ShelfScanResult,
+) -> Optional[str]:
+    """The Seam B seed, or None when the shelf and the describe disagree."""
+    canonical_actions = "\n".join(
+        f"{depot}\0{revision}\0{action}"
+        for depot, (revision, action) in sorted(actions.items())
+    )
+    canonical_fingerprint = "\n".join(
+        f"{depot}\0{digest}" for depot, digest in sorted(shelf.digests.items())
+    )
+    seed_digest = hashlib.sha256(
+        (canonical_fingerprint + "\n" + canonical_actions).encode("utf-8")
+    ).hexdigest()
+    if set(shelf.digests) != set(actions) or any(
+        shelf.actions.get(depot, action) != action
+        for depot, (_, action) in actions.items()
+    ):
+        return None
+    return f"p4:{client_name}:{seed_digest}"
+
+
+def _pre_image_text(file: dict) -> Optional[str]:
+    if file.get("pre_image_is_empty"):
+        return ""
+    if file.get("pre_image"):
+        try:
+            return Path(file["pre_image"]).read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            return None
+    return None
+
+
+def _markdown_post_image(
+    cl: str, file: dict, revision: str, action: str, section: dict, expected: str
+) -> tuple[Optional[bytes], Optional[str], bool]:
+    """Capture a changed Markdown file's shelved post-image.
+
+    Returns (post-image bytes, diagnostic, seed still valid). The seed is
+    invalidated only when the shelf content contradicts the captured diff or
+    the shelf fingerprint.
+    """
+    reconstructed = build_snapshot(
+        file["repository_path"], section["text"], pre_image_text=_pre_image_text(file)
+    ).post_image_text
+    if reconstructed is None and action in _ADD_ACTIONS:
+        reconstructed = ""
+    if reconstructed is None:
+        return None, "could not reconstruct changed Markdown post-image", True
+    if len(reconstructed.encode("utf-8")) > MAX_SOURCE_BYTES:
+        return None, "changed Markdown post-image exceeds source limit", True
+    content = fetch_file_content(
+        file["depot"], revision, cl, is_shelved=True, is_delete=False
+    )
+    if content is None:
+        return None, "could not fetch changed Markdown shelf content", True
+    if reconstructed != "\n".join(content.splitlines()):
+        return None, "changed Markdown content did not match captured diff", False
+    data = content.encode("utf-8")
+    actual = hashlib.md5(data).hexdigest().upper()
+    if expected and actual != expected:
+        return None, "changed Markdown digest did not match shelf fingerprint", False
+    return data, None, True
+
+
+def _path_effect(
+    cl: str,
+    file: dict,
+    actions: dict[str, tuple[str, str]],
+    shelf: ShelfScanResult,
+    section: Optional[dict],
+) -> tuple[PathEffect, bool]:
+    """One file's Seam B path effect, and whether the snapshot seed survives it."""
+    revision, action = actions.get(file["depot"], ("", ""))
+    repository_path = file["repository_path"]
+    if action in _DELETE_ACTIONS:
+        return PathEffect(repository_path, "delete", cl), True
+    expected = shelf.digests.get(file["depot"], "").upper()
+    data: bytes | None = None
+    diagnostic = None
+    seed_valid = True
+    if section is not None and repository_path.lower().endswith((".md", ".markdown")):
+        data, diagnostic, seed_valid = _markdown_post_image(
+            cl, file, revision, action, section, expected
+        )
+    effect = PathEffect(
+        repository_path,
+        "add" if action in _ADD_ACTIONS else "edit",
+        cl,
+        post_image=data,
+        post_size=len(data) if data is not None else 0,
+        post_identity=expected or None,
+        post_image_error=diagnostic,
+    )
+    return effect, seed_valid
+
+
+def _seam_b_capture(
+    cl: str,
+    state: _ShelfState,
+    foreign_change: Optional[dict[str, str]],
+    workspace_root: Optional[Path],
+    client_name: Optional[str],
+    actions: dict[str, tuple[str, str]],
+    files: list[dict],
+    sections: list[dict],
+) -> tuple[bool, Optional[str], list[PathEffect]]:
+    """Seam B: (supported, snapshot seed, path effects) for a local pending shelf."""
+    seam_b_supported = (
+        foreign_change is None
+        and state.pending
+        and state.is_shelved
+        and workspace_root is not None
+    )
+    if seam_b_supported and state.shelf_observed is None:
+        state.shelf_observed = fetch_shelf_fingerprint(cl)
+    shelf = state.shelf_observed
+    if not (seam_b_supported and shelf is not None and shelf.scan_ok and shelf.digests):
+        return False, None, []
+    snapshot_seed = _snapshot_seed(client_name, actions, shelf)
+    sections_by_depot = {section["identifier"]: section for section in sections}
+    path_effects: list[PathEffect] = []
+    for file in files:
+        effect, seed_valid = _path_effect(
+            cl, file, actions, shelf, sections_by_depot.get(file["depot"])
+        )
+        path_effects.append(effect)
+        if not seed_valid:
+            snapshot_seed = None
+    return True, snapshot_seed, path_effects
+
+
+def _shelf_moved_during_capture(
+    cl: str, state: _ShelfState, snapshot_seed: Optional[str]
+) -> bool:
+    """Read the closing fingerprint and report whether the capture is unusable."""
+    final_fingerprint = fetch_shelf_fingerprint(cl)
+    return (
+        snapshot_seed is None
+        or state.shelf_observed is None
+        or not final_fingerprint.scan_ok
+        or final_fingerprint.digests != state.shelf_observed.digests
+        or final_fingerprint.actions != state.shelf_observed.actions
+    )
+
+
+def _omit_local_link_targets(core: dict) -> None:
+    """Drop the snapshot-dependent link check from a capture the shelf invalidated."""
+    for entry in [*core.get("claimed_files", []), *core.get("diff_chunks", [])]:
+        scan = entry.get("mechanical_scan", {})
+        for record in scan.get("files", []):
+            record["checks_run"] = [
+                check for check in record.get("checks_run", []) if check != "local_link_targets"
+            ]
+            record["findings"] = [
+                finding for finding in record.get("findings", [])
+                if finding.get("check") != "local_link_targets"
+            ]
+            record.setdefault("diagnostics", []).append(
+                "local_link_targets omitted because the P4 shelf changed during capture"
+            )
+    core.pop("snapshot_identity", None)
+
+
+def _hygiene_scans(
+    cl: str,
+    foreign_change: Optional[dict[str, str]],
+    core: dict,
+    workspace_root: Optional[Path],
+    depot_files: list[str],
+    actions: dict[str, tuple[str, str]],
+) -> tuple[dict[str, list[dict]], list[dict[str, str]]]:
+    """Forgotten-file, default-changelist, and unresolved scans for the bundle."""
+    # Foreign ownership is determined before this phase. Keep every client-local
+    # scan inside the non-foreign branch so reviewer workspace state cannot be
+    # attributed to the CL author.
+    if foreign_change is not None:
+        findings: dict[str, list[dict]] = {
+            "unreconciled": [], "default_open": [], "stale_open": [], "unresolved": [],
+        }
+        incomplete = [
+            _foreign_skip(scan, foreign_change)
+            for scan in ("unreconciled", "default_open", "unresolved")
+        ]
+        return findings, incomplete
+    # Seed the hygiene scan from files BEFORE routing, not from changed_files
+    # alone. assemble_bundle has already stripped claimed and machine-emitted
+    # identifiers out of changed_files (their own contract routes them to
+    # claimed_files / machine_emitted_files instead), so a fully-claimed CL
+    # would otherwise collapse to an empty changed_files, compute_minimal_dirs
+    # would return [], find_unreconciled would short-circuit, and p4 would
+    # never be invoked -- the forgotten-files gate would report clean without
+    # running. Mirrors git-kit's hygiene_sources.
+    hygiene_sources = (
+        core["changed_files"]
+        + core.get("claimed_files", [])
+        + (core.get("machine_emitted_files") or core.get("generated_files") or [])
+    )
+    minimal_dirs = compute_minimal_dirs(
+        [f["local"] for f in hygiene_sources], workspace_root
+    )
+    unreconciled_raw, unreconciled_incomplete = find_unreconciled(minimal_dirs)
+    unreconciled, stale_open = _partition_own_depot_files(
+        unreconciled_raw, set(depot_files), actions
+    )
+    default_open, default_open_incomplete = find_default_open(minimal_dirs)
+    unresolved, unresolved_incomplete = find_unresolved(cl)
+    findings = {
+        "unreconciled": unreconciled,
+        "default_open": default_open,
+        "stale_open": stale_open,
+        "unresolved": unresolved,
+    }
+    return findings, unreconciled_incomplete + default_open_incomplete + unresolved_incomplete
+
+
+def _ledger_fields(
+    cl: str,
+    actions: dict[str, tuple[str, str]],
+    state: _ShelfState,
+    ledger_path: Optional[Path],
+) -> tuple[str, list]:
+    """Declined-findings ledger baseline and hits for this CL.
+
+    The baseline folds the CL's shelf fingerprint (content) and per-file
+    (rev, action) map (identity) into one token: when the author reshelves /
+    edits / the CL's revisions move, the baseline changes and previously-declined
+    findings re-surface. The shelf observation is reused when one was captured;
+    otherwise it is a cheap `fstat -Ol` (no content download), tolerant of an
+    absent shelf.
+    """
+    if state.shelf_observed is None:
+        state.shelf_observed = fetch_shelf_fingerprint(cl)
+    ledger_baseline = ledger.baseline_token(
+        {"actions": actions, "shelf": state.shelf_observed.digests}
+    )
+    ledger_hits = ledger.ledger_hits(ledger_path or _ledger_path(), cl, ledger_baseline)
+    return ledger_baseline, ledger_hits
+
+
+def _bundle_record(
+    cl: str,
+    description: str,
+    workspace_root: Optional[Path],
+    core: dict,
+    hygiene: dict[str, list[dict]],
+    hygiene_incomplete: list[dict[str, str]],
+    shelf_drift: list[dict[str, str]],
+    state: _ShelfState,
+    ledger_baseline: str,
+    ledger_hits: list,
+    claim_globs: list[str],
+    foreign_change: Optional[dict[str, str]],
+) -> dict:
+    """The bundle.json record, in its published key order."""
+    bundle: dict = {
+        "cl": cl,
+        "description": description,
+        "project_root": str(workspace_root) if workspace_root else None,
+        "bundle_dir": core["bundle_dir"],
+        "diff_chunks": core["diff_chunks"],
+        "changed_files": core["changed_files"],
+        "unique_claude_mds": core["unique_claude_mds"],
+        "unreconciled": hygiene["unreconciled"],
+        "default_open": hygiene["default_open"],
+        "stale_open": hygiene["stale_open"],
+        "unresolved": hygiene["unresolved"],
+        "hygiene_incomplete": hygiene_incomplete,
+        "shelf_drift": shelf_drift,
+        "submit_gates": core["submit_gates"],
+        "auto_shelved": state.auto_shelved,
+        "shelf_fingerprint": state.shelf_fingerprint,
+        "change_id": cl,
+        "ledger_baseline": ledger_baseline,
+        "ledger_hits": ledger_hits,
+        "mechanical_check_phrases": core["mechanical_check_phrases"],
+        "mechanical_contract": core["mechanical_contract"],
+    }
+    if core.get("snapshot_identity") is not None:
+        bundle["snapshot_identity"] = core["snapshot_identity"]
+    if claim_globs:
+        bundle["claimed_files"] = core.get("claimed_files", [])
+    if foreign_change is not None:
+        bundle["foreign_change"] = foreign_change
+    # Read NEW-key-or-OLD-key: a bootstrap predating the machine_emitted rename
+    # still writes `generated_files`. Tolerating both spellings keeps this kit
+    # order-free against the bootstrap half of the rename -- reading only the new
+    # key against an older bootstrap would silently drop the "not reviewed"
+    # section for files that are ALREADY excluded from the diff chunks.
+    emitted = core.get("machine_emitted_files") or core.get("generated_files")
+    if emitted:
+        bundle["machine_emitted_files"] = emitted
+    return bundle
+
+
+def _rebuild(
+    cl: str,
+    bundle_dir: Path,
+    claim_globs: list[str],
+    ledger_path: Optional[Path],
+    review_machine_emitted: bool,
+) -> dict:
+    """Run build_bundle's single permitted Seam B retry."""
+    return build_bundle(
+        cl,
+        bundle_dir,
+        claim_globs=claim_globs,
+        ledger_path=ledger_path,
+        review_machine_emitted=review_machine_emitted,
+        _seam_b_retry=True,
+    )
+
+
 def build_bundle(
     cl: str,
     bundle_dir: Path,
@@ -1737,299 +2298,44 @@ def build_bundle(
     capture) is skipped, as it is for a submitted CL.
     """
     claim_globs = claim_globs or []
-    auto_shelved = False
-    shelf_fingerprint: dict[str, str] = {}
-    shelf_scan_incomplete: list[dict[str, str]] = []
-    opened: Optional[dict[str, str]] = None
-    opened_incomplete: list[dict[str, str]] = []
-    if workspace_view is not None:
-        shelf_observed = ShelfScanResult(
-            digests=workspace_view.digests, actions=workspace_view.actions
-        )
-        describe, is_shelved = workspace_view.describe, False
-    else:
-        # F0 precedes the describe so one Seam B attempt is genuinely bracketed:
-        # fingerprint -> describe/actions/content/queries -> fingerprint. Pending
-        # unshelved changes replace this empty observation with the post-shelve F0.
-        shelf_observed: Optional[ShelfScanResult] = fetch_shelf_fingerprint(cl)
-        try:
-            describe, is_shelved = fetch_describe(cl)
-        except PendingUnshelvedError:
-            # A shelf can appear after fetch_describe reports an unshelved CL.
-            # Recheck at that boundary, preserve a shelf created by another
-            # process, and use this observation as F0 for the accepted describe.
-            shelf_observed = fetch_shelf_fingerprint(cl)
-            if not shelf_observed.scan_ok:
-                raise ValueError(
-                    f"could not check CL {cl} for a shelf before auto-shelve: "
-                    f"{shelf_observed.scan_reason}"
-                )
-            if shelf_observed.digests:
-                describe, is_shelved = fetch_describe(cl)
-            else:
-                # auto_shelve_cl fetches and validates the post-shelve fingerprint;
-                # capture that result instead of making another post-shelve query.
-                shelf_observed = auto_shelve_cl(cl)
-                shelf_fingerprint = shelf_observed.digests
-                review_shelf.record_created(
-                    _review_cl_dir(bundle_dir), cl, shelf_observed.digests, shelf_observed.actions
-                )
-                describe, is_shelved = fetch_describe(cl)
-                auto_shelved = True
-
-    if _is_pending(describe) and is_shelved and not shelf_observed.digests and not _seam_b_retry:
-        return build_bundle(
-            cl,
-            bundle_dir,
-            claim_globs=claim_globs,
-            ledger_path=ledger_path,
-            review_machine_emitted=review_machine_emitted,
-            _seam_b_retry=True,
-        )
+    state = _capture_change(cl, bundle_dir, workspace_view)
+    if state.shelf_not_yet_visible and not _seam_b_retry:
+        return _rebuild(cl, bundle_dir, claim_globs, ledger_path, review_machine_emitted)
 
     workspace_root, client_name = get_workspace_root()
-    change_owner = _parse_change_owner(describe)
-    foreign_change: Optional[dict[str, str]] = None
-    if (
-        change_owner is not None
-        and client_name is not None
-        and change_owner["client"] != client_name
-    ):
-        foreign_change = change_owner
+    foreign_change = _foreign_owner(state.describe, client_name)
+    _refuse_foreign_claims(cl, claim_globs, foreign_change)
+    _check_shelf_divergence(cl, state, foreign_change)
+    _refuse_submitted_claims(cl, claim_globs, state)
 
-    if claim_globs and foreign_change is not None:
-        raise ValueError(
-            f"CL {cl} belongs to foreign client {foreign_change['client']}; "
-            f"claim pre-images require its client workspace -- "
-            f"re-run without --claim for a plain informational review"
-        )
-
-    if _is_pending(describe) and is_shelved and not auto_shelved:
-        if shelf_observed is None:
-            shelf_observed = fetch_shelf_fingerprint(cl)
-        divergence = []
-        if foreign_change is not None:
-            opened_incomplete = [
-                {
-                    "scan": "shelf_opened",
-                    "reason": f"skipped for foreign client {foreign_change['client']}",
-                }
-            ]
-        if shelf_observed.scan_ok and foreign_change is None:
-            opened, opened_incomplete = fetch_opened_files(cl)
-            if not opened_incomplete:
-                divergence, divergence_incomplete = shelf_divergence(
-                    cl, shelf_observed, opened
-                )
-                opened_incomplete += divergence_incomplete
-        elif not shelf_observed.scan_ok:
-            shelf_scan_incomplete = [
-                {
-                    "scan": "shelf_fingerprint",
-                    "reason": shelf_observed.scan_reason,
-                }
-            ]
-        if divergence:
-            details = "; ".join(
-                f"{item['depot']} ({item['kind']})" for item in divergence
-            )
-            raise ValueError(
-                f"CL {cl} shelf does not match its open files: {details}; "
-                f"repair with p4 shelve -f -c {cl}"
-            )
-
-    # Claim pre-images are materialized from the workspace's #have revision,
-    # which for a SUBMITTED CL is POST-change once the workspace has synced past
-    # it -- so attribution silently inverts. The skill's scope already excludes
-    # submitted CLs; guard the --claim path explicitly with an actionable error.
-    # Without --claim, submitted CLs remain reviewable as plain informational
-    # reviews (behavior untouched).
-    if claim_globs and not _is_pending(describe):
-        raise ValueError(
-            f"CL {cl} is submitted; claim pre-images require a pending CL -- "
-            f"re-run without --claim for a plain informational review"
-        )
-
-    description = parse_description(describe)
-    actions = parse_file_actions(describe)
-    diff = extract_diff(describe, None if workspace_view else actions, cl, is_shelved)
+    description = parse_description(state.describe)
+    actions = parse_file_actions(state.describe)
+    diff = extract_diff(
+        state.describe, None if workspace_view else actions, cl, state.is_shelved
+    )
     # `actions` is the canonical per-file list (Affected/Shelved files section).
     # Pure-add files in mixed shelved CLs may be absent from the Differences
     # section entirely, so deriving the file list from ==== headers undercounts.
     depot_files = list(actions.keys())
     local_map = resolve_local_paths(depot_files)
-
-    shelf_drift: list[dict[str, str]] = []
-    shelf_drift_incomplete: list[dict[str, str]] = []
-    if foreign_change is not None:
-        shelf_drift_incomplete = [
-            {
-                "scan": "shelf_drift",
-                "reason": f"skipped for foreign client {foreign_change['client']}",
-            }
-        ]
-    elif _is_pending(describe) and is_shelved:
-        if shelf_observed is not None and shelf_observed.scan_ok:
-            if opened is None:
-                opened, opened_incomplete = fetch_opened_files(cl)
-            if not opened_incomplete:
-                shelf_drift, shelf_drift_incomplete = _shelf_content_drift(
-                    shelf_observed.digests, opened, local_map
-                )
-        if shelf_drift:
-            paths = ", ".join(item["depot"] for item in shelf_drift)
-            print(
-                f"prepare_review: shelf content differs from the workspace for {paths}",
-                file=sys.stderr,
-            )
+    shelf_drift, shelf_drift_incomplete = _shelf_drift_scan(
+        cl, state, foreign_change, local_map
+    )
 
     preamble, sections = _p4_diff_to_sections(diff)
-    def repository_path(depot: str) -> str:
-        local = local_map.get(depot)
-        if workspace_root is None or not local:
-            return depot
-        try:
-            return Path(local).resolve().relative_to(workspace_root.resolve()).as_posix()
-        except (OSError, ValueError):
-            return depot
-
-    files = [
-        {
-            "identifier": depot,
-            "depot": depot,
-            "local": local_map.get(depot),
-            "repository_path": repository_path(depot),
-        }
-        for depot in depot_files
-    ]
-    # Materialize immutable pre-images for locally-owned pending files. A
-    # submitted or foreign-client review has no supported pinned base view, so
-    # those cases deliberately leave the post-image precondition unmet. For a
-    # locally owned pending shelf, use each describe record's exact base
-    # revision. Within that set, a claimed file always needs one (the triviality
-    # guard reads it) and every other file needs one only when a registered
-    # mechanical check reads the post-image -- each costs a `p4 print`, so on a
-    # large CL the difference is one round-trip per file. Asking the registry
-    # rather than assuming means this widens by itself when the first
-    # structured-parse check lands. `action` remains an output field only for
-    # claims; assemble_bundle strips it from generic changed-file records.
-    if foreign_change is None and _is_pending(describe):
-        scan_needs_pre_image = requires_pre_image()
-        for f in files:
-            if not (
-                scan_needs_pre_image
-                or matches_claim(f["identifier"], claim_globs)
-            ):
-                continue
-            action = actions.get(f["identifier"], ("", ""))[1]
-            base_revision = actions.get(f["identifier"], ("", ""))[0]
-            f["action"] = action
-            f["pre_image"] = materialize_preimage(
-                f["depot"], action, bundle_dir, base_revision
-            )
-            f["pre_image_is_empty"] = action in _ADD_ACTIONS
-
-    seam_b_supported = (
-        foreign_change is None
-        and _is_pending(describe)
-        and is_shelved
-        and workspace_root is not None
+    files = _changed_file_records(depot_files, local_map, workspace_root)
+    if foreign_change is None and state.pending:
+        _materialize_pre_images(files, actions, claim_globs, bundle_dir)
+    seam_b_supported, snapshot_seed, path_effects = _seam_b_capture(
+        cl, state, foreign_change, workspace_root, client_name, actions, files, sections
     )
-    if seam_b_supported and shelf_observed is None:
-        shelf_observed = fetch_shelf_fingerprint(cl)
-    snapshot_seed: str | None = None
-    path_effects: list[PathEffect] = []
-    seam_b_supported = bool(
-        seam_b_supported
-        and shelf_observed is not None
-        and shelf_observed.scan_ok
-        and shelf_observed.digests
-    )
-    if seam_b_supported and shelf_observed is not None:
-        canonical_actions = "\n".join(
-            f"{depot}\0{revision}\0{action}"
-            for depot, (revision, action) in sorted(actions.items())
-        )
-        canonical_fingerprint = "\n".join(
-            f"{depot}\0{digest}" for depot, digest in sorted(shelf_observed.digests.items())
-        )
-        seed_digest = hashlib.sha256(
-            (canonical_fingerprint + "\n" + canonical_actions).encode("utf-8")
-        ).hexdigest()
-        snapshot_seed = f"p4:{client_name}:{seed_digest}"
-        if set(shelf_observed.digests) != set(actions) or any(
-            shelf_observed.actions.get(depot, action) != action
-            for depot, (_, action) in actions.items()
-        ):
-            snapshot_seed = None
-        sections_by_depot = {section["identifier"]: section for section in sections}
-        for file in files:
-            depot = file["depot"]
-            revision, action = actions.get(depot, ("", ""))
-            repository_path = file["repository_path"]
-            if action in _DELETE_ACTIONS:
-                path_effects.append(PathEffect(repository_path, "delete", cl))
-                continue
-            expected = shelf_observed.digests.get(depot, "").upper()
-            data: bytes | None = None
-            diagnostic = None
-            section = sections_by_depot.get(depot)
-            if section is not None and file["repository_path"].lower().endswith((".md", ".markdown")):
-                pre_text: str | None = None
-                if file.get("pre_image_is_empty"):
-                    pre_text = ""
-                elif file.get("pre_image"):
-                    try:
-                        pre_text = Path(file["pre_image"]).read_text(encoding="utf-8")
-                    except (OSError, UnicodeError):
-                        pass
-                reconstructed = build_snapshot(
-                    file["repository_path"], section["text"], pre_image_text=pre_text
-                ).post_image_text
-                if reconstructed is None and action in _ADD_ACTIONS:
-                    reconstructed = ""
-                if reconstructed is None:
-                    diagnostic = "could not reconstruct changed Markdown post-image"
-                elif len(reconstructed.encode("utf-8")) > MAX_SOURCE_BYTES:
-                    diagnostic = "changed Markdown post-image exceeds source limit"
-                else:
-                    content = fetch_file_content(
-                        depot, revision, cl, is_shelved=True, is_delete=False
-                    )
-                    if content is None:
-                        diagnostic = "could not fetch changed Markdown shelf content"
-                    elif reconstructed != "\n".join(content.splitlines()):
-                        diagnostic = "changed Markdown content did not match captured diff"
-                        snapshot_seed = None
-                    else:
-                        data = content.encode("utf-8")
-                        actual = hashlib.md5(data).hexdigest().upper()
-                        if expected and actual != expected:
-                            diagnostic = "changed Markdown digest did not match shelf fingerprint"
-                            data = None
-                            snapshot_seed = None
-            path_effects.append(
-                PathEffect(
-                    repository_path,
-                    "add" if action in _ADD_ACTIONS else "edit",
-                    cl,
-                    post_image=data,
-                    post_size=len(data) if data is not None else 0,
-                    post_identity=expected or None,
-                    post_image_error=diagnostic,
-                )
-            )
+
     skip_machine_emitted_scan = (
         foreign_change is not None and not review_machine_emitted
     )
     machine_emitted_incomplete: list[dict[str, str]] = []
     if skip_machine_emitted_scan:
-        machine_emitted_incomplete = [
-            {
-                "scan": "machine_emitted",
-                "reason": f"skipped for foreign client {foreign_change['client']}",
-            }
-        ]
+        machine_emitted_incomplete = [_foreign_skip("machine_emitted", foreign_change)]
     core = assemble_bundle(
         preamble=preamble,
         sections=sections,
@@ -2054,151 +2360,35 @@ def build_bundle(
         snapshot_reader=(P4SnapshotReader(workspace_root) if seam_b_supported else None),
         mechanical_contract=2,
     )
-    if seam_b_supported:
-        final_fingerprint = fetch_shelf_fingerprint(cl)
-        snapshot_mismatch = (
-            snapshot_seed is None
-            or shelf_observed is None
-            or not final_fingerprint.scan_ok
-            or final_fingerprint.digests != shelf_observed.digests
-            or final_fingerprint.actions != shelf_observed.actions
-        )
-        if snapshot_mismatch and not _seam_b_retry:
-            retried = build_bundle(
-                cl,
-                bundle_dir,
-                claim_globs=claim_globs,
-                ledger_path=ledger_path,
-                review_machine_emitted=review_machine_emitted,
-                _seam_b_retry=True,
-            )
-            if auto_shelved:
+    if seam_b_supported and _shelf_moved_during_capture(cl, state, snapshot_seed):
+        if not _seam_b_retry:
+            retried = _rebuild(cl, bundle_dir, claim_globs, ledger_path, review_machine_emitted)
+            if state.auto_shelved:
                 retried["auto_shelved"] = True
-                retried["shelf_fingerprint"] = shelf_fingerprint
+                retried["shelf_fingerprint"] = state.shelf_fingerprint
             return retried
-        if snapshot_mismatch:
-            for entry in [*core.get("claimed_files", []), *core.get("diff_chunks", [])]:
-                scan = entry.get("mechanical_scan", {})
-                for record in scan.get("files", []):
-                    record["checks_run"] = [
-                        check for check in record.get("checks_run", []) if check != "local_link_targets"
-                    ]
-                    record["findings"] = [
-                        finding for finding in record.get("findings", [])
-                        if finding.get("check") != "local_link_targets"
-                    ]
-                    record.setdefault("diagnostics", []).append(
-                        "local_link_targets omitted because the P4 shelf changed during capture"
-                    )
-            core.pop("snapshot_identity", None)
-    changed_files = core["changed_files"]
+        _omit_local_link_targets(core)
 
-    # Seed the hygiene scan from files BEFORE routing, not from changed_files
-    # alone. assemble_bundle has already stripped claimed and machine-emitted
-    # identifiers out of changed_files (their own contract routes them to
-    # claimed_files / machine_emitted_files instead), so a fully-claimed CL
-    # would otherwise collapse to an empty changed_files, compute_minimal_dirs
-    # would return [], find_unreconciled would short-circuit, and p4 would
-    # never be invoked -- the forgotten-files gate would report clean without
-    # running. Mirrors git-kit's hygiene_sources.
-    hygiene_sources = (
-        changed_files
-        + core.get("claimed_files", [])
-        + (core.get("machine_emitted_files") or core.get("generated_files") or [])
+    hygiene, scan_incomplete = _hygiene_scans(
+        cl, foreign_change, core, workspace_root, depot_files, actions
     )
-    # Foreign ownership is determined before this block. Keep every client-local
-    # scan inside the non-foreign branch so reviewer workspace state cannot be
-    # attributed to the CL author.
-    if foreign_change is not None:
-        skip_reason = f"skipped for foreign client {foreign_change['client']}"
-        unreconciled: list[dict] = []
-        default_open: list[dict] = []
-        stale_open: list[dict] = []
-        unresolved: list[dict] = []
-        unreconciled_incomplete = [
-            {"scan": "unreconciled", "reason": skip_reason}
-        ]
-        default_open_incomplete = [
-            {"scan": "default_open", "reason": skip_reason}
-        ]
-        unresolved_incomplete = [
-            {"scan": "unresolved", "reason": skip_reason}
-        ]
-    else:
-        minimal_dirs = compute_minimal_dirs(
-            [f["local"] for f in hygiene_sources], workspace_root
-        )
-        unreconciled_raw, unreconciled_incomplete = find_unreconciled(minimal_dirs)
-        unreconciled, stale_open = _partition_own_depot_files(
-            unreconciled_raw, set(depot_files), actions
-        )
-        default_open, default_open_incomplete = find_default_open(minimal_dirs)
-        unresolved, unresolved_incomplete = find_unresolved(cl)
     # A failed scan must never serialize as an empty list indistinguishable
     # from "ran and found nothing" -- hygiene_incomplete is always present
     # (empty when all applicable scans ran cleanly) and names which scan(s)
     # could not complete and why. See find_unreconciled / find_unresolved.
     hygiene_incomplete = (
-        unreconciled_incomplete
-        + default_open_incomplete
-        + unresolved_incomplete
-        + shelf_scan_incomplete
-        + opened_incomplete
+        scan_incomplete
+        + state.shelf_scan_incomplete
+        + state.opened_incomplete
         + shelf_drift_incomplete
         + machine_emitted_incomplete
     )
+    ledger_baseline, ledger_hits = _ledger_fields(cl, actions, state, ledger_path)
 
-    # Declined-findings ledger. The baseline folds the CL's shelf fingerprint
-    # (content) and per-file (rev, action) map (identity) into one token: when
-    # the author reshelves / edits / the CL's revisions move, the baseline
-    # changes and previously-declined findings re-surface. `shelf_now` reuses
-    # the just-captured fingerprint when we auto-shelved; otherwise it is a
-    # cheap `fstat -Ol` (no content download), tolerant of an absent shelf.
-    if shelf_observed is None:
-        shelf_observed = fetch_shelf_fingerprint(cl)
-    shelf_now = shelf_observed.digests
-    ledger_baseline = ledger.baseline_token({"actions": actions, "shelf": shelf_now})
-    change_id = cl
-    ledger_hits = ledger.ledger_hits(ledger_path or _ledger_path(), change_id, ledger_baseline)
-
-    bundle: dict = {
-        "cl": cl,
-        "description": description,
-        "project_root": str(workspace_root) if workspace_root else None,
-        "bundle_dir": core["bundle_dir"],
-        "diff_chunks": core["diff_chunks"],
-        "changed_files": changed_files,
-        "unique_claude_mds": core["unique_claude_mds"],
-        "unreconciled": unreconciled,
-        "default_open": default_open,
-        "stale_open": stale_open,
-        "unresolved": unresolved,
-        "hygiene_incomplete": hygiene_incomplete,
-        "shelf_drift": shelf_drift,
-        "submit_gates": core["submit_gates"],
-        "auto_shelved": auto_shelved,
-        "shelf_fingerprint": shelf_fingerprint,
-        "change_id": change_id,
-        "ledger_baseline": ledger_baseline,
-        "ledger_hits": ledger_hits,
-        "mechanical_check_phrases": core["mechanical_check_phrases"],
-        "mechanical_contract": core["mechanical_contract"],
-    }
-    if core.get("snapshot_identity") is not None:
-        bundle["snapshot_identity"] = core["snapshot_identity"]
-    if claim_globs:
-        bundle["claimed_files"] = core.get("claimed_files", [])
-    if foreign_change is not None:
-        bundle["foreign_change"] = foreign_change
-    # Read NEW-key-or-OLD-key: a bootstrap predating the machine_emitted rename
-    # still writes `generated_files`. Tolerating both spellings keeps this kit
-    # order-free against the bootstrap half of the rename -- reading only the new
-    # key against an older bootstrap would silently drop the "not reviewed"
-    # section for files that are ALREADY excluded from the diff chunks.
-    emitted = core.get("machine_emitted_files") or core.get("generated_files")
-    if emitted:
-        bundle["machine_emitted_files"] = emitted
-    return bundle
+    return _bundle_record(
+        cl, description, workspace_root, core, hygiene, hygiene_incomplete,
+        shelf_drift, state, ledger_baseline, ledger_hits, claim_globs, foreign_change,
+    )
 
 
 _FREEZE_SCHEMA_VERSION = 1

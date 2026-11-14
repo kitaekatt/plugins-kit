@@ -45,7 +45,7 @@
     {
       "name": "p4-kit",
       "description": "Multi-agent code review for pending Perforce changelists (/p4-code-review) -- auto-shelves, reviews, cleans up.",
-      "version": "0.72.1",
+      "version": "0.72.2",
       "author": {
         "name": "Christina"
       },
@@ -230,7 +230,7 @@
     {
       "name": "clean-code-kit",
       "description": "Which code in a git repository is duplicated or most complex: runs pinned metric tools over a snapshot of the repository and writes a ranked findings report for the developer to act on.",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "author": {
         "name": "Christina"
       },

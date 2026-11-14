@@ -35,3 +35,23 @@ def lane_extensions(lane: str) -> set[str]:
 def supported_extensions() -> set[str]:
     """Extensions at least one lane reads."""
     return {ext for lane in LANE_LANGUAGES for ext in lane_extensions(lane)}
+
+
+# Extensions of source languages, whether or not any lane reads them. The coverage
+# table and init show the ones no lane reads, so an unread language is not buried
+# among asset extensions. Compared in lower case.
+SOURCE_EXTENSIONS: frozenset[str] = frozenset(
+    "." + name for name in (
+        "py js jsx mjs cjs ts tsx mts cts gd c h cc cpp hpp cs go rs java kt swift rb php lua "
+        "scala clj cljs ex exs sh zig dart m mm").split())
+
+KIND_MEASURED = "measured"
+KIND_SOURCE_UNMEASURED = "source-unmeasured"
+KIND_OTHER = "other"
+
+
+def kind_of(ext: str) -> str:
+    """``measured`` when some lane reads ``ext``, ``source-unmeasured`` for another source language, else ``other``."""
+    if ext in supported_extensions():
+        return KIND_MEASURED
+    return KIND_SOURCE_UNMEASURED if ext in SOURCE_EXTENSIONS else KIND_OTHER

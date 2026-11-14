@@ -1,0 +1,8237 @@
+{
+ "auto_shelve_then_retry_keeps_ownership": {
+  "assembled": [
+   {
+    "claim_globs": [],
+    "files": [
+     {
+      "action": "edit",
+      "depot": "//depot/guide.md",
+      "identifier": "//depot/guide.md",
+      "local": "<TMP>/ws/guide.md",
+      "pre_image": "<TMP>/bundle/pre/guide.md",
+      "pre_image_is_empty": false,
+      "repository_path": "guide.md"
+     },
+     {
+      "action": "add",
+      "depot": "//depot/new.md",
+      "identifier": "//depot/new.md",
+      "local": "<TMP>/ws/new.md",
+      "pre_image": "<TMP>/bundle/pre/new.md",
+      "pre_image_is_empty": true,
+      "repository_path": "new.md"
+     },
+     {
+      "action": "edit",
+      "depot": "//depot/a.py",
+      "identifier": "//depot/a.py",
+      "local": "<TMP>/ws/a.py",
+      "pre_image": "<TMP>/bundle/pre/a.py",
+      "pre_image_is_empty": false,
+      "repository_path": "a.py"
+     },
+     {
+      "action": "delete",
+      "depot": "//depot/old.py",
+      "identifier": "//depot/old.py",
+      "local": "<TMP>/ws/old.py",
+      "pre_image": "<TMP>/bundle/pre/old.py",
+      "pre_image_is_empty": false,
+      "repository_path": "old.py"
+     }
+    ],
+    "mechanical_contract": 2,
+    "path_effects": [
+     {
+      "effect": "edit",
+      "path": "guide.md",
+      "post_identity": "0C0B4E6264F502CDFB93C0981A7FA445",
+      "post_image": "intro\nnew\n",
+      "post_image_error": null,
+      "post_size": 10,
+      "review_id": "77"
+     },
+     {
+      "effect": "add",
+      "path": "new.md",
+      "post_identity": "B1946AC92492D2347C6235B4D2611184",
+      "post_image": "hello\n",
+      "post_image_error": null,
+      "post_size": 6,
+      "review_id": "77"
+     },
+     {
+      "effect": "edit",
+      "path": "a.py",
+      "post_identity": "3D688704CBBC6753B2002C94A2AD19AC",
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     },
+     {
+      "effect": "delete",
+      "path": "old.py",
+      "post_identity": null,
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     }
+    ],
+    "review_generated": false,
+    "snapshot_reader": "P4SnapshotReader",
+    "snapshot_seed": "p4:client:62cad7806a211f4a5bacb0c8f1c016fbe0c5f376c0135d3264bf451744d28d8d",
+    "workspace_root": "<TMP>/ws"
+   },
+   {
+    "claim_globs": [],
+    "files": [
+     {
+      "action": "edit",
+      "depot": "//depot/guide.md",
+      "identifier": "//depot/guide.md",
+      "local": "<TMP>/ws/guide.md",
+      "pre_image": "<TMP>/bundle/pre/guide.md",
+      "pre_image_is_empty": false,
+      "repository_path": "guide.md"
+     },
+     {
+      "action": "add",
+      "depot": "//depot/new.md",
+      "identifier": "//depot/new.md",
+      "local": "<TMP>/ws/new.md",
+      "pre_image": "<TMP>/bundle/pre/new.md",
+      "pre_image_is_empty": true,
+      "repository_path": "new.md"
+     },
+     {
+      "action": "edit",
+      "depot": "//depot/a.py",
+      "identifier": "//depot/a.py",
+      "local": "<TMP>/ws/a.py",
+      "pre_image": "<TMP>/bundle/pre/a.py",
+      "pre_image_is_empty": false,
+      "repository_path": "a.py"
+     },
+     {
+      "action": "delete",
+      "depot": "//depot/old.py",
+      "identifier": "//depot/old.py",
+      "local": "<TMP>/ws/old.py",
+      "pre_image": "<TMP>/bundle/pre/old.py",
+      "pre_image_is_empty": false,
+      "repository_path": "old.py"
+     }
+    ],
+    "mechanical_contract": 2,
+    "path_effects": [
+     {
+      "effect": "edit",
+      "path": "guide.md",
+      "post_identity": "0C0B4E6264F502CDFB93C0981A7FA445",
+      "post_image": "intro\nnew\n",
+      "post_image_error": null,
+      "post_size": 10,
+      "review_id": "77"
+     },
+     {
+      "effect": "add",
+      "path": "new.md",
+      "post_identity": "B1946AC92492D2347C6235B4D2611184",
+      "post_image": "hello\n",
+      "post_image_error": null,
+      "post_size": 6,
+      "review_id": "77"
+     },
+     {
+      "effect": "edit",
+      "path": "a.py",
+      "post_identity": "3D688704CBBC6753B2002C94A2AD19AC",
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     },
+     {
+      "effect": "delete",
+      "path": "old.py",
+      "post_identity": null,
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     }
+    ],
+    "review_generated": false,
+    "snapshot_reader": "P4SnapshotReader",
+    "snapshot_seed": "p4:client:62cad7806a211f4a5bacb0c8f1c016fbe0c5f376c0135d3264bf451744d28d8d",
+    "workspace_root": "<TMP>/ws"
+   }
+  ],
+  "bundle": {
+   "auto_shelved": true,
+   "bundle_dir": "<TMP>/bundle",
+   "change_id": "77",
+   "changed_files": [
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/guide.md",
+     "local": "<TMP>/ws/guide.md",
+     "mechanical_findings": [],
+     "repository_path": "guide.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/new.md",
+     "local": "<TMP>/ws/new.md",
+     "mechanical_findings": [],
+     "repository_path": "new.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/a.py",
+     "local": "<TMP>/ws/a.py",
+     "mechanical_findings": [],
+     "repository_path": "a.py"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/old.py",
+     "local": "<TMP>/ws/old.py",
+     "mechanical_findings": [],
+     "repository_path": "old.py"
+    }
+   ],
+   "cl": "77",
+   "default_open": [],
+   "description": "Refactor the guide",
+   "diff_chunks": [
+    {
+     "bytes": 240,
+     "files": [
+      "//depot/guide.md",
+      "//depot/new.md",
+      "//depot/a.py",
+      "//depot/old.py"
+     ],
+     "index": 0,
+     "mechanical_findings": [],
+     "mechanical_scan": {
+      "files": [
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path",
+         "local_link_targets"
+        ],
+        "file": "//depot/guide.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path",
+         "local_link_targets"
+        ],
+        "file": "//depot/new.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         ".python-version: Python version mapping is error"
+        ],
+        "file": "//depot/a.py",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "file": "//depot/old.py",
+        "findings": [],
+        "mechanical_contract": 2
+       }
+      ],
+      "schema_version": 2
+     },
+     "path": "chunks/chunk-000.diff"
+    }
+   ],
+   "hygiene_incomplete": [],
+   "ledger_baseline": "d160346ca0de4923",
+   "ledger_hits": [],
+   "mechanical_check_phrases": {
+    "abs_path": "absolute paths",
+    "column_counts": "CSV/TSV column counts",
+    "duplicate_keys": "duplicate keys",
+    "local_link_targets": "local file and Markdown link targets",
+    "non_ascii": "non-ASCII characters",
+    "python_syntax": "CPython syntax under nearest snapshot .python-version (whole post-image; first compiler diagnostic)",
+    "structured_parse": "structured-data parse failures (whole post-image; first parser diagnostic)"
+   },
+   "mechanical_contract": 2,
+   "project_root": "<TMP>/ws",
+   "shelf_drift": [],
+   "shelf_fingerprint": {
+    "//depot/a.py": "3D688704CBBC6753B2002C94A2AD19AC",
+    "//depot/guide.md": "0C0B4E6264F502CDFB93C0981A7FA445",
+    "//depot/new.md": "B1946AC92492D2347C6235B4D2611184",
+    "//depot/old.py": ""
+   },
+   "snapshot_identity": "p4:client:5348ddf463122bbac31c1130eb5d444084c2aea586f3692cf7cc84ce914a0e11",
+   "stale_open": [],
+   "submit_gates": [],
+   "unique_claude_mds": [
+    "<TMP>/ws/CLAUDE.md"
+   ],
+   "unreconciled": [],
+   "unresolved": []
+  },
+  "calls": [
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "auto_shelve_cl",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "get_workspace_root"
+   ],
+   [
+    "resolve_local_paths",
+    [
+     "//depot/guide.md",
+     "//depot/new.md",
+     "//depot/a.py",
+     "//depot/old.py"
+    ]
+   ],
+   [
+    "fetch_opened_files",
+    "77"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/guide.md",
+    "edit",
+    "3"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/new.md",
+    "add",
+    "1"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/a.py",
+    "edit",
+    "5"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/old.py",
+    "delete",
+    "2"
+   ],
+   [
+    "fetch_file_content",
+    "//depot/guide.md",
+    "3",
+    "77",
+    true,
+    false
+   ],
+   [
+    "fetch_file_content",
+    "//depot/new.md",
+    "1",
+    "77",
+    true,
+    false
+   ],
+   [
+    "run_p4",
+    [
+     "-ztag",
+     "where",
+     "<TMP>/ws/.python-version"
+    ]
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "get_workspace_root"
+   ],
+   [
+    "fetch_opened_files",
+    "77"
+   ],
+   [
+    "resolve_local_paths",
+    [
+     "//depot/guide.md",
+     "//depot/new.md",
+     "//depot/a.py",
+     "//depot/old.py"
+    ]
+   ],
+   [
+    "materialize_preimage",
+    "//depot/guide.md",
+    "edit",
+    "3"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/new.md",
+    "add",
+    "1"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/a.py",
+    "edit",
+    "5"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/old.py",
+    "delete",
+    "2"
+   ],
+   [
+    "fetch_file_content",
+    "//depot/guide.md",
+    "3",
+    "77",
+    true,
+    false
+   ],
+   [
+    "fetch_file_content",
+    "//depot/new.md",
+    "1",
+    "77",
+    true,
+    false
+   ],
+   [
+    "run_p4",
+    [
+     "-ztag",
+     "where",
+     "<TMP>/ws/.python-version"
+    ]
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "find_unreconciled",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_default_open",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_unresolved",
+    "77"
+   ]
+  ],
+  "stderr": ""
+ },
+ "auto_shelve_then_stable": {
+  "assembled": [
+   {
+    "claim_globs": [],
+    "files": [
+     {
+      "action": "edit",
+      "depot": "//depot/guide.md",
+      "identifier": "//depot/guide.md",
+      "local": "<TMP>/ws/guide.md",
+      "pre_image": "<TMP>/bundle/pre/guide.md",
+      "pre_image_is_empty": false,
+      "repository_path": "guide.md"
+     },
+     {
+      "action": "add",
+      "depot": "//depot/new.md",
+      "identifier": "//depot/new.md",
+      "local": "<TMP>/ws/new.md",
+      "pre_image": "<TMP>/bundle/pre/new.md",
+      "pre_image_is_empty": true,
+      "repository_path": "new.md"
+     },
+     {
+      "action": "edit",
+      "depot": "//depot/a.py",
+      "identifier": "//depot/a.py",
+      "local": "<TMP>/ws/a.py",
+      "pre_image": "<TMP>/bundle/pre/a.py",
+      "pre_image_is_empty": false,
+      "repository_path": "a.py"
+     },
+     {
+      "action": "delete",
+      "depot": "//depot/old.py",
+      "identifier": "//depot/old.py",
+      "local": "<TMP>/ws/old.py",
+      "pre_image": "<TMP>/bundle/pre/old.py",
+      "pre_image_is_empty": false,
+      "repository_path": "old.py"
+     }
+    ],
+    "mechanical_contract": 2,
+    "path_effects": [
+     {
+      "effect": "edit",
+      "path": "guide.md",
+      "post_identity": "0C0B4E6264F502CDFB93C0981A7FA445",
+      "post_image": "intro\nnew\n",
+      "post_image_error": null,
+      "post_size": 10,
+      "review_id": "77"
+     },
+     {
+      "effect": "add",
+      "path": "new.md",
+      "post_identity": "B1946AC92492D2347C6235B4D2611184",
+      "post_image": "hello\n",
+      "post_image_error": null,
+      "post_size": 6,
+      "review_id": "77"
+     },
+     {
+      "effect": "edit",
+      "path": "a.py",
+      "post_identity": "3D688704CBBC6753B2002C94A2AD19AC",
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     },
+     {
+      "effect": "delete",
+      "path": "old.py",
+      "post_identity": null,
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     }
+    ],
+    "review_generated": false,
+    "snapshot_reader": "P4SnapshotReader",
+    "snapshot_seed": "p4:client:62cad7806a211f4a5bacb0c8f1c016fbe0c5f376c0135d3264bf451744d28d8d",
+    "workspace_root": "<TMP>/ws"
+   }
+  ],
+  "bundle": {
+   "auto_shelved": true,
+   "bundle_dir": "<TMP>/bundle",
+   "change_id": "77",
+   "changed_files": [
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/guide.md",
+     "local": "<TMP>/ws/guide.md",
+     "mechanical_findings": [],
+     "repository_path": "guide.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/new.md",
+     "local": "<TMP>/ws/new.md",
+     "mechanical_findings": [],
+     "repository_path": "new.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/a.py",
+     "local": "<TMP>/ws/a.py",
+     "mechanical_findings": [],
+     "repository_path": "a.py"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/old.py",
+     "local": "<TMP>/ws/old.py",
+     "mechanical_findings": [],
+     "repository_path": "old.py"
+    }
+   ],
+   "cl": "77",
+   "default_open": [],
+   "description": "Refactor the guide",
+   "diff_chunks": [
+    {
+     "bytes": 240,
+     "files": [
+      "//depot/guide.md",
+      "//depot/new.md",
+      "//depot/a.py",
+      "//depot/old.py"
+     ],
+     "index": 0,
+     "mechanical_findings": [],
+     "mechanical_scan": {
+      "files": [
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path",
+         "local_link_targets"
+        ],
+        "file": "//depot/guide.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path",
+         "local_link_targets"
+        ],
+        "file": "//depot/new.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         ".python-version: Python version mapping is error"
+        ],
+        "file": "//depot/a.py",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "file": "//depot/old.py",
+        "findings": [],
+        "mechanical_contract": 2
+       }
+      ],
+      "schema_version": 2
+     },
+     "path": "chunks/chunk-000.diff"
+    }
+   ],
+   "hygiene_incomplete": [],
+   "ledger_baseline": "d160346ca0de4923",
+   "ledger_hits": [],
+   "mechanical_check_phrases": {
+    "abs_path": "absolute paths",
+    "column_counts": "CSV/TSV column counts",
+    "duplicate_keys": "duplicate keys",
+    "local_link_targets": "local file and Markdown link targets",
+    "non_ascii": "non-ASCII characters",
+    "python_syntax": "CPython syntax under nearest snapshot .python-version (whole post-image; first compiler diagnostic)",
+    "structured_parse": "structured-data parse failures (whole post-image; first parser diagnostic)"
+   },
+   "mechanical_contract": 2,
+   "project_root": "<TMP>/ws",
+   "shelf_drift": [],
+   "shelf_fingerprint": {
+    "//depot/a.py": "3D688704CBBC6753B2002C94A2AD19AC",
+    "//depot/guide.md": "0C0B4E6264F502CDFB93C0981A7FA445",
+    "//depot/new.md": "B1946AC92492D2347C6235B4D2611184",
+    "//depot/old.py": ""
+   },
+   "snapshot_identity": "p4:client:5348ddf463122bbac31c1130eb5d444084c2aea586f3692cf7cc84ce914a0e11",
+   "stale_open": [],
+   "submit_gates": [],
+   "unique_claude_mds": [
+    "<TMP>/ws/CLAUDE.md"
+   ],
+   "unreconciled": [],
+   "unresolved": []
+  },
+  "calls": [
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "auto_shelve_cl",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "get_workspace_root"
+   ],
+   [
+    "resolve_local_paths",
+    [
+     "//depot/guide.md",
+     "//depot/new.md",
+     "//depot/a.py",
+     "//depot/old.py"
+    ]
+   ],
+   [
+    "fetch_opened_files",
+    "77"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/guide.md",
+    "edit",
+    "3"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/new.md",
+    "add",
+    "1"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/a.py",
+    "edit",
+    "5"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/old.py",
+    "delete",
+    "2"
+   ],
+   [
+    "fetch_file_content",
+    "//depot/guide.md",
+    "3",
+    "77",
+    true,
+    false
+   ],
+   [
+    "fetch_file_content",
+    "//depot/new.md",
+    "1",
+    "77",
+    true,
+    false
+   ],
+   [
+    "run_p4",
+    [
+     "-ztag",
+     "where",
+     "<TMP>/ws/.python-version"
+    ]
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "find_unreconciled",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_default_open",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_unresolved",
+    "77"
+   ]
+  ],
+  "stderr": ""
+ },
+ "foreign_client": {
+  "assembled": [
+   {
+    "claim_globs": [],
+    "files": [
+     {
+      "depot": "//depot/guide.md",
+      "identifier": "//depot/guide.md",
+      "local": "<TMP>/ws/guide.md",
+      "repository_path": "guide.md"
+     },
+     {
+      "depot": "//depot/new.md",
+      "identifier": "//depot/new.md",
+      "local": "<TMP>/ws/new.md",
+      "repository_path": "new.md"
+     },
+     {
+      "depot": "//depot/a.py",
+      "identifier": "//depot/a.py",
+      "local": "<TMP>/ws/a.py",
+      "repository_path": "a.py"
+     },
+     {
+      "depot": "//depot/old.py",
+      "identifier": "//depot/old.py",
+      "local": "<TMP>/ws/old.py",
+      "repository_path": "old.py"
+     }
+    ],
+    "mechanical_contract": 2,
+    "path_effects": [],
+    "review_generated": true,
+    "snapshot_reader": null,
+    "snapshot_seed": null,
+    "workspace_root": "<TMP>/ws"
+   }
+  ],
+  "bundle": {
+   "auto_shelved": false,
+   "bundle_dir": "<TMP>/bundle",
+   "change_id": "77",
+   "changed_files": [
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/guide.md",
+     "local": "<TMP>/ws/guide.md",
+     "mechanical_findings": [],
+     "repository_path": "guide.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/new.md",
+     "local": "<TMP>/ws/new.md",
+     "mechanical_findings": [],
+     "repository_path": "new.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/a.py",
+     "local": "<TMP>/ws/a.py",
+     "mechanical_findings": [],
+     "repository_path": "a.py"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/old.py",
+     "local": "<TMP>/ws/old.py",
+     "mechanical_findings": [],
+     "repository_path": "old.py"
+    }
+   ],
+   "cl": "77",
+   "default_open": [],
+   "description": "Refactor the guide",
+   "diff_chunks": [
+    {
+     "bytes": 240,
+     "files": [
+      "//depot/guide.md",
+      "//depot/new.md",
+      "//depot/a.py",
+      "//depot/old.py"
+     ],
+     "index": 0,
+     "mechanical_findings": [],
+     "mechanical_scan": {
+      "files": [
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "file": "//depot/guide.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "file": "//depot/new.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         "Python post-image unavailable"
+        ],
+        "file": "//depot/a.py",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         "Python post-image unavailable"
+        ],
+        "file": "//depot/old.py",
+        "findings": [],
+        "mechanical_contract": 2
+       }
+      ],
+      "schema_version": 2
+     },
+     "path": "chunks/chunk-000.diff"
+    }
+   ],
+   "foreign_change": {
+    "client": "author-ws",
+    "user": "author"
+   },
+   "hygiene_incomplete": [
+    {
+     "reason": "skipped for foreign client author-ws",
+     "scan": "unreconciled"
+    },
+    {
+     "reason": "skipped for foreign client author-ws",
+     "scan": "default_open"
+    },
+    {
+     "reason": "skipped for foreign client author-ws",
+     "scan": "unresolved"
+    },
+    {
+     "reason": "skipped for foreign client author-ws",
+     "scan": "shelf_opened"
+    },
+    {
+     "reason": "skipped for foreign client author-ws",
+     "scan": "shelf_drift"
+    },
+    {
+     "reason": "skipped for foreign client author-ws",
+     "scan": "machine_emitted"
+    }
+   ],
+   "ledger_baseline": "d160346ca0de4923",
+   "ledger_hits": [],
+   "mechanical_check_phrases": {
+    "abs_path": "absolute paths",
+    "column_counts": "CSV/TSV column counts",
+    "duplicate_keys": "duplicate keys",
+    "local_link_targets": "local file and Markdown link targets",
+    "non_ascii": "non-ASCII characters",
+    "python_syntax": "CPython syntax under nearest snapshot .python-version (whole post-image; first compiler diagnostic)",
+    "structured_parse": "structured-data parse failures (whole post-image; first parser diagnostic)"
+   },
+   "mechanical_contract": 2,
+   "project_root": "<TMP>/ws",
+   "shelf_drift": [],
+   "shelf_fingerprint": {},
+   "stale_open": [],
+   "submit_gates": [],
+   "unique_claude_mds": [
+    "<TMP>/ws/CLAUDE.md"
+   ],
+   "unreconciled": [],
+   "unresolved": []
+  },
+  "calls": [
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "get_workspace_root"
+   ],
+   [
+    "resolve_local_paths",
+    [
+     "//depot/guide.md",
+     "//depot/new.md",
+     "//depot/a.py",
+     "//depot/old.py"
+    ]
+   ]
+  ],
+  "stderr": ""
+ },
+ "foreign_client_review_machine_emitted": {
+  "assembled": [
+   {
+    "claim_globs": [],
+    "files": [
+     {
+      "depot": "//depot/guide.md",
+      "identifier": "//depot/guide.md",
+      "local": "<TMP>/ws/guide.md",
+      "repository_path": "guide.md"
+     },
+     {
+      "depot": "//depot/new.md",
+      "identifier": "//depot/new.md",
+      "local": "<TMP>/ws/new.md",
+      "repository_path": "new.md"
+     },
+     {
+      "depot": "//depot/a.py",
+      "identifier": "//depot/a.py",
+      "local": "<TMP>/ws/a.py",
+      "repository_path": "a.py"
+     },
+     {
+      "depot": "//depot/old.py",
+      "identifier": "//depot/old.py",
+      "local": "<TMP>/ws/old.py",
+      "repository_path": "old.py"
+     }
+    ],
+    "mechanical_contract": 2,
+    "path_effects": [],
+    "review_generated": true,
+    "snapshot_reader": null,
+    "snapshot_seed": null,
+    "workspace_root": "<TMP>/ws"
+   }
+  ],
+  "bundle": {
+   "auto_shelved": false,
+   "bundle_dir": "<TMP>/bundle",
+   "change_id": "77",
+   "changed_files": [
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/guide.md",
+     "local": "<TMP>/ws/guide.md",
+     "mechanical_findings": [],
+     "repository_path": "guide.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/new.md",
+     "local": "<TMP>/ws/new.md",
+     "mechanical_findings": [],
+     "repository_path": "new.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/a.py",
+     "local": "<TMP>/ws/a.py",
+     "mechanical_findings": [],
+     "repository_path": "a.py"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/old.py",
+     "local": "<TMP>/ws/old.py",
+     "mechanical_findings": [],
+     "repository_path": "old.py"
+    }
+   ],
+   "cl": "77",
+   "default_open": [],
+   "description": "Refactor the guide",
+   "diff_chunks": [
+    {
+     "bytes": 240,
+     "files": [
+      "//depot/guide.md",
+      "//depot/new.md",
+      "//depot/a.py",
+      "//depot/old.py"
+     ],
+     "index": 0,
+     "mechanical_findings": [],
+     "mechanical_scan": {
+      "files": [
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "file": "//depot/guide.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "file": "//depot/new.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         "Python post-image unavailable"
+        ],
+        "file": "//depot/a.py",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         "Python post-image unavailable"
+        ],
+        "file": "//depot/old.py",
+        "findings": [],
+        "mechanical_contract": 2
+       }
+      ],
+      "schema_version": 2
+     },
+     "path": "chunks/chunk-000.diff"
+    }
+   ],
+   "foreign_change": {
+    "client": "author-ws",
+    "user": "author"
+   },
+   "hygiene_incomplete": [
+    {
+     "reason": "skipped for foreign client author-ws",
+     "scan": "unreconciled"
+    },
+    {
+     "reason": "skipped for foreign client author-ws",
+     "scan": "default_open"
+    },
+    {
+     "reason": "skipped for foreign client author-ws",
+     "scan": "unresolved"
+    },
+    {
+     "reason": "skipped for foreign client author-ws",
+     "scan": "shelf_opened"
+    },
+    {
+     "reason": "skipped for foreign client author-ws",
+     "scan": "shelf_drift"
+    }
+   ],
+   "ledger_baseline": "d160346ca0de4923",
+   "ledger_hits": [],
+   "mechanical_check_phrases": {
+    "abs_path": "absolute paths",
+    "column_counts": "CSV/TSV column counts",
+    "duplicate_keys": "duplicate keys",
+    "local_link_targets": "local file and Markdown link targets",
+    "non_ascii": "non-ASCII characters",
+    "python_syntax": "CPython syntax under nearest snapshot .python-version (whole post-image; first compiler diagnostic)",
+    "structured_parse": "structured-data parse failures (whole post-image; first parser diagnostic)"
+   },
+   "mechanical_contract": 2,
+   "project_root": "<TMP>/ws",
+   "shelf_drift": [],
+   "shelf_fingerprint": {},
+   "stale_open": [],
+   "submit_gates": [],
+   "unique_claude_mds": [
+    "<TMP>/ws/CLAUDE.md"
+   ],
+   "unreconciled": [],
+   "unresolved": []
+  },
+  "calls": [
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "get_workspace_root"
+   ],
+   [
+    "resolve_local_paths",
+    [
+     "//depot/guide.md",
+     "//depot/new.md",
+     "//depot/a.py",
+     "//depot/old.py"
+    ]
+   ]
+  ],
+  "stderr": ""
+ },
+ "foreign_client_with_claim_refused": {
+  "assembled": [],
+  "calls": [
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "get_workspace_root"
+   ]
+  ],
+  "error": [
+   "ValueError",
+   "CL 77 belongs to foreign client author-ws; claim pre-images require its client workspace -- re-run without --claim for a plain informational review"
+  ],
+  "stderr": ""
+ },
+ "pending_divergence_refused": {
+  "assembled": [],
+  "calls": [
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "get_workspace_root"
+   ],
+   [
+    "fetch_opened_files",
+    "77"
+   ]
+  ],
+  "error": [
+   "ValueError",
+   "CL 77 shelf does not match its open files: //depot/extra.py (opened after shelving); repair with p4 shelve -f -c 77"
+  ],
+  "stderr": ""
+ },
+ "pending_empty_fingerprint_retries_at_top": {
+  "assembled": [
+   {
+    "claim_globs": [],
+    "files": [
+     {
+      "action": "edit",
+      "depot": "//depot/guide.md",
+      "identifier": "//depot/guide.md",
+      "local": "<TMP>/ws/guide.md",
+      "pre_image": "<TMP>/bundle/pre/guide.md",
+      "pre_image_is_empty": false,
+      "repository_path": "guide.md"
+     },
+     {
+      "action": "add",
+      "depot": "//depot/new.md",
+      "identifier": "//depot/new.md",
+      "local": "<TMP>/ws/new.md",
+      "pre_image": "<TMP>/bundle/pre/new.md",
+      "pre_image_is_empty": true,
+      "repository_path": "new.md"
+     },
+     {
+      "action": "edit",
+      "depot": "//depot/a.py",
+      "identifier": "//depot/a.py",
+      "local": "<TMP>/ws/a.py",
+      "pre_image": "<TMP>/bundle/pre/a.py",
+      "pre_image_is_empty": false,
+      "repository_path": "a.py"
+     },
+     {
+      "action": "delete",
+      "depot": "//depot/old.py",
+      "identifier": "//depot/old.py",
+      "local": "<TMP>/ws/old.py",
+      "pre_image": "<TMP>/bundle/pre/old.py",
+      "pre_image_is_empty": false,
+      "repository_path": "old.py"
+     }
+    ],
+    "mechanical_contract": 2,
+    "path_effects": [
+     {
+      "effect": "edit",
+      "path": "guide.md",
+      "post_identity": "0C0B4E6264F502CDFB93C0981A7FA445",
+      "post_image": "intro\nnew\n",
+      "post_image_error": null,
+      "post_size": 10,
+      "review_id": "77"
+     },
+     {
+      "effect": "add",
+      "path": "new.md",
+      "post_identity": "B1946AC92492D2347C6235B4D2611184",
+      "post_image": "hello\n",
+      "post_image_error": null,
+      "post_size": 6,
+      "review_id": "77"
+     },
+     {
+      "effect": "edit",
+      "path": "a.py",
+      "post_identity": "3D688704CBBC6753B2002C94A2AD19AC",
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     },
+     {
+      "effect": "delete",
+      "path": "old.py",
+      "post_identity": null,
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     }
+    ],
+    "review_generated": false,
+    "snapshot_reader": "P4SnapshotReader",
+    "snapshot_seed": "p4:client:62cad7806a211f4a5bacb0c8f1c016fbe0c5f376c0135d3264bf451744d28d8d",
+    "workspace_root": "<TMP>/ws"
+   }
+  ],
+  "bundle": {
+   "auto_shelved": false,
+   "bundle_dir": "<TMP>/bundle",
+   "change_id": "77",
+   "changed_files": [
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/guide.md",
+     "local": "<TMP>/ws/guide.md",
+     "mechanical_findings": [],
+     "repository_path": "guide.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/new.md",
+     "local": "<TMP>/ws/new.md",
+     "mechanical_findings": [],
+     "repository_path": "new.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/a.py",
+     "local": "<TMP>/ws/a.py",
+     "mechanical_findings": [],
+     "repository_path": "a.py"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/old.py",
+     "local": "<TMP>/ws/old.py",
+     "mechanical_findings": [],
+     "repository_path": "old.py"
+    }
+   ],
+   "cl": "77",
+   "default_open": [],
+   "description": "Refactor the guide",
+   "diff_chunks": [
+    {
+     "bytes": 240,
+     "files": [
+      "//depot/guide.md",
+      "//depot/new.md",
+      "//depot/a.py",
+      "//depot/old.py"
+     ],
+     "index": 0,
+     "mechanical_findings": [],
+     "mechanical_scan": {
+      "files": [
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path",
+         "local_link_targets"
+        ],
+        "file": "//depot/guide.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path",
+         "local_link_targets"
+        ],
+        "file": "//depot/new.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         ".python-version: Python version mapping is error"
+        ],
+        "file": "//depot/a.py",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "file": "//depot/old.py",
+        "findings": [],
+        "mechanical_contract": 2
+       }
+      ],
+      "schema_version": 2
+     },
+     "path": "chunks/chunk-000.diff"
+    }
+   ],
+   "hygiene_incomplete": [],
+   "ledger_baseline": "d160346ca0de4923",
+   "ledger_hits": [],
+   "mechanical_check_phrases": {
+    "abs_path": "absolute paths",
+    "column_counts": "CSV/TSV column counts",
+    "duplicate_keys": "duplicate keys",
+    "local_link_targets": "local file and Markdown link targets",
+    "non_ascii": "non-ASCII characters",
+    "python_syntax": "CPython syntax under nearest snapshot .python-version (whole post-image; first compiler diagnostic)",
+    "structured_parse": "structured-data parse failures (whole post-image; first parser diagnostic)"
+   },
+   "mechanical_contract": 2,
+   "project_root": "<TMP>/ws",
+   "shelf_drift": [],
+   "shelf_fingerprint": {},
+   "snapshot_identity": "p4:client:5348ddf463122bbac31c1130eb5d444084c2aea586f3692cf7cc84ce914a0e11",
+   "stale_open": [],
+   "submit_gates": [],
+   "unique_claude_mds": [
+    "<TMP>/ws/CLAUDE.md"
+   ],
+   "unreconciled": [],
+   "unresolved": []
+  },
+  "calls": [
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "get_workspace_root"
+   ],
+   [
+    "fetch_opened_files",
+    "77"
+   ],
+   [
+    "resolve_local_paths",
+    [
+     "//depot/guide.md",
+     "//depot/new.md",
+     "//depot/a.py",
+     "//depot/old.py"
+    ]
+   ],
+   [
+    "materialize_preimage",
+    "//depot/guide.md",
+    "edit",
+    "3"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/new.md",
+    "add",
+    "1"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/a.py",
+    "edit",
+    "5"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/old.py",
+    "delete",
+    "2"
+   ],
+   [
+    "fetch_file_content",
+    "//depot/guide.md",
+    "3",
+    "77",
+    true,
+    false
+   ],
+   [
+    "fetch_file_content",
+    "//depot/new.md",
+    "1",
+    "77",
+    true,
+    false
+   ],
+   [
+    "run_p4",
+    [
+     "-ztag",
+     "where",
+     "<TMP>/ws/.python-version"
+    ]
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "find_unreconciled",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_default_open",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_unresolved",
+    "77"
+   ]
+  ],
+  "stderr": ""
+ },
+ "pending_fingerprint_keeps_moving": {
+  "assembled": [
+   {
+    "claim_globs": [],
+    "files": [
+     {
+      "action": "edit",
+      "depot": "//depot/guide.md",
+      "identifier": "//depot/guide.md",
+      "local": "<TMP>/ws/guide.md",
+      "pre_image": "<TMP>/bundle/pre/guide.md",
+      "pre_image_is_empty": false,
+      "repository_path": "guide.md"
+     },
+     {
+      "action": "add",
+      "depot": "//depot/new.md",
+      "identifier": "//depot/new.md",
+      "local": "<TMP>/ws/new.md",
+      "pre_image": "<TMP>/bundle/pre/new.md",
+      "pre_image_is_empty": true,
+      "repository_path": "new.md"
+     },
+     {
+      "action": "edit",
+      "depot": "//depot/a.py",
+      "identifier": "//depot/a.py",
+      "local": "<TMP>/ws/a.py",
+      "pre_image": "<TMP>/bundle/pre/a.py",
+      "pre_image_is_empty": false,
+      "repository_path": "a.py"
+     },
+     {
+      "action": "delete",
+      "depot": "//depot/old.py",
+      "identifier": "//depot/old.py",
+      "local": "<TMP>/ws/old.py",
+      "pre_image": "<TMP>/bundle/pre/old.py",
+      "pre_image_is_empty": false,
+      "repository_path": "old.py"
+     }
+    ],
+    "mechanical_contract": 2,
+    "path_effects": [
+     {
+      "effect": "edit",
+      "path": "guide.md",
+      "post_identity": "0C0B4E6264F502CDFB93C0981A7FA445",
+      "post_image": "intro\nnew\n",
+      "post_image_error": null,
+      "post_size": 10,
+      "review_id": "77"
+     },
+     {
+      "effect": "add",
+      "path": "new.md",
+      "post_identity": "B1946AC92492D2347C6235B4D2611184",
+      "post_image": "hello\n",
+      "post_image_error": null,
+      "post_size": 6,
+      "review_id": "77"
+     },
+     {
+      "effect": "edit",
+      "path": "a.py",
+      "post_identity": "3D688704CBBC6753B2002C94A2AD19AC",
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     },
+     {
+      "effect": "delete",
+      "path": "old.py",
+      "post_identity": null,
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     }
+    ],
+    "review_generated": false,
+    "snapshot_reader": "P4SnapshotReader",
+    "snapshot_seed": "p4:client:62cad7806a211f4a5bacb0c8f1c016fbe0c5f376c0135d3264bf451744d28d8d",
+    "workspace_root": "<TMP>/ws"
+   },
+   {
+    "claim_globs": [],
+    "files": [
+     {
+      "action": "edit",
+      "depot": "//depot/guide.md",
+      "identifier": "//depot/guide.md",
+      "local": "<TMP>/ws/guide.md",
+      "pre_image": "<TMP>/bundle/pre/guide.md",
+      "pre_image_is_empty": false,
+      "repository_path": "guide.md"
+     },
+     {
+      "action": "add",
+      "depot": "//depot/new.md",
+      "identifier": "//depot/new.md",
+      "local": "<TMP>/ws/new.md",
+      "pre_image": "<TMP>/bundle/pre/new.md",
+      "pre_image_is_empty": true,
+      "repository_path": "new.md"
+     },
+     {
+      "action": "edit",
+      "depot": "//depot/a.py",
+      "identifier": "//depot/a.py",
+      "local": "<TMP>/ws/a.py",
+      "pre_image": "<TMP>/bundle/pre/a.py",
+      "pre_image_is_empty": false,
+      "repository_path": "a.py"
+     },
+     {
+      "action": "delete",
+      "depot": "//depot/old.py",
+      "identifier": "//depot/old.py",
+      "local": "<TMP>/ws/old.py",
+      "pre_image": "<TMP>/bundle/pre/old.py",
+      "pre_image_is_empty": false,
+      "repository_path": "old.py"
+     }
+    ],
+    "mechanical_contract": 2,
+    "path_effects": [
+     {
+      "effect": "edit",
+      "path": "guide.md",
+      "post_identity": "0C0B4E6264F502CDFB93C0981A7FA445",
+      "post_image": "intro\nnew\n",
+      "post_image_error": null,
+      "post_size": 10,
+      "review_id": "77"
+     },
+     {
+      "effect": "add",
+      "path": "new.md",
+      "post_identity": "B1946AC92492D2347C6235B4D2611184",
+      "post_image": "hello\n",
+      "post_image_error": null,
+      "post_size": 6,
+      "review_id": "77"
+     },
+     {
+      "effect": "edit",
+      "path": "a.py",
+      "post_identity": "3D688704CBBC6753B2002C94A2AD19AC",
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     },
+     {
+      "effect": "delete",
+      "path": "old.py",
+      "post_identity": null,
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     }
+    ],
+    "review_generated": false,
+    "snapshot_reader": "P4SnapshotReader",
+    "snapshot_seed": "p4:client:62cad7806a211f4a5bacb0c8f1c016fbe0c5f376c0135d3264bf451744d28d8d",
+    "workspace_root": "<TMP>/ws"
+   }
+  ],
+  "bundle": {
+   "auto_shelved": false,
+   "bundle_dir": "<TMP>/bundle",
+   "change_id": "77",
+   "changed_files": [
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/guide.md",
+     "local": "<TMP>/ws/guide.md",
+     "mechanical_findings": [],
+     "repository_path": "guide.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/new.md",
+     "local": "<TMP>/ws/new.md",
+     "mechanical_findings": [],
+     "repository_path": "new.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/a.py",
+     "local": "<TMP>/ws/a.py",
+     "mechanical_findings": [],
+     "repository_path": "a.py"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/old.py",
+     "local": "<TMP>/ws/old.py",
+     "mechanical_findings": [],
+     "repository_path": "old.py"
+    }
+   ],
+   "cl": "77",
+   "default_open": [],
+   "description": "Refactor the guide",
+   "diff_chunks": [
+    {
+     "bytes": 240,
+     "files": [
+      "//depot/guide.md",
+      "//depot/new.md",
+      "//depot/a.py",
+      "//depot/old.py"
+     ],
+     "index": 0,
+     "mechanical_findings": [],
+     "mechanical_scan": {
+      "files": [
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         "local_link_targets omitted because the P4 shelf changed during capture"
+        ],
+        "file": "//depot/guide.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         "local_link_targets omitted because the P4 shelf changed during capture"
+        ],
+        "file": "//depot/new.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         ".python-version: Python version mapping is error",
+         "local_link_targets omitted because the P4 shelf changed during capture"
+        ],
+        "file": "//depot/a.py",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         "local_link_targets omitted because the P4 shelf changed during capture"
+        ],
+        "file": "//depot/old.py",
+        "findings": [],
+        "mechanical_contract": 2
+       }
+      ],
+      "schema_version": 2
+     },
+     "path": "chunks/chunk-000.diff"
+    }
+   ],
+   "hygiene_incomplete": [],
+   "ledger_baseline": "d160346ca0de4923",
+   "ledger_hits": [],
+   "mechanical_check_phrases": {
+    "abs_path": "absolute paths",
+    "column_counts": "CSV/TSV column counts",
+    "duplicate_keys": "duplicate keys",
+    "local_link_targets": "local file and Markdown link targets",
+    "non_ascii": "non-ASCII characters",
+    "python_syntax": "CPython syntax under nearest snapshot .python-version (whole post-image; first compiler diagnostic)",
+    "structured_parse": "structured-data parse failures (whole post-image; first parser diagnostic)"
+   },
+   "mechanical_contract": 2,
+   "project_root": "<TMP>/ws",
+   "shelf_drift": [],
+   "shelf_fingerprint": {},
+   "stale_open": [],
+   "submit_gates": [],
+   "unique_claude_mds": [
+    "<TMP>/ws/CLAUDE.md"
+   ],
+   "unreconciled": [],
+   "unresolved": []
+  },
+  "calls": [
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "get_workspace_root"
+   ],
+   [
+    "fetch_opened_files",
+    "77"
+   ],
+   [
+    "resolve_local_paths",
+    [
+     "//depot/guide.md",
+     "//depot/new.md",
+     "//depot/a.py",
+     "//depot/old.py"
+    ]
+   ],
+   [
+    "materialize_preimage",
+    "//depot/guide.md",
+    "edit",
+    "3"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/new.md",
+    "add",
+    "1"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/a.py",
+    "edit",
+    "5"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/old.py",
+    "delete",
+    "2"
+   ],
+   [
+    "fetch_file_content",
+    "//depot/guide.md",
+    "3",
+    "77",
+    true,
+    false
+   ],
+   [
+    "fetch_file_content",
+    "//depot/new.md",
+    "1",
+    "77",
+    true,
+    false
+   ],
+   [
+    "run_p4",
+    [
+     "-ztag",
+     "where",
+     "<TMP>/ws/.python-version"
+    ]
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "get_workspace_root"
+   ],
+   [
+    "fetch_opened_files",
+    "77"
+   ],
+   [
+    "resolve_local_paths",
+    [
+     "//depot/guide.md",
+     "//depot/new.md",
+     "//depot/a.py",
+     "//depot/old.py"
+    ]
+   ],
+   [
+    "materialize_preimage",
+    "//depot/guide.md",
+    "edit",
+    "3"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/new.md",
+    "add",
+    "1"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/a.py",
+    "edit",
+    "5"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/old.py",
+    "delete",
+    "2"
+   ],
+   [
+    "fetch_file_content",
+    "//depot/guide.md",
+    "3",
+    "77",
+    true,
+    false
+   ],
+   [
+    "fetch_file_content",
+    "//depot/new.md",
+    "1",
+    "77",
+    true,
+    false
+   ],
+   [
+    "run_p4",
+    [
+     "-ztag",
+     "where",
+     "<TMP>/ws/.python-version"
+    ]
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "find_unreconciled",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_default_open",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_unresolved",
+    "77"
+   ]
+  ],
+  "stderr": ""
+ },
+ "pending_fingerprint_moves_once": {
+  "assembled": [
+   {
+    "claim_globs": [],
+    "files": [
+     {
+      "action": "edit",
+      "depot": "//depot/guide.md",
+      "identifier": "//depot/guide.md",
+      "local": "<TMP>/ws/guide.md",
+      "pre_image": "<TMP>/bundle/pre/guide.md",
+      "pre_image_is_empty": false,
+      "repository_path": "guide.md"
+     },
+     {
+      "action": "add",
+      "depot": "//depot/new.md",
+      "identifier": "//depot/new.md",
+      "local": "<TMP>/ws/new.md",
+      "pre_image": "<TMP>/bundle/pre/new.md",
+      "pre_image_is_empty": true,
+      "repository_path": "new.md"
+     },
+     {
+      "action": "edit",
+      "depot": "//depot/a.py",
+      "identifier": "//depot/a.py",
+      "local": "<TMP>/ws/a.py",
+      "pre_image": "<TMP>/bundle/pre/a.py",
+      "pre_image_is_empty": false,
+      "repository_path": "a.py"
+     },
+     {
+      "action": "delete",
+      "depot": "//depot/old.py",
+      "identifier": "//depot/old.py",
+      "local": "<TMP>/ws/old.py",
+      "pre_image": "<TMP>/bundle/pre/old.py",
+      "pre_image_is_empty": false,
+      "repository_path": "old.py"
+     }
+    ],
+    "mechanical_contract": 2,
+    "path_effects": [
+     {
+      "effect": "edit",
+      "path": "guide.md",
+      "post_identity": "0C0B4E6264F502CDFB93C0981A7FA445",
+      "post_image": "intro\nnew\n",
+      "post_image_error": null,
+      "post_size": 10,
+      "review_id": "77"
+     },
+     {
+      "effect": "add",
+      "path": "new.md",
+      "post_identity": "B1946AC92492D2347C6235B4D2611184",
+      "post_image": "hello\n",
+      "post_image_error": null,
+      "post_size": 6,
+      "review_id": "77"
+     },
+     {
+      "effect": "edit",
+      "path": "a.py",
+      "post_identity": "3D688704CBBC6753B2002C94A2AD19AC",
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     },
+     {
+      "effect": "delete",
+      "path": "old.py",
+      "post_identity": null,
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     }
+    ],
+    "review_generated": false,
+    "snapshot_reader": "P4SnapshotReader",
+    "snapshot_seed": "p4:client:62cad7806a211f4a5bacb0c8f1c016fbe0c5f376c0135d3264bf451744d28d8d",
+    "workspace_root": "<TMP>/ws"
+   },
+   {
+    "claim_globs": [],
+    "files": [
+     {
+      "action": "edit",
+      "depot": "//depot/guide.md",
+      "identifier": "//depot/guide.md",
+      "local": "<TMP>/ws/guide.md",
+      "pre_image": "<TMP>/bundle/pre/guide.md",
+      "pre_image_is_empty": false,
+      "repository_path": "guide.md"
+     },
+     {
+      "action": "add",
+      "depot": "//depot/new.md",
+      "identifier": "//depot/new.md",
+      "local": "<TMP>/ws/new.md",
+      "pre_image": "<TMP>/bundle/pre/new.md",
+      "pre_image_is_empty": true,
+      "repository_path": "new.md"
+     },
+     {
+      "action": "edit",
+      "depot": "//depot/a.py",
+      "identifier": "//depot/a.py",
+      "local": "<TMP>/ws/a.py",
+      "pre_image": "<TMP>/bundle/pre/a.py",
+      "pre_image_is_empty": false,
+      "repository_path": "a.py"
+     },
+     {
+      "action": "delete",
+      "depot": "//depot/old.py",
+      "identifier": "//depot/old.py",
+      "local": "<TMP>/ws/old.py",
+      "pre_image": "<TMP>/bundle/pre/old.py",
+      "pre_image_is_empty": false,
+      "repository_path": "old.py"
+     }
+    ],
+    "mechanical_contract": 2,
+    "path_effects": [
+     {
+      "effect": "edit",
+      "path": "guide.md",
+      "post_identity": "0C0B4E6264F502CDFB93C0981A7FA445",
+      "post_image": "intro\nnew\n",
+      "post_image_error": null,
+      "post_size": 10,
+      "review_id": "77"
+     },
+     {
+      "effect": "add",
+      "path": "new.md",
+      "post_identity": "B1946AC92492D2347C6235B4D2611184",
+      "post_image": "hello\n",
+      "post_image_error": null,
+      "post_size": 6,
+      "review_id": "77"
+     },
+     {
+      "effect": "edit",
+      "path": "a.py",
+      "post_identity": "3D688704CBBC6753B2002C94A2AD19AC",
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     },
+     {
+      "effect": "delete",
+      "path": "old.py",
+      "post_identity": null,
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     }
+    ],
+    "review_generated": false,
+    "snapshot_reader": "P4SnapshotReader",
+    "snapshot_seed": "p4:client:62cad7806a211f4a5bacb0c8f1c016fbe0c5f376c0135d3264bf451744d28d8d",
+    "workspace_root": "<TMP>/ws"
+   }
+  ],
+  "bundle": {
+   "auto_shelved": false,
+   "bundle_dir": "<TMP>/bundle",
+   "change_id": "77",
+   "changed_files": [
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/guide.md",
+     "local": "<TMP>/ws/guide.md",
+     "mechanical_findings": [],
+     "repository_path": "guide.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/new.md",
+     "local": "<TMP>/ws/new.md",
+     "mechanical_findings": [],
+     "repository_path": "new.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/a.py",
+     "local": "<TMP>/ws/a.py",
+     "mechanical_findings": [],
+     "repository_path": "a.py"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/old.py",
+     "local": "<TMP>/ws/old.py",
+     "mechanical_findings": [],
+     "repository_path": "old.py"
+    }
+   ],
+   "cl": "77",
+   "default_open": [],
+   "description": "Refactor the guide",
+   "diff_chunks": [
+    {
+     "bytes": 240,
+     "files": [
+      "//depot/guide.md",
+      "//depot/new.md",
+      "//depot/a.py",
+      "//depot/old.py"
+     ],
+     "index": 0,
+     "mechanical_findings": [],
+     "mechanical_scan": {
+      "files": [
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path",
+         "local_link_targets"
+        ],
+        "file": "//depot/guide.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path",
+         "local_link_targets"
+        ],
+        "file": "//depot/new.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         ".python-version: Python version mapping is error"
+        ],
+        "file": "//depot/a.py",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "file": "//depot/old.py",
+        "findings": [],
+        "mechanical_contract": 2
+       }
+      ],
+      "schema_version": 2
+     },
+     "path": "chunks/chunk-000.diff"
+    }
+   ],
+   "hygiene_incomplete": [],
+   "ledger_baseline": "d160346ca0de4923",
+   "ledger_hits": [],
+   "mechanical_check_phrases": {
+    "abs_path": "absolute paths",
+    "column_counts": "CSV/TSV column counts",
+    "duplicate_keys": "duplicate keys",
+    "local_link_targets": "local file and Markdown link targets",
+    "non_ascii": "non-ASCII characters",
+    "python_syntax": "CPython syntax under nearest snapshot .python-version (whole post-image; first compiler diagnostic)",
+    "structured_parse": "structured-data parse failures (whole post-image; first parser diagnostic)"
+   },
+   "mechanical_contract": 2,
+   "project_root": "<TMP>/ws",
+   "shelf_drift": [],
+   "shelf_fingerprint": {},
+   "snapshot_identity": "p4:client:5348ddf463122bbac31c1130eb5d444084c2aea586f3692cf7cc84ce914a0e11",
+   "stale_open": [],
+   "submit_gates": [],
+   "unique_claude_mds": [
+    "<TMP>/ws/CLAUDE.md"
+   ],
+   "unreconciled": [],
+   "unresolved": []
+  },
+  "calls": [
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "get_workspace_root"
+   ],
+   [
+    "fetch_opened_files",
+    "77"
+   ],
+   [
+    "resolve_local_paths",
+    [
+     "//depot/guide.md",
+     "//depot/new.md",
+     "//depot/a.py",
+     "//depot/old.py"
+    ]
+   ],
+   [
+    "materialize_preimage",
+    "//depot/guide.md",
+    "edit",
+    "3"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/new.md",
+    "add",
+    "1"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/a.py",
+    "edit",
+    "5"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/old.py",
+    "delete",
+    "2"
+   ],
+   [
+    "fetch_file_content",
+    "//depot/guide.md",
+    "3",
+    "77",
+    true,
+    false
+   ],
+   [
+    "fetch_file_content",
+    "//depot/new.md",
+    "1",
+    "77",
+    true,
+    false
+   ],
+   [
+    "run_p4",
+    [
+     "-ztag",
+     "where",
+     "<TMP>/ws/.python-version"
+    ]
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "get_workspace_root"
+   ],
+   [
+    "fetch_opened_files",
+    "77"
+   ],
+   [
+    "resolve_local_paths",
+    [
+     "//depot/guide.md",
+     "//depot/new.md",
+     "//depot/a.py",
+     "//depot/old.py"
+    ]
+   ],
+   [
+    "materialize_preimage",
+    "//depot/guide.md",
+    "edit",
+    "3"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/new.md",
+    "add",
+    "1"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/a.py",
+    "edit",
+    "5"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/old.py",
+    "delete",
+    "2"
+   ],
+   [
+    "fetch_file_content",
+    "//depot/guide.md",
+    "3",
+    "77",
+    true,
+    false
+   ],
+   [
+    "fetch_file_content",
+    "//depot/new.md",
+    "1",
+    "77",
+    true,
+    false
+   ],
+   [
+    "run_p4",
+    [
+     "-ztag",
+     "where",
+     "<TMP>/ws/.python-version"
+    ]
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "find_unreconciled",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_default_open",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_unresolved",
+    "77"
+   ]
+  ],
+  "stderr": ""
+ },
+ "pending_fully_claimed": {
+  "assembled": [
+   {
+    "claim_globs": [
+     "**/*.md",
+     "**/*.py"
+    ],
+    "files": [
+     {
+      "action": "edit",
+      "depot": "//depot/guide.md",
+      "identifier": "//depot/guide.md",
+      "local": "<TMP>/ws/guide.md",
+      "pre_image": "<TMP>/bundle/pre/guide.md",
+      "pre_image_is_empty": false,
+      "repository_path": "guide.md"
+     },
+     {
+      "action": "add",
+      "depot": "//depot/new.md",
+      "identifier": "//depot/new.md",
+      "local": "<TMP>/ws/new.md",
+      "pre_image": "<TMP>/bundle/pre/new.md",
+      "pre_image_is_empty": true,
+      "repository_path": "new.md"
+     },
+     {
+      "action": "edit",
+      "depot": "//depot/a.py",
+      "identifier": "//depot/a.py",
+      "local": "<TMP>/ws/a.py",
+      "pre_image": "<TMP>/bundle/pre/a.py",
+      "pre_image_is_empty": false,
+      "repository_path": "a.py"
+     },
+     {
+      "action": "delete",
+      "depot": "//depot/old.py",
+      "identifier": "//depot/old.py",
+      "local": "<TMP>/ws/old.py",
+      "pre_image": "<TMP>/bundle/pre/old.py",
+      "pre_image_is_empty": false,
+      "repository_path": "old.py"
+     }
+    ],
+    "mechanical_contract": 2,
+    "path_effects": [
+     {
+      "effect": "edit",
+      "path": "guide.md",
+      "post_identity": "0C0B4E6264F502CDFB93C0981A7FA445",
+      "post_image": "intro\nnew\n",
+      "post_image_error": null,
+      "post_size": 10,
+      "review_id": "77"
+     },
+     {
+      "effect": "add",
+      "path": "new.md",
+      "post_identity": "B1946AC92492D2347C6235B4D2611184",
+      "post_image": "hello\n",
+      "post_image_error": null,
+      "post_size": 6,
+      "review_id": "77"
+     },
+     {
+      "effect": "edit",
+      "path": "a.py",
+      "post_identity": "3D688704CBBC6753B2002C94A2AD19AC",
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     },
+     {
+      "effect": "delete",
+      "path": "old.py",
+      "post_identity": null,
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     }
+    ],
+    "review_generated": false,
+    "snapshot_reader": "P4SnapshotReader",
+    "snapshot_seed": "p4:client:62cad7806a211f4a5bacb0c8f1c016fbe0c5f376c0135d3264bf451744d28d8d",
+    "workspace_root": "<TMP>/ws"
+   }
+  ],
+  "bundle": {
+   "auto_shelved": false,
+   "bundle_dir": "<TMP>/bundle",
+   "change_id": "77",
+   "changed_files": [],
+   "cl": "77",
+   "claimed_files": [
+    {
+     "action": "edit",
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/guide.md",
+     "identifier": "//depot/guide.md",
+     "local": "<TMP>/ws/guide.md",
+     "mechanical_findings": [],
+     "mechanical_scan": {
+      "files": [
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path",
+         "local_link_targets"
+        ],
+        "file": "//depot/guide.md",
+        "findings": [],
+        "mechanical_contract": 2
+       }
+      ],
+      "schema_version": 2
+     },
+     "pre_image": "<TMP>/bundle/pre/guide.md",
+     "repository_path": "guide.md",
+     "trivial": true,
+     "trivial_checks": {
+      "ascii_clean": true,
+      "no_abs_paths": true
+     },
+     "trivial_reasons": []
+    },
+    {
+     "action": "add",
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/new.md",
+     "identifier": "//depot/new.md",
+     "local": "<TMP>/ws/new.md",
+     "mechanical_findings": [],
+     "mechanical_scan": {
+      "files": [
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path",
+         "local_link_targets"
+        ],
+        "file": "//depot/new.md",
+        "findings": [],
+        "mechanical_contract": 2
+       }
+      ],
+      "schema_version": 2
+     },
+     "pre_image": "<TMP>/bundle/pre/new.md",
+     "repository_path": "new.md",
+     "trivial": true,
+     "trivial_checks": {
+      "ascii_clean": true,
+      "no_abs_paths": true
+     },
+     "trivial_reasons": []
+    },
+    {
+     "action": "edit",
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/a.py",
+     "identifier": "//depot/a.py",
+     "local": "<TMP>/ws/a.py",
+     "mechanical_findings": [],
+     "mechanical_scan": {
+      "files": [
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         ".python-version: Python version mapping is error"
+        ],
+        "file": "//depot/a.py",
+        "findings": [],
+        "mechanical_contract": 2
+       }
+      ],
+      "schema_version": 2
+     },
+     "pre_image": "<TMP>/bundle/pre/a.py",
+     "repository_path": "a.py",
+     "trivial": true,
+     "trivial_checks": {
+      "ascii_clean": true,
+      "no_abs_paths": true
+     },
+     "trivial_reasons": []
+    },
+    {
+     "action": "delete",
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/old.py",
+     "identifier": "//depot/old.py",
+     "local": "<TMP>/ws/old.py",
+     "mechanical_findings": [],
+     "mechanical_scan": {
+      "files": [
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "file": "//depot/old.py",
+        "findings": [],
+        "mechanical_contract": 2
+       }
+      ],
+      "schema_version": 2
+     },
+     "pre_image": "<TMP>/bundle/pre/old.py",
+     "repository_path": "old.py",
+     "trivial": true,
+     "trivial_checks": {
+      "ascii_clean": true,
+      "no_abs_paths": true
+     },
+     "trivial_reasons": []
+    }
+   ],
+   "default_open": [],
+   "description": "Refactor the guide",
+   "diff_chunks": [],
+   "hygiene_incomplete": [],
+   "ledger_baseline": "d160346ca0de4923",
+   "ledger_hits": [],
+   "mechanical_check_phrases": {
+    "abs_path": "absolute paths",
+    "column_counts": "CSV/TSV column counts",
+    "duplicate_keys": "duplicate keys",
+    "local_link_targets": "local file and Markdown link targets",
+    "non_ascii": "non-ASCII characters",
+    "python_syntax": "CPython syntax under nearest snapshot .python-version (whole post-image; first compiler diagnostic)",
+    "structured_parse": "structured-data parse failures (whole post-image; first parser diagnostic)"
+   },
+   "mechanical_contract": 2,
+   "project_root": "<TMP>/ws",
+   "shelf_drift": [],
+   "shelf_fingerprint": {},
+   "snapshot_identity": "p4:client:5348ddf463122bbac31c1130eb5d444084c2aea586f3692cf7cc84ce914a0e11",
+   "stale_open": [],
+   "submit_gates": [],
+   "unique_claude_mds": [
+    "<TMP>/ws/CLAUDE.md"
+   ],
+   "unreconciled": [],
+   "unresolved": []
+  },
+  "calls": [
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "get_workspace_root"
+   ],
+   [
+    "fetch_opened_files",
+    "77"
+   ],
+   [
+    "resolve_local_paths",
+    [
+     "//depot/guide.md",
+     "//depot/new.md",
+     "//depot/a.py",
+     "//depot/old.py"
+    ]
+   ],
+   [
+    "materialize_preimage",
+    "//depot/guide.md",
+    "edit",
+    "3"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/new.md",
+    "add",
+    "1"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/a.py",
+    "edit",
+    "5"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/old.py",
+    "delete",
+    "2"
+   ],
+   [
+    "fetch_file_content",
+    "//depot/guide.md",
+    "3",
+    "77",
+    true,
+    false
+   ],
+   [
+    "fetch_file_content",
+    "//depot/new.md",
+    "1",
+    "77",
+    true,
+    false
+   ],
+   [
+    "run_p4",
+    [
+     "-ztag",
+     "where",
+     "<TMP>/ws/.python-version"
+    ]
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "find_unreconciled",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_default_open",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_unresolved",
+    "77"
+   ]
+  ],
+  "stderr": ""
+ },
+ "pending_hygiene_findings": {
+  "assembled": [
+   {
+    "claim_globs": [],
+    "files": [
+     {
+      "action": "edit",
+      "depot": "//depot/guide.md",
+      "identifier": "//depot/guide.md",
+      "local": "<TMP>/ws/guide.md",
+      "pre_image": "<TMP>/bundle/pre/guide.md",
+      "pre_image_is_empty": false,
+      "repository_path": "guide.md"
+     },
+     {
+      "action": "add",
+      "depot": "//depot/new.md",
+      "identifier": "//depot/new.md",
+      "local": "<TMP>/ws/new.md",
+      "pre_image": "<TMP>/bundle/pre/new.md",
+      "pre_image_is_empty": true,
+      "repository_path": "new.md"
+     },
+     {
+      "action": "edit",
+      "depot": "//depot/a.py",
+      "identifier": "//depot/a.py",
+      "local": "<TMP>/ws/a.py",
+      "pre_image": "<TMP>/bundle/pre/a.py",
+      "pre_image_is_empty": false,
+      "repository_path": "a.py"
+     },
+     {
+      "action": "delete",
+      "depot": "//depot/old.py",
+      "identifier": "//depot/old.py",
+      "local": "<TMP>/ws/old.py",
+      "pre_image": "<TMP>/bundle/pre/old.py",
+      "pre_image_is_empty": false,
+      "repository_path": "old.py"
+     }
+    ],
+    "mechanical_contract": 2,
+    "path_effects": [
+     {
+      "effect": "edit",
+      "path": "guide.md",
+      "post_identity": "0C0B4E6264F502CDFB93C0981A7FA445",
+      "post_image": "intro\nnew\n",
+      "post_image_error": null,
+      "post_size": 10,
+      "review_id": "77"
+     },
+     {
+      "effect": "add",
+      "path": "new.md",
+      "post_identity": "B1946AC92492D2347C6235B4D2611184",
+      "post_image": "hello\n",
+      "post_image_error": null,
+      "post_size": 6,
+      "review_id": "77"
+     },
+     {
+      "effect": "edit",
+      "path": "a.py",
+      "post_identity": "3D688704CBBC6753B2002C94A2AD19AC",
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     },
+     {
+      "effect": "delete",
+      "path": "old.py",
+      "post_identity": null,
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     }
+    ],
+    "review_generated": false,
+    "snapshot_reader": "P4SnapshotReader",
+    "snapshot_seed": "p4:client:62cad7806a211f4a5bacb0c8f1c016fbe0c5f376c0135d3264bf451744d28d8d",
+    "workspace_root": "<TMP>/ws"
+   }
+  ],
+  "bundle": {
+   "auto_shelved": false,
+   "bundle_dir": "<TMP>/bundle",
+   "change_id": "77",
+   "changed_files": [
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/guide.md",
+     "local": "<TMP>/ws/guide.md",
+     "mechanical_findings": [],
+     "repository_path": "guide.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/new.md",
+     "local": "<TMP>/ws/new.md",
+     "mechanical_findings": [],
+     "repository_path": "new.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/a.py",
+     "local": "<TMP>/ws/a.py",
+     "mechanical_findings": [],
+     "repository_path": "a.py"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/old.py",
+     "local": "<TMP>/ws/old.py",
+     "mechanical_findings": [],
+     "repository_path": "old.py"
+    }
+   ],
+   "cl": "77",
+   "default_open": [
+    {
+     "action": "edit",
+     "depot": "//depot/d.py"
+    }
+   ],
+   "description": "Refactor the guide",
+   "diff_chunks": [
+    {
+     "bytes": 240,
+     "files": [
+      "//depot/guide.md",
+      "//depot/new.md",
+      "//depot/a.py",
+      "//depot/old.py"
+     ],
+     "index": 0,
+     "mechanical_findings": [],
+     "mechanical_scan": {
+      "files": [
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path",
+         "local_link_targets"
+        ],
+        "file": "//depot/guide.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path",
+         "local_link_targets"
+        ],
+        "file": "//depot/new.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         ".python-version: Python version mapping is error"
+        ],
+        "file": "//depot/a.py",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "file": "//depot/old.py",
+        "findings": [],
+        "mechanical_contract": 2
+       }
+      ],
+      "schema_version": 2
+     },
+     "path": "chunks/chunk-000.diff"
+    }
+   ],
+   "hygiene_incomplete": [
+    {
+     "reason": "partial",
+     "scan": "unresolved"
+    }
+   ],
+   "ledger_baseline": "d160346ca0de4923",
+   "ledger_hits": [],
+   "mechanical_check_phrases": {
+    "abs_path": "absolute paths",
+    "column_counts": "CSV/TSV column counts",
+    "duplicate_keys": "duplicate keys",
+    "local_link_targets": "local file and Markdown link targets",
+    "non_ascii": "non-ASCII characters",
+    "python_syntax": "CPython syntax under nearest snapshot .python-version (whole post-image; first compiler diagnostic)",
+    "structured_parse": "structured-data parse failures (whole post-image; first parser diagnostic)"
+   },
+   "mechanical_contract": 2,
+   "project_root": "<TMP>/ws",
+   "shelf_drift": [],
+   "shelf_fingerprint": {},
+   "snapshot_identity": "p4:client:5348ddf463122bbac31c1130eb5d444084c2aea586f3692cf7cc84ce914a0e11",
+   "stale_open": [],
+   "submit_gates": [],
+   "unique_claude_mds": [
+    "<TMP>/ws/CLAUDE.md"
+   ],
+   "unreconciled": [
+    {
+     "action": "add",
+     "depot": "//depot/stray.py",
+     "local": "<TMP>/ws/stray.py"
+    }
+   ],
+   "unresolved": [
+    {
+     "depot": "//depot/guide.md"
+    }
+   ]
+  },
+  "calls": [
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "get_workspace_root"
+   ],
+   [
+    "fetch_opened_files",
+    "77"
+   ],
+   [
+    "resolve_local_paths",
+    [
+     "//depot/guide.md",
+     "//depot/new.md",
+     "//depot/a.py",
+     "//depot/old.py"
+    ]
+   ],
+   [
+    "materialize_preimage",
+    "//depot/guide.md",
+    "edit",
+    "3"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/new.md",
+    "add",
+    "1"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/a.py",
+    "edit",
+    "5"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/old.py",
+    "delete",
+    "2"
+   ],
+   [
+    "fetch_file_content",
+    "//depot/guide.md",
+    "3",
+    "77",
+    true,
+    false
+   ],
+   [
+    "fetch_file_content",
+    "//depot/new.md",
+    "1",
+    "77",
+    true,
+    false
+   ],
+   [
+    "run_p4",
+    [
+     "-ztag",
+     "where",
+     "<TMP>/ws/.python-version"
+    ]
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "find_unreconciled",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_default_open",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_unresolved",
+    "77"
+   ]
+  ],
+  "stderr": ""
+ },
+ "pending_markdown_content_mismatch_retries_then_strips": {
+  "assembled": [
+   {
+    "claim_globs": [],
+    "files": [
+     {
+      "action": "edit",
+      "depot": "//depot/guide.md",
+      "identifier": "//depot/guide.md",
+      "local": "<TMP>/ws/guide.md",
+      "pre_image": "<TMP>/bundle/pre/guide.md",
+      "pre_image_is_empty": false,
+      "repository_path": "guide.md"
+     },
+     {
+      "action": "add",
+      "depot": "//depot/new.md",
+      "identifier": "//depot/new.md",
+      "local": "<TMP>/ws/new.md",
+      "pre_image": "<TMP>/bundle/pre/new.md",
+      "pre_image_is_empty": true,
+      "repository_path": "new.md"
+     },
+     {
+      "action": "edit",
+      "depot": "//depot/a.py",
+      "identifier": "//depot/a.py",
+      "local": "<TMP>/ws/a.py",
+      "pre_image": "<TMP>/bundle/pre/a.py",
+      "pre_image_is_empty": false,
+      "repository_path": "a.py"
+     },
+     {
+      "action": "delete",
+      "depot": "//depot/old.py",
+      "identifier": "//depot/old.py",
+      "local": "<TMP>/ws/old.py",
+      "pre_image": "<TMP>/bundle/pre/old.py",
+      "pre_image_is_empty": false,
+      "repository_path": "old.py"
+     }
+    ],
+    "mechanical_contract": 2,
+    "path_effects": [
+     {
+      "effect": "edit",
+      "path": "guide.md",
+      "post_identity": "0C0B4E6264F502CDFB93C0981A7FA445",
+      "post_image": null,
+      "post_image_error": "changed Markdown content did not match captured diff",
+      "post_size": 0,
+      "review_id": "77"
+     },
+     {
+      "effect": "add",
+      "path": "new.md",
+      "post_identity": "B1946AC92492D2347C6235B4D2611184",
+      "post_image": "hello\n",
+      "post_image_error": null,
+      "post_size": 6,
+      "review_id": "77"
+     },
+     {
+      "effect": "edit",
+      "path": "a.py",
+      "post_identity": "3D688704CBBC6753B2002C94A2AD19AC",
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     },
+     {
+      "effect": "delete",
+      "path": "old.py",
+      "post_identity": null,
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     }
+    ],
+    "review_generated": false,
+    "snapshot_reader": "P4SnapshotReader",
+    "snapshot_seed": null,
+    "workspace_root": "<TMP>/ws"
+   },
+   {
+    "claim_globs": [],
+    "files": [
+     {
+      "action": "edit",
+      "depot": "//depot/guide.md",
+      "identifier": "//depot/guide.md",
+      "local": "<TMP>/ws/guide.md",
+      "pre_image": "<TMP>/bundle/pre/guide.md",
+      "pre_image_is_empty": false,
+      "repository_path": "guide.md"
+     },
+     {
+      "action": "add",
+      "depot": "//depot/new.md",
+      "identifier": "//depot/new.md",
+      "local": "<TMP>/ws/new.md",
+      "pre_image": "<TMP>/bundle/pre/new.md",
+      "pre_image_is_empty": true,
+      "repository_path": "new.md"
+     },
+     {
+      "action": "edit",
+      "depot": "//depot/a.py",
+      "identifier": "//depot/a.py",
+      "local": "<TMP>/ws/a.py",
+      "pre_image": "<TMP>/bundle/pre/a.py",
+      "pre_image_is_empty": false,
+      "repository_path": "a.py"
+     },
+     {
+      "action": "delete",
+      "depot": "//depot/old.py",
+      "identifier": "//depot/old.py",
+      "local": "<TMP>/ws/old.py",
+      "pre_image": "<TMP>/bundle/pre/old.py",
+      "pre_image_is_empty": false,
+      "repository_path": "old.py"
+     }
+    ],
+    "mechanical_contract": 2,
+    "path_effects": [
+     {
+      "effect": "edit",
+      "path": "guide.md",
+      "post_identity": "0C0B4E6264F502CDFB93C0981A7FA445",
+      "post_image": null,
+      "post_image_error": "changed Markdown content did not match captured diff",
+      "post_size": 0,
+      "review_id": "77"
+     },
+     {
+      "effect": "add",
+      "path": "new.md",
+      "post_identity": "B1946AC92492D2347C6235B4D2611184",
+      "post_image": "hello\n",
+      "post_image_error": null,
+      "post_size": 6,
+      "review_id": "77"
+     },
+     {
+      "effect": "edit",
+      "path": "a.py",
+      "post_identity": "3D688704CBBC6753B2002C94A2AD19AC",
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     },
+     {
+      "effect": "delete",
+      "path": "old.py",
+      "post_identity": null,
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     }
+    ],
+    "review_generated": false,
+    "snapshot_reader": "P4SnapshotReader",
+    "snapshot_seed": null,
+    "workspace_root": "<TMP>/ws"
+   }
+  ],
+  "bundle": {
+   "auto_shelved": false,
+   "bundle_dir": "<TMP>/bundle",
+   "change_id": "77",
+   "changed_files": [
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/guide.md",
+     "local": "<TMP>/ws/guide.md",
+     "mechanical_findings": [],
+     "repository_path": "guide.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/new.md",
+     "local": "<TMP>/ws/new.md",
+     "mechanical_findings": [],
+     "repository_path": "new.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/a.py",
+     "local": "<TMP>/ws/a.py",
+     "mechanical_findings": [],
+     "repository_path": "a.py"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/old.py",
+     "local": "<TMP>/ws/old.py",
+     "mechanical_findings": [],
+     "repository_path": "old.py"
+    }
+   ],
+   "cl": "77",
+   "default_open": [],
+   "description": "Refactor the guide",
+   "diff_chunks": [
+    {
+     "bytes": 240,
+     "files": [
+      "//depot/guide.md",
+      "//depot/new.md",
+      "//depot/a.py",
+      "//depot/old.py"
+     ],
+     "index": 0,
+     "mechanical_findings": [],
+     "mechanical_scan": {
+      "files": [
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         "repository snapshot unavailable",
+         "local_link_targets omitted because the P4 shelf changed during capture"
+        ],
+        "file": "//depot/guide.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         "repository snapshot unavailable",
+         "local_link_targets omitted because the P4 shelf changed during capture"
+        ],
+        "file": "//depot/new.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         "repository snapshot unavailable",
+         "local_link_targets omitted because the P4 shelf changed during capture"
+        ],
+        "file": "//depot/a.py",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         "local_link_targets omitted because the P4 shelf changed during capture"
+        ],
+        "file": "//depot/old.py",
+        "findings": [],
+        "mechanical_contract": 2
+       }
+      ],
+      "schema_version": 2
+     },
+     "path": "chunks/chunk-000.diff"
+    }
+   ],
+   "hygiene_incomplete": [],
+   "ledger_baseline": "d160346ca0de4923",
+   "ledger_hits": [],
+   "mechanical_check_phrases": {
+    "abs_path": "absolute paths",
+    "column_counts": "CSV/TSV column counts",
+    "duplicate_keys": "duplicate keys",
+    "local_link_targets": "local file and Markdown link targets",
+    "non_ascii": "non-ASCII characters",
+    "python_syntax": "CPython syntax under nearest snapshot .python-version (whole post-image; first compiler diagnostic)",
+    "structured_parse": "structured-data parse failures (whole post-image; first parser diagnostic)"
+   },
+   "mechanical_contract": 2,
+   "project_root": "<TMP>/ws",
+   "shelf_drift": [],
+   "shelf_fingerprint": {},
+   "stale_open": [],
+   "submit_gates": [],
+   "unique_claude_mds": [
+    "<TMP>/ws/CLAUDE.md"
+   ],
+   "unreconciled": [],
+   "unresolved": []
+  },
+  "calls": [
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "get_workspace_root"
+   ],
+   [
+    "fetch_opened_files",
+    "77"
+   ],
+   [
+    "resolve_local_paths",
+    [
+     "//depot/guide.md",
+     "//depot/new.md",
+     "//depot/a.py",
+     "//depot/old.py"
+    ]
+   ],
+   [
+    "materialize_preimage",
+    "//depot/guide.md",
+    "edit",
+    "3"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/new.md",
+    "add",
+    "1"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/a.py",
+    "edit",
+    "5"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/old.py",
+    "delete",
+    "2"
+   ],
+   [
+    "fetch_file_content",
+    "//depot/guide.md",
+    "3",
+    "77",
+    true,
+    false
+   ],
+   [
+    "fetch_file_content",
+    "//depot/new.md",
+    "1",
+    "77",
+    true,
+    false
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "get_workspace_root"
+   ],
+   [
+    "fetch_opened_files",
+    "77"
+   ],
+   [
+    "resolve_local_paths",
+    [
+     "//depot/guide.md",
+     "//depot/new.md",
+     "//depot/a.py",
+     "//depot/old.py"
+    ]
+   ],
+   [
+    "materialize_preimage",
+    "//depot/guide.md",
+    "edit",
+    "3"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/new.md",
+    "add",
+    "1"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/a.py",
+    "edit",
+    "5"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/old.py",
+    "delete",
+    "2"
+   ],
+   [
+    "fetch_file_content",
+    "//depot/guide.md",
+    "3",
+    "77",
+    true,
+    false
+   ],
+   [
+    "fetch_file_content",
+    "//depot/new.md",
+    "1",
+    "77",
+    true,
+    false
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "find_unreconciled",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_default_open",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_unresolved",
+    "77"
+   ]
+  ],
+  "stderr": ""
+ },
+ "pending_markdown_digest_mismatch_and_drift": {
+  "assembled": [
+   {
+    "claim_globs": [],
+    "files": [
+     {
+      "action": "edit",
+      "depot": "//depot/guide.md",
+      "identifier": "//depot/guide.md",
+      "local": "<TMP>/ws/guide.md",
+      "pre_image": "<TMP>/bundle/pre/guide.md",
+      "pre_image_is_empty": false,
+      "repository_path": "guide.md"
+     },
+     {
+      "action": "add",
+      "depot": "//depot/new.md",
+      "identifier": "//depot/new.md",
+      "local": "<TMP>/ws/new.md",
+      "pre_image": "<TMP>/bundle/pre/new.md",
+      "pre_image_is_empty": true,
+      "repository_path": "new.md"
+     },
+     {
+      "action": "edit",
+      "depot": "//depot/a.py",
+      "identifier": "//depot/a.py",
+      "local": "<TMP>/ws/a.py",
+      "pre_image": "<TMP>/bundle/pre/a.py",
+      "pre_image_is_empty": false,
+      "repository_path": "a.py"
+     },
+     {
+      "action": "delete",
+      "depot": "//depot/old.py",
+      "identifier": "//depot/old.py",
+      "local": "<TMP>/ws/old.py",
+      "pre_image": "<TMP>/bundle/pre/old.py",
+      "pre_image_is_empty": false,
+      "repository_path": "old.py"
+     }
+    ],
+    "mechanical_contract": 2,
+    "path_effects": [
+     {
+      "effect": "edit",
+      "path": "guide.md",
+      "post_identity": "ABCD",
+      "post_image": null,
+      "post_image_error": "changed Markdown digest did not match shelf fingerprint",
+      "post_size": 0,
+      "review_id": "77"
+     },
+     {
+      "effect": "add",
+      "path": "new.md",
+      "post_identity": "B1946AC92492D2347C6235B4D2611184",
+      "post_image": "hello\n",
+      "post_image_error": null,
+      "post_size": 6,
+      "review_id": "77"
+     },
+     {
+      "effect": "edit",
+      "path": "a.py",
+      "post_identity": "3D688704CBBC6753B2002C94A2AD19AC",
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     },
+     {
+      "effect": "delete",
+      "path": "old.py",
+      "post_identity": null,
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     }
+    ],
+    "review_generated": false,
+    "snapshot_reader": "P4SnapshotReader",
+    "snapshot_seed": null,
+    "workspace_root": "<TMP>/ws"
+   },
+   {
+    "claim_globs": [],
+    "files": [
+     {
+      "action": "edit",
+      "depot": "//depot/guide.md",
+      "identifier": "//depot/guide.md",
+      "local": "<TMP>/ws/guide.md",
+      "pre_image": "<TMP>/bundle/pre/guide.md",
+      "pre_image_is_empty": false,
+      "repository_path": "guide.md"
+     },
+     {
+      "action": "add",
+      "depot": "//depot/new.md",
+      "identifier": "//depot/new.md",
+      "local": "<TMP>/ws/new.md",
+      "pre_image": "<TMP>/bundle/pre/new.md",
+      "pre_image_is_empty": true,
+      "repository_path": "new.md"
+     },
+     {
+      "action": "edit",
+      "depot": "//depot/a.py",
+      "identifier": "//depot/a.py",
+      "local": "<TMP>/ws/a.py",
+      "pre_image": "<TMP>/bundle/pre/a.py",
+      "pre_image_is_empty": false,
+      "repository_path": "a.py"
+     },
+     {
+      "action": "delete",
+      "depot": "//depot/old.py",
+      "identifier": "//depot/old.py",
+      "local": "<TMP>/ws/old.py",
+      "pre_image": "<TMP>/bundle/pre/old.py",
+      "pre_image_is_empty": false,
+      "repository_path": "old.py"
+     }
+    ],
+    "mechanical_contract": 2,
+    "path_effects": [
+     {
+      "effect": "edit",
+      "path": "guide.md",
+      "post_identity": "ABCD",
+      "post_image": null,
+      "post_image_error": "changed Markdown digest did not match shelf fingerprint",
+      "post_size": 0,
+      "review_id": "77"
+     },
+     {
+      "effect": "add",
+      "path": "new.md",
+      "post_identity": "B1946AC92492D2347C6235B4D2611184",
+      "post_image": "hello\n",
+      "post_image_error": null,
+      "post_size": 6,
+      "review_id": "77"
+     },
+     {
+      "effect": "edit",
+      "path": "a.py",
+      "post_identity": "3D688704CBBC6753B2002C94A2AD19AC",
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     },
+     {
+      "effect": "delete",
+      "path": "old.py",
+      "post_identity": null,
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     }
+    ],
+    "review_generated": false,
+    "snapshot_reader": "P4SnapshotReader",
+    "snapshot_seed": null,
+    "workspace_root": "<TMP>/ws"
+   }
+  ],
+  "bundle": {
+   "auto_shelved": false,
+   "bundle_dir": "<TMP>/bundle",
+   "change_id": "77",
+   "changed_files": [
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/guide.md",
+     "local": "<TMP>/ws/guide.md",
+     "mechanical_findings": [],
+     "repository_path": "guide.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/new.md",
+     "local": "<TMP>/ws/new.md",
+     "mechanical_findings": [],
+     "repository_path": "new.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/a.py",
+     "local": "<TMP>/ws/a.py",
+     "mechanical_findings": [],
+     "repository_path": "a.py"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/old.py",
+     "local": "<TMP>/ws/old.py",
+     "mechanical_findings": [],
+     "repository_path": "old.py"
+    }
+   ],
+   "cl": "77",
+   "default_open": [],
+   "description": "Refactor the guide",
+   "diff_chunks": [
+    {
+     "bytes": 240,
+     "files": [
+      "//depot/guide.md",
+      "//depot/new.md",
+      "//depot/a.py",
+      "//depot/old.py"
+     ],
+     "index": 0,
+     "mechanical_findings": [],
+     "mechanical_scan": {
+      "files": [
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         "repository snapshot unavailable",
+         "local_link_targets omitted because the P4 shelf changed during capture"
+        ],
+        "file": "//depot/guide.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         "repository snapshot unavailable",
+         "local_link_targets omitted because the P4 shelf changed during capture"
+        ],
+        "file": "//depot/new.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         "repository snapshot unavailable",
+         "local_link_targets omitted because the P4 shelf changed during capture"
+        ],
+        "file": "//depot/a.py",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         "local_link_targets omitted because the P4 shelf changed during capture"
+        ],
+        "file": "//depot/old.py",
+        "findings": [],
+        "mechanical_contract": 2
+       }
+      ],
+      "schema_version": 2
+     },
+     "path": "chunks/chunk-000.diff"
+    }
+   ],
+   "hygiene_incomplete": [],
+   "ledger_baseline": "c83784f148a59066",
+   "ledger_hits": [],
+   "mechanical_check_phrases": {
+    "abs_path": "absolute paths",
+    "column_counts": "CSV/TSV column counts",
+    "duplicate_keys": "duplicate keys",
+    "local_link_targets": "local file and Markdown link targets",
+    "non_ascii": "non-ASCII characters",
+    "python_syntax": "CPython syntax under nearest snapshot .python-version (whole post-image; first compiler diagnostic)",
+    "structured_parse": "structured-data parse failures (whole post-image; first parser diagnostic)"
+   },
+   "mechanical_contract": 2,
+   "project_root": "<TMP>/ws",
+   "shelf_drift": [
+    {
+     "depot": "//depot/guide.md",
+     "local": "<TMP>/ws/guide.md"
+    }
+   ],
+   "shelf_fingerprint": {},
+   "stale_open": [],
+   "submit_gates": [],
+   "unique_claude_mds": [
+    "<TMP>/ws/CLAUDE.md"
+   ],
+   "unreconciled": [],
+   "unresolved": []
+  },
+  "calls": [
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "get_workspace_root"
+   ],
+   [
+    "fetch_opened_files",
+    "77"
+   ],
+   [
+    "resolve_local_paths",
+    [
+     "//depot/guide.md",
+     "//depot/new.md",
+     "//depot/a.py",
+     "//depot/old.py"
+    ]
+   ],
+   [
+    "materialize_preimage",
+    "//depot/guide.md",
+    "edit",
+    "3"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/new.md",
+    "add",
+    "1"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/a.py",
+    "edit",
+    "5"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/old.py",
+    "delete",
+    "2"
+   ],
+   [
+    "fetch_file_content",
+    "//depot/guide.md",
+    "3",
+    "77",
+    true,
+    false
+   ],
+   [
+    "fetch_file_content",
+    "//depot/new.md",
+    "1",
+    "77",
+    true,
+    false
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "get_workspace_root"
+   ],
+   [
+    "fetch_opened_files",
+    "77"
+   ],
+   [
+    "resolve_local_paths",
+    [
+     "//depot/guide.md",
+     "//depot/new.md",
+     "//depot/a.py",
+     "//depot/old.py"
+    ]
+   ],
+   [
+    "materialize_preimage",
+    "//depot/guide.md",
+    "edit",
+    "3"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/new.md",
+    "add",
+    "1"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/a.py",
+    "edit",
+    "5"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/old.py",
+    "delete",
+    "2"
+   ],
+   [
+    "fetch_file_content",
+    "//depot/guide.md",
+    "3",
+    "77",
+    true,
+    false
+   ],
+   [
+    "fetch_file_content",
+    "//depot/new.md",
+    "1",
+    "77",
+    true,
+    false
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "find_unreconciled",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_default_open",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_unresolved",
+    "77"
+   ]
+  ],
+  "stderr": "prepare_review: shelf content differs from the workspace for //depot/guide.md\nprepare_review: shelf content differs from the workspace for //depot/guide.md\n"
+ },
+ "pending_markdown_fetch_fails": {
+  "assembled": [
+   {
+    "claim_globs": [],
+    "files": [
+     {
+      "action": "edit",
+      "depot": "//depot/guide.md",
+      "identifier": "//depot/guide.md",
+      "local": "<TMP>/ws/guide.md",
+      "pre_image": "<TMP>/bundle/pre/guide.md",
+      "pre_image_is_empty": false,
+      "repository_path": "guide.md"
+     },
+     {
+      "action": "add",
+      "depot": "//depot/new.md",
+      "identifier": "//depot/new.md",
+      "local": "<TMP>/ws/new.md",
+      "pre_image": "<TMP>/bundle/pre/new.md",
+      "pre_image_is_empty": true,
+      "repository_path": "new.md"
+     },
+     {
+      "action": "edit",
+      "depot": "//depot/a.py",
+      "identifier": "//depot/a.py",
+      "local": "<TMP>/ws/a.py",
+      "pre_image": "<TMP>/bundle/pre/a.py",
+      "pre_image_is_empty": false,
+      "repository_path": "a.py"
+     },
+     {
+      "action": "delete",
+      "depot": "//depot/old.py",
+      "identifier": "//depot/old.py",
+      "local": "<TMP>/ws/old.py",
+      "pre_image": "<TMP>/bundle/pre/old.py",
+      "pre_image_is_empty": false,
+      "repository_path": "old.py"
+     }
+    ],
+    "mechanical_contract": 2,
+    "path_effects": [
+     {
+      "effect": "edit",
+      "path": "guide.md",
+      "post_identity": "0C0B4E6264F502CDFB93C0981A7FA445",
+      "post_image": null,
+      "post_image_error": "could not fetch changed Markdown shelf content",
+      "post_size": 0,
+      "review_id": "77"
+     },
+     {
+      "effect": "add",
+      "path": "new.md",
+      "post_identity": "B1946AC92492D2347C6235B4D2611184",
+      "post_image": null,
+      "post_image_error": "could not fetch changed Markdown shelf content",
+      "post_size": 0,
+      "review_id": "77"
+     },
+     {
+      "effect": "edit",
+      "path": "a.py",
+      "post_identity": "3D688704CBBC6753B2002C94A2AD19AC",
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     },
+     {
+      "effect": "delete",
+      "path": "old.py",
+      "post_identity": null,
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     }
+    ],
+    "review_generated": false,
+    "snapshot_reader": "P4SnapshotReader",
+    "snapshot_seed": "p4:client:62cad7806a211f4a5bacb0c8f1c016fbe0c5f376c0135d3264bf451744d28d8d",
+    "workspace_root": "<TMP>/ws"
+   }
+  ],
+  "bundle": {
+   "auto_shelved": false,
+   "bundle_dir": "<TMP>/bundle",
+   "change_id": "77",
+   "changed_files": [
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/guide.md",
+     "local": "<TMP>/ws/guide.md",
+     "mechanical_findings": [],
+     "repository_path": "guide.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/new.md",
+     "local": "<TMP>/ws/new.md",
+     "mechanical_findings": [],
+     "repository_path": "new.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/a.py",
+     "local": "<TMP>/ws/a.py",
+     "mechanical_findings": [],
+     "repository_path": "a.py"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/old.py",
+     "local": "<TMP>/ws/old.py",
+     "mechanical_findings": [],
+     "repository_path": "old.py"
+    }
+   ],
+   "cl": "77",
+   "default_open": [],
+   "description": "Refactor the guide",
+   "diff_chunks": [
+    {
+     "bytes": 240,
+     "files": [
+      "//depot/guide.md",
+      "//depot/new.md",
+      "//depot/a.py",
+      "//depot/old.py"
+     ],
+     "index": 0,
+     "mechanical_findings": [],
+     "mechanical_scan": {
+      "files": [
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path",
+         "local_link_targets"
+        ],
+        "file": "//depot/guide.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path",
+         "local_link_targets"
+        ],
+        "file": "//depot/new.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         ".python-version: Python version mapping is error"
+        ],
+        "file": "//depot/a.py",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "file": "//depot/old.py",
+        "findings": [],
+        "mechanical_contract": 2
+       }
+      ],
+      "schema_version": 2
+     },
+     "path": "chunks/chunk-000.diff"
+    }
+   ],
+   "hygiene_incomplete": [],
+   "ledger_baseline": "d160346ca0de4923",
+   "ledger_hits": [],
+   "mechanical_check_phrases": {
+    "abs_path": "absolute paths",
+    "column_counts": "CSV/TSV column counts",
+    "duplicate_keys": "duplicate keys",
+    "local_link_targets": "local file and Markdown link targets",
+    "non_ascii": "non-ASCII characters",
+    "python_syntax": "CPython syntax under nearest snapshot .python-version (whole post-image; first compiler diagnostic)",
+    "structured_parse": "structured-data parse failures (whole post-image; first parser diagnostic)"
+   },
+   "mechanical_contract": 2,
+   "project_root": "<TMP>/ws",
+   "shelf_drift": [],
+   "shelf_fingerprint": {},
+   "snapshot_identity": "p4:client:5348ddf463122bbac31c1130eb5d444084c2aea586f3692cf7cc84ce914a0e11",
+   "stale_open": [],
+   "submit_gates": [],
+   "unique_claude_mds": [
+    "<TMP>/ws/CLAUDE.md"
+   ],
+   "unreconciled": [],
+   "unresolved": []
+  },
+  "calls": [
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "get_workspace_root"
+   ],
+   [
+    "fetch_opened_files",
+    "77"
+   ],
+   [
+    "resolve_local_paths",
+    [
+     "//depot/guide.md",
+     "//depot/new.md",
+     "//depot/a.py",
+     "//depot/old.py"
+    ]
+   ],
+   [
+    "materialize_preimage",
+    "//depot/guide.md",
+    "edit",
+    "3"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/new.md",
+    "add",
+    "1"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/a.py",
+    "edit",
+    "5"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/old.py",
+    "delete",
+    "2"
+   ],
+   [
+    "fetch_file_content",
+    "//depot/guide.md",
+    "3",
+    "77",
+    true,
+    false
+   ],
+   [
+    "fetch_file_content",
+    "//depot/new.md",
+    "1",
+    "77",
+    true,
+    false
+   ],
+   [
+    "run_p4",
+    [
+     "-ztag",
+     "where",
+     "<TMP>/ws/.python-version"
+    ]
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "find_unreconciled",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_default_open",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_unresolved",
+    "77"
+   ]
+  ],
+  "stderr": ""
+ },
+ "pending_markdown_post_image_over_limit": {
+  "assembled": [
+   {
+    "claim_globs": [],
+    "files": [
+     {
+      "action": "edit",
+      "depot": "//depot/guide.md",
+      "identifier": "//depot/guide.md",
+      "local": "<TMP>/ws/guide.md",
+      "pre_image": "<TMP>/bundle/pre/guide.md",
+      "pre_image_is_empty": false,
+      "repository_path": "guide.md"
+     },
+     {
+      "action": "add",
+      "depot": "//depot/new.md",
+      "identifier": "//depot/new.md",
+      "local": "<TMP>/ws/new.md",
+      "pre_image": "<TMP>/bundle/pre/new.md",
+      "pre_image_is_empty": true,
+      "repository_path": "new.md"
+     },
+     {
+      "action": "edit",
+      "depot": "//depot/a.py",
+      "identifier": "//depot/a.py",
+      "local": "<TMP>/ws/a.py",
+      "pre_image": "<TMP>/bundle/pre/a.py",
+      "pre_image_is_empty": false,
+      "repository_path": "a.py"
+     },
+     {
+      "action": "delete",
+      "depot": "//depot/old.py",
+      "identifier": "//depot/old.py",
+      "local": "<TMP>/ws/old.py",
+      "pre_image": "<TMP>/bundle/pre/old.py",
+      "pre_image_is_empty": false,
+      "repository_path": "old.py"
+     }
+    ],
+    "mechanical_contract": 2,
+    "path_effects": [
+     {
+      "effect": "edit",
+      "path": "guide.md",
+      "post_identity": "0C0B4E6264F502CDFB93C0981A7FA445",
+      "post_image": null,
+      "post_image_error": "changed Markdown post-image exceeds source limit",
+      "post_size": 0,
+      "review_id": "77"
+     },
+     {
+      "effect": "add",
+      "path": "new.md",
+      "post_identity": "B1946AC92492D2347C6235B4D2611184",
+      "post_image": "hello\n",
+      "post_image_error": null,
+      "post_size": 6,
+      "review_id": "77"
+     },
+     {
+      "effect": "edit",
+      "path": "a.py",
+      "post_identity": "3D688704CBBC6753B2002C94A2AD19AC",
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     },
+     {
+      "effect": "delete",
+      "path": "old.py",
+      "post_identity": null,
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     }
+    ],
+    "review_generated": false,
+    "snapshot_reader": "P4SnapshotReader",
+    "snapshot_seed": "p4:client:62cad7806a211f4a5bacb0c8f1c016fbe0c5f376c0135d3264bf451744d28d8d",
+    "workspace_root": "<TMP>/ws"
+   }
+  ],
+  "bundle": {
+   "auto_shelved": false,
+   "bundle_dir": "<TMP>/bundle",
+   "change_id": "77",
+   "changed_files": [
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/guide.md",
+     "local": "<TMP>/ws/guide.md",
+     "mechanical_findings": [],
+     "repository_path": "guide.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/new.md",
+     "local": "<TMP>/ws/new.md",
+     "mechanical_findings": [],
+     "repository_path": "new.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/a.py",
+     "local": "<TMP>/ws/a.py",
+     "mechanical_findings": [],
+     "repository_path": "a.py"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/old.py",
+     "local": "<TMP>/ws/old.py",
+     "mechanical_findings": [],
+     "repository_path": "old.py"
+    }
+   ],
+   "cl": "77",
+   "default_open": [],
+   "description": "Refactor the guide",
+   "diff_chunks": [
+    {
+     "bytes": 240,
+     "files": [
+      "//depot/guide.md",
+      "//depot/new.md",
+      "//depot/a.py",
+      "//depot/old.py"
+     ],
+     "index": 0,
+     "mechanical_findings": [],
+     "mechanical_scan": {
+      "files": [
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path",
+         "local_link_targets"
+        ],
+        "file": "//depot/guide.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path",
+         "local_link_targets"
+        ],
+        "file": "//depot/new.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         ".python-version: Python version mapping is error"
+        ],
+        "file": "//depot/a.py",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "file": "//depot/old.py",
+        "findings": [],
+        "mechanical_contract": 2
+       }
+      ],
+      "schema_version": 2
+     },
+     "path": "chunks/chunk-000.diff"
+    }
+   ],
+   "hygiene_incomplete": [],
+   "ledger_baseline": "d160346ca0de4923",
+   "ledger_hits": [],
+   "mechanical_check_phrases": {
+    "abs_path": "absolute paths",
+    "column_counts": "CSV/TSV column counts",
+    "duplicate_keys": "duplicate keys",
+    "local_link_targets": "local file and Markdown link targets",
+    "non_ascii": "non-ASCII characters",
+    "python_syntax": "CPython syntax under nearest snapshot .python-version (whole post-image; first compiler diagnostic)",
+    "structured_parse": "structured-data parse failures (whole post-image; first parser diagnostic)"
+   },
+   "mechanical_contract": 2,
+   "project_root": "<TMP>/ws",
+   "shelf_drift": [],
+   "shelf_fingerprint": {},
+   "snapshot_identity": "p4:client:5348ddf463122bbac31c1130eb5d444084c2aea586f3692cf7cc84ce914a0e11",
+   "stale_open": [],
+   "submit_gates": [],
+   "unique_claude_mds": [
+    "<TMP>/ws/CLAUDE.md"
+   ],
+   "unreconciled": [],
+   "unresolved": []
+  },
+  "calls": [
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "get_workspace_root"
+   ],
+   [
+    "fetch_opened_files",
+    "77"
+   ],
+   [
+    "resolve_local_paths",
+    [
+     "//depot/guide.md",
+     "//depot/new.md",
+     "//depot/a.py",
+     "//depot/old.py"
+    ]
+   ],
+   [
+    "materialize_preimage",
+    "//depot/guide.md",
+    "edit",
+    "3"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/new.md",
+    "add",
+    "1"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/a.py",
+    "edit",
+    "5"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/old.py",
+    "delete",
+    "2"
+   ],
+   [
+    "fetch_file_content",
+    "//depot/new.md",
+    "1",
+    "77",
+    true,
+    false
+   ],
+   [
+    "run_p4",
+    [
+     "-ztag",
+     "where",
+     "<TMP>/ws/.python-version"
+    ]
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "find_unreconciled",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_default_open",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_unresolved",
+    "77"
+   ]
+  ],
+  "stderr": ""
+ },
+ "pending_markdown_preimage_missing": {
+  "assembled": [
+   {
+    "claim_globs": [],
+    "files": [
+     {
+      "action": "edit",
+      "depot": "//depot/guide.md",
+      "identifier": "//depot/guide.md",
+      "local": "<TMP>/ws/guide.md",
+      "pre_image": null,
+      "pre_image_is_empty": false,
+      "repository_path": "guide.md"
+     },
+     {
+      "action": "add",
+      "depot": "//depot/new.md",
+      "identifier": "//depot/new.md",
+      "local": "<TMP>/ws/new.md",
+      "pre_image": "<TMP>/bundle/pre/new.md",
+      "pre_image_is_empty": true,
+      "repository_path": "new.md"
+     },
+     {
+      "action": "edit",
+      "depot": "//depot/a.py",
+      "identifier": "//depot/a.py",
+      "local": "<TMP>/ws/a.py",
+      "pre_image": null,
+      "pre_image_is_empty": false,
+      "repository_path": "a.py"
+     },
+     {
+      "action": "delete",
+      "depot": "//depot/old.py",
+      "identifier": "//depot/old.py",
+      "local": "<TMP>/ws/old.py",
+      "pre_image": null,
+      "pre_image_is_empty": false,
+      "repository_path": "old.py"
+     }
+    ],
+    "mechanical_contract": 2,
+    "path_effects": [
+     {
+      "effect": "edit",
+      "path": "guide.md",
+      "post_identity": "0C0B4E6264F502CDFB93C0981A7FA445",
+      "post_image": null,
+      "post_image_error": "could not reconstruct changed Markdown post-image",
+      "post_size": 0,
+      "review_id": "77"
+     },
+     {
+      "effect": "add",
+      "path": "new.md",
+      "post_identity": "B1946AC92492D2347C6235B4D2611184",
+      "post_image": "hello\n",
+      "post_image_error": null,
+      "post_size": 6,
+      "review_id": "77"
+     },
+     {
+      "effect": "edit",
+      "path": "a.py",
+      "post_identity": "3D688704CBBC6753B2002C94A2AD19AC",
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     },
+     {
+      "effect": "delete",
+      "path": "old.py",
+      "post_identity": null,
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     }
+    ],
+    "review_generated": false,
+    "snapshot_reader": "P4SnapshotReader",
+    "snapshot_seed": "p4:client:62cad7806a211f4a5bacb0c8f1c016fbe0c5f376c0135d3264bf451744d28d8d",
+    "workspace_root": "<TMP>/ws"
+   }
+  ],
+  "bundle": {
+   "auto_shelved": false,
+   "bundle_dir": "<TMP>/bundle",
+   "change_id": "77",
+   "changed_files": [
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/guide.md",
+     "local": "<TMP>/ws/guide.md",
+     "mechanical_findings": [],
+     "repository_path": "guide.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/new.md",
+     "local": "<TMP>/ws/new.md",
+     "mechanical_findings": [],
+     "repository_path": "new.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/a.py",
+     "local": "<TMP>/ws/a.py",
+     "mechanical_findings": [],
+     "repository_path": "a.py"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/old.py",
+     "local": "<TMP>/ws/old.py",
+     "mechanical_findings": [],
+     "repository_path": "old.py"
+    }
+   ],
+   "cl": "77",
+   "default_open": [],
+   "description": "Refactor the guide",
+   "diff_chunks": [
+    {
+     "bytes": 240,
+     "files": [
+      "//depot/guide.md",
+      "//depot/new.md",
+      "//depot/a.py",
+      "//depot/old.py"
+     ],
+     "index": 0,
+     "mechanical_findings": [],
+     "mechanical_scan": {
+      "files": [
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "file": "//depot/guide.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path",
+         "local_link_targets"
+        ],
+        "file": "//depot/new.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         "Python post-image unavailable"
+        ],
+        "file": "//depot/a.py",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "file": "//depot/old.py",
+        "findings": [],
+        "mechanical_contract": 2
+       }
+      ],
+      "schema_version": 2
+     },
+     "path": "chunks/chunk-000.diff"
+    }
+   ],
+   "hygiene_incomplete": [],
+   "ledger_baseline": "d160346ca0de4923",
+   "ledger_hits": [],
+   "mechanical_check_phrases": {
+    "abs_path": "absolute paths",
+    "column_counts": "CSV/TSV column counts",
+    "duplicate_keys": "duplicate keys",
+    "local_link_targets": "local file and Markdown link targets",
+    "non_ascii": "non-ASCII characters",
+    "python_syntax": "CPython syntax under nearest snapshot .python-version (whole post-image; first compiler diagnostic)",
+    "structured_parse": "structured-data parse failures (whole post-image; first parser diagnostic)"
+   },
+   "mechanical_contract": 2,
+   "project_root": "<TMP>/ws",
+   "shelf_drift": [],
+   "shelf_fingerprint": {},
+   "snapshot_identity": "p4:client:5348ddf463122bbac31c1130eb5d444084c2aea586f3692cf7cc84ce914a0e11",
+   "stale_open": [],
+   "submit_gates": [],
+   "unique_claude_mds": [
+    "<TMP>/ws/CLAUDE.md"
+   ],
+   "unreconciled": [],
+   "unresolved": []
+  },
+  "calls": [
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "get_workspace_root"
+   ],
+   [
+    "fetch_opened_files",
+    "77"
+   ],
+   [
+    "resolve_local_paths",
+    [
+     "//depot/guide.md",
+     "//depot/new.md",
+     "//depot/a.py",
+     "//depot/old.py"
+    ]
+   ],
+   [
+    "materialize_preimage",
+    "//depot/guide.md",
+    "edit",
+    "3"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/new.md",
+    "add",
+    "1"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/a.py",
+    "edit",
+    "5"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/old.py",
+    "delete",
+    "2"
+   ],
+   [
+    "fetch_file_content",
+    "//depot/new.md",
+    "1",
+    "77",
+    true,
+    false
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "find_unreconciled",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_default_open",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_unresolved",
+    "77"
+   ]
+  ],
+  "stderr": ""
+ },
+ "pending_markdown_preimage_unrelated": {
+  "assembled": [
+   {
+    "claim_globs": [],
+    "files": [
+     {
+      "action": "edit",
+      "depot": "//depot/guide.md",
+      "identifier": "//depot/guide.md",
+      "local": "<TMP>/ws/guide.md",
+      "pre_image": "<TMP>/bundle/pre/guide.md",
+      "pre_image_is_empty": false,
+      "repository_path": "guide.md"
+     },
+     {
+      "action": "add",
+      "depot": "//depot/new.md",
+      "identifier": "//depot/new.md",
+      "local": "<TMP>/ws/new.md",
+      "pre_image": "<TMP>/bundle/pre/new.md",
+      "pre_image_is_empty": true,
+      "repository_path": "new.md"
+     },
+     {
+      "action": "edit",
+      "depot": "//depot/a.py",
+      "identifier": "//depot/a.py",
+      "local": "<TMP>/ws/a.py",
+      "pre_image": "<TMP>/bundle/pre/a.py",
+      "pre_image_is_empty": false,
+      "repository_path": "a.py"
+     },
+     {
+      "action": "delete",
+      "depot": "//depot/old.py",
+      "identifier": "//depot/old.py",
+      "local": "<TMP>/ws/old.py",
+      "pre_image": "<TMP>/bundle/pre/old.py",
+      "pre_image_is_empty": false,
+      "repository_path": "old.py"
+     }
+    ],
+    "mechanical_contract": 2,
+    "path_effects": [
+     {
+      "effect": "edit",
+      "path": "guide.md",
+      "post_identity": "0C0B4E6264F502CDFB93C0981A7FA445",
+      "post_image": null,
+      "post_image_error": "could not reconstruct changed Markdown post-image",
+      "post_size": 0,
+      "review_id": "77"
+     },
+     {
+      "effect": "add",
+      "path": "new.md",
+      "post_identity": "B1946AC92492D2347C6235B4D2611184",
+      "post_image": "hello\n",
+      "post_image_error": null,
+      "post_size": 6,
+      "review_id": "77"
+     },
+     {
+      "effect": "edit",
+      "path": "a.py",
+      "post_identity": "3D688704CBBC6753B2002C94A2AD19AC",
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     },
+     {
+      "effect": "delete",
+      "path": "old.py",
+      "post_identity": null,
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     }
+    ],
+    "review_generated": false,
+    "snapshot_reader": "P4SnapshotReader",
+    "snapshot_seed": "p4:client:62cad7806a211f4a5bacb0c8f1c016fbe0c5f376c0135d3264bf451744d28d8d",
+    "workspace_root": "<TMP>/ws"
+   }
+  ],
+  "bundle": {
+   "auto_shelved": false,
+   "bundle_dir": "<TMP>/bundle",
+   "change_id": "77",
+   "changed_files": [
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/guide.md",
+     "local": "<TMP>/ws/guide.md",
+     "mechanical_findings": [],
+     "repository_path": "guide.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/new.md",
+     "local": "<TMP>/ws/new.md",
+     "mechanical_findings": [],
+     "repository_path": "new.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/a.py",
+     "local": "<TMP>/ws/a.py",
+     "mechanical_findings": [],
+     "repository_path": "a.py"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/old.py",
+     "local": "<TMP>/ws/old.py",
+     "mechanical_findings": [],
+     "repository_path": "old.py"
+    }
+   ],
+   "cl": "77",
+   "default_open": [],
+   "description": "Refactor the guide",
+   "diff_chunks": [
+    {
+     "bytes": 240,
+     "files": [
+      "//depot/guide.md",
+      "//depot/new.md",
+      "//depot/a.py",
+      "//depot/old.py"
+     ],
+     "index": 0,
+     "mechanical_findings": [],
+     "mechanical_scan": {
+      "files": [
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "file": "//depot/guide.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path",
+         "local_link_targets"
+        ],
+        "file": "//depot/new.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         ".python-version: Python version mapping is error"
+        ],
+        "file": "//depot/a.py",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "file": "//depot/old.py",
+        "findings": [],
+        "mechanical_contract": 2
+       }
+      ],
+      "schema_version": 2
+     },
+     "path": "chunks/chunk-000.diff"
+    }
+   ],
+   "hygiene_incomplete": [],
+   "ledger_baseline": "d160346ca0de4923",
+   "ledger_hits": [],
+   "mechanical_check_phrases": {
+    "abs_path": "absolute paths",
+    "column_counts": "CSV/TSV column counts",
+    "duplicate_keys": "duplicate keys",
+    "local_link_targets": "local file and Markdown link targets",
+    "non_ascii": "non-ASCII characters",
+    "python_syntax": "CPython syntax under nearest snapshot .python-version (whole post-image; first compiler diagnostic)",
+    "structured_parse": "structured-data parse failures (whole post-image; first parser diagnostic)"
+   },
+   "mechanical_contract": 2,
+   "project_root": "<TMP>/ws",
+   "shelf_drift": [],
+   "shelf_fingerprint": {},
+   "snapshot_identity": "p4:client:5348ddf463122bbac31c1130eb5d444084c2aea586f3692cf7cc84ce914a0e11",
+   "stale_open": [],
+   "submit_gates": [],
+   "unique_claude_mds": [
+    "<TMP>/ws/CLAUDE.md"
+   ],
+   "unreconciled": [],
+   "unresolved": []
+  },
+  "calls": [
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "get_workspace_root"
+   ],
+   [
+    "fetch_opened_files",
+    "77"
+   ],
+   [
+    "resolve_local_paths",
+    [
+     "//depot/guide.md",
+     "//depot/new.md",
+     "//depot/a.py",
+     "//depot/old.py"
+    ]
+   ],
+   [
+    "materialize_preimage",
+    "//depot/guide.md",
+    "edit",
+    "3"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/new.md",
+    "add",
+    "1"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/a.py",
+    "edit",
+    "5"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/old.py",
+    "delete",
+    "2"
+   ],
+   [
+    "fetch_file_content",
+    "//depot/new.md",
+    "1",
+    "77",
+    true,
+    false
+   ],
+   [
+    "run_p4",
+    [
+     "-ztag",
+     "where",
+     "<TMP>/ws/.python-version"
+    ]
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "find_unreconciled",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_default_open",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_unresolved",
+    "77"
+   ]
+  ],
+  "stderr": ""
+ },
+ "pending_no_workspace_root": {
+  "assembled": [
+   {
+    "claim_globs": [],
+    "files": [
+     {
+      "action": "edit",
+      "depot": "//depot/guide.md",
+      "identifier": "//depot/guide.md",
+      "local": "<TMP>/ws/guide.md",
+      "pre_image": "<TMP>/bundle/pre/guide.md",
+      "pre_image_is_empty": false,
+      "repository_path": "//depot/guide.md"
+     },
+     {
+      "action": "add",
+      "depot": "//depot/new.md",
+      "identifier": "//depot/new.md",
+      "local": "<TMP>/ws/new.md",
+      "pre_image": "<TMP>/bundle/pre/new.md",
+      "pre_image_is_empty": true,
+      "repository_path": "//depot/new.md"
+     },
+     {
+      "action": "edit",
+      "depot": "//depot/a.py",
+      "identifier": "//depot/a.py",
+      "local": "<TMP>/ws/a.py",
+      "pre_image": "<TMP>/bundle/pre/a.py",
+      "pre_image_is_empty": false,
+      "repository_path": "//depot/a.py"
+     },
+     {
+      "action": "delete",
+      "depot": "//depot/old.py",
+      "identifier": "//depot/old.py",
+      "local": "<TMP>/ws/old.py",
+      "pre_image": "<TMP>/bundle/pre/old.py",
+      "pre_image_is_empty": false,
+      "repository_path": "//depot/old.py"
+     }
+    ],
+    "mechanical_contract": 2,
+    "path_effects": [],
+    "review_generated": false,
+    "snapshot_reader": null,
+    "snapshot_seed": null,
+    "workspace_root": "None"
+   }
+  ],
+  "bundle": {
+   "auto_shelved": false,
+   "bundle_dir": "<TMP>/bundle",
+   "change_id": "77",
+   "changed_files": [
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/guide.md",
+     "local": "<TMP>/ws/guide.md",
+     "mechanical_findings": [],
+     "repository_path": "//depot/guide.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/new.md",
+     "local": "<TMP>/ws/new.md",
+     "mechanical_findings": [],
+     "repository_path": "//depot/new.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/a.py",
+     "local": "<TMP>/ws/a.py",
+     "mechanical_findings": [],
+     "repository_path": "//depot/a.py"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/old.py",
+     "local": "<TMP>/ws/old.py",
+     "mechanical_findings": [],
+     "repository_path": "//depot/old.py"
+    }
+   ],
+   "cl": "77",
+   "default_open": [],
+   "description": "Refactor the guide",
+   "diff_chunks": [
+    {
+     "bytes": 240,
+     "files": [
+      "//depot/guide.md",
+      "//depot/new.md",
+      "//depot/a.py",
+      "//depot/old.py"
+     ],
+     "index": 0,
+     "mechanical_findings": [],
+     "mechanical_scan": {
+      "files": [
+       {
+        "checks_run": [],
+        "diagnostics": [
+         "repository snapshot unavailable"
+        ],
+        "file": "//depot/guide.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [],
+        "diagnostics": [
+         "repository snapshot unavailable"
+        ],
+        "file": "//depot/new.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [],
+        "diagnostics": [
+         "Python source path is not repository-relative"
+        ],
+        "file": "//depot/a.py",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [],
+        "diagnostics": [
+         "Python source path is not repository-relative"
+        ],
+        "file": "//depot/old.py",
+        "findings": [],
+        "mechanical_contract": 2
+       }
+      ],
+      "schema_version": 2
+     },
+     "path": "chunks/chunk-000.diff"
+    }
+   ],
+   "hygiene_incomplete": [],
+   "ledger_baseline": "d160346ca0de4923",
+   "ledger_hits": [],
+   "mechanical_check_phrases": {
+    "column_counts": "CSV/TSV column counts",
+    "duplicate_keys": "duplicate keys",
+    "local_link_targets": "local file and Markdown link targets",
+    "python_syntax": "CPython syntax under nearest snapshot .python-version (whole post-image; first compiler diagnostic)",
+    "structured_parse": "structured-data parse failures (whole post-image; first parser diagnostic)"
+   },
+   "mechanical_contract": 2,
+   "project_root": null,
+   "shelf_drift": [],
+   "shelf_fingerprint": {},
+   "stale_open": [],
+   "submit_gates": [],
+   "unique_claude_mds": [
+    "<TMP>/ws/CLAUDE.md"
+   ],
+   "unreconciled": [],
+   "unresolved": []
+  },
+  "calls": [
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "get_workspace_root"
+   ],
+   [
+    "fetch_opened_files",
+    "77"
+   ],
+   [
+    "resolve_local_paths",
+    [
+     "//depot/guide.md",
+     "//depot/new.md",
+     "//depot/a.py",
+     "//depot/old.py"
+    ]
+   ],
+   [
+    "materialize_preimage",
+    "//depot/guide.md",
+    "edit",
+    "3"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/new.md",
+    "add",
+    "1"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/a.py",
+    "edit",
+    "5"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/old.py",
+    "delete",
+    "2"
+   ],
+   [
+    "find_unreconciled",
+    [
+     [
+      "<TMP>/ws",
+      true
+     ]
+    ]
+   ],
+   [
+    "find_default_open",
+    [
+     [
+      "<TMP>/ws",
+      true
+     ]
+    ]
+   ],
+   [
+    "find_unresolved",
+    "77"
+   ]
+  ],
+  "stderr": ""
+ },
+ "pending_opened_scan_incomplete": {
+  "assembled": [
+   {
+    "claim_globs": [],
+    "files": [
+     {
+      "action": "edit",
+      "depot": "//depot/guide.md",
+      "identifier": "//depot/guide.md",
+      "local": "<TMP>/ws/guide.md",
+      "pre_image": "<TMP>/bundle/pre/guide.md",
+      "pre_image_is_empty": false,
+      "repository_path": "guide.md"
+     },
+     {
+      "action": "add",
+      "depot": "//depot/new.md",
+      "identifier": "//depot/new.md",
+      "local": "<TMP>/ws/new.md",
+      "pre_image": "<TMP>/bundle/pre/new.md",
+      "pre_image_is_empty": true,
+      "repository_path": "new.md"
+     },
+     {
+      "action": "edit",
+      "depot": "//depot/a.py",
+      "identifier": "//depot/a.py",
+      "local": "<TMP>/ws/a.py",
+      "pre_image": "<TMP>/bundle/pre/a.py",
+      "pre_image_is_empty": false,
+      "repository_path": "a.py"
+     },
+     {
+      "action": "delete",
+      "depot": "//depot/old.py",
+      "identifier": "//depot/old.py",
+      "local": "<TMP>/ws/old.py",
+      "pre_image": "<TMP>/bundle/pre/old.py",
+      "pre_image_is_empty": false,
+      "repository_path": "old.py"
+     }
+    ],
+    "mechanical_contract": 2,
+    "path_effects": [
+     {
+      "effect": "edit",
+      "path": "guide.md",
+      "post_identity": "0C0B4E6264F502CDFB93C0981A7FA445",
+      "post_image": "intro\nnew\n",
+      "post_image_error": null,
+      "post_size": 10,
+      "review_id": "77"
+     },
+     {
+      "effect": "add",
+      "path": "new.md",
+      "post_identity": "B1946AC92492D2347C6235B4D2611184",
+      "post_image": "hello\n",
+      "post_image_error": null,
+      "post_size": 6,
+      "review_id": "77"
+     },
+     {
+      "effect": "edit",
+      "path": "a.py",
+      "post_identity": "3D688704CBBC6753B2002C94A2AD19AC",
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     },
+     {
+      "effect": "delete",
+      "path": "old.py",
+      "post_identity": null,
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     }
+    ],
+    "review_generated": false,
+    "snapshot_reader": "P4SnapshotReader",
+    "snapshot_seed": "p4:client:62cad7806a211f4a5bacb0c8f1c016fbe0c5f376c0135d3264bf451744d28d8d",
+    "workspace_root": "<TMP>/ws"
+   }
+  ],
+  "bundle": {
+   "auto_shelved": false,
+   "bundle_dir": "<TMP>/bundle",
+   "change_id": "77",
+   "changed_files": [
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/guide.md",
+     "local": "<TMP>/ws/guide.md",
+     "mechanical_findings": [],
+     "repository_path": "guide.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/new.md",
+     "local": "<TMP>/ws/new.md",
+     "mechanical_findings": [],
+     "repository_path": "new.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/a.py",
+     "local": "<TMP>/ws/a.py",
+     "mechanical_findings": [],
+     "repository_path": "a.py"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/old.py",
+     "local": "<TMP>/ws/old.py",
+     "mechanical_findings": [],
+     "repository_path": "old.py"
+    }
+   ],
+   "cl": "77",
+   "default_open": [],
+   "description": "Refactor the guide",
+   "diff_chunks": [
+    {
+     "bytes": 240,
+     "files": [
+      "//depot/guide.md",
+      "//depot/new.md",
+      "//depot/a.py",
+      "//depot/old.py"
+     ],
+     "index": 0,
+     "mechanical_findings": [],
+     "mechanical_scan": {
+      "files": [
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path",
+         "local_link_targets"
+        ],
+        "file": "//depot/guide.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path",
+         "local_link_targets"
+        ],
+        "file": "//depot/new.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         ".python-version: Python version mapping is error"
+        ],
+        "file": "//depot/a.py",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "file": "//depot/old.py",
+        "findings": [],
+        "mechanical_contract": 2
+       }
+      ],
+      "schema_version": 2
+     },
+     "path": "chunks/chunk-000.diff"
+    }
+   ],
+   "hygiene_incomplete": [
+    {
+     "reason": "opened refused",
+     "scan": "shelf_opened"
+    }
+   ],
+   "ledger_baseline": "d160346ca0de4923",
+   "ledger_hits": [],
+   "mechanical_check_phrases": {
+    "abs_path": "absolute paths",
+    "column_counts": "CSV/TSV column counts",
+    "duplicate_keys": "duplicate keys",
+    "local_link_targets": "local file and Markdown link targets",
+    "non_ascii": "non-ASCII characters",
+    "python_syntax": "CPython syntax under nearest snapshot .python-version (whole post-image; first compiler diagnostic)",
+    "structured_parse": "structured-data parse failures (whole post-image; first parser diagnostic)"
+   },
+   "mechanical_contract": 2,
+   "project_root": "<TMP>/ws",
+   "shelf_drift": [],
+   "shelf_fingerprint": {},
+   "snapshot_identity": "p4:client:5348ddf463122bbac31c1130eb5d444084c2aea586f3692cf7cc84ce914a0e11",
+   "stale_open": [],
+   "submit_gates": [],
+   "unique_claude_mds": [
+    "<TMP>/ws/CLAUDE.md"
+   ],
+   "unreconciled": [],
+   "unresolved": []
+  },
+  "calls": [
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "get_workspace_root"
+   ],
+   [
+    "fetch_opened_files",
+    "77"
+   ],
+   [
+    "resolve_local_paths",
+    [
+     "//depot/guide.md",
+     "//depot/new.md",
+     "//depot/a.py",
+     "//depot/old.py"
+    ]
+   ],
+   [
+    "materialize_preimage",
+    "//depot/guide.md",
+    "edit",
+    "3"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/new.md",
+    "add",
+    "1"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/a.py",
+    "edit",
+    "5"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/old.py",
+    "delete",
+    "2"
+   ],
+   [
+    "fetch_file_content",
+    "//depot/guide.md",
+    "3",
+    "77",
+    true,
+    false
+   ],
+   [
+    "fetch_file_content",
+    "//depot/new.md",
+    "1",
+    "77",
+    true,
+    false
+   ],
+   [
+    "run_p4",
+    [
+     "-ztag",
+     "where",
+     "<TMP>/ws/.python-version"
+    ]
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "find_unreconciled",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_default_open",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_unresolved",
+    "77"
+   ]
+  ],
+  "stderr": ""
+ },
+ "pending_review_machine_emitted": {
+  "assembled": [
+   {
+    "claim_globs": [],
+    "files": [
+     {
+      "action": "edit",
+      "depot": "//depot/guide.md",
+      "identifier": "//depot/guide.md",
+      "local": "<TMP>/ws/guide.md",
+      "pre_image": "<TMP>/bundle/pre/guide.md",
+      "pre_image_is_empty": false,
+      "repository_path": "guide.md"
+     },
+     {
+      "action": "add",
+      "depot": "//depot/new.md",
+      "identifier": "//depot/new.md",
+      "local": "<TMP>/ws/new.md",
+      "pre_image": "<TMP>/bundle/pre/new.md",
+      "pre_image_is_empty": true,
+      "repository_path": "new.md"
+     },
+     {
+      "action": "edit",
+      "depot": "//depot/a.py",
+      "identifier": "//depot/a.py",
+      "local": "<TMP>/ws/a.py",
+      "pre_image": "<TMP>/bundle/pre/a.py",
+      "pre_image_is_empty": false,
+      "repository_path": "a.py"
+     },
+     {
+      "action": "delete",
+      "depot": "//depot/old.py",
+      "identifier": "//depot/old.py",
+      "local": "<TMP>/ws/old.py",
+      "pre_image": "<TMP>/bundle/pre/old.py",
+      "pre_image_is_empty": false,
+      "repository_path": "old.py"
+     }
+    ],
+    "mechanical_contract": 2,
+    "path_effects": [
+     {
+      "effect": "edit",
+      "path": "guide.md",
+      "post_identity": "0C0B4E6264F502CDFB93C0981A7FA445",
+      "post_image": "intro\nnew\n",
+      "post_image_error": null,
+      "post_size": 10,
+      "review_id": "77"
+     },
+     {
+      "effect": "add",
+      "path": "new.md",
+      "post_identity": "B1946AC92492D2347C6235B4D2611184",
+      "post_image": "hello\n",
+      "post_image_error": null,
+      "post_size": 6,
+      "review_id": "77"
+     },
+     {
+      "effect": "edit",
+      "path": "a.py",
+      "post_identity": "3D688704CBBC6753B2002C94A2AD19AC",
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     },
+     {
+      "effect": "delete",
+      "path": "old.py",
+      "post_identity": null,
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     }
+    ],
+    "review_generated": true,
+    "snapshot_reader": "P4SnapshotReader",
+    "snapshot_seed": "p4:client:62cad7806a211f4a5bacb0c8f1c016fbe0c5f376c0135d3264bf451744d28d8d",
+    "workspace_root": "<TMP>/ws"
+   }
+  ],
+  "bundle": {
+   "auto_shelved": false,
+   "bundle_dir": "<TMP>/bundle",
+   "change_id": "77",
+   "changed_files": [
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/guide.md",
+     "local": "<TMP>/ws/guide.md",
+     "mechanical_findings": [],
+     "repository_path": "guide.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/new.md",
+     "local": "<TMP>/ws/new.md",
+     "mechanical_findings": [],
+     "repository_path": "new.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/a.py",
+     "local": "<TMP>/ws/a.py",
+     "mechanical_findings": [],
+     "repository_path": "a.py"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/old.py",
+     "local": "<TMP>/ws/old.py",
+     "mechanical_findings": [],
+     "repository_path": "old.py"
+    }
+   ],
+   "cl": "77",
+   "default_open": [],
+   "description": "Refactor the guide",
+   "diff_chunks": [
+    {
+     "bytes": 240,
+     "files": [
+      "//depot/guide.md",
+      "//depot/new.md",
+      "//depot/a.py",
+      "//depot/old.py"
+     ],
+     "index": 0,
+     "mechanical_findings": [],
+     "mechanical_scan": {
+      "files": [
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path",
+         "local_link_targets"
+        ],
+        "file": "//depot/guide.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path",
+         "local_link_targets"
+        ],
+        "file": "//depot/new.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         ".python-version: Python version mapping is error"
+        ],
+        "file": "//depot/a.py",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "file": "//depot/old.py",
+        "findings": [],
+        "mechanical_contract": 2
+       }
+      ],
+      "schema_version": 2
+     },
+     "path": "chunks/chunk-000.diff"
+    }
+   ],
+   "hygiene_incomplete": [],
+   "ledger_baseline": "d160346ca0de4923",
+   "ledger_hits": [],
+   "mechanical_check_phrases": {
+    "abs_path": "absolute paths",
+    "column_counts": "CSV/TSV column counts",
+    "duplicate_keys": "duplicate keys",
+    "local_link_targets": "local file and Markdown link targets",
+    "non_ascii": "non-ASCII characters",
+    "python_syntax": "CPython syntax under nearest snapshot .python-version (whole post-image; first compiler diagnostic)",
+    "structured_parse": "structured-data parse failures (whole post-image; first parser diagnostic)"
+   },
+   "mechanical_contract": 2,
+   "project_root": "<TMP>/ws",
+   "shelf_drift": [],
+   "shelf_fingerprint": {},
+   "snapshot_identity": "p4:client:5348ddf463122bbac31c1130eb5d444084c2aea586f3692cf7cc84ce914a0e11",
+   "stale_open": [],
+   "submit_gates": [],
+   "unique_claude_mds": [
+    "<TMP>/ws/CLAUDE.md"
+   ],
+   "unreconciled": [],
+   "unresolved": []
+  },
+  "calls": [
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "get_workspace_root"
+   ],
+   [
+    "fetch_opened_files",
+    "77"
+   ],
+   [
+    "resolve_local_paths",
+    [
+     "//depot/guide.md",
+     "//depot/new.md",
+     "//depot/a.py",
+     "//depot/old.py"
+    ]
+   ],
+   [
+    "materialize_preimage",
+    "//depot/guide.md",
+    "edit",
+    "3"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/new.md",
+    "add",
+    "1"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/a.py",
+    "edit",
+    "5"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/old.py",
+    "delete",
+    "2"
+   ],
+   [
+    "fetch_file_content",
+    "//depot/guide.md",
+    "3",
+    "77",
+    true,
+    false
+   ],
+   [
+    "fetch_file_content",
+    "//depot/new.md",
+    "1",
+    "77",
+    true,
+    false
+   ],
+   [
+    "run_p4",
+    [
+     "-ztag",
+     "where",
+     "<TMP>/ws/.python-version"
+    ]
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "find_unreconciled",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_default_open",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_unresolved",
+    "77"
+   ]
+  ],
+  "stderr": ""
+ },
+ "pending_seam_b_clean": {
+  "assembled": [
+   {
+    "claim_globs": [],
+    "files": [
+     {
+      "action": "edit",
+      "depot": "//depot/guide.md",
+      "identifier": "//depot/guide.md",
+      "local": "<TMP>/ws/guide.md",
+      "pre_image": "<TMP>/bundle/pre/guide.md",
+      "pre_image_is_empty": false,
+      "repository_path": "guide.md"
+     },
+     {
+      "action": "add",
+      "depot": "//depot/new.md",
+      "identifier": "//depot/new.md",
+      "local": "<TMP>/ws/new.md",
+      "pre_image": "<TMP>/bundle/pre/new.md",
+      "pre_image_is_empty": true,
+      "repository_path": "new.md"
+     },
+     {
+      "action": "edit",
+      "depot": "//depot/a.py",
+      "identifier": "//depot/a.py",
+      "local": "<TMP>/ws/a.py",
+      "pre_image": "<TMP>/bundle/pre/a.py",
+      "pre_image_is_empty": false,
+      "repository_path": "a.py"
+     },
+     {
+      "action": "delete",
+      "depot": "//depot/old.py",
+      "identifier": "//depot/old.py",
+      "local": "<TMP>/ws/old.py",
+      "pre_image": "<TMP>/bundle/pre/old.py",
+      "pre_image_is_empty": false,
+      "repository_path": "old.py"
+     }
+    ],
+    "mechanical_contract": 2,
+    "path_effects": [
+     {
+      "effect": "edit",
+      "path": "guide.md",
+      "post_identity": "0C0B4E6264F502CDFB93C0981A7FA445",
+      "post_image": "intro\nnew\n",
+      "post_image_error": null,
+      "post_size": 10,
+      "review_id": "77"
+     },
+     {
+      "effect": "add",
+      "path": "new.md",
+      "post_identity": "B1946AC92492D2347C6235B4D2611184",
+      "post_image": "hello\n",
+      "post_image_error": null,
+      "post_size": 6,
+      "review_id": "77"
+     },
+     {
+      "effect": "edit",
+      "path": "a.py",
+      "post_identity": "3D688704CBBC6753B2002C94A2AD19AC",
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     },
+     {
+      "effect": "delete",
+      "path": "old.py",
+      "post_identity": null,
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     }
+    ],
+    "review_generated": false,
+    "snapshot_reader": "P4SnapshotReader",
+    "snapshot_seed": "p4:client:62cad7806a211f4a5bacb0c8f1c016fbe0c5f376c0135d3264bf451744d28d8d",
+    "workspace_root": "<TMP>/ws"
+   }
+  ],
+  "bundle": {
+   "auto_shelved": false,
+   "bundle_dir": "<TMP>/bundle",
+   "change_id": "77",
+   "changed_files": [
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/guide.md",
+     "local": "<TMP>/ws/guide.md",
+     "mechanical_findings": [],
+     "repository_path": "guide.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/new.md",
+     "local": "<TMP>/ws/new.md",
+     "mechanical_findings": [],
+     "repository_path": "new.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/a.py",
+     "local": "<TMP>/ws/a.py",
+     "mechanical_findings": [],
+     "repository_path": "a.py"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/old.py",
+     "local": "<TMP>/ws/old.py",
+     "mechanical_findings": [],
+     "repository_path": "old.py"
+    }
+   ],
+   "cl": "77",
+   "default_open": [],
+   "description": "Refactor the guide",
+   "diff_chunks": [
+    {
+     "bytes": 240,
+     "files": [
+      "//depot/guide.md",
+      "//depot/new.md",
+      "//depot/a.py",
+      "//depot/old.py"
+     ],
+     "index": 0,
+     "mechanical_findings": [],
+     "mechanical_scan": {
+      "files": [
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path",
+         "local_link_targets"
+        ],
+        "file": "//depot/guide.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path",
+         "local_link_targets"
+        ],
+        "file": "//depot/new.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         ".python-version: Python version mapping is error"
+        ],
+        "file": "//depot/a.py",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "file": "//depot/old.py",
+        "findings": [],
+        "mechanical_contract": 2
+       }
+      ],
+      "schema_version": 2
+     },
+     "path": "chunks/chunk-000.diff"
+    }
+   ],
+   "hygiene_incomplete": [],
+   "ledger_baseline": "d160346ca0de4923",
+   "ledger_hits": [],
+   "mechanical_check_phrases": {
+    "abs_path": "absolute paths",
+    "column_counts": "CSV/TSV column counts",
+    "duplicate_keys": "duplicate keys",
+    "local_link_targets": "local file and Markdown link targets",
+    "non_ascii": "non-ASCII characters",
+    "python_syntax": "CPython syntax under nearest snapshot .python-version (whole post-image; first compiler diagnostic)",
+    "structured_parse": "structured-data parse failures (whole post-image; first parser diagnostic)"
+   },
+   "mechanical_contract": 2,
+   "project_root": "<TMP>/ws",
+   "shelf_drift": [],
+   "shelf_fingerprint": {},
+   "snapshot_identity": "p4:client:5348ddf463122bbac31c1130eb5d444084c2aea586f3692cf7cc84ce914a0e11",
+   "stale_open": [],
+   "submit_gates": [],
+   "unique_claude_mds": [
+    "<TMP>/ws/CLAUDE.md"
+   ],
+   "unreconciled": [],
+   "unresolved": []
+  },
+  "calls": [
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "get_workspace_root"
+   ],
+   [
+    "fetch_opened_files",
+    "77"
+   ],
+   [
+    "resolve_local_paths",
+    [
+     "//depot/guide.md",
+     "//depot/new.md",
+     "//depot/a.py",
+     "//depot/old.py"
+    ]
+   ],
+   [
+    "materialize_preimage",
+    "//depot/guide.md",
+    "edit",
+    "3"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/new.md",
+    "add",
+    "1"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/a.py",
+    "edit",
+    "5"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/old.py",
+    "delete",
+    "2"
+   ],
+   [
+    "fetch_file_content",
+    "//depot/guide.md",
+    "3",
+    "77",
+    true,
+    false
+   ],
+   [
+    "fetch_file_content",
+    "//depot/new.md",
+    "1",
+    "77",
+    true,
+    false
+   ],
+   [
+    "run_p4",
+    [
+     "-ztag",
+     "where",
+     "<TMP>/ws/.python-version"
+    ]
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "find_unreconciled",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_default_open",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_unresolved",
+    "77"
+   ]
+  ],
+  "stderr": ""
+ },
+ "pending_seam_b_with_claims": {
+  "assembled": [
+   {
+    "claim_globs": [
+     "**/guide.md"
+    ],
+    "files": [
+     {
+      "action": "edit",
+      "depot": "//depot/guide.md",
+      "identifier": "//depot/guide.md",
+      "local": "<TMP>/ws/guide.md",
+      "pre_image": "<TMP>/bundle/pre/guide.md",
+      "pre_image_is_empty": false,
+      "repository_path": "guide.md"
+     },
+     {
+      "action": "add",
+      "depot": "//depot/new.md",
+      "identifier": "//depot/new.md",
+      "local": "<TMP>/ws/new.md",
+      "pre_image": "<TMP>/bundle/pre/new.md",
+      "pre_image_is_empty": true,
+      "repository_path": "new.md"
+     },
+     {
+      "action": "edit",
+      "depot": "//depot/a.py",
+      "identifier": "//depot/a.py",
+      "local": "<TMP>/ws/a.py",
+      "pre_image": "<TMP>/bundle/pre/a.py",
+      "pre_image_is_empty": false,
+      "repository_path": "a.py"
+     },
+     {
+      "action": "delete",
+      "depot": "//depot/old.py",
+      "identifier": "//depot/old.py",
+      "local": "<TMP>/ws/old.py",
+      "pre_image": "<TMP>/bundle/pre/old.py",
+      "pre_image_is_empty": false,
+      "repository_path": "old.py"
+     }
+    ],
+    "mechanical_contract": 2,
+    "path_effects": [
+     {
+      "effect": "edit",
+      "path": "guide.md",
+      "post_identity": "0C0B4E6264F502CDFB93C0981A7FA445",
+      "post_image": "intro\nnew\n",
+      "post_image_error": null,
+      "post_size": 10,
+      "review_id": "77"
+     },
+     {
+      "effect": "add",
+      "path": "new.md",
+      "post_identity": "B1946AC92492D2347C6235B4D2611184",
+      "post_image": "hello\n",
+      "post_image_error": null,
+      "post_size": 6,
+      "review_id": "77"
+     },
+     {
+      "effect": "edit",
+      "path": "a.py",
+      "post_identity": "3D688704CBBC6753B2002C94A2AD19AC",
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     },
+     {
+      "effect": "delete",
+      "path": "old.py",
+      "post_identity": null,
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     }
+    ],
+    "review_generated": false,
+    "snapshot_reader": "P4SnapshotReader",
+    "snapshot_seed": "p4:client:62cad7806a211f4a5bacb0c8f1c016fbe0c5f376c0135d3264bf451744d28d8d",
+    "workspace_root": "<TMP>/ws"
+   }
+  ],
+  "bundle": {
+   "auto_shelved": false,
+   "bundle_dir": "<TMP>/bundle",
+   "change_id": "77",
+   "changed_files": [
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/new.md",
+     "local": "<TMP>/ws/new.md",
+     "mechanical_findings": [],
+     "repository_path": "new.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/a.py",
+     "local": "<TMP>/ws/a.py",
+     "mechanical_findings": [],
+     "repository_path": "a.py"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/old.py",
+     "local": "<TMP>/ws/old.py",
+     "mechanical_findings": [],
+     "repository_path": "old.py"
+    }
+   ],
+   "cl": "77",
+   "claimed_files": [
+    {
+     "action": "edit",
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/guide.md",
+     "identifier": "//depot/guide.md",
+     "local": "<TMP>/ws/guide.md",
+     "mechanical_findings": [],
+     "mechanical_scan": {
+      "files": [
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path",
+         "local_link_targets"
+        ],
+        "file": "//depot/guide.md",
+        "findings": [],
+        "mechanical_contract": 2
+       }
+      ],
+      "schema_version": 2
+     },
+     "pre_image": "<TMP>/bundle/pre/guide.md",
+     "repository_path": "guide.md",
+     "trivial": true,
+     "trivial_checks": {
+      "ascii_clean": true,
+      "no_abs_paths": true
+     },
+     "trivial_reasons": []
+    }
+   ],
+   "default_open": [],
+   "description": "Refactor the guide",
+   "diff_chunks": [
+    {
+     "bytes": 170,
+     "files": [
+      "//depot/new.md",
+      "//depot/a.py",
+      "//depot/old.py"
+     ],
+     "index": 0,
+     "mechanical_findings": [],
+     "mechanical_scan": {
+      "files": [
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path",
+         "local_link_targets"
+        ],
+        "file": "//depot/new.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         ".python-version: Python version mapping is error"
+        ],
+        "file": "//depot/a.py",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "file": "//depot/old.py",
+        "findings": [],
+        "mechanical_contract": 2
+       }
+      ],
+      "schema_version": 2
+     },
+     "path": "chunks/chunk-000.diff"
+    }
+   ],
+   "hygiene_incomplete": [],
+   "ledger_baseline": "d160346ca0de4923",
+   "ledger_hits": [],
+   "mechanical_check_phrases": {
+    "abs_path": "absolute paths",
+    "column_counts": "CSV/TSV column counts",
+    "duplicate_keys": "duplicate keys",
+    "local_link_targets": "local file and Markdown link targets",
+    "non_ascii": "non-ASCII characters",
+    "python_syntax": "CPython syntax under nearest snapshot .python-version (whole post-image; first compiler diagnostic)",
+    "structured_parse": "structured-data parse failures (whole post-image; first parser diagnostic)"
+   },
+   "mechanical_contract": 2,
+   "project_root": "<TMP>/ws",
+   "shelf_drift": [],
+   "shelf_fingerprint": {},
+   "snapshot_identity": "p4:client:5348ddf463122bbac31c1130eb5d444084c2aea586f3692cf7cc84ce914a0e11",
+   "stale_open": [],
+   "submit_gates": [],
+   "unique_claude_mds": [
+    "<TMP>/ws/CLAUDE.md"
+   ],
+   "unreconciled": [],
+   "unresolved": []
+  },
+  "calls": [
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "get_workspace_root"
+   ],
+   [
+    "fetch_opened_files",
+    "77"
+   ],
+   [
+    "resolve_local_paths",
+    [
+     "//depot/guide.md",
+     "//depot/new.md",
+     "//depot/a.py",
+     "//depot/old.py"
+    ]
+   ],
+   [
+    "materialize_preimage",
+    "//depot/guide.md",
+    "edit",
+    "3"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/new.md",
+    "add",
+    "1"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/a.py",
+    "edit",
+    "5"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/old.py",
+    "delete",
+    "2"
+   ],
+   [
+    "fetch_file_content",
+    "//depot/guide.md",
+    "3",
+    "77",
+    true,
+    false
+   ],
+   [
+    "fetch_file_content",
+    "//depot/new.md",
+    "1",
+    "77",
+    true,
+    false
+   ],
+   [
+    "run_p4",
+    [
+     "-ztag",
+     "where",
+     "<TMP>/ws/.python-version"
+    ]
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "find_unreconciled",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_default_open",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_unresolved",
+    "77"
+   ]
+  ],
+  "stderr": ""
+ },
+ "pending_shelf_scan_failed": {
+  "assembled": [
+   {
+    "claim_globs": [],
+    "files": [
+     {
+      "action": "edit",
+      "depot": "//depot/guide.md",
+      "identifier": "//depot/guide.md",
+      "local": "<TMP>/ws/guide.md",
+      "pre_image": "<TMP>/bundle/pre/guide.md",
+      "pre_image_is_empty": false,
+      "repository_path": "guide.md"
+     },
+     {
+      "action": "add",
+      "depot": "//depot/new.md",
+      "identifier": "//depot/new.md",
+      "local": "<TMP>/ws/new.md",
+      "pre_image": "<TMP>/bundle/pre/new.md",
+      "pre_image_is_empty": true,
+      "repository_path": "new.md"
+     },
+     {
+      "action": "edit",
+      "depot": "//depot/a.py",
+      "identifier": "//depot/a.py",
+      "local": "<TMP>/ws/a.py",
+      "pre_image": "<TMP>/bundle/pre/a.py",
+      "pre_image_is_empty": false,
+      "repository_path": "a.py"
+     },
+     {
+      "action": "delete",
+      "depot": "//depot/old.py",
+      "identifier": "//depot/old.py",
+      "local": "<TMP>/ws/old.py",
+      "pre_image": "<TMP>/bundle/pre/old.py",
+      "pre_image_is_empty": false,
+      "repository_path": "old.py"
+     }
+    ],
+    "mechanical_contract": 2,
+    "path_effects": [],
+    "review_generated": false,
+    "snapshot_reader": null,
+    "snapshot_seed": null,
+    "workspace_root": "<TMP>/ws"
+   }
+  ],
+  "bundle": {
+   "auto_shelved": false,
+   "bundle_dir": "<TMP>/bundle",
+   "change_id": "77",
+   "changed_files": [
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/guide.md",
+     "local": "<TMP>/ws/guide.md",
+     "mechanical_findings": [],
+     "repository_path": "guide.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/new.md",
+     "local": "<TMP>/ws/new.md",
+     "mechanical_findings": [],
+     "repository_path": "new.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/a.py",
+     "local": "<TMP>/ws/a.py",
+     "mechanical_findings": [],
+     "repository_path": "a.py"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/old.py",
+     "local": "<TMP>/ws/old.py",
+     "mechanical_findings": [],
+     "repository_path": "old.py"
+    }
+   ],
+   "cl": "77",
+   "default_open": [],
+   "description": "Refactor the guide",
+   "diff_chunks": [
+    {
+     "bytes": 240,
+     "files": [
+      "//depot/guide.md",
+      "//depot/new.md",
+      "//depot/a.py",
+      "//depot/old.py"
+     ],
+     "index": 0,
+     "mechanical_findings": [],
+     "mechanical_scan": {
+      "files": [
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         "repository snapshot unavailable"
+        ],
+        "file": "//depot/guide.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         "repository snapshot unavailable"
+        ],
+        "file": "//depot/new.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         "repository snapshot unavailable"
+        ],
+        "file": "//depot/a.py",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         "repository snapshot unavailable"
+        ],
+        "file": "//depot/old.py",
+        "findings": [],
+        "mechanical_contract": 2
+       }
+      ],
+      "schema_version": 2
+     },
+     "path": "chunks/chunk-000.diff"
+    }
+   ],
+   "hygiene_incomplete": [
+    {
+     "reason": "fstat refused",
+     "scan": "shelf_fingerprint"
+    }
+   ],
+   "ledger_baseline": "630a64e8403550c9",
+   "ledger_hits": [],
+   "mechanical_check_phrases": {
+    "abs_path": "absolute paths",
+    "column_counts": "CSV/TSV column counts",
+    "duplicate_keys": "duplicate keys",
+    "local_link_targets": "local file and Markdown link targets",
+    "non_ascii": "non-ASCII characters",
+    "python_syntax": "CPython syntax under nearest snapshot .python-version (whole post-image; first compiler diagnostic)",
+    "structured_parse": "structured-data parse failures (whole post-image; first parser diagnostic)"
+   },
+   "mechanical_contract": 2,
+   "project_root": "<TMP>/ws",
+   "shelf_drift": [],
+   "shelf_fingerprint": {},
+   "stale_open": [],
+   "submit_gates": [],
+   "unique_claude_mds": [
+    "<TMP>/ws/CLAUDE.md"
+   ],
+   "unreconciled": [],
+   "unresolved": []
+  },
+  "calls": [
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "get_workspace_root"
+   ],
+   [
+    "resolve_local_paths",
+    [
+     "//depot/guide.md",
+     "//depot/new.md",
+     "//depot/a.py",
+     "//depot/old.py"
+    ]
+   ],
+   [
+    "materialize_preimage",
+    "//depot/guide.md",
+    "edit",
+    "3"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/new.md",
+    "add",
+    "1"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/a.py",
+    "edit",
+    "5"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/old.py",
+    "delete",
+    "2"
+   ],
+   [
+    "find_unreconciled",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_default_open",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_unresolved",
+    "77"
+   ]
+  ],
+  "stderr": ""
+ },
+ "pre_shelve_race_found_foreign_shelf": {
+  "assembled": [
+   {
+    "claim_globs": [],
+    "files": [
+     {
+      "action": "edit",
+      "depot": "//depot/guide.md",
+      "identifier": "//depot/guide.md",
+      "local": "<TMP>/ws/guide.md",
+      "pre_image": "<TMP>/bundle/pre/guide.md",
+      "pre_image_is_empty": false,
+      "repository_path": "guide.md"
+     },
+     {
+      "action": "add",
+      "depot": "//depot/new.md",
+      "identifier": "//depot/new.md",
+      "local": "<TMP>/ws/new.md",
+      "pre_image": "<TMP>/bundle/pre/new.md",
+      "pre_image_is_empty": true,
+      "repository_path": "new.md"
+     },
+     {
+      "action": "edit",
+      "depot": "//depot/a.py",
+      "identifier": "//depot/a.py",
+      "local": "<TMP>/ws/a.py",
+      "pre_image": "<TMP>/bundle/pre/a.py",
+      "pre_image_is_empty": false,
+      "repository_path": "a.py"
+     },
+     {
+      "action": "delete",
+      "depot": "//depot/old.py",
+      "identifier": "//depot/old.py",
+      "local": "<TMP>/ws/old.py",
+      "pre_image": "<TMP>/bundle/pre/old.py",
+      "pre_image_is_empty": false,
+      "repository_path": "old.py"
+     }
+    ],
+    "mechanical_contract": 2,
+    "path_effects": [
+     {
+      "effect": "edit",
+      "path": "guide.md",
+      "post_identity": "0C0B4E6264F502CDFB93C0981A7FA445",
+      "post_image": "intro\nnew\n",
+      "post_image_error": null,
+      "post_size": 10,
+      "review_id": "77"
+     },
+     {
+      "effect": "add",
+      "path": "new.md",
+      "post_identity": "B1946AC92492D2347C6235B4D2611184",
+      "post_image": "hello\n",
+      "post_image_error": null,
+      "post_size": 6,
+      "review_id": "77"
+     },
+     {
+      "effect": "edit",
+      "path": "a.py",
+      "post_identity": "3D688704CBBC6753B2002C94A2AD19AC",
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     },
+     {
+      "effect": "delete",
+      "path": "old.py",
+      "post_identity": null,
+      "post_image": null,
+      "post_image_error": null,
+      "post_size": 0,
+      "review_id": "77"
+     }
+    ],
+    "review_generated": false,
+    "snapshot_reader": "P4SnapshotReader",
+    "snapshot_seed": "p4:client:62cad7806a211f4a5bacb0c8f1c016fbe0c5f376c0135d3264bf451744d28d8d",
+    "workspace_root": "<TMP>/ws"
+   }
+  ],
+  "bundle": {
+   "auto_shelved": false,
+   "bundle_dir": "<TMP>/bundle",
+   "change_id": "77",
+   "changed_files": [
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/guide.md",
+     "local": "<TMP>/ws/guide.md",
+     "mechanical_findings": [],
+     "repository_path": "guide.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/new.md",
+     "local": "<TMP>/ws/new.md",
+     "mechanical_findings": [],
+     "repository_path": "new.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/a.py",
+     "local": "<TMP>/ws/a.py",
+     "mechanical_findings": [],
+     "repository_path": "a.py"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/old.py",
+     "local": "<TMP>/ws/old.py",
+     "mechanical_findings": [],
+     "repository_path": "old.py"
+    }
+   ],
+   "cl": "77",
+   "default_open": [],
+   "description": "Refactor the guide",
+   "diff_chunks": [
+    {
+     "bytes": 240,
+     "files": [
+      "//depot/guide.md",
+      "//depot/new.md",
+      "//depot/a.py",
+      "//depot/old.py"
+     ],
+     "index": 0,
+     "mechanical_findings": [],
+     "mechanical_scan": {
+      "files": [
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path",
+         "local_link_targets"
+        ],
+        "file": "//depot/guide.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path",
+         "local_link_targets"
+        ],
+        "file": "//depot/new.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         ".python-version: Python version mapping is error"
+        ],
+        "file": "//depot/a.py",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "file": "//depot/old.py",
+        "findings": [],
+        "mechanical_contract": 2
+       }
+      ],
+      "schema_version": 2
+     },
+     "path": "chunks/chunk-000.diff"
+    }
+   ],
+   "hygiene_incomplete": [],
+   "ledger_baseline": "d160346ca0de4923",
+   "ledger_hits": [],
+   "mechanical_check_phrases": {
+    "abs_path": "absolute paths",
+    "column_counts": "CSV/TSV column counts",
+    "duplicate_keys": "duplicate keys",
+    "local_link_targets": "local file and Markdown link targets",
+    "non_ascii": "non-ASCII characters",
+    "python_syntax": "CPython syntax under nearest snapshot .python-version (whole post-image; first compiler diagnostic)",
+    "structured_parse": "structured-data parse failures (whole post-image; first parser diagnostic)"
+   },
+   "mechanical_contract": 2,
+   "project_root": "<TMP>/ws",
+   "shelf_drift": [],
+   "shelf_fingerprint": {},
+   "snapshot_identity": "p4:client:5348ddf463122bbac31c1130eb5d444084c2aea586f3692cf7cc84ce914a0e11",
+   "stale_open": [],
+   "submit_gates": [],
+   "unique_claude_mds": [
+    "<TMP>/ws/CLAUDE.md"
+   ],
+   "unreconciled": [],
+   "unresolved": []
+  },
+  "calls": [
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "get_workspace_root"
+   ],
+   [
+    "fetch_opened_files",
+    "77"
+   ],
+   [
+    "resolve_local_paths",
+    [
+     "//depot/guide.md",
+     "//depot/new.md",
+     "//depot/a.py",
+     "//depot/old.py"
+    ]
+   ],
+   [
+    "materialize_preimage",
+    "//depot/guide.md",
+    "edit",
+    "3"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/new.md",
+    "add",
+    "1"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/a.py",
+    "edit",
+    "5"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/old.py",
+    "delete",
+    "2"
+   ],
+   [
+    "fetch_file_content",
+    "//depot/guide.md",
+    "3",
+    "77",
+    true,
+    false
+   ],
+   [
+    "fetch_file_content",
+    "//depot/new.md",
+    "1",
+    "77",
+    true,
+    false
+   ],
+   [
+    "run_p4",
+    [
+     "-ztag",
+     "where",
+     "<TMP>/ws/.python-version"
+    ]
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "find_unreconciled",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_default_open",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_unresolved",
+    "77"
+   ]
+  ],
+  "stderr": ""
+ },
+ "pre_shelve_scan_failed_refused": {
+  "assembled": [],
+  "calls": [
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ]
+  ],
+  "error": [
+   "ValueError",
+   "could not check CL 77 for a shelf before auto-shelve: fstat refused"
+  ],
+  "stderr": ""
+ },
+ "submitted_local": {
+  "assembled": [
+   {
+    "claim_globs": [],
+    "files": [
+     {
+      "depot": "//depot/guide.md",
+      "identifier": "//depot/guide.md",
+      "local": "<TMP>/ws/guide.md",
+      "repository_path": "guide.md"
+     },
+     {
+      "depot": "//depot/new.md",
+      "identifier": "//depot/new.md",
+      "local": "<TMP>/ws/new.md",
+      "repository_path": "new.md"
+     },
+     {
+      "depot": "//depot/a.py",
+      "identifier": "//depot/a.py",
+      "local": "<TMP>/ws/a.py",
+      "repository_path": "a.py"
+     },
+     {
+      "depot": "//depot/old.py",
+      "identifier": "//depot/old.py",
+      "local": "<TMP>/ws/old.py",
+      "repository_path": "old.py"
+     }
+    ],
+    "mechanical_contract": 2,
+    "path_effects": [],
+    "review_generated": false,
+    "snapshot_reader": null,
+    "snapshot_seed": null,
+    "workspace_root": "<TMP>/ws"
+   }
+  ],
+  "bundle": {
+   "auto_shelved": false,
+   "bundle_dir": "<TMP>/bundle",
+   "change_id": "77",
+   "changed_files": [
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/guide.md",
+     "local": "<TMP>/ws/guide.md",
+     "mechanical_findings": [],
+     "repository_path": "guide.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/new.md",
+     "local": "<TMP>/ws/new.md",
+     "mechanical_findings": [],
+     "repository_path": "new.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/a.py",
+     "local": "<TMP>/ws/a.py",
+     "mechanical_findings": [],
+     "repository_path": "a.py"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/old.py",
+     "local": "<TMP>/ws/old.py",
+     "mechanical_findings": [],
+     "repository_path": "old.py"
+    }
+   ],
+   "cl": "77",
+   "default_open": [],
+   "description": "Refactor the guide",
+   "diff_chunks": [
+    {
+     "bytes": 240,
+     "files": [
+      "//depot/guide.md",
+      "//depot/new.md",
+      "//depot/a.py",
+      "//depot/old.py"
+     ],
+     "index": 0,
+     "mechanical_findings": [],
+     "mechanical_scan": {
+      "files": [
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "file": "//depot/guide.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "file": "//depot/new.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         "Python post-image unavailable"
+        ],
+        "file": "//depot/a.py",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         "Python post-image unavailable"
+        ],
+        "file": "//depot/old.py",
+        "findings": [],
+        "mechanical_contract": 2
+       }
+      ],
+      "schema_version": 2
+     },
+     "path": "chunks/chunk-000.diff"
+    }
+   ],
+   "hygiene_incomplete": [],
+   "ledger_baseline": "630a64e8403550c9",
+   "ledger_hits": [],
+   "mechanical_check_phrases": {
+    "abs_path": "absolute paths",
+    "column_counts": "CSV/TSV column counts",
+    "duplicate_keys": "duplicate keys",
+    "local_link_targets": "local file and Markdown link targets",
+    "non_ascii": "non-ASCII characters",
+    "python_syntax": "CPython syntax under nearest snapshot .python-version (whole post-image; first compiler diagnostic)",
+    "structured_parse": "structured-data parse failures (whole post-image; first parser diagnostic)"
+   },
+   "mechanical_contract": 2,
+   "project_root": "<TMP>/ws",
+   "shelf_drift": [],
+   "shelf_fingerprint": {},
+   "stale_open": [],
+   "submit_gates": [],
+   "unique_claude_mds": [
+    "<TMP>/ws/CLAUDE.md"
+   ],
+   "unreconciled": [],
+   "unresolved": []
+  },
+  "calls": [
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "get_workspace_root"
+   ],
+   [
+    "resolve_local_paths",
+    [
+     "//depot/guide.md",
+     "//depot/new.md",
+     "//depot/a.py",
+     "//depot/old.py"
+    ]
+   ],
+   [
+    "find_unreconciled",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_default_open",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_unresolved",
+    "77"
+   ]
+  ],
+  "stderr": ""
+ },
+ "submitted_with_claim_refused": {
+  "assembled": [],
+  "calls": [
+   [
+    "fetch_shelf_fingerprint",
+    "77"
+   ],
+   [
+    "fetch_describe",
+    "77"
+   ],
+   [
+    "get_workspace_root"
+   ]
+  ],
+  "error": [
+   "ValueError",
+   "CL 77 is submitted; claim pre-images require a pending CL -- re-run without --claim for a plain informational review"
+  ],
+  "stderr": ""
+ },
+ "workspace_view": {
+  "assembled": [
+   {
+    "claim_globs": [],
+    "files": [
+     {
+      "action": "edit",
+      "depot": "//depot/guide.md",
+      "identifier": "//depot/guide.md",
+      "local": "<TMP>/ws/guide.md",
+      "pre_image": "<TMP>/bundle/pre/guide.md",
+      "pre_image_is_empty": false,
+      "repository_path": "guide.md"
+     },
+     {
+      "action": "add",
+      "depot": "//depot/new.md",
+      "identifier": "//depot/new.md",
+      "local": "<TMP>/ws/new.md",
+      "pre_image": "<TMP>/bundle/pre/new.md",
+      "pre_image_is_empty": true,
+      "repository_path": "new.md"
+     },
+     {
+      "action": "edit",
+      "depot": "//depot/a.py",
+      "identifier": "//depot/a.py",
+      "local": "<TMP>/ws/a.py",
+      "pre_image": "<TMP>/bundle/pre/a.py",
+      "pre_image_is_empty": false,
+      "repository_path": "a.py"
+     },
+     {
+      "action": "delete",
+      "depot": "//depot/old.py",
+      "identifier": "//depot/old.py",
+      "local": "<TMP>/ws/old.py",
+      "pre_image": "<TMP>/bundle/pre/old.py",
+      "pre_image_is_empty": false,
+      "repository_path": "old.py"
+     }
+    ],
+    "mechanical_contract": 2,
+    "path_effects": [],
+    "review_generated": false,
+    "snapshot_reader": null,
+    "snapshot_seed": null,
+    "workspace_root": "<TMP>/ws"
+   }
+  ],
+  "bundle": {
+   "auto_shelved": false,
+   "bundle_dir": "<TMP>/bundle",
+   "change_id": "77",
+   "changed_files": [
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/guide.md",
+     "local": "<TMP>/ws/guide.md",
+     "mechanical_findings": [],
+     "repository_path": "guide.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/new.md",
+     "local": "<TMP>/ws/new.md",
+     "mechanical_findings": [],
+     "repository_path": "new.md"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/a.py",
+     "local": "<TMP>/ws/a.py",
+     "mechanical_findings": [],
+     "repository_path": "a.py"
+    },
+    {
+     "chunk_index": 0,
+     "claude_mds": [
+      "<TMP>/ws/CLAUDE.md"
+     ],
+     "depot": "//depot/old.py",
+     "local": "<TMP>/ws/old.py",
+     "mechanical_findings": [],
+     "repository_path": "old.py"
+    }
+   ],
+   "cl": "77",
+   "default_open": [],
+   "description": "Refactor the guide",
+   "diff_chunks": [
+    {
+     "bytes": 240,
+     "files": [
+      "//depot/guide.md",
+      "//depot/new.md",
+      "//depot/a.py",
+      "//depot/old.py"
+     ],
+     "index": 0,
+     "mechanical_findings": [],
+     "mechanical_scan": {
+      "files": [
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         "repository snapshot unavailable"
+        ],
+        "file": "//depot/guide.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         "repository snapshot unavailable"
+        ],
+        "file": "//depot/new.md",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         "repository snapshot unavailable"
+        ],
+        "file": "//depot/a.py",
+        "findings": [],
+        "mechanical_contract": 2
+       },
+       {
+        "checks_run": [
+         "non_ascii",
+         "abs_path"
+        ],
+        "diagnostics": [
+         "repository snapshot unavailable"
+        ],
+        "file": "//depot/old.py",
+        "findings": [],
+        "mechanical_contract": 2
+       }
+      ],
+      "schema_version": 2
+     },
+     "path": "chunks/chunk-000.diff"
+    }
+   ],
+   "hygiene_incomplete": [],
+   "ledger_baseline": "d160346ca0de4923",
+   "ledger_hits": [],
+   "mechanical_check_phrases": {
+    "abs_path": "absolute paths",
+    "column_counts": "CSV/TSV column counts",
+    "duplicate_keys": "duplicate keys",
+    "local_link_targets": "local file and Markdown link targets",
+    "non_ascii": "non-ASCII characters",
+    "python_syntax": "CPython syntax under nearest snapshot .python-version (whole post-image; first compiler diagnostic)",
+    "structured_parse": "structured-data parse failures (whole post-image; first parser diagnostic)"
+   },
+   "mechanical_contract": 2,
+   "project_root": "<TMP>/ws",
+   "shelf_drift": [],
+   "shelf_fingerprint": {},
+   "stale_open": [],
+   "submit_gates": [],
+   "unique_claude_mds": [
+    "<TMP>/ws/CLAUDE.md"
+   ],
+   "unreconciled": [],
+   "unresolved": []
+  },
+  "calls": [
+   [
+    "get_workspace_root"
+   ],
+   [
+    "resolve_local_paths",
+    [
+     "//depot/guide.md",
+     "//depot/new.md",
+     "//depot/a.py",
+     "//depot/old.py"
+    ]
+   ],
+   [
+    "materialize_preimage",
+    "//depot/guide.md",
+    "edit",
+    "3"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/new.md",
+    "add",
+    "1"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/a.py",
+    "edit",
+    "5"
+   ],
+   [
+    "materialize_preimage",
+    "//depot/old.py",
+    "delete",
+    "2"
+   ],
+   [
+    "find_unreconciled",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_default_open",
+    [
+     [
+      "<TMP>/ws",
+      false
+     ]
+    ]
+   ],
+   [
+    "find_unresolved",
+    "77"
+   ]
+  ],
+  "stderr": ""
+ }
+}

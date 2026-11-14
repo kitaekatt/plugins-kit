@@ -272,14 +272,32 @@ def test_report_counts_tracked_vs_measured_files_by_extension(target_repo, fake_
     _commit_all(target_repo)
     doc, text = _run_doc(target_repo, capsys)
     by_ext = doc["target"]["coverage"]["by_extension"]
-    assert by_ext[".gd"] == {"tracked": 3, "supported": False,
+    assert by_ext[".gd"] == {"tracked": 3, "supported": False, "kind": "source-unmeasured",
                              "measured": {"duplication": 0, "complexity": 0}}
     # a.py, b.py, empty.py under src; bootstrap_guard.py is excluded; tests/test_a.py is outside source_roots
-    assert by_ext[".py"] == {"tracked": 5, "supported": True,
+    assert by_ext[".py"] == {"tracked": 5, "supported": True, "kind": "measured",
                              "measured": {"duplication": 3, "complexity": 3}}
     assert by_ext[".ts"]["tracked"] == 1 and by_ext[".ts"]["measured"] == {"duplication": 0, "complexity": 0}
-    assert "| .gd | 3 | 0 | 0 | no |" in text
+    assert "| .gd | 3 | 0 | 0 | source, unmeasured |" in text
     assert "| .py | 5 | 3 | 3 | yes |" in text
+
+
+def test_coverage_separates_assets_from_source_and_folds_case(target_repo, fake_venv, fake_tools, capsys):
+    for name in ("a.PNG", "b.png", "c.JPG", "d.jpg", "m.glb"):
+        (target_repo / "src" / name).write_text("x")
+    (target_repo / "src" / "g.GD").write_text("extends Node\n")
+    (target_repo / "src" / "h.cpp").write_text("int x;\n")
+    _commit_all(target_repo)
+    doc, text = _run_doc(target_repo, capsys)
+    by_ext = doc["target"]["coverage"]["by_extension"]
+    assert by_ext[".png"]["tracked"] == 2 and by_ext[".png"]["kind"] == "other"
+    assert by_ext[".jpg"]["tracked"] == 2 and ".PNG" not in by_ext and ".JPG" not in by_ext
+    assert by_ext[".gd"]["kind"] == "source-unmeasured" and by_ext[".py"]["kind"] == "measured"
+    section = text.split("## Coverage")[1].split("\n## ")[0]
+    assert ".png" not in section and ".glb" not in section and ".jpg" not in section
+    assert "| .cpp | 1 | 0 | 0 | source, unmeasured |" in section
+    others = sum(r["tracked"] for r in by_ext.values() if r["kind"] == "other")
+    assert f"other files: {others}" in section
 
 
 def test_duplication_is_not_applicable_when_dryer_reads_fewer_than_two_files(
@@ -385,6 +403,66 @@ def test_init_prints_a_valid_config_and_writes_nothing(target_repo, capsys):
     assert cfg.languages == ["python", "typescript"]
     assert cfg.source_roots == ["src"] and cfg.test_roots == ["tests"]
     assert "# .gd: 1 file" in text and "no lane reads" in text
+
+
+def _init_text(repo, capsys):
+    _commit_all(repo)
+    assert cli.main(["init", "--target", str(repo)]) == 0
+    return capsys.readouterr().out
+
+
+def _bare_repo(tmp_path, files):
+    repo = tmp_path / "proj"
+    for rel in files:
+        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo / rel).write_text("x = 1\n")
+    git(repo, "init", "-q")
+    return repo
+
+
+def test_init_does_not_root_a_directory_for_one_file_and_lists_it(tmp_path, capsys):
+    files = [f"src/m{n}.py" for n in range(3)] + ["godot/extensions/kernel/id.mjs"]
+    text = _init_text(_bare_repo(tmp_path, files), capsys)
+    assert "source_roots: [src]" in text
+    assert "# godot/extensions/kernel/id.mjs" in text and "not proposed" in text
+
+
+def test_init_proposes_the_deepest_directory_holding_a_small_tree(tmp_path, capsys):
+    files = [f"src/m{n}.py" for n in range(3)] + ["tools/a/deep/x.py", "tools/a/deep/y.py"]
+    text = _init_text(_bare_repo(tmp_path, files), capsys)
+    assert "source_roots: [src, tools/a/deep]" in text
+
+
+def test_init_includes_hidden_directories_git_tracks(tmp_path, capsys):
+    files = [f"src/m{n}.py" for n in range(3)] + [f".claude/hooks/h{n}.mjs" for n in range(3)]
+    text = _init_text(_bare_repo(tmp_path, files), capsys)
+    assert "source_roots: [.claude, src]" in text
+
+
+def test_init_roots_are_posix_even_where_os_path_is_ntpath(tmp_path, capsys, monkeypatch):
+    import ntpath
+    import types
+
+    from clean_code_kit import init as init_mod
+
+    monkeypatch.setattr(init_mod, "os", types.SimpleNamespace(path=ntpath), raising=False)
+    files = [f"src/m{n}.py" for n in range(3)] + ["tools/a/deep/x.py", "tools/a/deep/y.py"]
+    roots, _stray = init_mod._source_roots(files, {".py"})
+    assert "tools/a/deep" in roots and not any("\\" in r for r in roots)
+
+
+def test_init_names_the_threshold_constant():
+    from clean_code_kit import init as init_mod
+
+    assert init_mod.MIN_ROOT_FILES == 3
+
+
+def test_init_lists_every_source_unmeasured_extension_and_collapses_the_rest(tmp_path, capsys):
+    files = [f"src/m{n}.py" for n in range(3)] + ["src/a.cpp", "src/b.CPP", "src/b.h", "src/c.png", "src/d.png", "src/e.uid"]
+    text = _init_text(_bare_repo(tmp_path, files), capsys)
+    assert "# .cpp: 2 files, no lane reads this extension" in text
+    assert "# .h: 1 file, no lane reads this extension" in text
+    assert "# other files: 3" in text and ".png" not in text and ".uid" not in text
 
 
 def test_init_refuses_a_repository_with_no_supported_source(tmp_path, capsys):
