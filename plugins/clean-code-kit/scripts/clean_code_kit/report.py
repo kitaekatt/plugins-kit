@@ -15,6 +15,7 @@ from typing import Any
 
 from . import MARKETPLACE, PLUGIN
 from .errors import Refusal
+from .languages import KIND_MEASURED, KIND_OTHER, KIND_SOURCE_UNMEASURED
 from .model import LaneResult
 
 SCHEMA = "clean-code-kit.findings/v1"
@@ -84,7 +85,6 @@ def _duplication_section(result: LaneResult) -> list[str]:
 
 
 UNSCORED_SHOWN = 20
-COVERAGE_ROWS_SHOWN = 30
 
 
 def _complexity_section(result: LaneResult, top: int, min_complexity: int) -> list[str]:
@@ -128,23 +128,24 @@ def _ignored_note(result: LaneResult) -> list[str]:
 
 def _coverage_section(coverage: dict[str, Any]) -> list[str]:
     lanes = coverage["lanes"]
-    rows = list(coverage["by_extension"].items())
+    by_ext = coverage["by_extension"]
+    shown = [(ext, row) for kind in (KIND_MEASURED, KIND_SOURCE_UNMEASURED)
+             for ext, row in by_ext.items() if row["kind"] == kind]
+    other = sum(row["tracked"] for row in by_ext.values() if row["kind"] == KIND_OTHER)
     lines = ["## Coverage", "",
              "Files tracked in the target (all of git's file list, not only the source roots) "
              "against files handed to each lane (under a source root, after exclude and language "
-             "pruning, with an extension the lane's tool reads). 'Lane' is `no` when no lane "
-             "reads the extension at all.", "",
+             "pruning, with an extension the lane's tool reads). Extensions are folded to lower "
+             "case. Listed: every extension some lane reads (`yes`), then every source-language "
+             "extension no lane reads (`source, unmeasured`). Everything else is one line of "
+             "counts; findings.json (target.coverage) has every extension.", "",
              "| Extension | Tracked | " + " | ".join(lanes) + " | Lane |",
              "|---|---:|" + "---:|" * len(lanes) + "---|"]
-    for ext, row in rows[:COVERAGE_ROWS_SHOWN]:
+    for ext, row in shown:
         cells = " | ".join(str(row["measured"][lane]) for lane in lanes)
-        lines.append(f"| {_cell(ext)} | {row['tracked']} | {cells} | "
-                     f"{'yes' if row['supported'] else 'no'} |")
-    if len(rows) > COVERAGE_ROWS_SHOWN:
-        lines.append("")
-        lines.append(f"{len(rows) - COVERAGE_ROWS_SHOWN} more extensions are in findings.json "
-                     "(target.coverage).")
-    lines.append("")
+        label = "yes" if row["kind"] == KIND_MEASURED else "source, unmeasured"
+        lines.append(f"| {_cell(ext)} | {row['tracked']} | {cells} | {label} |")
+    lines += ["", f"other files: {other}", ""]
     return lines
 
 

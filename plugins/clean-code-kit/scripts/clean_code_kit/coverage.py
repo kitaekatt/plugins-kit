@@ -14,7 +14,7 @@ from collections import Counter
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from .languages import lane_extensions, supported_extensions
+from .languages import lane_extensions, kind_of, supported_extensions
 from .model import LaneResult
 
 NO_EXTENSION = "(none)"
@@ -23,7 +23,7 @@ DISTRIBUTION_BUCKETS = (("1", 1, 1), ("2-5", 2, 5), ("6-10", 6, 10), ("11-20", 1
 
 
 def extension(path: str) -> str:
-    return PurePosixPath(path).suffix or NO_EXTENSION
+    return PurePosixPath(path).suffix.lower() or NO_EXTENSION
 
 
 def select(root: Path, source_roots: list[str], lanes: list[str]) -> dict[str, list[str]]:
@@ -42,12 +42,12 @@ def select(root: Path, source_roots: list[str], lanes: list[str]) -> dict[str, l
 
 
 def table(tracked: list[str], selection: dict[str, list[str]]) -> dict[str, Any]:
-    """``{"lanes": [...], "by_extension": {ext: {tracked, supported, measured: {lane: n}}}}``."""
+    """``{"lanes": [...], "by_extension": {ext: {tracked, supported, kind, measured: {lane: n}}}}``; ext is lower case."""
     supported = supported_extensions()
     counts = Counter(extension(p) for p in tracked)
     measured = {lane: Counter(extension(p) for p in paths) for lane, paths in selection.items()}
     by_ext = {
-        ext: {"tracked": counts[ext], "supported": ext in supported,
+        ext: {"tracked": counts[ext], "supported": ext in supported, "kind": kind_of(ext),
               "measured": {lane: measured[lane][ext] for lane in selection}}
         for ext in sorted(counts, key=lambda e: (-counts[e], e))
     }

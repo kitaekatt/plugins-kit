@@ -107,20 +107,30 @@ lists (the config file itself is not counted; `report.md` names the paths), so a
 ## Proposing a config: `init`
 
 `code_audit.py init --target <dir>` prints a proposed config.yaml to stdout and
-writes nothing. It counts `git ls-files` extensions, proposes the languages the
-lanes read, the top-level directories holding such files (except test and
-vendored directories) as `source_roots`, any `test`/`tests`/`spec` directories
-as `test_roots`, and comments the extensions no lane reads. It exits 2 when no
-tracked file has an extension a lane reads or none sits below a top-level
-directory. Review the output with the user, then save it as the config.
+writes nothing. It counts `git ls-files` extensions and proposes the languages
+the lanes read. Source roots are top-level directories holding at least 3
+supported files (`MIN_ROOT_FILES` in `init.py`), except test and vendored
+directories; hidden directories count when git tracks supported files in them.
+A smaller top-level directory is not rooted whole: init proposes the deepest
+directory holding all its supported files, or, when only one file is left,
+proposes nothing and lists the file in a comment. Directories `test`/`tests`/
+`spec` become `test_roots`. The comment block lists every source-language
+extension no lane reads with its count (`.cpp`, `.gd`, ...) and one `other
+files: N` line for the rest. It exits 2 when no tracked file has an extension a
+lane reads or no source root can be proposed. Review the output with the user,
+then save it as the config.
 
 ## What a report says about coverage
 
-`report.md` and `findings.json` (`target.coverage`) tabulate, per extension, the
-files tracked in the target (all of git's file list, not only the source
-roots) against the files handed to each lane, and mark extensions no lane
-reads. A lane's status is `no-comparable-source` when dryer would get fewer than
-two readable files.
+`report.md` and `findings.json` (`target.coverage`) count extensions, folded to
+lower case, over the files tracked in the target (all of git's file list, not
+only the source roots) against the files handed to each lane. The report table
+lists every extension some lane reads (`yes`), then every known source-language
+extension no lane reads (`source, unmeasured`), then one `other files: N` line
+for everything else (assets, data, config). `findings.json` keeps every
+extension, each with `kind`: `measured`, `source-unmeasured` or `other`. A
+lane's status is `no-comparable-source` when dryer would get fewer than two
+readable files.
 
 ## Where a run writes
 
