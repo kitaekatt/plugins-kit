@@ -108,7 +108,8 @@ def _complexity_section(result: LaneResult, top: int, min_complexity: int) -> li
         lines.append("")
     unscored = result.detail["files_without_scored_functions"]
     lines.append(f"Files with no scored functions: {len(unscored)} of "
-                 f"{result.detail['files_selected']} files in the selection.")
+                 f"{result.detail['files_selected']} files in the selection. Skipped by the tool "
+                 f"as tests, not in that count: {result.detail['files_skipped_by_tool']}.")
     if unscored:
         lines += [""] + [f"- `{_cell(path)}`" for path in unscored[:UNSCORED_SHOWN]]
         if len(unscored) > UNSCORED_SHOWN:
@@ -138,11 +139,17 @@ def _coverage_section(coverage: dict[str, Any]) -> list[str]:
              "pruning, with an extension the lane's tool reads). Extensions are folded to lower "
              "case. Listed: every extension some lane reads (`yes`), then every source-language "
              "extension no lane reads (`source, unmeasured`). Everything else is one line of "
-             "counts; findings.json (target.coverage) has every extension.", "",
-             "| Extension | Tracked | " + " | ".join(lanes) + " | Lane |",
-             "|---|---:|" + "---:|" * len(lanes) + "---|"]
+             "counts; findings.json (target.coverage) has every extension. The `skipped` "
+             "columns count files in a source root whose extension the lane's tool reads but "
+             "which the tool skips on its own as tests (a test directory such as `tests/`, "
+             "`test_*.py`, `*.test.js`); they are not in the measured columns and not in "
+             "\"Files with no scored functions\".", "",
+             "| Extension | Tracked | " + " | ".join(f"{lane} measured" for lane in lanes) + " | "
+             + " | ".join(f"{lane} skipped (tests)" for lane in lanes) + " | Lane |",
+             "|---|---:|" + "---:|" * (2 * len(lanes)) + "---|"]
     for ext, row in shown:
-        cells = " | ".join(str(row["measured"][lane]) for lane in lanes)
+        cells = " | ".join([str(row["measured"][lane]) for lane in lanes]
+                           + [str(row["skipped"][lane]) for lane in lanes])
         label = "yes" if row["kind"] == KIND_MEASURED else "source, unmeasured"
         lines.append(f"| {_cell(ext)} | {row['tracked']} | {cells} | {label} |")
     lines += ["", f"other files: {other}", ""]

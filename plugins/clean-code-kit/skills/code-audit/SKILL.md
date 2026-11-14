@@ -234,7 +234,7 @@ domain_skill:
                  findings.json, what did it find, worst offenders, ranked]
       description: >-
         Read a report the audit wrote: `report.md` in the report directory
-        gives a coverage table (tracked vs measured files per extension; measured and unread source languages listed, all other files one count), per-lane
+        gives a coverage table (tracked vs measured vs tool-skipped test files per extension; measured and unread source languages listed, all other files one count), per-lane
         counts and a ranked table (the complexity table only the first `top`
         functions at or above `min_complexity`, plus a complexity distribution
         and the files with no scored function); `findings.json` holds every finding with

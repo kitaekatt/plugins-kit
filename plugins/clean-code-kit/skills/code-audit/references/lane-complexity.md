@@ -52,7 +52,10 @@ entry under `lanes` records crapper's commit (`tool_commit`), the exact
 After the table, `report.md` lists the files in the selection that have no
 scored function (a capped list; the full list is `lanes[].detail.files_without_scored_functions`
 in `findings.json`). Such a file holds only constructs crapper does not score,
-or nothing but top-level code; it is not thereby simple.
+or nothing but top-level code; it is not thereby simple. Files crapper skips as
+tests (test directories, test file names) are not in that list or in the
+selection; the count is in the coverage table's `skipped (tests)` column and
+`detail.files_skipped_by_tool`.
 
 JS/TS `export default` anonymous functions are scored with the name `<default>`.
 

@@ -135,3 +135,26 @@ def test_real_tools_audit_gdscript_cpp_and_javascript(target_repo):
     for ext in (".gd", ".cpp", ".js"):
         assert by_ext[ext]["supported"] is True
         assert all(n > 0 for n in by_ext[ext]["measured"].values()), (ext, by_ext[ext])
+
+
+@needs_tools
+def test_real_tools_skip_test_directory_gdscript_and_javascript_tests(target_repo):
+    config = target_repo / ".claude" / "clean-code-kit" / "config.yaml"
+    config.write_text(config.read_text().replace(
+        "languages: [python]", "languages: [gdscript, javascript]"))
+    src = target_repo / "src" / "game"
+    (src / "tests").mkdir(parents=True)
+    (src / "main.gd").write_text(_GD_BRANCHY)
+    (src / "tests" / "check.gd").write_text(_GD_BRANCHY.replace("branchy_gd", "check_gd"))
+    (src / "app.js").write_text(_JS_DUP)
+    (src / "app.test.js").write_text(_JS_DUP)
+    git(target_repo, "add", "-A")
+    git(target_repo, "commit", "-q", "-m", "tests")
+    doc = _audit(target_repo)
+    by_ext = doc["target"]["coverage"]["by_extension"]
+    for ext in (".gd", ".js"):
+        assert by_ext[ext]["measured"] == {"duplication": 1, "complexity": 1}, (ext, by_ext[ext])
+        assert by_ext[ext]["skipped"] == {"duplication": 1, "complexity": 1}, (ext, by_ext[ext])
+    cpx = next(lane for lane in doc["lanes"] if lane["name"] == "complexity")
+    assert not any("tests" in p or ".test." in p for p in cpx["detail"]["files_without_scored_functions"])
+    assert not any(f["path"].endswith(("check.gd", "app.test.js")) for f in doc["findings"])

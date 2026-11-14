@@ -63,13 +63,43 @@ def test_dryer_ignores_cplusplus_only_extensions_in_the_ignored_by_count():
     assert coverage.ignored_by("complexity", ["a.c++", "b.hxx"]) == {}
 
 
-def test_select_skips_javascript_test_and_spec_files_for_duplication_only(tmp_path):
-    (tmp_path / "src").mkdir()
-    for name in ("a.js", "a.test.js", "a.spec.mjs", "a.test.ts"):
-        (tmp_path / "src" / name).write_text("x\n")
-    picked = coverage.select(tmp_path, ["src"], ["duplication", "complexity"])
-    assert picked["duplication"] == ["src/a.js", "src/a.test.ts"]
-    assert picked["complexity"] == ["src/a.js", "src/a.spec.mjs", "src/a.test.js", "src/a.test.ts"]
+@pytest.mark.parametrize("lane", ["duplication", "complexity"])
+@pytest.mark.parametrize("rel", [
+    "godot/tests/_brush_down_check.gd", "src/test/a.cpp", "src/__tests__/a.js", "src/spec/a.ts",
+    "src/a.test.js", "src/a.spec.mjs", "src/a.test.ts", "src/a.spec.tsx",
+    "src/test_a.py", "src/a_test.py", "src/conftest.py"])
+def test_both_tools_skip_test_dirs_and_test_names(lane, rel):
+    assert languages.lane_skips(lane, rel)
+
+
+@pytest.mark.parametrize("lane", ["duplication", "complexity"])
+@pytest.mark.parametrize("rel", [
+    "godot/scripts/a.gd", "src/a.js", "src/contest.py", "src/attest.py", "src/a.test.gd",
+    "src/latest/a.gd", "src/a.test"])
+def test_ordinary_files_are_not_tool_skipped(lane, rel):
+    assert not languages.lane_skips(lane, rel)
+
+
+def test_select_keeps_tool_skipped_files_out_of_the_measured_selection(tmp_path):
+    (tmp_path / "godot" / "tests").mkdir(parents=True)
+    (tmp_path / "godot" / "main.gd").write_text("x\n")
+    (tmp_path / "godot" / "tests" / "t.gd").write_text("x\n")
+    (tmp_path / "godot" / "a.test.js").write_text("x\n")
+    lanes = ["duplication", "complexity"]
+    picked = coverage.select(tmp_path, ["godot"], lanes)
+    skipped = coverage.select_skipped(tmp_path, ["godot"], lanes)
+    for lane in lanes:
+        assert picked[lane] == ["godot/main.gd"], lane
+        assert skipped[lane] == ["godot/a.test.js", "godot/tests/t.gd"], lane
+
+
+def test_table_reports_skipped_counts_separately_from_measured():
+    selection = {"duplication": ["g/a.gd"], "complexity": ["g/a.gd"]}
+    skipped = {"duplication": ["g/tests/t.gd", "g/tests/u.gd"], "complexity": ["g/tests/t.gd", "g/tests/u.gd"]}
+    row = coverage.table(["g/a.gd", "g/tests/t.gd", "g/tests/u.gd"], selection, skipped)["by_extension"][".gd"]
+    assert row["tracked"] == 3
+    assert row["measured"] == {"duplication": 1, "complexity": 1}
+    assert row["skipped"] == {"duplication": 2, "complexity": 2}
 
 
 def test_parser_prefetch_covers_every_configurable_language():

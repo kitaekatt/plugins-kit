@@ -273,13 +273,15 @@ def test_report_counts_tracked_vs_measured_files_by_extension(target_repo, fake_
     doc, text = _run_doc(target_repo, capsys)
     by_ext = doc["target"]["coverage"]["by_extension"]
     assert by_ext[".gdshader"] == {"tracked": 3, "supported": False, "kind": "source-unmeasured",
-                             "measured": {"duplication": 0, "complexity": 0}}
+                             "measured": {"duplication": 0, "complexity": 0},
+                             "skipped": {"duplication": 0, "complexity": 0}}
     # a.py, b.py, empty.py under src; bootstrap_guard.py is excluded; tests/test_a.py is outside source_roots
     assert by_ext[".py"] == {"tracked": 5, "supported": True, "kind": "measured",
-                             "measured": {"duplication": 3, "complexity": 3}}
+                             "measured": {"duplication": 3, "complexity": 3},
+                             "skipped": {"duplication": 0, "complexity": 0}}
     assert by_ext[".ts"]["tracked"] == 1 and by_ext[".ts"]["measured"] == {"duplication": 0, "complexity": 0}
-    assert "| .gdshader | 3 | 0 | 0 | source, unmeasured |" in text
-    assert "| .py | 5 | 3 | 3 | yes |" in text
+    assert "| .gdshader | 3 | 0 | 0 | 0 | 0 | source, unmeasured |" in text
+    assert "| .py | 5 | 3 | 3 | 0 | 0 | yes |" in text
 
 
 def test_coverage_separates_assets_from_source_and_folds_case(target_repo, fake_venv, fake_tools, capsys):
@@ -295,7 +297,7 @@ def test_coverage_separates_assets_from_source_and_folds_case(target_repo, fake_
     assert by_ext[".gdshader"]["kind"] == "source-unmeasured" and by_ext[".py"]["kind"] == "measured"
     section = text.split("## Coverage")[1].split("\n## ")[0]
     assert ".png" not in section and ".glb" not in section and ".jpg" not in section
-    assert "| .cs | 1 | 0 | 0 | source, unmeasured |" in section
+    assert "| .cs | 1 | 0 | 0 | 0 | 0 | source, unmeasured |" in section
     others = sum(r["tracked"] for r in by_ext.values() if r["kind"] == "other")
     assert f"other files: {others}" in section
 
@@ -343,6 +345,26 @@ def test_files_with_no_scored_functions_are_listed(target_repo, fake_venv, fake_
     cpx = doc["lanes"][1]
     assert cpx["detail"]["files_without_scored_functions"] == ["src/pkg/empty.py"]
     assert "Files with no scored functions: 1" in text and "`src/pkg/empty.py`" in text
+
+
+def test_tool_skipped_test_files_are_counted_apart_and_not_called_unscored(
+        target_repo, fake_venv, fake_tools, capsys):
+    tests_dir = target_repo / "src" / "pkg" / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "t1.py").write_text("X = 1\n")
+    (tests_dir / "t2.py").write_text("X = 1\n")
+    (target_repo / "src" / "pkg" / "test_c.py").write_text("X = 1\n")
+    _commit_all(target_repo)
+    doc, text = _run_doc(target_repo, capsys)
+    row = doc["target"]["coverage"]["by_extension"][".py"]
+    assert row["measured"] == {"duplication": 2, "complexity": 2}
+    assert row["skipped"] == {"duplication": 3, "complexity": 3}
+    cpx = doc["lanes"][1]["detail"]
+    assert cpx["files_without_scored_functions"] == []
+    assert cpx["files_selected"] == 2 and cpx["files_skipped_by_tool"] == 3
+    assert doc["lanes"][0]["detail"]["files_skipped_by_tool"] == 3
+    assert "| .py | 7 | 2 | 2 | 3 | 3 | yes |" in text
+    assert "t1.py" not in text.split("Files with no scored functions")[1]
 
 
 def test_unscored_listing_in_report_is_capped_but_json_is_complete(target_repo, fake_venv, fake_tools, capsys):

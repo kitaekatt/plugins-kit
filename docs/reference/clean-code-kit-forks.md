@@ -78,8 +78,8 @@ State as of 2026-11-14:
   `master`, plus one commit on the branch itself (`ad6a0ce`, a test exercising
   both options together), then merges of `feat/gdscript` (`868c258f`),
   `feat/cpp` (`ede64a4d`) and `feat/javascript` (`6b80e486`).
-- crapper `clean-code-kit` = `3b7d4b4a702235ac35eea67fd0cb5511348d9d1e`:
-  merges of `feat/gdscript` (`1554e240`) and `feat/cpp` (`531108ff`) over the
+- crapper `clean-code-kit` = `20376767696e7dd44bbce3af7bf9dd1c7daf7ee8`:
+  merges of `feat/gdscript` (`1554e240`) and `feat/cpp` (`531108ff`, then head `f7efa39` via `20376767`) over the
   earlier head `50236c15b469e6fb37175474c2ab472df92e6282`, which had
   merges of all six earlier crapper fix branches (`feat/function-location` at
   `a37c041da931047d0e1bc3a24323408cdcde3226`, then `feat/score-default-export` at
@@ -102,7 +102,7 @@ references to the forks:
 
 ```
 dryer @ git+https://github.com/kitaekatt/dryer@e8bca626e1674ffb4bb0be581371aa70f8a56157
-crapper @ git+https://github.com/kitaekatt/crapper@3b7d4b4a702235ac35eea67fd0cb5511348d9d1e
+crapper @ git+https://github.com/kitaekatt/crapper@20376767696e7dd44bbce3af7bf9dd1c7daf7ee8
 tree-sitter-language-pack==1.25.0
 ```
 
