@@ -81,10 +81,12 @@ tools read Clojure (`.clj` `.cljc` `.cljs` `.bb`, and `.cljd` for dryer), Java
 ARE measured. Add them to `exclude` to leave them out.
 
 The two tools read the table's extensions per lane. dryer reads every
-extension above except `.c++` and `.hxx`, and skips JavaScript files named
-`*.test.*` or `*.spec.*` (the coverage table counts those as not measured by
-duplication). crapper reads every extension above, and scores JavaScript as
-TypeScript. Complexity of C++ and GDScript is measured without coverage: neither
+extension above except `.c++` and `.hxx`. crapper reads every extension above,
+and scores JavaScript as TypeScript. Both skip, on their own, every file under a
+directory named `test`, `tests`, `spec`, `specs` or `__tests__`, JavaScript and
+TypeScript files named `*.test.*` or `*.spec.*`, and Python `conftest.py`,
+`*_test.py` and `test_*.py`; the coverage table counts those as skipped, not
+measured. Complexity of C++ and GDScript is measured without coverage: neither
 language has a coverage runner, so `lanes.complexity.coverage` has no effect
 on them. See each lane's reference.
 
@@ -132,7 +134,10 @@ then save it as the config.
 
 `report.md` and `findings.json` (`target.coverage`) count extensions, folded to
 lower case, over the files tracked in the target (all of git's file list, not
-only the source roots) against the files handed to each lane. The report table
+only the source roots) against the files handed to each lane (`measured`) and the files the
+lane's tool skips as tests (`skipped (tests)`, per lane; also `skipped` in
+`findings.json`, and `lanes[].detail.files_skipped_by_tool`). Skipped files are
+in neither the measured count nor `files_without_scored_functions`. The report table
 lists every extension some lane reads (`yes`), then every known source-language
 extension no lane reads (`source, unmeasured`), then one `other files: N` line
 for everything else (assets, data, config). `findings.json` keeps every

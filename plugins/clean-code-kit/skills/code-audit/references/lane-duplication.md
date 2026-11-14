@@ -62,8 +62,8 @@ for the usual cause.
 
 - **Languages read.** dryer reads Python, TypeScript, JavaScript
   (`.js .jsx .mjs .cjs`), GDScript (`.gd`) and C++ (`.cpp .cc .cxx .hpp .hh .h`).
-  It skips JavaScript files named `*.test.*` or `*.spec.*`, and the coverage
-  table counts them as not measured by duplication. It does not read the C++
+  It skips test directories and test file names (listed in
+  configuring.md), and the coverage table counts those as skipped, not measured. It does not read the C++
   extensions `.c++` and `.hxx`; `report.md` lists them as ignored. The first
   run of each grammar needs the parser bundle, which bootstrap pre-fetches.
 - **`.d.ts` declaration files, test files and test directories are

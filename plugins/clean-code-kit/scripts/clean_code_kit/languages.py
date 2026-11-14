@@ -41,9 +41,31 @@ def unconfigured_extensions(languages: list[str]) -> set[str]:
 LANE_LANGUAGES: dict[str, tuple[str, ...]] = {
     lane: tuple(by_lang) for lane, by_lang in LANE_EXTENSIONS.items()}
 
-# dryer skips test and spec JavaScript files on its own; they are not measured.
-LANE_SKIPPED_NAME = dict(duplication=(re.compile(r"\.(test|spec)\.[^.]+$"), frozenset(_JS)))
-
+# What each tool skips on its own, per lane, so the audit counts those files as
+# skipped and not as measured. Both tools share one rule set. Each rule is
+# (what it matches, the extensions it applies to or None for all, the tool source).
+#   dir  -- a path component (directory) equal to one of the names
+#   name -- a regex searched in the file name
+_TEST_DIRS = frozenset({"test", "tests", "spec", "specs", "__tests__"})
+_JS_TS_NAME = re.compile(r"\.(test|spec)\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$")
+_PY_NAME = re.compile(r"(^conftest\.py$|_test\.py$|^test_.*\.py$)")
+_TS_JS_EXTS = frozenset(_TS + _JS)
+LANE_SKIP_RULES: dict[str, tuple[tuple[str, object, frozenset[str] | None, str], ...]] = dict(
+    # dryer src/dryer/discover.py @ e8bca626: TEST_DIRS line 57, pruned at 103-104 and 110-117,
+    # is_test_file 68-100 (JS/TS suffixes 75-95, conftest.py 96, python names 98, dirs 100).
+    duplication=(
+        ("dir", _TEST_DIRS, None, "dryer discover.py:57,100,104"),
+        ("name", _JS_TS_NAME, _TS_JS_EXTS, "dryer discover.py:75-95"),
+        ("name", _PY_NAME, frozenset(_PY), "dryer discover.py:96-98"),
+    ),
+    # crapper src/crapper/discover.py @ 3b7d4b4a: TEST_DIRS line 54, pruned at 110,
+    # JS_TEST_SUFFIXES 58-75, is_test_file 86-99 (JS/TS 93, conftest.py 95, python names 97, dirs 99).
+    complexity=(
+        ("dir", _TEST_DIRS, None, "crapper discover.py:54,99,110"),
+        ("name", _JS_TS_NAME, _TS_JS_EXTS, "crapper discover.py:58-75,93"),
+        ("name", _PY_NAME, frozenset(_PY), "crapper discover.py:95-97"),
+    ),
+)
 
 def lane_extensions(lane: str) -> set[str]:
     """Extensions the tool behind ``lane`` reads among the table's languages."""
@@ -51,12 +73,16 @@ def lane_extensions(lane: str) -> set[str]:
 
 
 def lane_skips(lane: str, rel: str) -> bool:
-    """True when the lane's tool skips ``rel`` by name although it reads the extension."""
-    rule = LANE_SKIPPED_NAME.get(lane)
-    if rule is None:
-        return False
-    pattern, exts = rule
-    return PurePosixPath(rel).suffix in exts and pattern.search(PurePosixPath(rel).name) is not None
+    """True when the lane's tool skips ``rel`` on its own (a test directory or test file name)."""
+    path = PurePosixPath(rel)
+    for kind, rule, exts, _source in LANE_SKIP_RULES[lane]:
+        if exts is not None and path.suffix not in exts:
+            continue
+        if kind == "dir" and any(part in rule for part in path.parts):
+            return True
+        if kind == "name" and rule.search(path.name) is not None:
+            return True
+    return False
 
 
 def supported_extensions() -> set[str]:

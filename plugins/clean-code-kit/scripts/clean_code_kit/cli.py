@@ -92,8 +92,10 @@ def run(args: argparse.Namespace) -> Path:
         snapshot.require_roots(scratch, cfg.test_roots, "test_roots", cfg.path, mode)
         snapshot.prune(scratch, cfg.exclude, cfg.languages)
         selection = coverage.select(scratch, cfg.source_roots, list(LANES))
+        skipped = coverage.select_skipped(scratch, cfg.source_roots, list(LANES))
         target["coverage"] = coverage.table(snapshot.tracked_files(repo, mode),
-                                            {n: selection[n] for n in names})
+                                            {n: selection[n] for n in names},
+                                            {n: skipped[n] for n in names})
         results = []
         for name in names:
             lane = LANES[name]
@@ -112,6 +114,7 @@ def run(args: argparse.Namespace) -> Path:
                     result.detail["comparable_files"] = len(selection[name])
                 elif name == "complexity" and result.status == "ok":
                     coverage.annotate_complexity(result, selection[name])
+            result.detail["files_skipped_by_tool"] = len(skipped[name])
             if name == "duplication":
                 result.detail["ignored_extensions"] = coverage.ignored_by(name, [
                     p for paths in selection.values() for p in paths])

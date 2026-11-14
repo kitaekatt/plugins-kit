@@ -1,10 +1,10 @@
 """How much of the target the audit measured, and what each lane's selection held.
 
 ``select`` lists, per lane, the files of the pruned snapshot that sit under a
-source root and carry an extension the lane's tool reads. ``table`` compares
-that with git's file list of the whole target, by extension. Neither claims to
-know what a tool skipped on its own (its test-file and directory rules); the
-counts are the files the runner handed over.
+source root, carry an extension the lane's tool reads and are not skipped by the
+tool's own test-file and test-directory rules (``languages.lane_skips``);
+``select_skipped`` lists the ones the tool skips. ``table`` compares both with
+git's file list of the whole target, by extension.
 """
 
 from __future__ import annotations
@@ -26,8 +26,8 @@ def extension(path: str) -> str:
     return PurePosixPath(path).suffix.lower() or NO_EXTENSION
 
 
-def select(root: Path, source_roots: list[str], lanes: list[str]) -> dict[str, list[str]]:
-    """Per lane, the sorted posix paths under ``source_roots`` in ``root`` the lane's tool reads."""
+def _walk_lane_files(root: Path, source_roots: list[str], lanes: list[str],
+                     skipped: bool) -> dict[str, list[str]]:
     exts = {lane: lane_extensions(lane) for lane in lanes}
     found: dict[str, list[str]] = {lane: [] for lane in lanes}
     for top, _dirs, names in os.walk(root, followlinks=False):
@@ -36,19 +36,32 @@ def select(root: Path, source_roots: list[str], lanes: list[str]) -> dict[str, l
             if not any(rel == r or rel.startswith(r.rstrip("/") + "/") for r in source_roots):
                 continue
             for lane in lanes:
-                if PurePosixPath(rel).suffix in exts[lane] and not lane_skips(lane, rel):
+                if PurePosixPath(rel).suffix in exts[lane] and lane_skips(lane, rel) == skipped:
                     found[lane].append(rel)
     return {lane: sorted(paths) for lane, paths in found.items()}
 
 
-def table(tracked: list[str], selection: dict[str, list[str]]) -> dict[str, Any]:
-    """``{"lanes": [...], "by_extension": {ext: {tracked, supported, kind, measured: {lane: n}}}}``; ext is lower case."""
+def select(root: Path, source_roots: list[str], lanes: list[str]) -> dict[str, list[str]]:
+    """Per lane, the sorted posix paths under ``source_roots`` in ``root`` the lane's tool measures."""
+    return _walk_lane_files(root, source_roots, lanes, skipped=False)
+
+
+def select_skipped(root: Path, source_roots: list[str], lanes: list[str]) -> dict[str, list[str]]:
+    """Per lane, the sorted paths the lane's tool reads by extension but skips as tests."""
+    return _walk_lane_files(root, source_roots, lanes, skipped=True)
+
+
+def table(tracked: list[str], selection: dict[str, list[str]],
+          skipped: dict[str, list[str]]) -> dict[str, Any]:
+    """``{"lanes": [...], "by_extension": {ext: {tracked, supported, kind, measured: {lane: n}, skipped: {lane: n}}}}``; ext is lower case."""
     supported = supported_extensions()
     counts = Counter(extension(p) for p in tracked)
     measured = {lane: Counter(extension(p) for p in paths) for lane, paths in selection.items()}
+    skip_counts = {lane: Counter(extension(p) for p in paths) for lane, paths in skipped.items()}
     by_ext = {
         ext: {"tracked": counts[ext], "supported": ext in supported, "kind": kind_of(ext),
-              "measured": {lane: measured[lane][ext] for lane in selection}}
+              "measured": {lane: measured[lane][ext] for lane in selection},
+              "skipped": {lane: skip_counts[lane][ext] for lane in selection}}
         for ext in sorted(counts, key=lambda e: (-counts[e], e))
     }
     return {"lanes": list(selection), "by_extension": by_ext}
