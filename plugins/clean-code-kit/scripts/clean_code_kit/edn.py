@@ -198,12 +198,14 @@ def read_crap(text: str) -> list[dict[str, Any]]:
     out = []
     for i, entry in enumerate(doc["entries"]):
         where = f"crap.edn entry {i}"
-        _expect_keys(where, entry, {"name", "namespace", "complexity", "coverage", "crap"})
+        _expect_keys(where, entry, {"name", "namespace", "complexity", "coverage", "crap", "path", "line"})
         _expect(f"{where} :name", entry["name"], str)
         _expect(f"{where} :namespace", entry["namespace"], str)
         _expect(f"{where} :complexity", entry["complexity"], int)
         _expect(f"{where} :coverage", entry["coverage"], float, type(None))
         _expect(f"{where} :crap", entry["crap"], float, type(None))
+        _expect(f"{where} :path", entry["path"], str)
+        _expect(f"{where} :line", entry["line"], int)
         out.append(dict(entry))
     return out
 

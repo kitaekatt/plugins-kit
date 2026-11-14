@@ -240,13 +240,39 @@ class TestBootstrapDependencyDiagnostics:
 
         assert completed.stderr == (
             "[git-kit] the installed 'plugins-kit:bootstrap' plugin is too old "
-            "or stale for git-kit's code review (requires bootstrap >= 0.113.0; "
+            "or stale for git-kit's code review (requires bootstrap >= 0.168.0; "
             "missing: bootstrap_lib.code_review.pipeline.run_vcs(timeout=...), "
             "bootstrap_lib.code_review.mechanical_repository, "
-            "bootstrap_lib.code_review.pipeline.assemble_bundle(mechanical_contract=...)). "
+            "bootstrap_lib.code_review.pipeline.assemble_bundle(mechanical_contract=...), "
+            "bootstrap_lib.code_review.kit_scripts). "
             "Run `claude plugin update bootstrap@plugins-kit`. Then start a new "
             "session and retry.\n"
         )
+
+    def test_bootstrap_without_kit_scripts_reports_update_remedy(self, tmp_path):
+        """A bootstrap that has every older frontier API but predates the shared
+        kit_scripts helpers is refused as too old, not crashed on."""
+        package = tmp_path / "bootstrap_lib" / "code_review"
+        package.mkdir(parents=True)
+        (package.parent / "__init__.py").write_text("", encoding="utf-8")
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        (package / "ledger.py").write_text("", encoding="utf-8")
+        (package / "mechanical_repository.py").write_text("", encoding="utf-8")
+        (package / "pipeline.py").write_text(
+            "def run_vcs(executable, args, cwd=None, timeout=None):\n"
+            "    return 0, '', ''\n"
+            "def assemble_bundle(mechanical_contract=None):\n"
+            "    return {}\n",
+            encoding="utf-8",
+        )
+        env = dict(os.environ, _BOOTSTRAP_GUARD_SKIP_REEXEC="1", PYTHONPATH=str(tmp_path))
+
+        completed = self._run_prepare(env)
+
+        assert completed.returncode != 0
+        assert "Traceback" not in completed.stderr
+        assert "[git-kit] the installed 'plugins-kit:bootstrap' plugin is too old" in completed.stderr
+        assert "bootstrap_lib.code_review.kit_scripts" in completed.stderr
 
 # ---------------------------------------------------------------------------
 # detect_default_range -- G2: auto-detect on main/master without upstream

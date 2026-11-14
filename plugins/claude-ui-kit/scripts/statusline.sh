@@ -23,7 +23,7 @@ fi
 # .cwd is normalized to forward slashes before splitting: on Windows it arrives
 # as D:\dev\env-config, which split("/") leaves whole, rendering the full path
 # instead of the basename.
-IFS=$'\x1f' read -r MODEL MODEL_ID DIR PCT SESS WEEK SESS_RESET WEEK_RESET EFFORT < <(
+IFS=$'\x1f' read -r MODEL MODEL_ID DIR PCT SESS WEEK SESS_RESET WEEK_RESET EFFORT SID < <(
     echo "$DATA" | "$JQ" -r '[
         (.model.display_name // "Claude"),
         (try (.model.id // "unknown") catch "unknown"),
@@ -42,7 +42,8 @@ IFS=$'\x1f' read -r MODEL MODEL_ID DIR PCT SESS WEEK SESS_RESET WEEK_RESET EFFOR
         ((.rate_limits.seven_day.used_percentage // null) | if . == null then "" else ((100 - .) | floor | tostring) end),
         ((.rate_limits.five_hour.resets_at // null) | if . == null then "" else (. | floor | tostring) end),
         ((.rate_limits.seven_day.resets_at // null) | if . == null then "" else (. | floor | tostring) end),
-        (.effort.level // "")
+        (.effort.level // ""),
+        (.session_id // "")
     ] | map(tostring) | join("\u001f")' | tr -d '\r'
 )
 
@@ -191,7 +192,50 @@ fmt_reset() {
 SESS_RESET_STR=$(fmt_reset "$SESS_RESET")
 WEEK_RESET_STR=$(fmt_reset "$WEEK_RESET")
 
+# ---- Relay/direct cell (leftmost) ----------------------------------------
+# One icon per session state: relay (launched with `clauder --relay`, whose
+# claude argv carries `server:relay`), direct (/direct enabled in this
+# session), both icons together, or neither. On by default; hide with
+# STATUSLINE_SHOW_RELAY=0. The new glyphs are written as byte escapes so the
+# added lines stay ASCII. Cost: one grep over ~/.claude/sessions plus one `ps`.
+# Overrides (tests): STATUSLINE_SESSIONS_DIR, CLAUDE_BOOTSTRAP_DATA_ROOT.
+RELAY_CELL=""
+if [ "${STATUSLINE_SHOW_RELAY:-1}" != "0" ]; then
+    IS_RELAY=0
+    IS_DIRECT=0
+    case "$SID" in
+        ""|*[!A-Za-z0-9_-]*) SID="" ;;
+    esac
+    if [ -n "$SID" ]; then
+        DIRECT_FILE="${CLAUDE_BOOTSTRAP_DATA_ROOT:-${HOME:-/nonexistent}/.claude/plugins/data}/plugins-kit/llm-kit/direct/enabled/$SID.json"
+        [ -f "$DIRECT_FILE" ] && IS_DIRECT=1
+        SESS_DIR="${STATUSLINE_SESSIONS_DIR:-${HOME:-/nonexistent}/.claude/sessions}"
+        SESS_FILE=$(grep -l -F "\"sessionId\":\"$SID\"" "$SESS_DIR"/*.json 2>/dev/null | head -n 1 || true)
+        if [ -n "$SESS_FILE" ]; then
+            CPID=$(basename "$SESS_FILE" .json)
+            case "$CPID" in
+                ""|*[!0-9]*) ;;
+                *)
+                    CARGS=$(ps -o args= -p "$CPID" 2>/dev/null || true)
+                    case "$CARGS" in
+                        *server:relay*) IS_RELAY=1 ;;
+                    esac
+                    ;;
+            esac
+        fi
+    fi
+    if [ "$IS_RELAY" = "1" ]; then RELAY_CELL=$(printf '\xf0\x9f\x93\xa1'); fi
+    if [ "$IS_DIRECT" = "1" ]; then
+        [ -n "$RELAY_CELL" ] && RELAY_CELL="$RELAY_CELL "
+        RELAY_CELL="$RELAY_CELL$(printf '\xf0\x9f\x93\xa4')"
+    fi
+    if [ -z "$RELAY_CELL" ]; then RELAY_CELL=$(printf '\xe2\x9a\xaa'); fi
+fi
+
 OUT="${GRAY}📁 $DIR${RESET}"
+if [ -n "$RELAY_CELL" ]; then
+    OUT="$RELAY_CELL$SEP$OUT"
+fi
 if [ "${STATUSLINE_SHOW_MODEL:-1}" != "0" ] && [ -n "$MODEL" ]; then
     MODEL_SEG="$MODEL"
     [ -n "$EFFORT_GLYPH" ] && MODEL_SEG="$EFFORT_GLYPH $MODEL"

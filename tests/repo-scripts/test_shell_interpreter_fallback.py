@@ -182,7 +182,18 @@ class TestPreCommitScriptsPreferProjectPython:
     def test_check_staged_version_bump_uses_project_python(self, tmp_path):
         repo = self._publish_repo(tmp_path)
         stub = tmp_path / "projpy" / "python3"
-        _write_stub(stub, "PROJECT_PY_BASE_abc123")
+        # The script calls the interpreter twice: `--print-range-base` (answered
+        # with the marker) and `--bump-relevant-paths` (a stdin filter; the stub
+        # must pass stdin through, or the staged list is replaced by the marker
+        # and the script exits 0 before it ever consults the base).
+        stub.parent.mkdir(parents=True)
+        stub.write_text(
+            "#!/bin/sh\n"
+            'case "$*" in\n'
+            "  *--bump-relevant-paths*) cat ;;\n"
+            "  *) echo PROJECT_PY_BASE_abc123 ;;\n"
+            "esac\n")
+        stub.chmod(stub.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
         (repo / "plugins" / "foo" / "code.py").write_text("x = 2\n")
         subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
 

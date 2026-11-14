@@ -44,7 +44,9 @@ For each candidate it emits mechanical signals the audit lanes consume:
                       skill is NOT reported as an orphan.
     cited_by          up to a few example citing paths (orphan triage)
 
-Stdlib-only; degrades gracefully without skills_kit_lib.
+Requires skills_kit_lib (shipped beside this script) for --include-dir
+resolution; the dirwalk import falls back to a stdlib walk when that
+module is absent.
 """
 
 import argparse
@@ -606,19 +608,10 @@ def describe(path: Path, inbound: dict[str, list[Path]], root: Path) -> dict:
     }
 
 
-INCLUDE_DIRS_ENV = "MD_DOMAIN_INCLUDE_DIRS"
-
-
-def _resolve_include_dirs(cli_values: list[str] | None) -> list[str]:
-    """--include-dir values, falling back to the MD_DOMAIN_INCLUDE_DIRS
-    environment variable (os.pathsep-separated) when the flag was not passed.
-    Mirrors discover_claude_md.py / discover_skill.py exactly, including the
-    shared env var name -- one variable opts a directory back in for every
-    md-domain discover script in one setting."""
-    if cli_values:
-        return cli_values
-    env = os.environ.get(INCLUDE_DIRS_ENV)
-    return [name for name in env.split(os.pathsep) if name] if env else []
+from skills_kit_lib.include_dirs import (  # noqa: E402
+    INCLUDE_DIRS_ENV,
+    resolve_include_dirs as _resolve_include_dirs,
+)
 
 
 def main() -> int:

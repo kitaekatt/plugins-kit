@@ -252,11 +252,12 @@ reexec_under_plugin_venv("p4-kit")
 # under that venv the import below just works -- no path discovery. The try/except
 # below remains as a safety net for the installed-but-not-yet-provisioned window.
 
-_MIN_BOOTSTRAP_VERSION = "0.113.0"
+_MIN_BOOTSTRAP_VERSION = "0.168.0"
 _BOOTSTRAP_FRONTIER = (
     "bootstrap_lib.code_review.pipeline.run_vcs(timeout=...), "
     "bootstrap_lib.code_review.mechanical_repository, "
-    "bootstrap_lib.code_review.pipeline.assemble_bundle(mechanical_contract=...)"
+    "bootstrap_lib.code_review.pipeline.assemble_bundle(mechanical_contract=...), "
+    "bootstrap_lib.code_review.kit_scripts"
 )
 
 
@@ -279,6 +280,7 @@ try:
     review_pipeline = importlib.import_module("bootstrap_lib.code_review.pipeline")
     ledger = importlib.import_module("bootstrap_lib.code_review.ledger")
     importlib.import_module("bootstrap_lib.code_review.mechanical_repository")
+    importlib.import_module("bootstrap_lib.code_review.kit_scripts")
 except ModuleNotFoundError as exc:
     from bootstrap_guard import require_bootstrap
 
@@ -311,6 +313,13 @@ if "timeout" not in run_vcs_parameters or "mechanical_contract" not in bundle_pa
 # breaks `subprocess.run(["p4", ...])` with FileNotFoundError. Pulling
 # the registry-canonical PATH back in restores p4 visibility.
 from bootstrap_lib.path_repair import repair_path  # noqa: E402
+
+# VCS-neutral helpers both kits' review scripts share: the subprocess-timeout
+# environment read and the argv split. See bootstrap_lib/code_review/kit_scripts.py.
+from bootstrap_lib.code_review.kit_scripts import (  # noqa: E402
+    env_timeout_s,
+    parse_review_args as _parse_args,
+)
 
 # Shared VCS-neutral review pipeline -- subprocess wrapper, section
 # splitting, chunking + CLAUDE.md walk + submit-gate scan, bundle
@@ -659,18 +668,8 @@ def _read_ztag_records(
 
 
 def _p4_timeout_s() -> float:
-    """Read the p4 subprocess timeout (seconds) from `P4KIT_VCS_TIMEOUT_S`.
-
-    Falls back to `_P4_DEFAULT_TIMEOUT_S` when the variable is unset or holds
-    a value `float()` rejects.
-    """
-    raw = os.environ.get(_P4_TIMEOUT_ENV_VAR)
-    if not raw:
-        return _P4_DEFAULT_TIMEOUT_S
-    try:
-        return float(raw)
-    except ValueError:
-        return _P4_DEFAULT_TIMEOUT_S
+    """The p4 subprocess timeout (seconds) from `P4KIT_VCS_TIMEOUT_S`, else the default."""
+    return env_timeout_s(_P4_TIMEOUT_ENV_VAR, _P4_DEFAULT_TIMEOUT_S)
 
 # Cap each `p4 ... <paths>` invocation. Windows' CreateProcess limits the
 # combined command line to ~32 KB; bulk CLs (asset reconciles, regen passes)
@@ -2482,37 +2481,6 @@ def cleanup_auto_shelve(bundle_dir: Path) -> int:
         file=sys.stderr,
     )
     return 0
-
-
-def _parse_args(args: list[str]) -> tuple[list[str], list[str], bool]:
-    """Split argv[1:] into (positionals, claim_globs, review_machine_emitted).
-
-    `--claim <glob>` (repeatable) and `--claim=<glob>` collect claim patterns;
-    `--review-machine-emitted` turns OFF machine-emitted-artifact exclusion so
-    those files are chunked and reviewed like any other; everything else (the CL
-    number) is a positional. Raises ValueError on a `--claim` with no value.
-    """
-    positionals: list[str] = []
-    claim_globs: list[str] = []
-    review_machine_emitted = False
-    i = 0
-    while i < len(args):
-        a = args[i]
-        if a == "--review-machine-emitted":
-            review_machine_emitted = True
-            i += 1
-        elif a == "--claim":
-            if i + 1 >= len(args):
-                raise ValueError("--claim requires a glob argument")
-            claim_globs.append(args[i + 1])
-            i += 2
-        elif a.startswith("--claim="):
-            claim_globs.append(a[len("--claim="):])
-            i += 1
-        else:
-            positionals.append(a)
-            i += 1
-    return positionals, claim_globs, review_machine_emitted
 
 
 def _usage() -> int:

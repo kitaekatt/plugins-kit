@@ -52,7 +52,8 @@ def test_real_tools_audit_a_small_repository(target_repo):
     paths = {span["path"] for f in dup for span in f["group"]}
     assert "src/pkg/bootstrap_guard.py" not in paths
     cpx = [f for f in doc["findings"] if f["lane"] == "complexity"]
-    assert cpx[0]["symbol"] == "branchy" and cpx[0]["path"] is None
+    assert cpx[0]["symbol"] == "branchy"
+    assert cpx[0]["path"] == "src/pkg/b.py" and cpx[0]["start_line"] >= 1
     assert not (target_repo / ".metrics").exists()
 
 

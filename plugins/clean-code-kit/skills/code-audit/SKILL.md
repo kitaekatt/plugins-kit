@@ -125,11 +125,8 @@ domain_skill:
         the source roots silently, and do not run the audit on an unconfirmed
         config.
       - >-
-        Complexity findings carry no file location in this version: crapper's
-        output names a namespace and a symbol but no path or line, and the
-        report says "location unavailable". Do not invent a path or a line
-        number; locate the function by searching the target for its name when
-        the user asks where it is.
+        Complexity findings carry a file and a start line but no end line:
+        crapper does not report one. Do not invent an end line.
       - >-
         On exit 1, relay the tool's stderr as printed. On exit 2, relay the
         message; it names the file or path at fault. Do not retry with
@@ -183,7 +180,7 @@ domain_skill:
         path: references/lane-complexity.md
         keywords: [complexity, cyclomatic complexity, crapper, crap score,
                    coverage, no coverage, ranking, top, namespace, symbol,
-                   location unavailable, no file path, javascript as
+                   file and start line, no end line, javascript as
                    typescript, every function in findings.json, report
                    table, parser cache, follow-up task]
         summary: >-

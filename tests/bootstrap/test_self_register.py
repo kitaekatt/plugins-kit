@@ -47,8 +47,10 @@ class TestEnsureSelfRegistration:
             set(), set())
         data = _read(local)
         assert data["plugins"] == [
-            {"ref": "plugins-kit:git-kit", "install": "manual"},
-            {"ref": "plugins-kit:hue-kit", "install": "manual"},
+            {"ref": "plugins-kit:git-kit", "install": "manual",
+             "self_registered": True},
+            {"ref": "plugins-kit:hue-kit", "install": "manual",
+             "self_registered": True},
         ]
         assert len(actions) == 2
         assert all("install: manual" in a for a in actions)
@@ -90,7 +92,8 @@ class TestEnsureSelfRegistration:
             {"plugins-kit:skills-kit"}, {"skills-kit", "bootstrap"})
         data = _read(local)
         assert data["plugins"] == [
-            {"ref": "plugins-kit:hue-kit", "install": "manual"}]
+            {"ref": "plugins-kit:hue-kit", "install": "manual",
+             "self_registered": True}]
         assert len(actions) == 1
 
     def test_preserves_unrelated_keys_and_entries(self, tmp_path):
@@ -109,7 +112,8 @@ class TestEnsureSelfRegistration:
         assert data["tools"] == [{"name": "jq"}]
         assert data["plugins"][0] == existing["plugins"][0]
         assert data["plugins"][1] == {"ref": "plugins-kit:hue-kit",
-                                      "install": "manual"}
+                                      "install": "manual",
+                                      "self_registered": True}
 
     def test_unparseable_file_left_untouched(self, tmp_path):
         local = tmp_path / "bootstrap.local.json"
@@ -165,3 +169,104 @@ class TestManualEntryNeverInstalls:
         # Quiet: verbose-only ok entry, no action noise.
         assert action_entries == []
         assert any("not installed (install: manual" in e for e in ok_entries)
+
+
+class TestSelfRegisteredEntriesYieldToDeclarations:
+    """Defect: an entry self-registration wrote to the user-local layer used to
+    shadow a LATER declaration of the same ref in another layer -- merge-by-ref
+    let the local {"install": "manual"} win, so a plugin a tracked layer
+    declared install: "auto" reported "not installed (install: manual)" for
+    ever. A self-registered entry must yield: ignored at load time and
+    removed from the file, with an action entry naming the removal."""
+
+    def test_written_entries_carry_the_self_registered_marker(self, tmp_path):
+        local = str(tmp_path / "bootstrap.local.json")
+        ensure_self_registration(local, ["plugins-kit:hue-kit"], set(), set())
+        assert _read(local)["plugins"] == [
+            {"ref": "plugins-kit:hue-kit", "install": "manual",
+             "self_registered": True}]
+
+    def test_entry_declared_by_another_layer_is_removed_and_logged(self, tmp_path):
+        local = tmp_path / "bootstrap.local.json"
+        local.write_text(json.dumps({"keep": 1, "plugins": [
+            # legacy shape (pre-marker self-registration) and marked shape
+            {"ref": "plugins-kit:hue-kit", "install": "manual"},
+            {"ref": "plugins-kit:git-kit", "install": "manual",
+             "self_registered": True},
+            # hand-written: never touched
+            {"ref": "plugins-kit:p4-kit", "install": "manual",
+             "min_version": "1.0"},
+        ]}))
+        actions, _oks = ensure_self_registration(
+            str(local),
+            ["plugins-kit:hue-kit", "plugins-kit:git-kit", "plugins-kit:p4-kit"],
+            {"plugins-kit:hue-kit", "plugins-kit:git-kit", "plugins-kit:p4-kit"},
+            {"hue-kit", "git-kit", "p4-kit"},
+            layer_declared_refs={"plugins-kit:hue-kit", "plugins-kit:p4-kit"},
+            layer_declared_names={"git-kit", "hue-kit", "p4-kit"},
+        )
+        data = _read(str(local))
+        assert data["keep"] == 1
+        assert data["plugins"] == [
+            {"ref": "plugins-kit:p4-kit", "install": "manual",
+             "min_version": "1.0"}]
+        removed = [a for a in actions if "removed" in a]
+        assert len(removed) == 2
+        assert all("declared in another layer" in a for a in removed)
+
+
+class TestLoaderIgnoresShadowingSelfRegistration:
+    def test_tracked_auto_declaration_beats_stale_self_registered_entry(
+            self, tmp_path, monkeypatch):
+        from bootstrap_lib.engine import _load_layered_manifests
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        claude = tmp_path / ".claude"
+        claude.mkdir()
+        (claude / "bootstrap.local.json").write_text(json.dumps({"plugins": [
+            {"ref": "plugins-kit:hue-kit", "install": "manual"},
+            {"ref": "plugins-kit:p4-kit", "install": "manual",
+             "self_registered": True},
+            {"ref": "plugins-kit:git-kit", "install": "manual",
+             "self_registered": True},
+        ]}))
+        (claude / "bootstrap.json").write_text(json.dumps({"plugins": [
+            {"ref": "plugins-kit:hue-kit", "install": "auto"},
+            {"ref": "p4-kit", "install": "auto"},
+        ]}))
+        merged, errors = _load_layered_manifests(None)
+        assert errors == []
+        by_ref = {p["ref"]: p for p in merged["plugins"]}
+        assert by_ref["plugins-kit:hue-kit"]["install"] == "auto"
+        assert by_ref["p4-kit"]["install"] == "auto"
+        assert "plugins-kit:p4-kit" not in by_ref
+        # Undeclared elsewhere: the self-registered entry still applies.
+        assert by_ref["plugins-kit:git-kit"]["install"] == "manual"
+
+    def test_hand_written_local_override_still_wins(self, tmp_path, monkeypatch):
+        from bootstrap_lib.engine import _load_layered_manifests
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        claude = tmp_path / ".claude"
+        claude.mkdir()
+        (claude / "bootstrap.local.json").write_text(json.dumps({"plugins": [
+            {"ref": "plugins-kit:hue-kit", "install": "manual",
+             "min_version": "2.0"}]}))
+        (claude / "bootstrap.json").write_text(json.dumps({"plugins": [
+            {"ref": "plugins-kit:hue-kit", "install": "auto"}]}))
+        merged, _errors = _load_layered_manifests(None)
+        assert merged["plugins"][0]["install"] == "manual"
+
+
+def test_unreadable_file_is_quiet_when_nothing_is_missing(tmp_path):
+    # Pruning reads the file every pass; a malformed file must not turn that
+    # read into an action entry on a pass that has nothing to add.
+    local = tmp_path / "bootstrap.local.json"
+    local.write_text("{not json")
+    actions, oks = ensure_self_registration(
+        str(local), ["plugins-kit:hue-kit"], {"plugins-kit:hue-kit"},
+        {"hue-kit"})
+    assert actions == []
+    assert any("unreadable" in o for o in oks)
+    assert local.read_text() == "{not json"
