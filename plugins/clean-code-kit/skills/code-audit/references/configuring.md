@@ -108,12 +108,14 @@ lists (the config file itself is not counted; `report.md` names the paths), so a
 
 `code_audit.py init --target <dir>` prints a proposed config.yaml to stdout and
 writes nothing. It counts `git ls-files` extensions and proposes the languages
-the lanes read. Source roots are top-level directories holding at least 3
-supported files (`MIN_ROOT_FILES` in `init.py`), except test and vendored
-directories; hidden directories count when git tracks supported files in them.
-A smaller top-level directory is not rooted whole: init proposes the deepest
-directory holding all its supported files, or, when only one file is left,
-proposes nothing and lists the file in a comment. Directories `test`/`tests`/
+the lanes read. Source roots are top-level directories holding supported files, except test and
+vendored directories; hidden directories count when git tracks supported files
+in them. Each such top-level directory is proposed as the deepest directory
+holding all its supported files: `artsource/wood-shader-lab/...` proposes
+`artsource/wood-shader-lab`, and a top whose files span several subdirectories is
+proposed as the top itself (`src/a/x.py` and `src/b/y.py` give `src`). A
+top-level directory with exactly one supported file is not rooted: init lists
+that file in a comment as a stray. Directories `test`/`tests`/
 `spec` become `test_roots`. The comment block lists every source-language
 extension no lane reads with its count (`.cpp`, `.gd`, ...) and one `other
 files: N` line for the rest. It exits 2 when no tracked file has an extension a

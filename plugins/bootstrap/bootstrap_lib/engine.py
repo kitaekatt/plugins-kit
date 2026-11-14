@@ -636,8 +636,73 @@ def _main():
 
 
 def _main_pass():
-    start_time = datetime.now(timezone.utc)
+    """One engine pass, as a fixed sequence of phases sharing a _PassState.
 
+    The step numbers in the phase functions' comments are the ones the
+    bootstrap references use (engine-internals.md). Order is load-bearing
+    throughout; each phase's comment says why it sits where it does.
+    """
+    start_time = datetime.now(timezone.utc)
+    args = _parse_pass_args()
+    st = _pass_prelude(args, start_time)
+    if st is None:
+        return
+    if getattr(args, "run_kind", "full") == "always":
+        _pass_always_lane(st)
+        return
+    _pass_open_record(st)
+    _pass_identity(st)
+    _pass_version_change(st)
+    _pass_self_setup(st)
+    _pass_registry_repair(st)
+    _pass_snapshot_installed(st)
+    _pass_load_layered(st)
+    _pass_tiers_and_uninstalls(st)
+    _pass_discovery_inputs(st)
+    _pass_marketplace_barrier(st)
+    _pass_interpreter_env(st)
+    _pass_layered_manifest(st)
+    _pass_project_venv(st)
+    _pass_project_npm_and_links(st)
+    _pass_env_json(st)
+    # Add bootstrap's own section to display
+    st.display_sections.append(
+        (st.bootstrap_label, list(st.boot_action), list(st.boot_ok)))
+    _pass_plugins(st)
+    _pass_self_register(st)
+    _pass_env_records(st)
+    _pass_shared_libs(st)
+    _pass_notices(st)
+    _pass_codex_hook(st)
+    shell_content = _pass_write_logs(st)
+    display_lines = _pass_display_lines(st.display_sections)
+    if _pass_elevation(st):
+        return
+    # Record every failure dict VERBATIM, before any of it is rendered, and
+    # before the console branch returns. A failure carries far more than its
+    # display line -- agent_msg, user_msg, install_state, the elevation
+    # descriptor, the remediation command -- and every rendered surface keeps
+    # only a projection. Items the elevation aggregate speaks for are suppressed
+    # from BOTH message surfaces entirely (_visible_failures), so without this
+    # they would exist nowhere on disk.
+    _record_failures(st.recorder, st.all_failures)
+    if args.console:
+        _pass_console_report(st, display_lines)
+        return
+    _pass_emit(st, shell_content, display_lines)
+    _pass_complete(st)
+
+
+class _PassState:
+    """The values one engine pass threads from phase to phase.
+
+    A plain attribute bag, built by _pass_prelude and filled in phase order;
+    it exists so the phase functions share one pass without a parameter list
+    per phase. Nothing outlives the pass.
+    """
+
+
+def _parse_pass_args():
     parser = argparse.ArgumentParser(description="Bootstrap engine")
     parser.add_argument("--plugin-root", required=True, help="Path to bootstrap plugin root")
     parser.add_argument("--data-dir", required=True, help="Path to bootstrap data directory")
@@ -677,32 +742,47 @@ def _main_pass():
     # --console implies --verbose
     if args.console:
         args.verbose = True
+    return args
 
-    plugin_root = args.plugin_root
-    data_dir = args.data_dir
 
+def _pass_prelude(args, start_time):
+    """PATH repair, interpreter export, config load and OS detection.
+
+    Returns the pass state, or None when the platform is unsupported (the
+    pass has then already emitted its notice, and exited 1 under
+    --exit-status).
+    """
+    st = _PassState()
+    st.args = args
+    st.start_time = start_time
+    st.plugin_root = plugin_root = args.plugin_root
+    st.data_dir = data_dir = args.data_dir
+
+    # Imported here, in this order, before any phase runs: an ImportError
+    # from any of them is a transient partial-download race that the
+    # containment path (_run_with_containment) must see before the pass acts.
     from .config import load_config
-    from .log import write_log_block
+    from .log import write_log_block  # noqa: F401
     from .path_repair import repair_path
-    from .tool_check import check_tool
-    from .path_check import check_path_entry
+    from .tool_check import check_tool  # noqa: F401
+    from .path_check import check_path_entry  # noqa: F401
     from .platform_detect import detect_os, UnsupportedPlatformError
-    from .plugin_resolve import list_enabled_plugins
-    from .venv_check import check_venv
-    from .git_dep_check import check_git_dep
+    from .plugin_resolve import list_enabled_plugins  # noqa: F401
+    from .venv_check import check_venv  # noqa: F401
+    from .git_dep_check import check_git_dep  # noqa: F401
 
     # Repair PATH before any subprocess fan-out. On Windows, a bloated
     # launching-shell PATH can trip cmd.exe's variable-size limit during
     # venv activation and leave this Python with a stripped PATH that
     # fails tool_check / git_dep_check / etc.
-    path_repair_result = repair_path()
+    st.path_repair_result = repair_path()
 
     # Export BOOTSTRAP_PYTHON (and clear any inherited BOOTSTRAP_PROJECT_PYTHON)
     # before any branch can spawn a manifest command -- the always lane below
     # included. Process-scoped only: see interpreter_env. The ok entry is
     # appended once bootstrap_ok_entries exists, like path_repair_result's.
     from . import interpreter_env
-    engine_python = interpreter_env.begin_pass()
+    st.engine_python = interpreter_env.begin_pass()
 
     # The pass-start project default (interface-v3 section 3): the normative
     # rule WITH the per-project record, so the always lane below -- which never
@@ -710,20 +790,20 @@ def _main_pass():
     # a full pass recorded. The key is the hook's; a launch without
     # --project-key (a harvest relaunch, a console run) hashes --project-dir
     # verbatim.
-    project_key = args.project_key or (
+    st.project_key = args.project_key or (
         interpreter_env.project_key(args.project_dir) if args.project_dir else None)
-    project_python_entry = None
+    st.project_python_entry = None
     if args.project_dir:
         pp_value, pp_source = interpreter_env.export_project_default(
             args.project_dir,
             record_dir=os.path.join(data_dir, interpreter_env.RECORD_SUBDIR),
-            key=project_key,
+            key=st.project_key,
         )
-        project_python_entry = _project_python_entry(pp_value, pp_source)
+        st.project_python_entry = _project_python_entry(pp_value, pp_source)
 
     # Step 1: Load/migrate config
     defaults_dir = os.path.join(plugin_root, "defaults")
-    config = load_config(data_dir, defaults_dir)
+    st.config = load_config(data_dir, defaults_dir)
 
     # Fail fast on an unsupported platform (non-Ubuntu Linux) BEFORE any tool
     # or manifest processing: silently running Ubuntu/apt commands on a foreign
@@ -731,63 +811,74 @@ def _main_pass():
     # fail-fast (failure policy), not a per-item fix-all failure -- the platform
     # is unsupported as a fact, so there is nothing to auto-fix.
     try:
-        current_os = detect_os()
+        st.current_os = detect_os()
     except UnsupportedPlatformError as e:
         _emit_unsupported_platform(str(e), data_dir, args)
         if getattr(args, "exit_status", False):
             sys.exit(1)
-        return
+        return None
+    return st
 
-    # The throttled always-lane branches out here, before self-setup, the
-    # layered manifests, the env gate, and the per-plugin loop. It is not a
-    # cut-down pass; it is a different, tiny one -- see _run_always_pass for
-    # the state it must not touch and why. Placed after config load and OS
-    # detection because both are needed to evaluate an entry at all, and
-    # before everything else because none of it may run.
-    if getattr(args, "run_kind", "full") == "always":
-        # Containment is LOCAL and deliberate. _main runs inside
-        # _run_with_containment, whose handlers (_emit_engine_crash,
-        # _defer_transient_retry) clear the per-project cooldown and write
-        # bootstrap_display.pending. The always lane never consumed a cooldown
-        # stamp -- the shell skips that write on this path -- so letting a
-        # crash reach them would clear a stamp another launch owns, and, since
-        # this lane runs nearly every session, a persistently crashing entry
-        # would force a full pass every session forever. Swallow here, record
-        # in the log, and let the next full pass surface the entry properly.
-        entries = []
-        if args.verbose and project_python_entry:
-            entries.append(project_python_entry)
-        try:
-            failures, actions = _run_always_pass(
-                args.project_dir, current_os, data_dir, plugin_root,
-            )
-            # Log ACTIONS as well as failures. An always entry that remediates
-            # is doing real work -- cloning, pulling, committing, pushing --
-            # and an unlogged mutation is exactly what the repo's
-            # "Anti-pattern: silent bootstrap operations" rule forbids. Silent
-            # to the USER is the design; silent in the log is a defect.
-            entries.extend(actions)
-            entries.extend(
-                f"env_check {f.get('name', '?')}: {f.get('message', 'FAILED')}"
-                for f in failures)
-        except Exception as e:
-            import traceback
-            entries.append(f"always lane crashed: {type(e).__name__}: {e}")
-            traceback.print_exc()
-        if args.console:
-            for line in entries:
-                print(line)
-        elif entries:
-            # Log only. This block is the always lane's ONLY output surface --
-            # it never writes bootstrap_display.pending, so nothing here can
-            # reach the user this session; the next full pass reports it.
-            write_log_block(data_dir, "bootstrap always", entries)
-        return
+
+def _pass_always_lane(st):
+    """The throttled always-lane: env_checks entries with cadence 'always'.
+
+    It branches out before self-setup, the layered manifests, the env gate,
+    and the per-plugin loop. It is not a cut-down pass; it is a different,
+    tiny one -- see _run_always_pass for the state it must not touch and why.
+    Placed after config load and OS detection because both are needed to
+    evaluate an entry at all, and before everything else because none of it
+    may run.
+    """
+    from .log import write_log_block
+    args = st.args
+    # Containment is LOCAL and deliberate. _main runs inside
+    # _run_with_containment, whose handlers (_emit_engine_crash,
+    # _defer_transient_retry) clear the per-project cooldown and write
+    # bootstrap_display.pending. The always lane never consumed a cooldown
+    # stamp -- the shell skips that write on this path -- so letting a
+    # crash reach them would clear a stamp another launch owns, and, since
+    # this lane runs nearly every session, a persistently crashing entry
+    # would force a full pass every session forever. Swallow here, record
+    # in the log, and let the next full pass surface the entry properly.
+    entries = []
+    if args.verbose and st.project_python_entry:
+        entries.append(st.project_python_entry)
+    try:
+        failures, actions = _run_always_pass(
+            args.project_dir, st.current_os, st.data_dir, st.plugin_root,
+        )
+        # Log ACTIONS as well as failures. An always entry that remediates
+        # is doing real work -- cloning, pulling, committing, pushing --
+        # and an unlogged mutation is exactly what the repo's
+        # "Anti-pattern: silent bootstrap operations" rule forbids. Silent
+        # to the USER is the design; silent in the log is a defect.
+        entries.extend(actions)
+        entries.extend(
+            f"env_check {f.get('name', '?')}: {f.get('message', 'FAILED')}"
+            for f in failures)
+    except Exception as e:
+        import traceback
+        entries.append(f"always lane crashed: {type(e).__name__}: {e}")
+        traceback.print_exc()
+    if args.console:
+        for line in entries:
+            print(line)
+    elif entries:
+        # Log only. This block is the always lane's ONLY output surface --
+        # it never writes bootstrap_display.pending, so nothing here can
+        # reach the user this session; the next full pass reports it.
+        write_log_block(st.data_dir, "bootstrap always", entries)
+
+
+def _pass_open_record(st):
+    """Open the pass record and the entry lists every later phase appends to."""
+    args = st.args
     # Re-arm the apt backend's once-per-pass `apt-get update` guard so the first
     # direct apt install of THIS pass refreshes package lists (see apt.py).
     from .apt import reset_apt_pass_state
     reset_apt_pass_state()
-    log_success = config.get("log_success_checks", False) or args.verbose
+    st.log_success = st.config.get("log_success_checks", False) or args.verbose
 
     # The pass record. Complete by construction and independent of every
     # display filter below: `log_success` and the collated-line width decide
@@ -796,58 +887,70 @@ def _main_pass():
     # console pass against a wedged machine is exactly the state worth having
     # evidence of. See records.py.
     from .records import entry_list as _entry_list
-    recorder = _new_recorder(data_dir, start_time, args)
+    st.recorder = recorder = _new_recorder(st.data_dir, st.start_time, args)
     recorder.record("meta", "engine pass started",
-                    detail={"os": current_os, "project_dir": args.project_dir,
-                            "plugin_root": plugin_root,
-                            "log_success": log_success,
+                    detail={"os": st.current_os, "project_dir": args.project_dir,
+                            "plugin_root": st.plugin_root,
+                            "log_success": st.log_success,
                             "fix_all": bool(getattr(args, "fix_all", False))})
 
-    all_failures = []
-    # Bootstrap's own entries (self-bootstrap + user) — written to bootstrap's log.
+    st.all_failures = []
+    # Bootstrap's own entries (self-bootstrap + user) -- written to bootstrap's log.
     # RecordingLists: every append lands in the pass record, including the many
     # sites that hold one of these lists and append to it directly rather than
     # going through a ctx method.
-    bootstrap_action_entries = _entry_list(recorder, "action")
-    bootstrap_ok_entries = _entry_list(recorder, "ok")
-    # Log-only entries (always logged, never displayed) — see _ManifestContext.quiet
-    bootstrap_quiet_entries = _entry_list(recorder, "quiet")
+    st.boot_action = _entry_list(recorder, "action")
+    st.boot_ok = _entry_list(recorder, "ok")
+    # Log-only entries (always logged, never displayed) -- see _ManifestContext.quiet
+    st.boot_quiet = _entry_list(recorder, "quiet")
     # Display sections: list of (header, action_entries, ok_entries)
-    display_sections = []
+    st.display_sections = []
     # Pass-level shared-lib publish/link collector: both emission sites (each
     # plugin's manifest phase and the Step 4c sweep) record successes here and
     # Step 4c renders ONE aggregated display line for the whole pass.
-    shared_lib_links = _SharedLibLinkLog()
+    st.shared_lib_links = _SharedLibLinkLog()
+    # Deferred log blocks, written at Step 6 (see _pass_write_logs).
+    st.deferred_plugin_logs = []
 
-    if path_repair_result.changed:
-        details = []
-        if path_repair_result.deduped:
-            details.append(f"deduped {path_repair_result.deduped}")
-        if path_repair_result.restored:
-            details.append(f"restored {path_repair_result.restored} from registry")
-        # Logged as ok (verbose-only): PATH bloat returns next session, so this
-        # is a transient cleanup, not a persistent remediation worth surfacing.
-        bootstrap_ok_entries.append(
-            f"PATH repaired: {path_repair_result.before_entries} -> "
-            f"{path_repair_result.after_entries} entries "
-            f"({', '.join(details)})"
-        )
+    _pass_path_repair_entry(st.path_repair_result, st.boot_ok)
     # Verbose-only: names the interpreter every manifest command of this pass
     # sees, so an author reading bootstrap.log finds the variable.
-    bootstrap_ok_entries.append(
-        f"python: {interpreter_env.ENGINE_VAR}={engine_python}")
-    if project_python_entry:
-        bootstrap_ok_entries.append(project_python_entry)
+    from . import interpreter_env
+    st.boot_ok.append(
+        f"python: {interpreter_env.ENGINE_VAR}={st.engine_python}")
+    if st.project_python_entry:
+        st.boot_ok.append(st.project_python_entry)
 
+
+def _pass_path_repair_entry(path_repair_result, ok_entries):
+    if not path_repair_result.changed:
+        return
+    details = []
+    if path_repair_result.deduped:
+        details.append(f"deduped {path_repair_result.deduped}")
+    if path_repair_result.restored:
+        details.append(f"restored {path_repair_result.restored} from registry")
+    # Logged as ok (verbose-only): PATH bloat returns next session, so this
+    # is a transient cleanup, not a persistent remediation worth surfacing.
+    ok_entries.append(
+        f"PATH repaired: {path_repair_result.before_entries} -> "
+        f"{path_repair_result.after_entries} entries "
+        f"({', '.join(details)})"
+    )
+
+
+def _pass_identity(st):
+    """Locate the plugins dir and name this bootstrap: marketplace, name, version."""
+    plugin_root = st.plugin_root
     # Detect plugins directory (where installed_plugins.json lives)
-    # Dev layout: ~/Dev/<marketplace>/plugins/bootstrap → one up
-    # Cache layout: ~/.claude/plugins/cache/<marketplace>/bootstrap/<ver> → walk up to ~/.claude/plugins/
-    plugins_dir = _find_plugins_dir(plugin_root)
+    # Dev layout: ~/Dev/<marketplace>/plugins/bootstrap -> one up
+    # Cache layout: ~/.claude/plugins/cache/<marketplace>/bootstrap/<ver> -> walk up to ~/.claude/plugins/
+    st.plugins_dir = _find_plugins_dir(plugin_root)
     # Marketplace name: `name` in <checkout>/.claude-plugin/marketplace.json for a
     # dev layout, else the basename two levels up (the cache layout:
     # cache/plugins-kit/bootstrap/0.5.0 -> plugins-kit). A manifest that exists
     # but yields no name raises here and surfaces through the crash path.
-    marketplace_name = marketplace_name_for(plugin_root)
+    st.marketplace_name = marketplace_name = marketplace_name_for(plugin_root)
     plugin_json_path = os.path.join(plugin_root, ".claude-plugin", "plugin.json")
     boot_plugin_name = "bootstrap"
     version = ""
@@ -858,17 +961,25 @@ def _main_pass():
             version = pj.get("version", "")
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         pass
+    st.boot_plugin_name = boot_plugin_name
+    st.version = version
     version_suffix = f"@{version}" if version else ""
-    bootstrap_label = f"{marketplace_name}:{boot_plugin_name}{version_suffix}" if marketplace_name else f"{boot_plugin_name}{version_suffix}"
+    st.bootstrap_label = f"{marketplace_name}:{boot_plugin_name}{version_suffix}" if marketplace_name else f"{boot_plugin_name}{version_suffix}"
 
-    # Step 2b: Version change detection. The last_version stamp is the engine's
-    # GLOBAL stamp (in data_dir) — routed through the stamps module's single
-    # atomic-write + safe-read convention. See bootstrap_lib/stamps.py.
+
+def _pass_version_change(st):
+    """Step 2b: version change detection against the last_version stamp.
+
+    The last_version stamp is the engine's GLOBAL stamp (in data_dir) -- routed
+    through the stamps module's single atomic-write + safe-read convention.
+    See bootstrap_lib/stamps.py.
+    """
     from .stamps import global_stamp
+    version = st.version
     action_entries = []
     ok_entries = []
     if version:
-        last_version_stamp = global_stamp(data_dir, "last_version")
+        last_version_stamp = global_stamp(st.data_dir, "last_version")
         last_version = last_version_stamp.read()
         if last_version:
             # Compared by semver, not string equality: only a genuine UPGRADE
@@ -889,35 +1000,44 @@ def _main_pass():
         # run that advanced last_version would leave the two stamps
         # inconsistent and manufacture a phantom transition on the next real
         # pass. Console debug runs write no state; this is that contract.
-        if not args.console:
+        if not st.args.console:
             last_version_stamp.write(version)
-    bootstrap_action_entries.extend(action_entries)
-    bootstrap_ok_entries.extend(ok_entries)
+    st.boot_action.extend(action_entries)
+    st.boot_ok.extend(ok_entries)
 
-    # Step 3: Self-setup (tools, PATH, venv from config.self_setup) — runs every session
-    self_setup = config.get("self_setup", {})
+
+def _pass_self_setup(st):
+    """Step 3: self-setup (tools, PATH, venv from config.self_setup) -- every session.
+
+    Then Step 3b: activate bootstrap venv site-packages so PyYAML is available.
+    """
+    self_setup = st.config.get("self_setup", {})
     action_entries = []
     ok_entries = []
     failures = _process_self_setup(
-        self_setup, current_os, data_dir, plugin_root,
-        action_entries, ok_entries, plugin_name=boot_plugin_name,
-        quiet_entries=bootstrap_quiet_entries,
+        self_setup, st.current_os, st.data_dir, st.plugin_root,
+        action_entries, ok_entries, plugin_name=st.boot_plugin_name,
+        quiet_entries=st.boot_quiet,
     )
-    bootstrap_action_entries.extend(action_entries)
-    bootstrap_ok_entries.extend(ok_entries)
+    st.boot_action.extend(action_entries)
+    st.boot_ok.extend(ok_entries)
 
     if failures:
-        all_failures.extend(failures)
+        st.all_failures.extend(failures)
 
-    # Step 3b: Activate bootstrap venv site-packages so PyYAML is available
-    _activate_bootstrap_venv(data_dir)
+    _activate_bootstrap_venv(st.data_dir)
 
-    # Step 3b2: Repair malformed registry records -- "chimera" (a user-scope
-    # record carrying projectPath) and "orphan project" (a project-scope record
-    # naming no project), both duplicated alongside well-formed records.
-    # Once per pass and BEFORE any plugins phase (layered Step 3c and the
-    # per-plugin Step 4 both run _phase_plugins), so version checks and
-    # updates read a clean registry. Silent no-op on a healthy registry.
+
+def _pass_registry_repair(st):
+    """Step 3b2: repair malformed registry records.
+
+    "chimera" (a user-scope record carrying projectPath) and "orphan project"
+    (a project-scope record naming no project), both duplicated alongside
+    well-formed records. Once per pass and BEFORE any plugins phase (layered
+    Step 3c and the per-plugin Step 4 both run _phase_plugins), so version
+    checks and updates read a clean registry. Silent no-op on a healthy
+    registry.
+    """
     from .registry_repair import (
         apply_repair,
         describe_repair,
@@ -925,80 +1045,72 @@ def _main_pass():
         find_unrepairable,
         load_registry,
     )
-    _registry_path = os.path.join(plugins_dir, "installed_plugins.json")
+    _registry_path = os.path.join(st.plugins_dir, "installed_plugins.json")
     _repair_result = apply_repair(_registry_path)
     if getattr(_repair_result, "error", ""):
-        bootstrap_action_entries.append(
+        st.boot_action.append(
             f"registry: repair failed - {_repair_result.error}"
         )
     elif _repair_result:
-        bootstrap_action_entries.append(describe_repair(_repair_result))
+        st.boot_action.append(describe_repair(_repair_result))
     else:
-        bootstrap_ok_entries.append("registry: no malformed records")
+        st.boot_ok.append("registry: no malformed records")
 
     # Refs the healthy-survivor guard refused to touch. Read post-repair so the
     # report reflects the registry as it now stands. Visible (action entry): a
     # skipped ref is a machine still carrying a defect we chose not to fix.
     _repair_skipped = find_unrepairable(load_registry(_registry_path))
     if _repair_skipped:
-        bootstrap_action_entries.append(describe_unrepairable(_repair_skipped))
+        st.boot_action.append(describe_unrepairable(_repair_skipped))
 
-    # Snapshot installed plugin refs BEFORE any layered-manifest / per-plugin /
-    # script install runs this pass. Claude Code loaded plugins at session start,
-    # before this hook -- so any plugin that ENTERS the registry during this pass
-    # is not active in the running session yet (needs /reload-plugins or a
-    # restart). The after-snapshot diff (post Step 4b) drives the Step 4d reload
-    # nag. We diff the registry directly rather than reusing Step 4b's new_plugins
-    # because a layered `plugins:` install lands in the registry BEFORE Step 4's
-    # scan and is absorbed by Step 4 (never appearing in new_plugins) -- the gap
-    # the cache-kit end-to-end test surfaced.
-    _registry_for_diff = os.path.join(plugins_dir, "installed_plugins.json")
+
+def _pass_snapshot_installed(st):
+    """Snapshot installed plugin refs BEFORE any install this pass runs.
+
+    Claude Code loaded plugins at session start, before this hook -- so any
+    plugin that ENTERS the registry during this pass (layered manifest,
+    per-plugin, or script install) is not active in the running session yet
+    (needs /reload-plugins or a restart). The after-snapshot diff (post Step
+    4b) drives the Step 4d reload nag. We diff the registry directly rather
+    than reusing Step 4b's new_plugins because a layered `plugins:` install
+    lands in the registry BEFORE Step 4's scan and is absorbed by Step 4
+    (never appearing in new_plugins) -- the gap the cache-kit end-to-end test
+    surfaced.
+    """
+    st.registry_for_diff = os.path.join(st.plugins_dir, "installed_plugins.json")
     # Both snapshots take the same registry-v2-empty cache fallback (the
     # registry can stay {"plugins": {}} forever), or the diff is meaningless.
-    _refs_for_diff = _load_enabled_refs(args.project_dir)
-    installed_refs_before = set(
-        _read_installed_plugins(_registry_for_diff, enabled_refs=_refs_for_diff))
+    _refs_for_diff = _load_enabled_refs(st.args.project_dir)
+    st.installed_refs_before = set(
+        _read_installed_plugins(st.registry_for_diff, enabled_refs=_refs_for_diff))
 
-    # Step 3c: Process layered bootstrap manifests (user + project level)
+
+def _pass_load_layered(st):
+    """Step 3c: load the layered bootstrap manifests (user + project level).
+
+    Includes Step 3c-pull, which can move the project checkout and so forces a
+    reload, and the parse-error report for every layer that failed to parse.
+    """
+    args, data_dir = st.args, st.data_dir
     # Deprecation: warn if legacy user-bootstrap.json exists
     legacy_path = os.path.join(data_dir, "user-bootstrap.json")
     if os.path.isfile(legacy_path):
-        bootstrap_action_entries.append(
+        st.boot_action.append(
             "DEPRECATED: user-bootstrap.json found in data dir. "
             "Migrate to ~/.claude/bootstrap.json (still processed this session)."
         )
 
-    layered_manifest, layered_parse_errors, profile_state = _load_layered_manifests_ex(
-        args.project_dir, data_dir)
-
-    # Step 3c-pull: fast-forward the project checkout itself, FIRST, so every
-    # later phase -- tools, git_config, project_venv, project_npm, a project's
-    # check/fix entries -- converges on the updated tree in this same pass. A
-    # moved HEAD may carry a changed .claude/bootstrap.json, so the manifest is
-    # reloaded. Skipped over a parse error: a broken manifest drives nothing.
-    project_pull_notices = []
-    pull_def = (layered_manifest or {}).get("project_git_pull")
-    if args.project_dir and not layered_parse_errors and pull_def is not None:
-        pull_quiet = []
-        pull_action, pull_ok, pull_failures, pull_notice, pull_moved = _process_project_git_pull(
-            pull_def, args.project_dir, quiet_entries=pull_quiet)
-        bootstrap_action_entries.extend(_reprefix(e, "config: ") for e in pull_action)
-        bootstrap_ok_entries.extend(_reprefix(e, "config: ") for e in pull_ok)
-        bootstrap_quiet_entries.extend(_reprefix(e, "config: ") for e in pull_quiet)
-        all_failures.extend(pull_failures)
-        if pull_notice:
-            project_pull_notices.append(pull_notice)
-        if pull_moved:
-            layered_manifest, layered_parse_errors, profile_state = _load_layered_manifests_ex(
-                args.project_dir, data_dir)
-
-    for pe in layered_parse_errors:
+    st.layered_manifest, st.layered_parse_errors, st.profile_state = (
+        _load_layered_manifests_ex(args.project_dir, data_dir))
+    st.project_pull_notices = []
+    _pass_project_git_pull(st)
+    for pe in st.layered_parse_errors:
         _append_detail(
-            bootstrap_action_entries,
+            st.boot_action,
             f"layered manifest {pe['path']}: PARSE FAILED - {pe['error']}",
             display="layered manifest: PARSE FAILED",
         )
-        all_failures.append({
+        st.all_failures.append({
             "type": "manifest_parse",
             "path": pe["path"],
             "message": pe["error"],
@@ -1012,48 +1124,88 @@ def _main_pass():
             "persist_across_sessions": True,
         })
 
+
+def _pass_project_git_pull(st):
+    """Step 3c-pull: fast-forward the project checkout itself, FIRST.
+
+    So every later phase -- tools, git_config, project_venv, project_npm, a
+    project's check/fix entries -- converges on the updated tree in this same
+    pass. A moved HEAD may carry a changed .claude/bootstrap.json, so the
+    manifest is reloaded. Skipped over a parse error: a broken manifest drives
+    nothing.
+    """
+    args = st.args
+    pull_def = (st.layered_manifest or {}).get("project_git_pull")
+    if not (args.project_dir and not st.layered_parse_errors and pull_def is not None):
+        return
+    pull_quiet = []
+    pull_action, pull_ok, pull_failures, pull_notice, pull_moved = _process_project_git_pull(
+        pull_def, args.project_dir, quiet_entries=pull_quiet)
+    _extend_config_entries(st, pull_action, pull_ok, pull_quiet)
+    st.all_failures.extend(pull_failures)
+    if pull_notice:
+        st.project_pull_notices.append(pull_notice)
+    if pull_moved:
+        st.layered_manifest, st.layered_parse_errors, st.profile_state = (
+            _load_layered_manifests_ex(args.project_dir, st.data_dir))
+
+
+def _extend_config_entries(st, actions, oks, quiets):
+    """Fold a layered-config helper's plain lists into bootstrap's own lists.
+
+    _reprefix, not an f-string: an f-string produces a plain str and drops
+    the entry's authored short label and detail (see records.Entry).
+    """
+    st.boot_action.extend(_reprefix(e, "config: ") for e in actions)
+    st.boot_ok.extend(_reprefix(e, "config: ") for e in oks)
+    st.boot_quiet.extend(_reprefix(e, "config: ") for e in quiets)
+
+
+def _pass_tiers_and_uninstalls(st):
+    """Step 3c-tiers, then Step 3c-uninstall."""
+    args = st.args
     # Step 3c-tiers: resolve profile plugin tiers against what is installed,
     # BEFORE the layered manifest drives any phase. The rewritten plugins list
     # replaces the authored one (tiered entries carry the install mode the
     # resolver decided), and the removals the user recorded are carried out
     # here. See _process_plugin_tiers.
     tier_action, tier_ok, tier_quiet = [], [], []
-    layered_manifest, tier_failures = _process_plugin_tiers(
-        layered_manifest, profile_state, args.project_dir,
+    st.layered_manifest, tier_failures = _process_plugin_tiers(
+        st.layered_manifest, st.profile_state, args.project_dir,
         tier_action, tier_ok, tier_quiet)
-    bootstrap_action_entries.extend(_reprefix(e, "config: ") for e in tier_action)
-    bootstrap_ok_entries.extend(_reprefix(e, "config: ") for e in tier_ok)
-    bootstrap_quiet_entries.extend(_reprefix(e, "config: ") for e in tier_quiet)
-    all_failures.extend(tier_failures)
+    _extend_config_entries(st, tier_action, tier_ok, tier_quiet)
+    st.all_failures.extend(tier_failures)
 
     # Step 3c-uninstall: plugins[] entries marked `uninstall: true` (written by
     # a profile switch, or by hand). After the tiers, so an entry for a plugin
     # the selected profile still wants installed is seen as the conflict it is.
     un_action, un_ok, un_quiet = [], [], []
-    layered_manifest, un_failures = _process_plugin_uninstall_entries(
-        layered_manifest, profile_state, args.project_dir,
+    st.layered_manifest, un_failures = _process_plugin_uninstall_entries(
+        st.layered_manifest, st.profile_state, args.project_dir,
         un_action, un_ok, un_quiet)
-    bootstrap_action_entries.extend(_reprefix(e, "config: ") for e in un_action)
-    bootstrap_ok_entries.extend(_reprefix(e, "config: ") for e in un_ok)
-    bootstrap_quiet_entries.extend(_reprefix(e, "config: ") for e in un_quiet)
-    all_failures.extend(un_failures)
+    _extend_config_entries(st, un_action, un_ok, un_quiet)
+    st.all_failures.extend(un_failures)
 
-    # Plugin discovery inputs, shared by Step 3c-mkt and Step 4.
-    registry_path = os.path.join(plugins_dir, "installed_plugins.json")
+
+def _pass_discovery_inputs(st):
+    """Plugin discovery inputs, shared by Step 3c-mkt and Step 4."""
+    args = st.args
+    st.registry_path = registry_path = os.path.join(st.plugins_dir, "installed_plugins.json")
 
     # In dev layout the registry lists all repo plugins, not just enabled ones.
     # Build an enabled_refs filter from settings.json + production registry so only
     # actively-enabled plugins are bootstrapped. Production layout is unaffected
     # (its registry is already authoritative).
-    home = os.environ.get("HOME") or os.path.expanduser("~")
-    prod_registry = os.path.normpath(os.path.join(home, ".claude", "plugins", "installed_plugins.json"))
+    st.home = home = os.environ.get("HOME") or os.path.expanduser("~")
+    st.prod_registry = prod_registry = os.path.normpath(
+        os.path.join(home, ".claude", "plugins", "installed_plugins.json"))
     is_dev_layout = os.path.normpath(registry_path) != prod_registry
     # A claudx session (CLAUDE_PLUGIN_TEST) is the exception: claude_plugin_test.py
     # already filtered by enablement before writing the synthetic registry (or
     # took everything for --all), so that registry IS the selection and the real
     # settings must not narrow it (dev-only plugins are enabled nowhere).
     is_claudx_session = is_dev_layout and bool(os.environ.get("CLAUDE_PLUGIN_TEST"))
-    enabled_refs = (
+    st.enabled_refs = (
         _load_enabled_refs(args.project_dir)
         if is_dev_layout and not is_claudx_session else None
     )
@@ -1062,96 +1214,131 @@ def _main_pass():
     # at {"plugins": {}} for marketplace installs, so cache-derived fallback
     # entries need their own enablement source (settings enabledPlugins). In the
     # dev layout enabled_refs already carries it; otherwise load it here.
-    fallback_refs = enabled_refs if enabled_refs is not None else _load_enabled_refs(args.project_dir)
+    st.fallback_refs = (st.enabled_refs if st.enabled_refs is not None
+                        else _load_enabled_refs(args.project_dir))
 
-    # Sort: bootstrap plugin first, then same-marketplace plugins, then others
+
+def _pass_plugin_sort_key(st):
+    """Sort: bootstrap plugin first, then same-marketplace plugins, then others."""
+    boot_plugin_name, marketplace_name = st.boot_plugin_name, st.marketplace_name
+
     def _plugin_sort_key(pi):
         if pi.name == boot_plugin_name and pi.marketplace == marketplace_name:
             return (0, pi.name)
         if pi.marketplace == marketplace_name:
             return (1, pi.name)
         return (2, pi.name)
+    return _plugin_sort_key
 
-    # Step 3c-mkt: marketplace barrier. Every marketplaces[] entry -- the
-    # layered manifest's and every enabled plugin manifest's, bootstrap's own
-    # alwaysUpdate entry included -- is settled HERE, before the first plugins
-    # phase (layered Step 3c, then Step 4) compares an installed version with
-    # a marketplace clone. Without it the layered plugins phase read a clone
-    # that Step 4 refreshed only afterwards, so a published update applied one
-    # pass late. It runs after self-setup and registry repair (above), and the
-    # manifests keep their Step 3c/4 order, so a layered pin still wins. See
-    # _marketplace_barrier for the CLI-missing (fresh install) case.
-    barrier_plugins, barrier_cache_changed = list_enabled_plugins(
-        config, registry_path, plugins_dir, enabled_refs,
-        fallback_enabled_refs=fallback_refs,
+
+def _pass_list_plugins(st):
+    """List the enabled plugins, saving a changed discovery cache."""
+    from .plugin_resolve import list_enabled_plugins
+    plugins, cache_changed = list_enabled_plugins(
+        st.config, st.registry_path, st.plugins_dir, st.enabled_refs,
+        fallback_enabled_refs=st.fallback_refs,
     )
-    if barrier_cache_changed:
+    if cache_changed:
         from .config import save_config
-        save_config(data_dir, config)
-    barrier_plugins.sort(key=_plugin_sort_key)
-    all_failures.extend(_marketplace_barrier(
-        layered_manifest, barrier_plugins, current_os, data_dir, plugin_root,
-        args.project_dir, version, bootstrap_action_entries,
-        bootstrap_ok_entries, bootstrap_quiet_entries,
+        save_config(st.data_dir, st.config)
+    plugins.sort(key=_pass_plugin_sort_key(st))
+    return plugins
+
+
+def _pass_marketplace_barrier(st):
+    """Step 3c-mkt: marketplace barrier.
+
+    Every marketplaces[] entry -- the layered manifest's and every enabled
+    plugin manifest's, bootstrap's own alwaysUpdate entry included -- is
+    settled HERE, before the first plugins phase (layered Step 3c, then
+    Step 4) compares an installed version with a marketplace clone. Without it
+    the layered plugins phase read a clone that Step 4 refreshed only
+    afterwards, so a published update applied one pass late. It runs after
+    self-setup and registry repair (above), and the manifests keep their Step
+    3c/4 order, so a layered pin still wins. See _marketplace_barrier for the
+    CLI-missing (fresh install) case.
+    """
+    barrier_plugins = _pass_list_plugins(st)
+    st.all_failures.extend(_marketplace_barrier(
+        st.layered_manifest, barrier_plugins, st.current_os, st.data_dir,
+        st.plugin_root, st.args.project_dir, st.version, st.boot_action,
+        st.boot_ok, st.boot_quiet,
     ))
 
-    # Step 3c-python (interface-v3 section 3), BEFORE the layered manifest is
-    # processed so its commands see both names: (1) the two machine-wide
-    # opt-outs, read from USER layers only; (2) BOOTSTRAP_PYTHON persistence
-    # and the shell hook; (3) a fresh, manifest-aware project default
-    # (subdir, project_python) that ignores the record.
+
+def _pass_interpreter_env(st):
+    """Step 3c-python (interface-v3 section 3).
+
+    BEFORE the layered manifest is processed so its commands see both names:
+    (1) the two machine-wide opt-outs, read from USER layers only; (2)
+    BOOTSTRAP_PYTHON persistence and the shell hook; (3) a fresh,
+    manifest-aware project default (subdir, project_python) that ignores the
+    record.
+    """
+    from . import interpreter_env
+    args = st.args
+    parse_errors = bool(st.layered_parse_errors)
     ie_user_layers, ie_project_layers = _interpreter_env_layers(
-        args.project_dir, profile_state)
+        args.project_dir, st.profile_state)
     ie_persist, ie_shell_hook, ie_notes = interpreter_env.interpreter_env_settings(
-        ie_user_layers, parse_errors=bool(layered_parse_errors),
+        ie_user_layers, parse_errors=parse_errors,
         project_layers=ie_project_layers)
-    bootstrap_ok_entries.extend(ie_notes)
+    st.boot_ok.extend(ie_notes)
     ie_action, ie_ok, ie_failures = _process_interpreter_env(
-        ie_persist, ie_shell_hook, current_os=current_os, data_dir=data_dir,
-        parse_errors=bool(layered_parse_errors))
-    bootstrap_action_entries.extend(ie_action)
-    bootstrap_ok_entries.extend(ie_ok)
-    all_failures.extend(ie_failures)
-    project_python_source = None
+        ie_persist, ie_shell_hook, current_os=st.current_os, data_dir=st.data_dir,
+        parse_errors=parse_errors)
+    st.boot_action.extend(ie_action)
+    st.boot_ok.extend(ie_ok)
+    st.all_failures.extend(ie_failures)
+    st.project_python_source = None
     if args.project_dir:
-        _pp_value, project_python_source = _export_project_default_for_pass(
-            args.project_dir, layered_manifest, project_key,
-            bootstrap_ok_entries, bootstrap_quiet_entries,
+        _pp_value, st.project_python_source = _export_project_default_for_pass(
+            args.project_dir, st.layered_manifest, st.project_key,
+            st.boot_ok, st.boot_quiet,
             user_layers=ie_user_layers, project_layers=ie_project_layers)
 
-    if layered_manifest:
+
+def _pass_layered_manifest(st):
+    """Step 3c proper: run the merged layered manifest's phases as "config".
+
+    Then Step 3c2: surface the resolved bootstrap profile (errors, warnings,
+    an applied chain, and the attended-signal note) into this pass's entries
+    and failures -- see _report_profile_state's docstring for why the note is
+    folded in HERE rather than computed later at Step 8.
+    """
+    if st.layered_manifest:
         action_entries = []
         ok_entries = []
         quiet_entries = []
         failures = _process_manifest(
-            layered_manifest, current_os, data_dir, plugin_root,
+            st.layered_manifest, st.current_os, st.data_dir, st.plugin_root,
             action_entries, ok_entries, plugin_name="config",
-            project_dir=args.project_dir,
-            quiet_entries=quiet_entries, shared_lib_links=shared_lib_links,
+            project_dir=st.args.project_dir,
+            quiet_entries=quiet_entries, shared_lib_links=st.shared_lib_links,
         )
-        # _reprefix, not an f-string: an f-string produces a plain str and
-        # drops the entry's authored short label and detail (see records.Entry).
-        prefixed_action = [_reprefix(e, "config: ") for e in action_entries]
-        prefixed_ok = [_reprefix(e, "config: ") for e in ok_entries]
-        bootstrap_action_entries.extend(prefixed_action)
-        bootstrap_ok_entries.extend(prefixed_ok)
         # Log-only detail represented by an adjacent display summary.
         # bootstrap_action_entries feeds both the log and bootstrap's display
         # section, so quiet entries ride in the log-only list instead.
-        bootstrap_quiet_entries.extend(_reprefix(e, "config: ") for e in quiet_entries)
+        _extend_config_entries(st, action_entries, ok_entries, quiet_entries)
         if failures:
-            all_failures.extend(failures)
+            st.all_failures.extend(failures)
 
-    # Step 3c2: Surface the resolved bootstrap profile (errors, warnings, an
-    # applied chain, and the attended-signal note) into this pass's entries
-    # and failures -- see _report_profile_state's docstring for why the note
-    # is folded in HERE rather than computed later at Step 8.
-    all_failures.extend(_report_profile_state(
-        profile_state, bootstrap_action_entries, bootstrap_ok_entries,
-        bootstrap_quiet_entries))
+    st.all_failures.extend(_report_profile_state(
+        st.profile_state, st.boot_action, st.boot_ok, st.boot_quiet))
 
-    # Step 3d: Process project_venv from layered manifest (needs --project-dir)
-    project_venv_def = layered_manifest.get("project_venv") if layered_manifest else None
+
+def _pass_project_venv(st):
+    """Step 3d: project_venv from the layered manifest (needs --project-dir).
+
+    Then Step 3d-record: the project interpreter (or the opt-out) this pass
+    settled on is recorded for the hook prelude and the always lane (write
+    policy in interpreter_env.write_record). Skipped when a layered manifest
+    failed to parse: the broken layer may be the one holding project_python.
+    """
+    from . import interpreter_env
+    args = st.args
+    lm = st.layered_manifest
+    st.project_venv_def = project_venv_def = lm.get("project_venv") if lm else None
     if project_venv_def and args.project_dir:
         pv_quiet = []
         pv_action, pv_ok, pv_failures = _process_project_venv(
@@ -1165,175 +1352,149 @@ def _main_pass():
         # venv itself is valid and only that one library goes unlinked. Every
         # venv-level failure still gates the export exactly as before.
         if not [f for f in pv_failures if f.get("blocks_venv", True)]:
-            if project_python_source in _PROJECT_PYTHON_OUTRANKS_VENV:
-                pv_ok.append(_kept_over_venv_entry(project_python_source))
-            else:
-                project_python = _export_project_python(
-                    project_venv_def, args.project_dir)
-                if project_python:
-                    project_python_source = "venv"
-                    pv_ok.append(
-                        f"project_venv: exported "
-                        f"{interpreter_env.PROJECT_VAR}={project_python} (process)")
-        bootstrap_action_entries.extend(_reprefix(e, "config: ") for e in pv_action)
-        bootstrap_ok_entries.extend(_reprefix(e, "config: ") for e in pv_ok)
-        bootstrap_quiet_entries.extend(_reprefix(e, "config: ") for e in pv_quiet)
-        all_failures.extend(pv_failures)
+            _pass_export_venv_python(st, project_venv_def, pv_ok)
+        _extend_config_entries(st, pv_action, pv_ok, pv_quiet)
+        st.all_failures.extend(pv_failures)
 
-    # Step 3d-record: the project interpreter (or the opt-out) this pass
-    # settled on is recorded for the hook prelude and the always lane (write
-    # policy in interpreter_env.write_record). Skipped when a layered manifest
-    # failed to parse: the broken layer may be the one holding project_python.
-    if args.project_dir and project_python_source:
+    if args.project_dir and st.project_python_source:
         _maintain_project_python_record(
-            data_dir, project_key, os.environ.get(interpreter_env.PROJECT_VAR, ""),
-            project_python_source, bool(layered_parse_errors),
-            bootstrap_ok_entries, bootstrap_quiet_entries)
+            st.data_dir, st.project_key, os.environ.get(interpreter_env.PROJECT_VAR, ""),
+            st.project_python_source, bool(st.layered_parse_errors),
+            st.boot_ok, st.boot_quiet)
 
+
+def _pass_export_venv_python(st, project_venv_def, pv_ok):
+    from . import interpreter_env
+    if st.project_python_source in _PROJECT_PYTHON_OUTRANKS_VENV:
+        pv_ok.append(_kept_over_venv_entry(st.project_python_source))
+        return
+    project_python = _export_project_python(
+        project_venv_def, st.args.project_dir)
+    if project_python:
+        st.project_python_source = "venv"
+        pv_ok.append(
+            f"project_venv: exported "
+            f"{interpreter_env.PROJECT_VAR}={project_python} (process)")
+
+
+def _pass_project_npm_and_links(st):
+    """Step 3d2 (project_npm), then Step 3d3 (agent_skills_link)."""
+    args = st.args
+    lm = st.layered_manifest
     # Step 3d2: Process project_npm from layered manifest (needs --project-dir).
     # After project_venv for the same reason project_venv sits where it does:
     # tools/path have already run, so npm (installed by the tools phase on a
     # fresh machine) resolves here even when this session's PATH was inherited
     # without it.
-    project_npm_def = layered_manifest.get("project_npm") if layered_manifest else None
+    project_npm_def = lm.get("project_npm") if lm else None
     if project_npm_def and args.project_dir:
         pn_quiet = []
         pn_action, pn_ok, pn_failures = _process_project_npm(
             project_npm_def, args.project_dir, quiet_entries=pn_quiet)
-        bootstrap_action_entries.extend(_reprefix(e, "config: ") for e in pn_action)
-        bootstrap_ok_entries.extend(_reprefix(e, "config: ") for e in pn_ok)
-        bootstrap_quiet_entries.extend(_reprefix(e, "config: ") for e in pn_quiet)
-        all_failures.extend(pn_failures)
+        _extend_config_entries(st, pn_action, pn_ok, pn_quiet)
+        st.all_failures.extend(pn_failures)
 
     # Step 3d3: agent_skills_link -- link <project>/.agents/skills to
     # <project>/.claude/skills for Codex CLI discovery. Runs once per pass,
     # even when the merged layered manifest is empty (the field defaults to
     # enabled), and OUTSIDE _MANIFEST_PHASES -- see
     # _run_agent_skills_link_check's docstring for why.
-    asl_value = layered_manifest.get("agent_skills_link") if layered_manifest else None
+    asl_value = lm.get("agent_skills_link") if lm else None
     asl_action, asl_ok, asl_failures = _run_agent_skills_link_check(
         args.project_dir, asl_value,
     )
-    bootstrap_action_entries.extend(asl_action)
-    bootstrap_ok_entries.extend(asl_ok)
+    st.boot_action.extend(asl_action)
+    st.boot_ok.extend(asl_ok)
     if asl_failures:
-        all_failures.extend(asl_failures)
+        st.all_failures.extend(asl_failures)
 
-    # Step 3e: Process the layered env.json manifest (identity-bearing
-    # personalization; bootstrap-env-refactor spec 4.4). Placement is
-    # load-bearing: immediately AFTER the layered bootstrap.json manifest
-    # (env_vars -> tools -> fonts -> path -> project_venv -> project_npm have
-    # all run, so every variable and binary a personalization entry references
-    # already exists) and BEFORE plugin manifests (Step 4). Gated by this
-    # origin's record in the env_state.json stamp -- see _process_env_pass; a
-    # plain --console pass reads the gate but writes no stamp, exactly as it
-    # writes no queue (Step 7b). env.json failures never
-    # affect the bootstrap.json phases above: software still provisions;
-    # personalization refuses to guess.
+
+def _pass_env_json(st):
+    """Step 3e: the layered env.json manifest (identity-bearing personalization).
+
+    bootstrap-env-refactor spec 4.4. Placement is load-bearing: immediately
+    AFTER the layered bootstrap.json manifest (env_vars -> tools -> fonts ->
+    path -> project_venv -> project_npm have all run, so every variable and
+    binary a personalization entry references already exists) and BEFORE
+    plugin manifests (Step 4). Gated by this origin's record in the
+    env_state.json stamp -- see _process_env_pass; a plain --console pass
+    reads the gate but writes no stamp, exactly as it writes no queue (Step
+    7b). env.json failures never affect the bootstrap.json phases above:
+    software still provisions; personalization refuses to guess.
+    """
     env_action_entries = []
     env_ok_entries = []
     env_quiet_entries = []
     env_failures = _process_env_pass(
-        args.project_dir, current_os, data_dir, plugin_root,
-        env_action_entries, env_ok_entries, engine_version=version,
+        st.args.project_dir, st.current_os, st.data_dir, st.plugin_root,
+        env_action_entries, env_ok_entries, engine_version=st.version,
         quiet_entries=env_quiet_entries,
-        project_key=project_key,
-        write_stamp=_pass_writes_queue_and_stamp(args),
+        project_key=st.project_key,
+        write_stamp=_pass_writes_queue_and_stamp(st.args),
     )
-    bootstrap_action_entries.extend(_reprefix(e, "env: ") for e in env_action_entries)
-    bootstrap_ok_entries.extend(_reprefix(e, "env: ") for e in env_ok_entries)
-    bootstrap_quiet_entries.extend(_reprefix(e, "env: ") for e in env_quiet_entries)
+    st.boot_action.extend(_reprefix(e, "env: ") for e in env_action_entries)
+    st.boot_ok.extend(_reprefix(e, "env: ") for e in env_ok_entries)
+    st.boot_quiet.extend(_reprefix(e, "env: ") for e in env_quiet_entries)
     if env_failures:
-        all_failures.extend(env_failures)
+        st.all_failures.extend(env_failures)
 
-    # Add bootstrap's own section to display
-    display_sections.append((bootstrap_label, list(bootstrap_action_entries), list(bootstrap_ok_entries)))
 
-    # Step 4: Process enabled plugins (auto-discovered via bootstrap.json presence).
-    # The discovery inputs (registry_path, enabled_refs, fallback_refs, the sort
-    # key) are set up before Step 3c-mkt, which reads the same plugin set.
-    enabled_plugins, cache_changed = list_enabled_plugins(
-        config, registry_path, plugins_dir, enabled_refs,
-        fallback_enabled_refs=fallback_refs,
+def _pass_ordered_plugins(st):
+    plugins = _pass_list_plugins(st)
+    return _order_plugins_by_shared_lib_dependencies(
+        plugins,
+        default_marketplace=st.marketplace_name,
+        bootstrap_ref=(st.marketplace_name, st.boot_plugin_name),
     )
-    if cache_changed:
-        from .config import save_config
-        save_config(data_dir, config)
 
-    enabled_plugins.sort(key=_plugin_sort_key)
-    enabled_plugins = _order_plugins_by_shared_lib_dependencies(
-        enabled_plugins,
-        default_marketplace=marketplace_name,
-        bootstrap_ref=(marketplace_name, boot_plugin_name),
+
+def _pass_bootstrap_plugin(st, plugin_info):
+    _bootstrap_single_plugin_isolated(
+        plugin_info, st.current_os, st.data_dir, st.all_failures,
+        st.log_success, st.display_sections, st.deferred_plugin_logs, st.args,
+        engine_version=st.version, shared_lib_links=st.shared_lib_links,
+        recorder=st.recorder,
     )
-    deferred_plugin_logs = []
+
+
+def _pass_plugins(st):
+    """Step 4: enabled plugins (auto-discovered via bootstrap.json presence).
+
+    Then Step 4b: re-scan for plugins installed during Steps 3c/4 (e.g. a
+    layered bootstrap.json declared a plugin to install via `claude plugin
+    install`). The discovery inputs (registry_path, enabled_refs,
+    fallback_refs, the sort key) are set up before Step 3c-mkt, which reads
+    the same plugin set.
+    """
+    st.enabled_plugins = _pass_ordered_plugins(st)
     processed_plugin_keys = set()
 
-    for plugin_info in enabled_plugins:
+    for plugin_info in st.enabled_plugins:
         processed_plugin_keys.add(_plugin_processed_key(plugin_info))
-        _bootstrap_single_plugin_isolated(
-            plugin_info, current_os, data_dir, all_failures,
-            log_success, display_sections, deferred_plugin_logs, args,
-            engine_version=version, shared_lib_links=shared_lib_links,
-            recorder=recorder,
-        )
+        _pass_bootstrap_plugin(st, plugin_info)
 
-    # Step 4b: Re-scan for plugins installed during Steps 3c/4
-    # (e.g. a layered bootstrap.json declared a plugin to install via `claude plugin install`)
-    phase2_plugins, phase2_cache_changed = list_enabled_plugins(
-        config, registry_path, plugins_dir, enabled_refs,
-        fallback_enabled_refs=fallback_refs,
-    )
-    if phase2_cache_changed:
-        from .config import save_config
-        save_config(data_dir, config)
+    phase2_plugins = _pass_ordered_plugins(st)
+    st.new_plugins = _phase2_new_plugins(phase2_plugins, processed_plugin_keys)
+    for plugin_info in st.new_plugins:
+        _pass_bootstrap_plugin(st, plugin_info)
 
-    phase2_plugins.sort(key=_plugin_sort_key)
-    phase2_plugins = _order_plugins_by_shared_lib_dependencies(
-        phase2_plugins,
-        default_marketplace=marketplace_name,
-        bootstrap_ref=(marketplace_name, boot_plugin_name),
-    )
-    new_plugins = _phase2_new_plugins(phase2_plugins, processed_plugin_keys)
-    for plugin_info in new_plugins:
-        _bootstrap_single_plugin_isolated(
-            plugin_info, current_os, data_dir, all_failures,
-            log_success, display_sections, deferred_plugin_logs, args,
-            engine_version=version, shared_lib_links=shared_lib_links,
-            recorder=recorder,
-        )
 
-    # Step 4b2: Self-register bootstrap-dependent plugins for auto-update.
-    # _phase_plugins only manages DECLARED plugins[] entries; everything else
-    # fell back to Claude Code's own autoUpdate, which reads the marketplace
-    # clone BEFORE this pass refreshes it -- one restart behind every publish.
-    # Any processed plugin that ships a bootstrap.json but has no plugins[]
-    # entry anywhere (merged layers or another plugin's manifest) is appended
-    # to ~/.claude/bootstrap.local.json with install: "manual" (update-only:
-    # an uninstalled plugin stays uninstalled; uninstalling is the only
-    # opt-out, and a deleted entry is re-added next pass). Entries take effect
-    # from the NEXT pass -- the plugin was just provisioned this one, so
-    # nothing is stale in the gap. Rationale + write-target choice:
-    # bootstrap_lib/self_register.py module docstring.
-    from .self_register import declared_plugin_ids, ensure_self_registration
-    # A redirected test session (CLAUDE_BOOTSTRAP_DATA_ROOT, set by claudx)
-    # skips this step. The local manifest is read from the REAL $HOME, which
-    # the redirect does not move, so writing it would leak the session's
-    # working-copy plugin set into the machine's config; writing under the
-    # redirected root instead would be inert, because no layer is read there.
-    # Self-registration exists to keep INSTALLED plugins updated, which is a
-    # machine effect a claudx session does not test.
-    sr_redirected = bool(os.environ.get("CLAUDE_BOOTSTRAP_DATA_ROOT"))
-    sr_declared_refs, sr_declared_names = declared_plugin_ids(layered_manifest)
+def _pass_self_register_declared(st):
+    """Every plugin identity declared anywhere, plus the self-register candidates.
+
+    Returns (candidates, declared_refs, declared_names, layer_refs, layer_names).
+    """
+    from .self_register import declared_plugin_ids
+    sr_declared_refs, sr_declared_names = declared_plugin_ids(st.layered_manifest)
     sr_layer_refs, sr_layer_names = set(), set()
     for _sr_path, sr_kind, sr_data in _collect_manifest_layers(
-            args.project_dir, data_dir)[0]:
+            st.args.project_dir, st.data_dir)[0]:
         if sr_kind != "user_local" and isinstance(sr_data, dict):
             r, n = declared_plugin_ids(sr_data)
             sr_layer_refs |= r
             sr_layer_names |= n
     sr_candidates = []
-    for pi in enabled_plugins + new_plugins:
+    for pi in st.enabled_plugins + st.new_plugins:
         pi_manifest_path = os.path.join(pi.install_path, "bootstrap.json")
         if not pi.marketplace or not os.path.isfile(pi_manifest_path):
             continue
@@ -1345,13 +1506,42 @@ def _main_pass():
             sr_declared_names |= p_names
         except (json.JSONDecodeError, OSError):
             pass  # parse failure already surfaced by the per-plugin pass
+    return sr_candidates, sr_declared_refs, sr_declared_names, sr_layer_refs, sr_layer_names
+
+
+def _pass_self_register(st):
+    """Step 4b2: self-register bootstrap-dependent plugins for auto-update.
+
+    _phase_plugins only manages DECLARED plugins[] entries; everything else
+    fell back to Claude Code's own autoUpdate, which reads the marketplace
+    clone BEFORE this pass refreshes it -- one restart behind every publish.
+    Any processed plugin that ships a bootstrap.json but has no plugins[]
+    entry anywhere (merged layers or another plugin's manifest) is appended to
+    ~/.claude/bootstrap.local.json with install: "manual" (update-only: an
+    uninstalled plugin stays uninstalled; uninstalling is the only opt-out,
+    and a deleted entry is re-added next pass). Entries take effect from the
+    NEXT pass -- the plugin was just provisioned this one, so nothing is stale
+    in the gap. Rationale + write-target choice: bootstrap_lib/self_register.py
+    module docstring.
+    """
+    from .self_register import ensure_self_registration
+    # A redirected test session (CLAUDE_BOOTSTRAP_DATA_ROOT, set by claudx)
+    # skips this step. The local manifest is read from the REAL $HOME, which
+    # the redirect does not move, so writing it would leak the session's
+    # working-copy plugin set into the machine's config; writing under the
+    # redirected root instead would be inert, because no layer is read there.
+    # Self-registration exists to keep INSTALLED plugins updated, which is a
+    # machine effect a claudx session does not test.
+    sr_redirected = bool(os.environ.get("CLAUDE_BOOTSTRAP_DATA_ROOT"))
+    (sr_candidates, sr_declared_refs, sr_declared_names,
+     sr_layer_refs, sr_layer_names) = _pass_self_register_declared(st)
     if sr_redirected:
         sr_actions, sr_oks = [], [
             "self-register: skipped (CLAUDE_BOOTSTRAP_DATA_ROOT is set; a "
             "redirected session never writes ~/.claude/bootstrap.local.json)"]
     else:
         sr_actions, sr_oks = ensure_self_registration(
-            os.path.join(home, ".claude", "bootstrap.local.json"),
+            os.path.join(st.home, ".claude", "bootstrap.local.json"),
             sr_candidates, sr_declared_refs, sr_declared_names,
             layer_declared_refs=sr_layer_refs,
             layer_declared_names=sr_layer_names,
@@ -1359,102 +1549,135 @@ def _main_pass():
     # Built by ensure_self_registration as plain lists, so they carry no
     # RecordingList; record them explicitly rather than let the one code path
     # that bypasses the list-level hook go unrecorded.
-    _record_entries(recorder, "action", sr_actions, section="self-register")
-    _record_entries(recorder, "ok", sr_oks, section="self-register")
+    _record_entries(st.recorder, "action", sr_actions, section="self-register")
+    _record_entries(st.recorder, "ok", sr_oks, section="self-register")
     if sr_actions or sr_oks:
-        sr_label = f"{bootstrap_label} self-register"
-        display_sections.append((sr_label, sr_actions, sr_oks))
-        sr_log = sr_actions + (sr_oks if log_success else [])
-        if sr_log and not args.console:
+        sr_label = f"{st.bootstrap_label} self-register"
+        st.display_sections.append((sr_label, sr_actions, sr_oks))
+        sr_log = sr_actions + (sr_oks if st.log_success else [])
+        if sr_log and not st.args.console:
             # Deferred to Step 6 (like plugin logs, the Step 4c sweep, and the
             # Step 4d notice): writing now would leak the block back through
             # Step 5's shell_content read, so every self-register line would be
             # emitted twice -- once from its display section, once verbatim from
             # the log.
-            deferred_plugin_logs.append((data_dir, sr_label, sr_log))
+            st.deferred_plugin_logs.append((st.data_dir, sr_label, sr_log))
 
-    # Step 4b3: Record the env names a gate-skipped session would otherwise
-    # never see. Derived from the same plugin list and the same bootstrap.json
-    # gate as the per-plugin <PLUGIN>_ROOT export above, so the record carries
-    # exactly what this pass exported -- see _maintain_env_records. Placed
-    # after Step 4b (so a plugin installed mid-pass is in it) and before
-    # Step 5/6 (so its entries reach bootstrap.log, which Step 6 writes).
-    # bootstrap_quiet_entries / bootstrap_ok_entries are RecordingLists, so
-    # the appends land in the pass record without an explicit _record_entries;
-    # bootstrap's display section was already snapshotted above, which is
-    # correct here -- a record rewrite is log-only, never a display item.
+
+def _pass_env_records(st):
+    """Step 4b3: record the env names a gate-skipped session would otherwise never see.
+
+    Derived from the same plugin list and the same bootstrap.json gate as the
+    per-plugin <PLUGIN>_ROOT export above, so the record carries exactly what
+    this pass exported -- see _maintain_env_records. Placed after Step 4b (so
+    a plugin installed mid-pass is in it) and before Step 5/6 (so its entries
+    reach bootstrap.log, which Step 6 writes). bootstrap_quiet_entries /
+    bootstrap_ok_entries are RecordingLists, so the appends land in the pass
+    record without an explicit _record_entries; bootstrap's display section
+    was already snapshotted above, which is correct here -- a record rewrite
+    is log-only, never a display item.
+    """
     _maintain_env_records(
-        data_dir, enabled_plugins + new_plugins,
-        bootstrap_ok_entries, bootstrap_quiet_entries,
+        st.data_dir, st.enabled_plugins + st.new_plugins,
+        st.boot_ok, st.boot_quiet,
     )
 
-    # Step 4c: Shared-lib convergence sweep. Every owner has now published (Steps
-    # 4 + 4b), so re-link all consumers in one go -- a consumer processed before
-    # its owner no longer waits for the next session. Silent in steady state
-    # (already-linked consumers report "cached" -> verbose-only); only a genuinely
-    # converged or failed link surfaces. See _shared_lib_convergence_sweep.
+
+def _pass_shared_libs(st):
+    """Step 4c: shared-lib convergence sweep, Step 4c1 revocation, Step 4c2 project links.
+
+    Every owner has now published (Steps 4 + 4b), so re-link all consumers in
+    one go -- a consumer processed before its owner no longer waits for the
+    next session. Silent in steady state (already-linked consumers report
+    "cached" -> verbose-only); only a genuinely converged or failed link
+    surfaces. See _shared_lib_convergence_sweep.
+    """
+    all_plugins = st.enabled_plugins + st.new_plugins
     sweep_actions, sweep_quiets, sweep_oks, sweep_failures = _shared_lib_convergence_sweep(
-        enabled_plugins + new_plugins, data_dir, shared_lib_links, engine_version=version,
+        all_plugins, st.data_dir, st.shared_lib_links, engine_version=st.version,
     )
     if sweep_failures:
-        all_failures.extend(sweep_failures)
+        st.all_failures.extend(sweep_failures)
     # Step 4c1: revoke standalone-interpreter links whose recorded owner no
     # longer publishes the library. After the sweep so every owner manifest
     # has been through its own pass; see _revoke_standalone_links.
     rv_actions, rv_oks, rv_failures = _revoke_standalone_links(
-        enabled_plugins + new_plugins, data_dir, engine_version=version)
+        all_plugins, st.data_dir, engine_version=st.version)
     sweep_actions = sweep_actions + rv_actions
     sweep_oks = sweep_oks + rv_oks
-    all_failures.extend(rv_failures)
+    st.all_failures.extend(rv_failures)
     # Step 4c2: link the declared project_venv shared libs. Deliberately HERE,
     # after the sweep (every owner has published), and NOT inline at Step 3d,
     # which runs before any owner publishes and would soft-skip on a first pass.
-    if project_venv_def and args.project_dir:
+    if st.project_venv_def and st.args.project_dir:
         pl_actions, pl_quiets, pl_oks, pl_failures = _link_project_shared_libs(
-            project_venv_def, args.project_dir, data_dir, shared_lib_links)
+            st.project_venv_def, st.args.project_dir, st.data_dir, st.shared_lib_links)
         sweep_actions = sweep_actions + pl_actions
         sweep_quiets = sweep_quiets + pl_quiets
         sweep_oks = sweep_oks + pl_oks
-        all_failures.extend(pl_failures)
+        st.all_failures.extend(pl_failures)
     # ONE aggregated display line for every shared-lib success in the pass, from
     # BOTH emission sites (per-plugin manifest phase + this sweep), deduped and
     # grouped by lib -- the per-plugin lines are log-only (see _SharedLibLinkLog).
     # Failures are untouched: they stay in sweep_actions, per-plugin and loud.
-    link_summary = shared_lib_links.summary()
+    link_summary = st.shared_lib_links.summary()
     if link_summary:
         sweep_actions = sweep_actions + [link_summary]
-    _record_entries(recorder, "action", sweep_actions, section="shared-libs")
-    _record_entries(recorder, "quiet", sweep_quiets, section="shared-libs")
-    _record_entries(recorder, "ok", sweep_oks, section="shared-libs")
-    if sweep_actions or sweep_quiets or sweep_oks:
-        sweep_label = f"{bootstrap_label} shared-libs"
-        display_sections.append((sweep_label, sweep_actions, sweep_oks))
-        sweep_log = sweep_actions + sweep_quiets + (sweep_oks if log_success else [])
-        if sweep_log and not args.console:
-            # Deferred to Step 6 (like plugin logs and the Step 4d notice):
-            # writing now would leak the block back through Step 5's
-            # shell_content read, so the block would ALSO be emitted verbatim
-            # into the display -- duplicating the aggregate line and dragging
-            # the log-only quiet entries (with their .pth paths) onto it.
-            deferred_plugin_logs.append((data_dir, sweep_label, sweep_log))
+    _pass_shared_libs_report(st, sweep_actions, sweep_quiets, sweep_oks)
 
-    # Step 4d: Reload/restart advisory. Any plugin that ENTERED the registry during
-    # this pass -- a layered `plugins:` install (Step 3c), a per-plugin install, or
-    # a script install (Step 4b) -- is not yet loaded by Claude Code (it loaded
-    # plugins at session start, before this hook installed them). We detect them by
-    # diffing the registry (before Step 3c vs now), NOT Step 4b's new_plugins, which
-    # misses layered installs absorbed by Step 4. A plugin merely updated at session
-    # start was already loaded by the restart that updated it, so it is not noticed.
-    # These are informational display lines, NOT action-required items: whether and
-    # when to restart is the user's call, so the notice rides in the normal display
-    # output with no relay directive telling Claude to surface it.
-    # Toggle off via config "notify_reload_needed".
-    if config.get("notify_reload_needed", True):
+
+def _pass_shared_libs_report(st, sweep_actions, sweep_quiets, sweep_oks):
+    _record_entries(st.recorder, "action", sweep_actions, section="shared-libs")
+    _record_entries(st.recorder, "quiet", sweep_quiets, section="shared-libs")
+    _record_entries(st.recorder, "ok", sweep_oks, section="shared-libs")
+    if not (sweep_actions or sweep_quiets or sweep_oks):
+        return
+    sweep_label = f"{st.bootstrap_label} shared-libs"
+    st.display_sections.append((sweep_label, sweep_actions, sweep_oks))
+    sweep_log = sweep_actions + sweep_quiets + (sweep_oks if st.log_success else [])
+    if sweep_log and not st.args.console:
+        # Deferred to Step 6 (like plugin logs and the Step 4d notice):
+        # writing now would leak the block back through Step 5's
+        # shell_content read, so the block would ALSO be emitted verbatim
+        # into the display -- duplicating the aggregate line and dragging
+        # the log-only quiet entries (with their .pth paths) onto it.
+        st.deferred_plugin_logs.append((st.data_dir, sweep_label, sweep_log))
+
+
+def _pass_notice(st, text):
+    """One informational notice section, deferred to Step 6 outside console mode.
+
+    Deferred (like plugin logs): writing now would leak the block back through
+    Step 5's shell_content read and the notice would appear twice in the
+    emitted display.
+    """
+    label = f"{st.bootstrap_label} notice"
+    st.display_sections.append((label, [text], []))
+    if not st.args.console:
+        st.deferred_plugin_logs.append((st.data_dir, label, [text]))
+
+
+def _pass_notices(st):
+    """Step 4d: reload/restart advisory, then the project_git_pull notices.
+
+    Any plugin that ENTERED the registry during this pass -- a layered
+    `plugins:` install (Step 3c), a per-plugin install, or a script install
+    (Step 4b) -- is not yet loaded by Claude Code (it loaded plugins at
+    session start, before this hook installed them). We detect them by
+    diffing the registry (before Step 3c vs now), NOT Step 4b's new_plugins,
+    which misses layered installs absorbed by Step 4. A plugin merely updated
+    at session start was already loaded by the restart that updated it, so it
+    is not noticed. These are informational display lines, NOT action-required
+    items: whether and when to restart is the user's call, so the notice rides
+    in the normal display output with no relay directive telling Claude to
+    surface it. Toggle off via config "notify_reload_needed".
+    """
+    if st.config.get("notify_reload_needed", True):
         # Same cache fallback as the "before" snapshot at Step 3b, so a plugin
         # installed mid-pass on a registry-v2-empty machine still surfaces.
         newly_installed = _resolve_newly_installed(
-            installed_refs_before,
-            _read_installed_plugins(_registry_for_diff, enabled_refs=fallback_refs),
+            st.installed_refs_before,
+            _read_installed_plugins(st.registry_for_diff, enabled_refs=st.fallback_refs),
         )
         notices = [a for a in (
             _reload_advice(newly_installed),
@@ -1463,54 +1686,60 @@ def _main_pass():
             # Unlike the reload nag above, this is a single-point registry lookup
             # (no before/after snapshot), so the registry-v2-empty cache fallback
             # is safe to wire in directly.
-            _bootstrap_stale_advice(version, boot_plugin_name, marketplace_name, prod_registry,
-                                    data_dir=data_dir, enabled_refs=fallback_refs),
+            _bootstrap_stale_advice(st.version, st.boot_plugin_name, st.marketplace_name,
+                                    st.prod_registry, data_dir=st.data_dir,
+                                    enabled_refs=st.fallback_refs),
         ) if a]
         for advice in notices:
-            advice_label = f"{bootstrap_label} notice"
-            display_sections.append((advice_label, [advice], []))
-            if not args.console:
-                # Deferred to Step 6 (like plugin logs): writing now would leak
-                # the block back through Step 5's shell_content read and the
-                # notice would appear twice in the emitted display.
-                deferred_plugin_logs.append((data_dir, advice_label, [advice]))
+            _pass_notice(st, advice)
 
     # The project_git_pull outcome (Step 3c-pull) rides the same notice channel:
     # informational, no relay directive, kept on every display path. Not gated
     # by notify_reload_needed -- the user opted into the pull, and a blocked
     # update they never hear about is the silent failure the feature exists to
     # prevent.
-    for notice in project_pull_notices:
-        notice_label = f"{bootstrap_label} notice"
-        display_sections.append((notice_label, [notice], []))
-        if not args.console:
-            deferred_plugin_logs.append((data_dir, notice_label, [notice]))
+    for notice in st.project_pull_notices:
+        _pass_notice(st, notice)
 
-    # Step 4e: A clean Claude bootstrap pass arms the USER-level Codex
-    # SessionStart adapter ($CODEX_HOME/hooks.json) and strips bootstrap's
-    # legacy entries from <project>/.codex/hooks.json.  Nothing is ever
-    # created under the project or the session cwd.  The hook invokes the
-    # stable `bootstrap` executable rather than pinning a versioned
-    # plugin-cache path.  Do not install it after an incomplete pass.
+
+def _pass_codex_hook(st):
+    """Step 4e: a clean Claude bootstrap pass arms the USER-level Codex adapter.
+
+    The SessionStart adapter lives in $CODEX_HOME/hooks.json, and bootstrap's
+    legacy entries are stripped from <project>/.codex/hooks.json. Nothing is
+    ever created under the project or the session cwd. The hook invokes the
+    stable `bootstrap` executable rather than pinning a versioned plugin-cache
+    path. Do not install it after an incomplete pass.
+    """
+    args = st.args
     codex_hook_actions, codex_hook_oks, codex_hook_failures = (
         _run_codex_hook_setup(
             args.project_dir,
             console=args.console,
-            existing_failures=all_failures,
+            existing_failures=st.all_failures,
         )
     )
-    all_failures.extend(codex_hook_failures)
+    st.all_failures.extend(codex_hook_failures)
 
-    if codex_hook_actions or codex_hook_oks:
-        _record_entries(recorder, "action", codex_hook_actions, section="codex-hook")
-        _record_entries(recorder, "ok", codex_hook_oks, section="codex-hook")
-        codex_hook_label = f"{bootstrap_label} codex-hook"
-        display_sections.append((codex_hook_label, codex_hook_actions, codex_hook_oks))
-        codex_hook_log = codex_hook_actions + (
-            codex_hook_oks if log_success else [])
-        if codex_hook_log and not args.console:
-            deferred_plugin_logs.append((data_dir, codex_hook_label, codex_hook_log))
+    if not (codex_hook_actions or codex_hook_oks):
+        return
+    _record_entries(st.recorder, "action", codex_hook_actions, section="codex-hook")
+    _record_entries(st.recorder, "ok", codex_hook_oks, section="codex-hook")
+    codex_hook_label = f"{st.bootstrap_label} codex-hook"
+    st.display_sections.append((codex_hook_label, codex_hook_actions, codex_hook_oks))
+    codex_hook_log = codex_hook_actions + (
+        codex_hook_oks if st.log_success else [])
+    if codex_hook_log and not args.console:
+        st.deferred_plugin_logs.append((st.data_dir, codex_hook_label, codex_hook_log))
 
+
+def _pass_write_logs(st):
+    """Step 5 (read the shell's log entries) then Step 6 (write the engine's).
+
+    Returns the shell content read back from bootstrap.log ("" in console mode).
+    """
+    from .log import write_log_block
+    args, data_dir, start_time = st.args, st.data_dir, st.start_time
     # Step 5: Read shell log entries BEFORE writing any engine entries to the log.
     # Plugin log writes are deferred to step 6 to avoid the bootstrap plugin's
     # ok_entries leaking back through shell_content (its data_dir == engine data_dir).
@@ -1519,8 +1748,8 @@ def _main_pass():
     else:
         shell_content = ""  # Console mode: shell already printed its entries
 
-    # Step 6: Write log entries (bootstrap + plugins) — after reading shell entries
-    # Skip in console mode — no file writes.
+    # Step 6: Write log entries (bootstrap + plugins) -- after reading shell entries
+    # Skip in console mode -- no file writes.
     #
     # ok_entries remain gated on log_success. That gate still does real work
     # here -- the log IS read back (_read_new_log_entries), so an ok entry
@@ -1528,16 +1757,22 @@ def _main_pass():
     # longer a RETENTION decision: every ok entry lands in the pass record
     # regardless (records.py). Turning it on or off changes what is easy to
     # read in bootstrap.log, never what is kept.
-    bootstrap_log_entries = bootstrap_action_entries + bootstrap_quiet_entries + (bootstrap_ok_entries if log_success else [])
+    bootstrap_log_entries = st.boot_action + st.boot_quiet + (st.boot_ok if st.log_success else [])
     if bootstrap_log_entries and not args.console:
-        write_log_block(data_dir, bootstrap_label, bootstrap_log_entries, start_time=start_time)
-    for plugin_data_dir, plugin_label, plugin_log_entries in deferred_plugin_logs:
+        write_log_block(data_dir, st.bootstrap_label, bootstrap_log_entries, start_time=start_time)
+    for plugin_data_dir, plugin_label, plugin_log_entries in st.deferred_plugin_logs:
         if plugin_log_entries and not args.console:
             write_log_block(plugin_data_dir, plugin_label, plugin_log_entries, start_time=start_time)
+    return shell_content
 
-    # Step 7: Build display from sections — actions only, never ok entries.
-    # ok entries are written to the log file (gated by log_success) for debugging
-    # via `tail bootstrap.log`, but never surface in the user-facing hook output.
+
+def _pass_display_lines(display_sections):
+    """Step 7: build display from sections -- actions only, never ok entries.
+
+    ok entries are written to the log file (gated by log_success) for
+    debugging via `tail bootstrap.log`, but never surface in the user-facing
+    hook output.
+    """
     display_lines = []
     for header, actions, _oks in display_sections:
         if not actions:
@@ -1548,108 +1783,117 @@ def _main_pass():
         # -- never a mid-word cut. The full diagnostic stays in bootstrap.log
         # and the pass record.
         display_lines.append(f"--- {header}: {_numbered(actions)} ---")
+    return display_lines
 
-    # Step 7b: Elevation queue -> ONE per-OS remediation script. Harvest every
-    # `elevation` descriptor deferred during this pass (apt packages, elevated
-    # commands, a missing-brew installer signal), regenerate queue.json when the
-    # queue is non-empty, and DELETE a stale queue when it is empty (the ops
-    # succeeded, so the item clears). When a queue was written, append ONE
-    # aggregated fix-all item naming what it covers; the per-item
-    # needs_elevation failures are suppressed by the message layer, which the
-    # aggregate speaks for. See bootstrap_lib/fix_queue.py and
-    # analysis-dividing-line.md section 4.3.
-    #
-    # On a --fix-all run (the user TYPED 'fix-all' -- explicit consent for
-    # elevation) the step additionally LAUNCHES the fix runner, waits for it,
-    # and on success spawns a re-check pass so the deferred items clear in the
-    # same fix-all cycle. SessionStart/background passes never launch. Plain
-    # --console debug runs (no --fix-all) skip the step entirely, preserving
-    # their "no file writes" contract -- and, for the same reason, write no env
-    # stamp, so a console pass can never close the env gate without updating
-    # the queue. The console re-check pass a fix-all spawns (--recheck) is the
-    # exception: it rewrites the queue (no launch, no fix-all item) AND stamps,
-    # so the fixed items clear in the same fix-all cycle.
+
+def _pass_elevation(st):
+    """Step 7b: elevation queue -> ONE per-OS remediation script.
+
+    Returns True when the pass is done: a --fix-all run launched the fix
+    runner, which completed and spawned a re-check pass that has emitted its
+    own results.
+
+    Harvest every `elevation` descriptor deferred during this pass (apt
+    packages, elevated commands, a missing-brew installer signal), regenerate
+    queue.json when the queue is non-empty, and DELETE a stale queue when it
+    is empty (the ops succeeded, so the item clears). When a queue was
+    written, append ONE aggregated fix-all item naming what it covers; the
+    per-item needs_elevation failures are suppressed by the message layer,
+    which the aggregate speaks for. See bootstrap_lib/fix_queue.py and
+    analysis-dividing-line.md section 4.3.
+
+    On a --fix-all run (the user TYPED 'fix-all' -- explicit consent for
+    elevation) the step additionally LAUNCHES the fix runner, waits for it,
+    and on success spawns a re-check pass so the deferred items clear in the
+    same fix-all cycle. SessionStart/background passes never launch. Plain
+    --console debug runs (no --fix-all) skip the step entirely, preserving
+    their "no file writes" contract -- and, for the same reason, write no env
+    stamp, so a console pass can never close the env gate without updating
+    the queue. The console re-check pass a fix-all spawns (--recheck) is the
+    exception: it rewrites the queue (no launch, no fix-all item) AND stamps,
+    so the fixed items clear in the same fix-all cycle.
+    """
+    args = st.args
     if not args.console or args.fix_all:
-        if _elevation_step(all_failures, current_os, data_dir, args, plugin_root,
-                           bootstrap_label):
+        if _elevation_step(st.all_failures, st.current_os, st.data_dir, args,
+                           st.plugin_root, st.bootstrap_label):
             # The runner completed; a re-check pass was spawned and has emitted
             # its own results -- this pass is done. Record first: the re-check
             # records the POST-fix state, so without this the pre-fix failures
             # that motivated the run would exist nowhere.
-            _record_failures(recorder, all_failures)
-            return
+            _record_failures(st.recorder, st.all_failures)
+            return True
     elif getattr(args, "recheck", False):
-        _elevation_step(all_failures, current_os, data_dir, args, plugin_root,
-                        bootstrap_label, rewrite_only=True)
+        _elevation_step(st.all_failures, st.current_os, st.data_dir, args,
+                        st.plugin_root, st.bootstrap_label, rewrite_only=True)
+    return False
 
-    # Record every failure dict VERBATIM, before any of it is rendered, and
-    # before the console branch returns. A failure carries far more than its
-    # display line -- agent_msg, user_msg, install_state, the elevation
-    # descriptor, the remediation command -- and every rendered surface keeps
-    # only a projection. Items the elevation aggregate speaks for are suppressed
-    # from BOTH message surfaces entirely (_visible_failures), so without this
-    # they would exist nowhere on disk.
-    _record_failures(recorder, all_failures)
 
-    if args.console:
-        # Console mode: plain text to stdout, no JSON
-        for line in display_lines:
-            print(line)
-        # A console pass never prompts (Step 8's profile directive is for a
-        # session); it names the command that does the choosing instead.
-        if profile_state.status in ("unselected", "unknown"):
-            print("profile: none selected -- run 'bootstrap profile'")
-        if all_failures:
-            print(f"\n{bootstrap_label} -> {len(all_failures)} failure(s):")
-            for f in all_failures:
-                print(f"  - [{f['type']}] {f.get('name') or ''}")
-                # The message is where the actionable detail lives -- for the
-                # elevation_script item on a fix-all run it carries the launch
-                # OUTCOME (UAC declined / runner exit code / timed out), which
-                # this summary used to drop entirely: a failed fix-all printed
-                # nothing but the item's own name, leaving the conversation
-                # blind to WHY (observed live, 0.49.0).
-                detail = f.get("message") or f.get("user_msg") or ""
-                for line in detail.splitlines():
-                    print(f"      {line}")
-        # Console writes no log and no stamps -- that is its contract, and it is
-        # why a console pass used to leave no trace of what it changed. An
-        # append-only record breaks neither rule, and a console pass against a
-        # wedged machine is exactly the state worth having evidence of.
-        recorder.record("emit", "\n".join(display_lines), channel="console")
-        if getattr(args, "exit_status", False) and all_failures:
-            sys.exit(1)
-        return
+def _pass_console_report(st, display_lines):
+    """Console mode: plain text to stdout, no JSON; exit 1 under --exit-status."""
+    all_failures = st.all_failures
+    for line in display_lines:
+        print(line)
+    # A console pass never prompts (Step 8's profile directive is for a
+    # session); it names the command that does the choosing instead.
+    if st.profile_state.status in ("unselected", "unknown"):
+        print("profile: none selected -- run 'bootstrap profile'")
+    if all_failures:
+        print(f"\n{st.bootstrap_label} -> {len(all_failures)} failure(s):")
+        for f in all_failures:
+            print(f"  - [{f['type']}] {f.get('name') or ''}")
+            # The message is where the actionable detail lives -- for the
+            # elevation_script item on a fix-all run it carries the launch
+            # OUTCOME (UAC declined / runner exit code / timed out), which
+            # this summary used to drop entirely: a failed fix-all printed
+            # nothing but the item's own name, leaving the conversation
+            # blind to WHY (observed live, 0.49.0).
+            detail = f.get("message") or f.get("user_msg") or ""
+            for line in detail.splitlines():
+                print(f"      {line}")
+    # Console writes no log and no stamps -- that is its contract, and it is
+    # why a console pass used to leave no trace of what it changed. An
+    # append-only record breaks neither rule, and a console pass against a
+    # wedged machine is exactly the state worth having evidence of.
+    st.recorder.record("emit", "\n".join(display_lines), channel="console")
+    if getattr(st.args, "exit_status", False) and all_failures:
+        sys.exit(1)
 
-    # Build final display: shell entries + section entries
+
+def _pass_emit(st, shell_content, display_lines):
+    """Step 8: emit results (shell entries + section entries), threading the profile prompt."""
     parts = []
     if shell_content:
         # The shell hook's own log block, read back from bootstrap.log. Recorded
         # here so the record covers the whole pass, not just its Python half.
-        recorder.record("shell", shell_content)
+        st.recorder.record("shell", shell_content)
         parts.append(shell_content)
     parts.extend(display_lines)
     display_content = "\n".join(parts)
 
     # Update the log display marker
-    _update_display_marker(data_dir)
+    _update_display_marker(st.data_dir)
 
-    # Step 8: Emit results, threading the profile prompt through.
     _emit_pass_results(
-        all_failures=all_failures, current_os=current_os,
-        display_content=display_content, bootstrap_label=bootstrap_label,
-        data_dir=data_dir, args=args, recorder=recorder,
-        profile_state=profile_state, plugin_root=plugin_root,
-        pass_started_at=start_time.timestamp(),
+        all_failures=st.all_failures, current_os=st.current_os,
+        display_content=display_content, bootstrap_label=st.bootstrap_label,
+        data_dir=st.data_dir, args=st.args, recorder=st.recorder,
+        profile_state=st.profile_state, plugin_root=st.plugin_root,
+        pass_started_at=st.start_time.timestamp(),
     )
 
+
+def _pass_complete(st):
+    """Completion bookkeeping of a non-console pass that reached its emit."""
+    from .stamps import global_stamp
+    data_dir, version = st.data_dir, st.version
     # Clean up stale persistent alert file when no persistent failures remain.
     # This is what makes the alert disappear once the user fixes the underlying
     # issue and the engine confirms the fix on a subsequent run. Recomputed
     # (rather than returned from _emit_pass_results) because it is a pure
     # function of all_failures/data_dir with no side effect of its own.
     persistent_alert_path = os.path.join(data_dir, "bootstrap_alert.json")
-    has_persistent = any(f.get("persist_across_sessions") for f in all_failures)
+    has_persistent = any(f.get("persist_across_sessions") for f in st.all_failures)
     if not has_persistent:
         try:
             os.remove(persistent_alert_path)
@@ -1662,7 +1906,7 @@ def _main_pass():
     # the single-session update protocol's loop guard: the UserPromptSubmit
     # harvest (bootstrap_lib/harvest.py) only launches a newer engine when the
     # installed bootstrap version > engine_ran_version, and the harvested engine
-    # writes its OWN version here on completion — so it can never re-trigger
+    # writes its OWN version here on completion -- so it can never re-trigger
     # itself. Reached on both clean and check-failure passes (the engine still
     # EXECUTED); only a crash (handled in main()) skips it, and console mode
     # returns earlier so manual --console debug runs never stamp. See

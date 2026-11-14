@@ -14,8 +14,6 @@ from .languages import EXTENSIONS, KIND_OTHER, KIND_SOURCE_UNMEASURED, kind_of, 
 
 TEST_DIRS = ("test", "tests", "spec", "specs", "__tests__")
 SKIP_DIRS = {"node_modules", "vendor", "build", "dist", "out", "target", "venv", ".venv"}
-# A top-level directory holding fewer supported files than this is not proposed as a root itself.
-MIN_ROOT_FILES = 3
 
 
 def _source_roots(tracked: list[str], supported: set[str]) -> tuple[dict[str, int], list[str]]:
@@ -29,13 +27,28 @@ def _source_roots(tracked: list[str], supported: set[str]) -> tuple[dict[str, in
     roots: dict[str, int] = {}
     stray: list[str] = []
     for top, paths in by_top.items():
-        if len(paths) >= MIN_ROOT_FILES:
-            roots[top] = len(paths)
-        elif len(paths) == 1:
+        if len(paths) == 1:
             stray.append(paths[0])
-        else:
-            roots[posixpath.commonpath([PurePosixPath(p).parent.as_posix() for p in paths])] = len(paths)
+            continue
+        # Narrow to the deepest directory holding every file; a top whose files span subdirectories stays the top.
+        root = posixpath.commonpath([PurePosixPath(p).parent.as_posix() for p in paths])
+        roots[root] = len(paths)
     return roots, sorted(stray)
+
+
+def _no_root_reasons(tracked: list[str], supported: set[str], stray: list[str]) -> str:
+    """The causes present when no source root is proposed; every supported file falls under one of them."""
+    at_root = sum(1 for p in tracked if len(PurePosixPath(p).parts) == 1 and coverage.extension(p) in supported)
+    excluded = sum(1 for p in tracked if len(PurePosixPath(p).parts) > 1 and coverage.extension(p) in supported
+                   and (PurePosixPath(p).parts[0] in TEST_DIRS or PurePosixPath(p).parts[0] in SKIP_DIRS))
+    reasons = []
+    if at_root:
+        reasons.append(f"{at_root} supported file{'s' if at_root != 1 else ''} at the repository root")
+    if excluded:
+        reasons.append(f"{excluded} supported file{'s' if excluded != 1 else ''} only under test or skipped directories")
+    if stray:
+        reasons.append(f"{len(stray)} top-level director{'ies' if len(stray) != 1 else 'y'} holding a single supported file")
+    return "; ".join(reasons)
 
 
 def propose(target: Path) -> str:
@@ -51,8 +64,8 @@ def propose(target: Path) -> str:
     source_roots, stray = _source_roots(tracked, supported)
     at_root = sum(1 for p in tracked if len(PurePosixPath(p).parts) == 1 and coverage.extension(p) in supported)
     if not source_roots:
-        raise Refusal(f"{repo}: no directory holds {MIN_ROOT_FILES} or more source files, and no "
-                      "other directory can be proposed; write source_roots by hand "
+        reasons = _no_root_reasons(tracked, supported, stray)
+        raise Refusal(f"{repo}: no source root can be proposed ({reasons}); write source_roots by hand "
                       "(references/configuring.md)")
     test_roots = sorted({PurePosixPath(p).parts[0] for p in tracked
                          if len(PurePosixPath(p).parts) > 1 and PurePosixPath(p).parts[0] in TEST_DIRS})
