@@ -27,7 +27,9 @@ combines complexity with test coverage. This lane runs it without coverage
 
 `report.md` opens this lane's section with a count line (`Functions scored:
 <n>. Showing the top <k> by cyclomatic complexity. ...`), then a table of the
-first `top` functions (from the config), highest complexity first; ties are
+complexity distribution (buckets 1, 2-5, 6-10, 11-20, 21-50, >50, over every
+scored function), then a table of the first `top` functions with complexity at
+least `min_complexity` (from the config), highest complexity first; ties are
 ordered by namespace, then name. The columns are Rank, Complexity, Namespace,
 Function and Location:
 
@@ -46,6 +48,13 @@ it, and its `metrics` hold `complexity`, plus `coverage` and `crap`, which are
 `null` in this version. The lane's
 entry under `lanes` records crapper's commit (`tool_commit`), the exact
 `argv`, the exit status, the run time and the lane `status`.
+
+After the table, `report.md` lists the files in the selection that have no
+scored function (a capped list; the full list is `lanes[].detail.files_without_scored_functions`
+in `findings.json`). Such a file holds only constructs crapper does not score,
+or nothing but top-level code; it is not thereby simple.
+
+JS/TS `export default` anonymous functions are scored with the name `<default>`.
 
 A status of `no-source-files` with zero findings means the pruned selection
 held no file crapper reads. It is not an error.

@@ -51,7 +51,10 @@ ties are ordered by the first location. Each row is one finding:
 its `group` list of `{path, start_line, end_line}` records, one per copy. The lane's entry under `lanes` records dryer's commit (`tool_commit`),
 the exact `argv`, the exit status, the run time and the lane `status`.
 
-A status of `no-source-files` with zero findings means the pruned selection
+A status of `no-comparable-source` means the selection held fewer than two
+files dryer reads, so a duplicate could not exist and the tool was not run;
+`report.md` names the extensions dryer ignores (`lanes[].detail.ignored_extensions`
+in `findings.json`). It is not the same as `ok` with zero findings. A status of `no-source-files` with zero findings means the pruned selection
 held no file dryer reads. It is not an error; see the JavaScript limit below
 for the usual cause.
 
@@ -60,7 +63,7 @@ for the usual cause.
 - **JavaScript is not read.** dryer treats `.ts .tsx .mts .cts` as TypeScript
   and ignores `.js .jsx .mjs .cjs` entirely. A target configured with
   `languages: [javascript]` alone gets no duplication findings for those
-  files (typically status `no-source-files`), while the complexity lane does
+  files (status `no-comparable-source`), while the complexity lane does
   score them. A clean duplication lane on JavaScript code is therefore not
   evidence of no duplication.
 - **`.d.ts` declaration files, test files and test directories are

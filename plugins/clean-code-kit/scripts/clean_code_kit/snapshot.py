@@ -34,9 +34,37 @@ def head_sha(repo: Path) -> str:
     return git(repo, "rev-parse", "--verify", "HEAD").strip()
 
 
-def dirty_paths(repo: Path) -> int:
-    """The number of entries ``git status --porcelain`` lists."""
-    return len([line for line in git(repo, "status", "--porcelain").splitlines() if line])
+def dirty_paths(repo: Path, ignore: str | None = None) -> list[str]:
+    """The paths ``git status --porcelain`` lists, one per file, except ``ignore`` (repo-relative posix)."""
+    fields = git(repo, "status", "--porcelain", "-z", "--untracked-files=all").split("\0")
+    names: list[str] = []
+    index = 0
+    while index < len(fields):
+        entry = fields[index]
+        index += 1
+        if not entry:
+            continue
+        if len(entry) < 4 or entry[2] != " ":
+            raise Refusal(f"unexpected git status entry {entry!r} in {repo}")
+        if entry[0] in "RC" or entry[1] in "RC":
+            index += 1  # a rename or copy carries its source path as the next field
+        if entry[3:] != ignore:
+            names.append(entry[3:])
+    return names
+
+
+def tracked_files(repo: Path, mode: str) -> list[str]:
+    """Every file the ``mode`` snapshot holds, from git's file list (not limited to source roots)."""
+    if mode == "head":
+        listing = git(repo, "ls-tree", "-r", "-z", "--name-only", "HEAD")
+    elif mode == "working-tree":
+        listing = git(repo, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+    else:
+        raise Refusal(f"unknown snapshot mode {mode!r}")
+    paths = sorted({p for p in listing.split("\0") if p})
+    if mode == "working-tree":
+        paths = [p for p in paths if (repo / p).is_symlink() or (repo / p).is_file()]
+    return paths
 
 
 def snapshot_head(repo: Path, dest: Path) -> None:
