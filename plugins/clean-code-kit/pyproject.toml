@@ -1,11 +1,11 @@
 [project]
 name = "clean-code-kit"
-version = "0.1.4"
+version = "0.1.5"
 description = "Runtime dependencies for clean-code-kit: the pinned code-metric tools its code audit runs."
 requires-python = ">=3.11,!=3.14.*"
 dependencies = [
-    "dryer @ git+https://github.com/kitaekatt/dryer@ad6a0cec33f8e9d0a26e217edf2c881f55d8654c",
-    "crapper @ git+https://github.com/kitaekatt/crapper@50236c15b469e6fb37175474c2ab472df92e6282",
+    "dryer @ git+https://github.com/kitaekatt/dryer@e8bca626e1674ffb4bb0be581371aa70f8a56157",
+    "crapper @ git+https://github.com/kitaekatt/crapper@3b7d4b4a702235ac35eea67fd0cb5511348d9d1e",
     "tree-sitter-language-pack==1.25.0",
     "pyyaml>=6.0",
 ]

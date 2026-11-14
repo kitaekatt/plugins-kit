@@ -1041,46 +1041,63 @@ def _valid_physical_identity(value: Any) -> bool:
     return isinstance(value, list) and len(value) == 2 and all(type(n) is int and n >= 0 for n in value)
 
 
-def _load_entry_operation(data_dir: Path, info: os.stat_result, marker: os.stat_result,
-                          record: dict) -> AuthoringOperation:
-    """Accept only the finite version-2 entry record, never weaken seed records."""
-    required = {"version", "operation", "phase", "clone_identity", "git_identity", "branch", "declared_repo_digest",
-                "entry_head", "synced_head", "index", "preimages", "outputs", "artifacts", "directory_identity",
-                "marker_identity", "entry_cache", "selected_blob", "entry_blob_parent", "created_blob_parent"}
-    optional = {"synced_files", "synced_index", "expected_tree", "authored_paths", "blob_receiving_identity",
-                "commit_oid", "proof_ref", "publication_reason", "cleanup_outcome", "cleanup_remaining", "cleanup_next"}
+_LOADED_PHASES = {"admitted", "syncing", "synchronized", "prepared", "applying", "publishing", "unsubmitted",
+                  "uncertain", "definitely_rejected", "confirmed", "finalizing", "restored", "cleaning"}
+_ADVANCED_PHASES = {"prepared", "applying", "publishing", "unsubmitted", "uncertain", "definitely_rejected",
+                    "confirmed", "finalizing"}
+# An entry record also counts "unchanged" as advanced; a rotation record has no such phase.
+_ENTRY_ADVANCED_PHASES = _ADVANCED_PHASES | {"unchanged"}
+_PUBLISHED_PHASES = {"publishing", "uncertain", "confirmed", "finalizing"}
+_RECORD_REQUIRED = {"version", "operation", "phase", "clone_identity", "git_identity", "branch", "declared_repo_digest",
+                    "entry_head", "synced_head", "index", "preimages", "outputs", "artifacts", "directory_identity",
+                    "marker_identity", "entry_cache"}
+_RECORD_OPTIONAL = {"synced_files", "synced_index", "expected_tree", "authored_paths", "commit_oid", "proof_ref",
+                    "publication_reason", "cleanup_outcome", "cleanup_remaining", "cleanup_next"}
+
+
+def _check_record_keys(record: dict, required: set, optional: set) -> None:
     if not required.issubset(record) or set(record) - required - optional:
         raise ValueError
-    if type(record["version"]) is not int or record["version"] != 2 or record["operation"] not in {"add", "update", "remove"}:
-        raise ValueError
-    if record["phase"] not in {"admitted", "syncing", "synchronized", "prepared", "applying", "publishing", "unsubmitted", "uncertain", "definitely_rejected", "confirmed", "finalizing", "restored", "unchanged", "cleaning"}:
-        raise ValueError
+
+
+def _check_record_bindings(record: dict, info: os.stat_result, marker: os.stat_result) -> None:
+    """Well-formed physical identities, two of which name this directory and marker."""
     for key in ("clone_identity", "git_identity", "directory_identity", "marker_identity"):
         if not _valid_physical_identity(record[key]):raise ValueError
     if record["directory_identity"] != [info.st_dev, info.st_ino] or record["marker_identity"] != [marker.st_dev, marker.st_ino]:
         raise ValueError
-    for key in ("entry_blob_parent", "created_blob_parent"):
-        if record[key] is not None and not _valid_physical_identity(record[key]):raise ValueError
-    if record["created_blob_parent"] is not None and record["entry_blob_parent"] is not None:raise ValueError
+
+
+def _check_record_receipts(record: dict) -> None:
     for key in ("entry_head", "synced_head"):
         if not repo._object_id(record[key]):raise ValueError
     for key in ("index", "entry_cache"):
         if not _valid_file_receipt(record[key]):raise ValueError
     if "synced_index" in record and not _valid_file_receipt(record["synced_index"]):raise ValueError
-    if "blob_receiving_identity" in record and not _valid_physical_identity(record["blob_receiving_identity"]):raise ValueError
+
+
+def _check_record_publication(record: dict) -> None:
+    """A commit, its own proof ref and its tree travel together; the declaration is a digest."""
     if "commit_oid" in record:
         if not repo._object_id(record["commit_oid"]) or record.get("proof_ref") != repo._publication_ref(record["commit_oid"]) or not repo._object_id(record.get("expected_tree")):raise ValueError
     elif "proof_ref" in record:raise ValueError
     if not _valid_digest(record["declared_repo_digest"]):raise ValueError
-    selected = record["selected_blob"]
-    if selected is not None and (not isinstance(selected, str) or not selected.startswith("blobs/") or not _eligible(selected) or "\\" in selected or selected != Path(selected).as_posix()):raise ValueError
+
+
+def _bound_clone(data_dir: Path, record: dict) -> tuple[Path, str]:
+    """The clone and .git the record names, and the origin its digest names."""
     clone = data_dir / "repo"
     for path, key in [(clone, "clone_identity"), (clone / ".git", "git_identity")]:
         physical = _ordinary(path, directory=True)
         if record[key] != [physical.st_dev, physical.st_ino]:raise ValueError
     declared_repo = repo._recorded_origin(clone)
     if _digest(declared_repo.encode("utf-8")) != record["declared_repo_digest"]:raise ValueError
-    if not isinstance(record["preimages"], dict) or "manifest.json" not in record["preimages"]:raise ValueError
+    return clone, declared_repo
+
+
+def _stored_preimages(record: dict, required: set) -> set:
+    """Eligible preimage slots with unique preimage-<n> stored names; return those names."""
+    if not isinstance(record["preimages"], dict) or not required.issubset(record["preimages"]):raise ValueError
     stored_names = set()
     for name, state in record["preimages"].items():
         if not isinstance(name, str) or not _eligible(name):raise ValueError
@@ -1089,6 +1106,87 @@ def _load_entry_operation(data_dir: Path, info: os.stat_result, marker: os.stat_
         stored = state["stored"]
         if not stored.startswith("preimage-") or not stored[9:].isdigit() or stored in stored_names:raise ValueError
         stored_names.add(stored)
+    return stored_names
+
+
+def _settled(record: dict, advanced_phases: set, cleaning_outcomes: Any) -> bool:
+    """One of `advanced_phases`, or cleanup after one of `cleaning_outcomes`.
+
+    Entry records pass a set and rotation records a tuple: an unhashable
+    outcome raises TypeError here for the one and compares unequal for the
+    other, which is how each loader has always read it.
+    """
+    return record["phase"] in advanced_phases or record["phase"] == "cleaning" and record["cleanup_outcome"] in cleaning_outcomes
+
+
+def _check_synced_receipts(record: dict, synchronized: bool) -> None:
+    if "synced_files" in record:
+        if not isinstance(record["synced_files"], dict) or set(record["synced_files"]) != set(record["preimages"]):raise ValueError
+        if not all(_valid_file_receipt(state) for state in record["synced_files"].values()):raise ValueError
+    if synchronized:
+        if "synced_files" not in record or "synced_index" not in record or not _valid_file_receipt(record["synced_index"]):raise ValueError
+
+
+def _expected_recovery_names(record: dict, actual_names: set, cleaning_outcomes: set) -> set:
+    """The recorded artifacts, less the one cleanup had already removed."""
+    expected_names = set(record["artifacts"])
+    if record["phase"] == "cleaning":
+        remaining = record["cleanup_remaining"]
+        if record["cleanup_outcome"] not in cleaning_outcomes or not isinstance(remaining, list) or len(remaining) != len(set(remaining)) or set(remaining) != expected_names:raise ValueError
+        next_name = record["cleanup_next"]
+        if next_name is not None:
+            if next_name not in expected_names:raise ValueError
+            if next_name not in actual_names:expected_names.remove(next_name)
+    return expected_names
+
+
+def _check_recovery_names(data_dir: Path, record: dict, allowed: set, cleaning_outcomes: set) -> set:
+    """The recovery directory holds exactly the recorded artifacts, each private and as recorded."""
+    if "publication_reason" in record and record["publication_reason"] not in _PUBLICATION_REASONS:raise ValueError
+    if set(record["artifacts"]) - allowed or any(not _valid_file_receipt(state) or state is None for state in record["artifacts"].values()):raise ValueError
+    actual_names = {path.name for path in (data_dir / RECOVERY_DIRECTORY).iterdir()} - {"marker.json"}
+    if actual_names != _expected_recovery_names(record, actual_names, cleaning_outcomes):raise ValueError
+    for name in actual_names:
+        path = data_dir / RECOVERY_DIRECTORY / name
+        _private(path)
+        if _file_state(path) != record["artifacts"][name]:raise ValueError
+    return actual_names
+
+
+def _check_published_checkout(clone: Path, declared_repo: str, record: dict) -> None:
+    """Same branch; once publication began, HEAD is the recorded commit carrying the outputs."""
+    if _branch(clone) != record["branch"]:raise ValueError
+    published = record["phase"] in _PUBLISHED_PHASES or record["phase"] == "cleaning" and record["cleanup_outcome"] == "confirmed"
+    if published:
+        commit = record["commit_oid"]
+        if not repo._object_id(commit) or record["proof_ref"] != repo._publication_ref(commit) or _head(clone) != commit or repo._owned_oid(clone, "HEAD^{tree}") != record["expected_tree"]:raise ValueError
+        _admit(clone, declared_repo)
+        for name, state in record["outputs"].items():
+            if _file_state(clone / name) != (None if state is None else {"digest": state["digest"], "mode": _checkout_mode(0o644)}):raise ValueError
+
+
+def _check_entry_shape(record: dict) -> None:
+    """Version 2, an entry operation, a known phase, and the entry-only slots well formed."""
+    if type(record["version"]) is not int or record["version"] != 2 or record["operation"] not in {"add", "update", "remove"}:
+        raise ValueError
+    if record["phase"] not in _LOADED_PHASES | {"unchanged"}:
+        raise ValueError
+
+
+def _check_entry_slots(record: dict) -> None:
+    for key in ("entry_blob_parent", "created_blob_parent"):
+        if record[key] is not None and not _valid_physical_identity(record[key]):raise ValueError
+    if record["created_blob_parent"] is not None and record["entry_blob_parent"] is not None:raise ValueError
+
+
+def _check_entry_selection(record: dict) -> None:
+    selected = record["selected_blob"]
+    if selected is not None and (not isinstance(selected, str) or not selected.startswith("blobs/") or not _eligible(selected) or "\\" in selected or selected != Path(selected).as_posix()):raise ValueError
+
+
+def _check_entry_outputs(record: dict) -> None:
+    """The selected blob and the manifest, a removal's blob output absent."""
+    selected = record["selected_blob"]
     if selected is not None and selected not in record["preimages"]:raise ValueError
     if not isinstance(record["outputs"], dict) or not isinstance(record["artifacts"], dict):raise ValueError
     if record["outputs"]:
@@ -1098,100 +1196,71 @@ def _load_entry_operation(data_dir: Path, info: os.stat_result, marker: os.stat_
                 if state is not None:raise ValueError
             elif not _valid_file_receipt(state, stored=True) or state["stored"] != ("proposed-manifest" if name == "manifest.json" else "proposed-blob"):
                 raise ValueError
-    advanced = record["phase"] in {"prepared", "applying", "publishing", "unsubmitted", "uncertain", "definitely_rejected", "confirmed", "finalizing", "unchanged"}
-    if advanced or record["phase"] == "cleaning" and record["cleanup_outcome"] in {"confirmed", "unchanged"}:
-        if not record["outputs"] or record.get("authored_paths") != [selected, "manifest.json"] or not repo._object_id(record.get("expected_tree")):raise ValueError
-    if "synced_files" in record:
-        if not isinstance(record["synced_files"], dict) or set(record["synced_files"]) != set(record["preimages"]):raise ValueError
-        if not all(_valid_file_receipt(state) for state in record["synced_files"].values()):raise ValueError
-    synchronized = advanced or record["phase"] == "synchronized" or record["phase"] == "cleaning" and record["cleanup_outcome"] in {"confirmed", "unchanged"}
-    if synchronized:
-        if "synced_files" not in record or "synced_index" not in record or not _valid_file_receipt(record["synced_index"]):raise ValueError
-    if "publication_reason" in record and record["publication_reason"] not in _PUBLICATION_REASONS:raise ValueError
-    allowed = {"entry-index", "prepared-index", "proposed-manifest"} | stored_names
-    if record["operation"] != "remove":allowed.add("proposed-blob")
-    if set(record["artifacts"]) - allowed or any(not _valid_file_receipt(state) or state is None for state in record["artifacts"].values()):raise ValueError
-    actual_names = {path.name for path in (data_dir / RECOVERY_DIRECTORY).iterdir()} - {"marker.json"}
-    expected_names = set(record["artifacts"])
-    if record["phase"] == "cleaning":
-        remaining = record["cleanup_remaining"]
-        if record["cleanup_outcome"] not in {"confirmed", "restored", "unchanged"} or not isinstance(remaining, list) or len(remaining) != len(set(remaining)) or set(remaining) != expected_names:raise ValueError
-        next_name = record["cleanup_next"]
-        if next_name is not None:
-            if next_name not in expected_names:raise ValueError
-            if next_name not in actual_names:expected_names.remove(next_name)
-    if actual_names != expected_names:raise ValueError
-    for name in actual_names:
-        path = data_dir / RECOVERY_DIRECTORY / name
-        _private(path)
-        if _file_state(path) != record["artifacts"][name]:raise ValueError
+
+
+def _check_entry_receiving(data_dir: Path, record: dict, actual_names: set) -> None:
     if "proposed-blob" in actual_names:
         physical = _private(data_dir / RECOVERY_DIRECTORY / "proposed-blob")
         if record.get("blob_receiving_identity") != [physical.st_dev, physical.st_ino]:raise ValueError
     if record["operation"] == "remove" and "blob_receiving_identity" in record:raise ValueError
-    if _branch(clone) != record["branch"]:raise ValueError
-    published = record["phase"] in {"publishing", "uncertain", "confirmed", "finalizing"} or record["phase"] == "cleaning" and record["cleanup_outcome"] == "confirmed"
-    if published:
-        commit = record["commit_oid"]
-        if not repo._object_id(commit) or record["proof_ref"] != repo._publication_ref(commit) or _head(clone) != commit or repo._owned_oid(clone, "HEAD^{tree}") != record["expected_tree"]:raise ValueError
-        _admit(clone, declared_repo)
-        for name, state in record["outputs"].items():
-            if _file_state(clone / name) != (None if state is None else {"digest": state["digest"], "mode": _checkout_mode(0o644)}):raise ValueError
+
+
+def _check_entry_unchanged(clone: Path, declared_repo: str, record: dict) -> None:
+    """An unchanged outcome leaves the synchronized checkout exactly as recorded."""
     if record["phase"] == "unchanged" or record["phase"] == "cleaning" and record["cleanup_outcome"] == "unchanged":
         if _head(clone) != record["synced_head"] or _file_state(clone / ".git/index") != record["synced_index"]:raise ValueError
         _admit(clone, declared_repo)
         if any(_file_state(clone / name) != state for name, state in record["synced_files"].items()):raise ValueError
+
+
+def _load_entry_operation(data_dir: Path, info: os.stat_result, marker: os.stat_result,
+                          record: dict) -> AuthoringOperation:
+    """Accept only the finite version-2 entry record, never weaken seed records."""
+    _check_record_keys(record, _RECORD_REQUIRED | {"selected_blob", "entry_blob_parent", "created_blob_parent"},
+                       _RECORD_OPTIONAL | {"blob_receiving_identity"})
+    _check_entry_shape(record)
+    _check_record_bindings(record, info, marker)
+    _check_entry_slots(record)
+    _check_record_receipts(record)
+    if "blob_receiving_identity" in record and not _valid_physical_identity(record["blob_receiving_identity"]):raise ValueError
+    _check_record_publication(record)
+    _check_entry_selection(record)
+    clone, declared_repo = _bound_clone(data_dir, record)
+    stored_names = _stored_preimages(record, {"manifest.json"})
+    _check_entry_outputs(record)
+    selected = record["selected_blob"]
+    settled = _settled(record, _ENTRY_ADVANCED_PHASES, {"confirmed", "unchanged"})
+    if settled:
+        if not record["outputs"] or record.get("authored_paths") != [selected, "manifest.json"] or not repo._object_id(record.get("expected_tree")):raise ValueError
+    _check_synced_receipts(record, settled or record["phase"] == "synchronized")
+    allowed = {"entry-index", "prepared-index", "proposed-manifest"} | stored_names
+    if record["operation"] != "remove":allowed.add("proposed-blob")
+    actual_names = _check_recovery_names(data_dir, record, allowed, {"confirmed", "restored", "unchanged"})
+    _check_entry_receiving(data_dir, record, actual_names)
+    _check_published_checkout(clone, declared_repo, record)
+    _check_entry_unchanged(clone, declared_repo, record)
     repo.require_repo_binding(clone, declared_repo)
     return AuthoringOperation(data_dir, clone, declared_repo, record, (info.st_dev, info.st_ino), (marker.st_dev, marker.st_ino))
 
 
-def _load_rotation_operation(data_dir: Path, info: os.stat_result, marker: os.stat_result,
-                             record: dict) -> AuthoringOperation:
-    """Accept only the finite version-3 rotation record, never weaken others."""
-    required = {"version", "operation", "phase", "clone_identity", "git_identity", "branch", "declared_repo_digest",
-                "entry_head", "synced_head", "index", "preimages", "outputs", "artifacts", "directory_identity",
-                "marker_identity", "entry_cache", "rotation_blobs", "receiving_identities"}
-    optional = {"synced_files", "synced_index", "expected_tree", "authored_paths", "cache_digest",
-                "commit_oid", "proof_ref", "publication_reason", "cleanup_outcome", "cleanup_remaining", "cleanup_next"}
-    if not required.issubset(record) or set(record) - required - optional:
-        raise ValueError
+def _check_rotation_shape(record: dict) -> None:
+    """Version 3, a rotation, a known phase, and well-formed canonical rotation slots."""
     if type(record["version"]) is not int or record["version"] != 3 or record["operation"] != "rotate":
         raise ValueError
-    if record["phase"] not in {"admitted", "syncing", "synchronized", "prepared", "applying", "publishing", "unsubmitted", "uncertain", "definitely_rejected", "confirmed", "finalizing", "restored", "cleaning"}:
+    if record["phase"] not in _LOADED_PHASES:
         raise ValueError
-    for key in ("clone_identity", "git_identity", "directory_identity", "marker_identity"):
-        if not _valid_physical_identity(record[key]):raise ValueError
-    if record["directory_identity"] != [info.st_dev, info.st_ino] or record["marker_identity"] != [marker.st_dev, marker.st_ino]:
-        raise ValueError
-    for key in ("entry_head", "synced_head"):
-        if not repo._object_id(record[key]):raise ValueError
-    for key in ("index", "entry_cache"):
-        if not _valid_file_receipt(record[key]):raise ValueError
-    if "synced_index" in record and not _valid_file_receipt(record["synced_index"]):raise ValueError
-    if "cache_digest" in record and not _valid_digest(record["cache_digest"]):raise ValueError
-    if "commit_oid" in record:
-        if not repo._object_id(record["commit_oid"]) or record.get("proof_ref") != repo._publication_ref(record["commit_oid"]) or not repo._object_id(record.get("expected_tree")):raise ValueError
-    elif "proof_ref" in record:raise ValueError
-    if not _valid_digest(record["declared_repo_digest"]):raise ValueError
+
+
+def _check_rotation_blobs(record: dict) -> list:
     blobs = record["rotation_blobs"]
     if not isinstance(blobs, list) or sorted(set(blobs)) != blobs:raise ValueError
     for name in blobs:
         if not isinstance(name, str) or not _canonical_blob(name):raise ValueError
-    clone = data_dir / "repo"
-    for path, key in [(clone, "clone_identity"), (clone / ".git", "git_identity")]:
-        physical = _ordinary(path, directory=True)
-        if record[key] != [physical.st_dev, physical.st_ino]:raise ValueError
-    declared_repo = repo._recorded_origin(clone)
-    if _digest(declared_repo.encode("utf-8")) != record["declared_repo_digest"]:raise ValueError
-    if not isinstance(record["preimages"], dict) or not {"manifest.json", "identity.age"}.issubset(record["preimages"]):raise ValueError
-    stored_names = set()
-    for name, state in record["preimages"].items():
-        if not isinstance(name, str) or not _eligible(name):raise ValueError
-        if state is None:continue
-        if not _valid_file_receipt(state, stored=True):raise ValueError
-        stored = state["stored"]
-        if not stored.startswith("preimage-") or not stored[9:].isdigit() or stored in stored_names:raise ValueError
-        stored_names.add(stored)
+    return blobs
+
+
+def _check_rotation_outputs(record: dict, blobs: list) -> None:
+    """The identity, the manifest and every rotation blob, each in its own proposed slot."""
     if any(name not in record["preimages"] for name in blobs):raise ValueError
     for key in ("outputs", "artifacts", "receiving_identities"):
         if not isinstance(record[key], dict):raise ValueError
@@ -1201,45 +1270,39 @@ def _load_rotation_operation(data_dir: Path, info: os.stat_result, marker: os.st
         if set(record["outputs"]) != set(proposed):raise ValueError
         for name, state in record["outputs"].items():
             if not _valid_file_receipt(state, stored=True) or state["stored"] != proposed[name]:raise ValueError
-    advanced = record["phase"] in {"prepared", "applying", "publishing", "unsubmitted", "uncertain", "definitely_rejected", "confirmed", "finalizing"}
-    confirmed_cleaning = record["phase"] == "cleaning" and record["cleanup_outcome"] == "confirmed"
-    if advanced or confirmed_cleaning:
-        if not record["outputs"] or record.get("authored_paths") != ["identity.age", "manifest.json"] + blobs:raise ValueError
-        if not repo._object_id(record.get("expected_tree")) or "cache_digest" not in record:raise ValueError
-    if "synced_files" in record:
-        if not isinstance(record["synced_files"], dict) or set(record["synced_files"]) != set(record["preimages"]):raise ValueError
-        if not all(_valid_file_receipt(state) for state in record["synced_files"].values()):raise ValueError
-    if advanced or confirmed_cleaning or record["phase"] == "synchronized":
-        if "synced_files" not in record or "synced_index" not in record or not _valid_file_receipt(record["synced_index"]):raise ValueError
-    if "publication_reason" in record and record["publication_reason"] not in _PUBLICATION_REASONS:raise ValueError
-    allowed = {"entry-index", "prepared-index", "proposed-manifest"} | stored_names | _proposed_names(record)
-    if set(record["artifacts"]) - allowed or any(not _valid_file_receipt(state) or state is None for state in record["artifacts"].values()):raise ValueError
-    actual_names = {path.name for path in (data_dir / RECOVERY_DIRECTORY).iterdir()} - {"marker.json"}
-    expected_names = set(record["artifacts"])
-    if record["phase"] == "cleaning":
-        remaining = record["cleanup_remaining"]
-        if record["cleanup_outcome"] not in {"confirmed", "restored"} or not isinstance(remaining, list) or len(remaining) != len(set(remaining)) or set(remaining) != expected_names:raise ValueError
-        next_name = record["cleanup_next"]
-        if next_name is not None:
-            if next_name not in expected_names:raise ValueError
-            if next_name not in actual_names:expected_names.remove(next_name)
-    if actual_names != expected_names:raise ValueError
-    for name in actual_names:
-        path = data_dir / RECOVERY_DIRECTORY / name
-        _private(path)
-        if _file_state(path) != record["artifacts"][name]:raise ValueError
+
+
+def _check_rotation_receiving(data_dir: Path, record: dict, actual_names: set) -> None:
     for stored, identity in record["receiving_identities"].items():
         if stored not in _proposed_names(record) or not _valid_physical_identity(identity):raise ValueError
         if stored in actual_names:
             physical = _private(data_dir / RECOVERY_DIRECTORY / stored)
             if identity != [physical.st_dev, physical.st_ino]:raise ValueError
-    if _branch(clone) != record["branch"]:raise ValueError
-    if record["phase"] in {"publishing", "uncertain", "confirmed", "finalizing"} or confirmed_cleaning:
-        commit = record["commit_oid"]
-        if not repo._object_id(commit) or record["proof_ref"] != repo._publication_ref(commit) or _head(clone) != commit or repo._owned_oid(clone, "HEAD^{tree}") != record["expected_tree"]:raise ValueError
-        _admit(clone, declared_repo)
-        for name, state in record["outputs"].items():
-            if _file_state(clone / name) != {"digest": state["digest"], "mode": _checkout_mode(0o644)}:raise ValueError
+
+
+def _load_rotation_operation(data_dir: Path, info: os.stat_result, marker: os.stat_result,
+                             record: dict) -> AuthoringOperation:
+    """Accept only the finite version-3 rotation record, never weaken others."""
+    _check_record_keys(record, _RECORD_REQUIRED | {"rotation_blobs", "receiving_identities"},
+                       _RECORD_OPTIONAL | {"cache_digest"})
+    _check_rotation_shape(record)
+    _check_record_bindings(record, info, marker)
+    _check_record_receipts(record)
+    if "cache_digest" in record and not _valid_digest(record["cache_digest"]):raise ValueError
+    _check_record_publication(record)
+    blobs = _check_rotation_blobs(record)
+    clone, declared_repo = _bound_clone(data_dir, record)
+    stored_names = _stored_preimages(record, {"manifest.json", "identity.age"})
+    _check_rotation_outputs(record, blobs)
+    settled = _settled(record, _ADVANCED_PHASES, ("confirmed",))
+    if settled:
+        if not record["outputs"] or record.get("authored_paths") != ["identity.age", "manifest.json"] + blobs:raise ValueError
+        if not repo._object_id(record.get("expected_tree")) or "cache_digest" not in record:raise ValueError
+    _check_synced_receipts(record, settled or record["phase"] == "synchronized")
+    allowed = {"entry-index", "prepared-index", "proposed-manifest"} | stored_names | _proposed_names(record)
+    actual_names = _check_recovery_names(data_dir, record, allowed, {"confirmed", "restored"})
+    _check_rotation_receiving(data_dir, record, actual_names)
+    _check_published_checkout(clone, declared_repo, record)
     repo.require_repo_binding(clone, declared_repo)
     return AuthoringOperation(data_dir, clone, declared_repo, record, (info.st_dev, info.st_ino), (marker.st_dev, marker.st_ino))
 

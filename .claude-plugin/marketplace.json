@@ -137,7 +137,7 @@
     {
       "name": "secrets-kit",
       "description": "Fleet secrets provisioning: materialize age-encrypted credentials from a private repo onto each machine, declaratively. One passphrase-protected identity per fleet, unlocked once per machine; blobs encrypt to the public key so adding or rotating a secret never needs the passphrase. Session-start convergence + CLI.",
-      "version": "0.8.44",
+      "version": "0.8.45",
       "author": {
         "name": "Christina"
       },
@@ -230,7 +230,7 @@
     {
       "name": "clean-code-kit",
       "description": "Which code in a git repository is duplicated or most complex: runs pinned metric tools over a snapshot of the repository and writes a ranked findings report for the developer to act on.",
-      "version": "0.1.4",
+      "version": "0.1.5",
       "author": {
         "name": "Christina"
       },

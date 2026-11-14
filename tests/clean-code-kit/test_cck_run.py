@@ -267,35 +267,35 @@ def _run_doc(repo, capsys, *extra):
 def test_report_counts_tracked_vs_measured_files_by_extension(target_repo, fake_venv, fake_tools, capsys):
     (target_repo / "tools").mkdir()
     for n in range(3):
-        (target_repo / "tools" / f"x{n}.gd").write_text("extends Node\n")
+        (target_repo / "tools" / f"x{n}.gdshader").write_text("extends Node\n")
     (target_repo / "src" / "pkg" / "empty.py").write_text("X = 1\n")
     _commit_all(target_repo)
     doc, text = _run_doc(target_repo, capsys)
     by_ext = doc["target"]["coverage"]["by_extension"]
-    assert by_ext[".gd"] == {"tracked": 3, "supported": False, "kind": "source-unmeasured",
+    assert by_ext[".gdshader"] == {"tracked": 3, "supported": False, "kind": "source-unmeasured",
                              "measured": {"duplication": 0, "complexity": 0}}
     # a.py, b.py, empty.py under src; bootstrap_guard.py is excluded; tests/test_a.py is outside source_roots
     assert by_ext[".py"] == {"tracked": 5, "supported": True, "kind": "measured",
                              "measured": {"duplication": 3, "complexity": 3}}
     assert by_ext[".ts"]["tracked"] == 1 and by_ext[".ts"]["measured"] == {"duplication": 0, "complexity": 0}
-    assert "| .gd | 3 | 0 | 0 | source, unmeasured |" in text
+    assert "| .gdshader | 3 | 0 | 0 | source, unmeasured |" in text
     assert "| .py | 5 | 3 | 3 | yes |" in text
 
 
 def test_coverage_separates_assets_from_source_and_folds_case(target_repo, fake_venv, fake_tools, capsys):
     for name in ("a.PNG", "b.png", "c.JPG", "d.jpg", "m.glb"):
         (target_repo / "src" / name).write_text("x")
-    (target_repo / "src" / "g.GD").write_text("extends Node\n")
-    (target_repo / "src" / "h.cpp").write_text("int x;\n")
+    (target_repo / "src" / "g.GDSHADER").write_text("extends Node\n")
+    (target_repo / "src" / "h.cs").write_text("int x;\n")
     _commit_all(target_repo)
     doc, text = _run_doc(target_repo, capsys)
     by_ext = doc["target"]["coverage"]["by_extension"]
     assert by_ext[".png"]["tracked"] == 2 and by_ext[".png"]["kind"] == "other"
     assert by_ext[".jpg"]["tracked"] == 2 and ".PNG" not in by_ext and ".JPG" not in by_ext
-    assert by_ext[".gd"]["kind"] == "source-unmeasured" and by_ext[".py"]["kind"] == "measured"
+    assert by_ext[".gdshader"]["kind"] == "source-unmeasured" and by_ext[".py"]["kind"] == "measured"
     section = text.split("## Coverage")[1].split("\n## ")[0]
     assert ".png" not in section and ".glb" not in section and ".jpg" not in section
-    assert "| .cpp | 1 | 0 | 0 | source, unmeasured |" in section
+    assert "| .cs | 1 | 0 | 0 | source, unmeasured |" in section
     others = sum(r["tracked"] for r in by_ext.values() if r["kind"] == "other")
     assert f"other files: {others}" in section
 
@@ -303,17 +303,17 @@ def test_coverage_separates_assets_from_source_and_folds_case(target_repo, fake_
 def test_duplication_is_not_applicable_when_dryer_reads_fewer_than_two_files(
         target_repo, fake_venv, fake_tools, capsys):
     cfg = target_repo / CONFIG_REL
-    cfg.write_text(cfg.read_text().replace("languages: [python]", "languages: [javascript]"))
-    (target_repo / "src" / "pkg" / "app.js").write_text("export const f = () => 1;\n")
-    (target_repo / "src" / "pkg" / "lib.js").write_text("export const g = () => 2;\n")
+    cfg.write_text(cfg.read_text().replace("languages: [python]", "languages: [cpp]"))
+    (target_repo / "src" / "pkg" / "app.hxx").write_text("export const f = () => 1;\n")
+    (target_repo / "src" / "pkg" / "lib.hxx").write_text("export const g = () => 2;\n")
     _commit_all(target_repo)
     doc, text = _run_doc(target_repo, capsys)
     dup, cpx = doc["lanes"]
     assert dup["status"] == "no-comparable-source" and cpx["status"] == "ok"
     assert dup["detail"]["comparable_files"] == 0
-    assert dup["detail"]["ignored_extensions"] == {".js": 2}
+    assert dup["detail"]["ignored_extensions"] == {".hxx": 2}
     assert [tool for tool, _cwd in fake_tools["calls"]] == ["crapper"]
-    assert "Status: no-comparable-source" in text and ".js" in text
+    assert "Status: no-comparable-source" in text and ".hxx" in text
 
 
 def test_duplication_with_one_readable_file_is_not_applicable(target_repo, fake_venv, fake_tools, capsys):
@@ -327,12 +327,12 @@ def test_duplication_with_one_readable_file_is_not_applicable(target_repo, fake_
 
 def test_duplication_notes_ignored_extensions_even_when_it_runs(target_repo, fake_venv, fake_tools, capsys):
     cfg = target_repo / CONFIG_REL
-    cfg.write_text(cfg.read_text().replace("languages: [python]", "languages: [python, javascript]"))
-    (target_repo / "src" / "pkg" / "app.js").write_text("export const f = () => 1;\n")
+    cfg.write_text(cfg.read_text().replace("languages: [python]", "languages: [python, cpp]"))
+    (target_repo / "src" / "pkg" / "app.hxx").write_text("export const f = () => 1;\n")
     _commit_all(target_repo)
     doc, text = _run_doc(target_repo, capsys)
     assert doc["lanes"][0]["status"] == "ok"
-    assert doc["lanes"][0]["detail"]["ignored_extensions"] == {".js": 1}
+    assert doc["lanes"][0]["detail"]["ignored_extensions"] == {".hxx": 1}
     assert "dryer ignores" in text
 
 
@@ -392,7 +392,7 @@ def test_init_prints_a_valid_config_and_writes_nothing(target_repo, capsys):
 
     (target_repo / CONFIG_REL).unlink()
     (target_repo / "tools").mkdir()
-    (target_repo / "tools" / "x.gd").write_text("extends Node\n")
+    (target_repo / "tools" / "x.gdshader").write_text("shader_type spatial;\n")
     _commit_all(target_repo)
     assert cli.main(["init", "--target", str(target_repo)]) == 0
     text = capsys.readouterr().out
@@ -402,7 +402,17 @@ def test_init_prints_a_valid_config_and_writes_nothing(target_repo, capsys):
     cfg = config_mod.parse(Path("proposed"), yaml.safe_load(text))
     assert cfg.languages == ["python", "typescript"]
     assert cfg.source_roots == ["src/pkg"] and cfg.test_roots == ["tests"]
-    assert "# .gd: 1 file" in text and "no lane reads" in text
+    assert "# .gdshader: 1 file" in text and "no lane reads" in text
+
+
+def test_init_proposes_gdscript_and_cpp_when_those_files_are_tracked(tmp_path, capsys):
+    import yaml
+    from clean_code_kit import config as config_mod
+
+    files = ["game/a.gd", "game/b.gd", "kernel/k.cpp", "kernel/k.hpp"]
+    text = _init_text(_bare_repo(tmp_path, files), capsys)
+    cfg = config_mod.parse(Path("proposed"), yaml.safe_load(text))
+    assert cfg.languages == ["gdscript", "cpp"]
 
 
 def _init_text(repo, capsys):
@@ -452,17 +462,17 @@ def test_init_roots_are_posix_even_where_os_path_is_ntpath(tmp_path, capsys, mon
 
 
 def test_init_lists_every_source_unmeasured_extension_and_collapses_the_rest(tmp_path, capsys):
-    files = [f"src/m{n}.py" for n in range(3)] + ["src/a.cpp", "src/b.CPP", "src/b.h", "src/c.png", "src/d.png", "src/e.uid"]
+    files = [f"src/m{n}.py" for n in range(3)] + ["src/a.go", "src/b.GO", "src/b.rs", "src/c.png", "src/d.png", "src/e.uid"]
     text = _init_text(_bare_repo(tmp_path, files), capsys)
-    assert "# .cpp: 2 files, no lane reads this extension" in text
-    assert "# .h: 1 file, no lane reads this extension" in text
+    assert "# .go: 2 files, no lane reads this extension" in text
+    assert "# .rs: 1 file, no lane reads this extension" in text
     assert "# other files: 3" in text and ".png" not in text and ".uid" not in text
 
 
 def test_init_refuses_a_repository_with_no_supported_source(tmp_path, capsys):
     repo = tmp_path / "plain"
     repo.mkdir()
-    (repo / "a.gd").write_text("extends Node\n")
+    (repo / "a.gdshader").write_text("extends Node\n")
     git(repo, "init", "-q")
     _commit_all(repo)
     assert cli.main(["init", "--target", str(repo)]) == 2

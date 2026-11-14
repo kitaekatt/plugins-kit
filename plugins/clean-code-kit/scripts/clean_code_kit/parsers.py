@@ -26,9 +26,9 @@ CACHE_ENV = "TREE_SITTER_LANGUAGE_PACK_CACHE_DIR"
 CACHE_DIRNAME = "parsers"
 PACK_DIST = "tree_sitter_language_pack"
 # The grammars the tools request for the plugin's languages (crapper parses
-# the JavaScript extensions as typescript). Fetching any one grammar stores the
+# the JavaScript extensions as typescript; dryer parses javascript, gdscript and cpp). Fetching any one grammar stores the
 # platform's whole parser bundle, which then serves every other grammar offline.
-GRAMMARS = ("python", "typescript")
+GRAMMARS = ("python", "typescript", "javascript", "gdscript", "cpp")
 
 
 def cache_dir(data_dir: Path | str) -> Path:

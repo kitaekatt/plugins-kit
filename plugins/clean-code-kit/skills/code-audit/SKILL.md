@@ -169,24 +169,25 @@ domain_skill:
         path: references/lane-duplication.md
         keywords: [duplication, duplicate code, copy-paste, dryer, similarity,
                    score, copies, identical group, group_identical, threshold,
-                   min_lines, min-nodes, javascript ignored, vendored copies,
+                   min_lines, min-nodes, languages read, gdscript, cpp, vendored copies,
                    exclude, report table, parser cache, follow-up task]
         summary: >-
           The duplication lane (dryer): what it measures, how to read its
-          report table, its known limits (JavaScript extensions ignored,
+          report table, its known limits (languages read: JavaScript, GDScript and C++ included, `.c++`/`.hxx` ignored,
           deliberately vendored copies, what dryer skips on its own, the
           parser cache) and what a sensible follow-up task looks like.
       - id: lane-complexity
         path: references/lane-complexity.md
         keywords: [complexity, cyclomatic complexity, crapper, crap score,
                    coverage, no coverage, ranking, top, namespace, symbol,
-                   file and start line, no end line, javascript as
+                   file and start line, no end line, gdscript, cpp, javascript as
                    typescript, every function in findings.json, report
                    table, parser cache, follow-up task]
         summary: >-
           The complexity lane (crapper without coverage): what it measures,
           how to read its ranked table, its known limits (no file location,
-          no coverage-backed CRAP score, JavaScript scored as TypeScript,
+          no coverage-backed CRAP score, JavaScript scored as TypeScript, C++ and GDScript
+          scored without coverage,
           what crapper skips on its own, the parser cache) and what a
           sensible follow-up task looks like.
   capabilities:
