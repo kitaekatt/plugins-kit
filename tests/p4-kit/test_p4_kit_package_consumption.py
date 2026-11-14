@@ -39,7 +39,7 @@ def test_llm_kit_is_installed_not_linked() -> None:
 
 
 def test_the_manifest_requires_the_bootstrap_that_revokes_the_old_link() -> None:
-    assert _MANIFEST["requires_bootstrap"] == "0.160.0"
+    assert _MANIFEST["requires_bootstrap"] == "0.168.0"
 
 
 def test_the_package_requirements_are_declared() -> None:

@@ -37,11 +37,11 @@ Function and Location:
 | Complexity | The function's cyclomatic complexity. |
 | Namespace | crapper's name for the function's module. For Python it is the dotted module path relative to the source root crapper walked, with `.ClassName` appended for a method. |
 | Function | The function or method name (`symbol` in `findings.json`). |
-| Location | Always "location unavailable" in this version (see below). |
+| Location | `path:line`: the function's file, relative to the repository root, and its 1-based start line. |
 
 `findings.json` holds EVERY scored function, not only the first `top`; `top`
-limits the `report.md` table alone. A complexity finding's `path`,
-`start_line` and `end_line` are `null`; its `namespace` and `symbol` identify
+limits the `report.md` table alone. A complexity finding's `path` and
+`start_line` locate the function and `end_line` is `null` (crapper reports no end line); its `namespace` and `symbol` identify
 it, and its `metrics` hold `complexity`, plus `coverage` and `crap`, which are
 `null` in this version. The lane's
 entry under `lanes` records crapper's commit (`tool_commit`), the exact
@@ -52,12 +52,9 @@ held no file crapper reads. It is not an error.
 
 ## Known limits
 
-- **No file location.** crapper's output carries the namespace, the name and
-  the metrics of each function, and no file path or line. The report says
-  "location unavailable" rather than guessing. To find a function, search the
-  target for its name, using the namespace to choose among matches; for
-  Python the namespace usually maps back to a module file. Never present a
-  guessed path as the report's.
+- **No end line.** crapper reports each function's file and start line, not
+  its end line, so `end_line` is `null`. Never present a guessed end line as
+  the report's.
 - **JavaScript is scored as TypeScript.** crapper treats `.js .jsx .mjs .cjs`
   as TypeScript, as well as `.ts .tsx .mts .cts`. JavaScript functions are
   ranked here even though the duplication lane does not read those files,

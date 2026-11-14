@@ -87,13 +87,13 @@ def _complexity_section(result: LaneResult, top: int) -> list[str]:
     shown = result.findings[:top]
     lines = [f"Functions scored: {len(result.findings)}. Showing the top {len(shown)} by "
              "cyclomatic complexity. Coverage was not measured, so CRAP is not computed. "
-             "The tool reports a namespace and a function name only: location unavailable.", ""]
+             "Location is the file and the function's start line.", ""]
     if not shown:
         return lines
     lines += ["| Rank | Complexity | Namespace | Function | Location |", "|---:|---:|---|---|---|"]
     for f in shown:
         lines.append(f"| {f.rank} | {f.metrics['complexity']} | `{_cell(f.namespace)}` | "
-                     f"`{_cell(f.symbol)}` | location unavailable |")
+                     f"`{_cell(f.symbol)}` | `{_cell(f.path)}:{f.start_line}` |")
     lines.append("")
     return lines
 

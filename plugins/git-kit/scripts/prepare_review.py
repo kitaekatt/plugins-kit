@@ -154,11 +154,12 @@ from bootstrap_guard import data_dir, reexec_under_plugin_venv  # noqa: E402
 
 reexec_under_plugin_venv("git-kit")
 
-_MIN_BOOTSTRAP_VERSION = "0.113.0"
+_MIN_BOOTSTRAP_VERSION = "0.168.0"
 _BOOTSTRAP_FRONTIER = (
     "bootstrap_lib.code_review.pipeline.run_vcs(timeout=...), "
     "bootstrap_lib.code_review.mechanical_repository, "
-    "bootstrap_lib.code_review.pipeline.assemble_bundle(mechanical_contract=...)"
+    "bootstrap_lib.code_review.pipeline.assemble_bundle(mechanical_contract=...), "
+    "bootstrap_lib.code_review.kit_scripts"
 )
 
 
@@ -182,6 +183,7 @@ try:
     review_pipeline = importlib.import_module("bootstrap_lib.code_review.pipeline")
     ledger = importlib.import_module("bootstrap_lib.code_review.ledger")
     importlib.import_module("bootstrap_lib.code_review.mechanical_repository")
+    importlib.import_module("bootstrap_lib.code_review.kit_scripts")
 except ModuleNotFoundError as exc:
     from bootstrap_guard import require_bootstrap
 
@@ -209,6 +211,13 @@ if "timeout" not in run_vcs_parameters or "mechanical_contract" not in bundle_pa
     _exit_bootstrap_too_old()
 
 from bootstrap_lib.path_repair import repair_path  # noqa: E402
+
+# VCS-neutral helpers both kits' review scripts share: the subprocess-timeout
+# environment read and the argv split. See bootstrap_lib/code_review/kit_scripts.py.
+from bootstrap_lib.code_review.kit_scripts import (  # noqa: E402
+    env_timeout_s,
+    parse_review_args as _parse_args,
+)
 
 # Shared VCS-neutral review pipeline -- subprocess wrapper, section
 # splitting, chunking + CLAUDE.md walk + submit-gate scan, bundle
@@ -295,18 +304,8 @@ _GIT_DEFAULT_TIMEOUT_S = 60.0
 
 
 def _git_timeout_s() -> float:
-    """Read the git subprocess timeout (seconds) from `GITKIT_VCS_TIMEOUT_S`.
-
-    Falls back to `_GIT_DEFAULT_TIMEOUT_S` when the variable is unset or
-    holds a value `float()` rejects.
-    """
-    raw = os.environ.get(_GIT_TIMEOUT_ENV_VAR)
-    if not raw:
-        return _GIT_DEFAULT_TIMEOUT_S
-    try:
-        return float(raw)
-    except ValueError:
-        return _GIT_DEFAULT_TIMEOUT_S
+    """The git subprocess timeout (seconds) from `GITKIT_VCS_TIMEOUT_S`, else the default."""
+    return env_timeout_s(_GIT_TIMEOUT_ENV_VAR, _GIT_DEFAULT_TIMEOUT_S)
 
 
 def run_git(args: list[str], cwd: Optional[Path] = None) -> tuple[int, str, str]:
@@ -1543,38 +1542,6 @@ def build_bundle(
     if emitted:
         bundle["machine_emitted_files"] = emitted
     return bundle
-
-
-def _parse_args(args: list[str]) -> tuple[list[str], list[str], bool]:
-    """Split argv[1:] into (positionals, claim_globs, review_machine_emitted).
-
-    `--claim <glob>` (repeatable) and `--claim=<glob>` collect claim patterns;
-    `--review-machine-emitted` turns OFF machine-emitted-artifact exclusion so
-    those files are chunked and reviewed like any other; everything else (a
-    range/ref, `--staged`, `--working`) is a positional. Raises ValueError on a
-    `--claim` with no value.
-    """
-    positionals: list[str] = []
-    claim_globs: list[str] = []
-    review_machine_emitted = False
-    i = 0
-    while i < len(args):
-        a = args[i]
-        if a == "--review-machine-emitted":
-            review_machine_emitted = True
-            i += 1
-        elif a == "--claim":
-            if i + 1 >= len(args):
-                raise ValueError("--claim requires a glob argument")
-            claim_globs.append(args[i + 1])
-            i += 2
-        elif a.startswith("--claim="):
-            claim_globs.append(a[len("--claim="):])
-            i += 1
-        else:
-            positionals.append(a)
-            i += 1
-    return positionals, claim_globs, review_machine_emitted
 
 
 def _extract_snapshot_args(

@@ -84,9 +84,11 @@ def test_run_writes_the_report_under_local_data(target_repo, fake_venv, fake_too
     assert [lane["tool_commit"] for lane in doc["lanes"]] == [pins["dryer"], pins["crapper"]]
     assert {lane["status"] for lane in doc["lanes"]} == {"ok"}
     assert sum(1 for f in doc["findings"] if f["lane"] == "duplication") == 4
-    assert all(f["path"] is None for f in doc["findings"] if f["lane"] == "complexity")
+    cpx = [f for f in doc["findings"] if f["lane"] == "complexity"]
+    assert all(f["path"] and f["start_line"] for f in cpx)
     text = (out_dir / "report.md").read_text()
-    assert "location unavailable" in text and "| 1 | 3 | 1.00 |" in text
+    assert "location unavailable" not in text and "| 1 | 3 | 1.00 |" in text
+    assert f"`{cpx[0]['path']}:{cpx[0]['start_line']}`" in text
     # nothing else was written inside the target
     after = git(target_repo, "status", "--porcelain", "--ignored")
     assert set(after.splitlines()) == set(before.splitlines()) | {"!! .local-data/"}

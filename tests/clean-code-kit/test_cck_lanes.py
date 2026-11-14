@@ -77,13 +77,15 @@ def test_duplication_ranks_copies_before_score(tmp_path):
     assert [f.metrics["copies"] for f in findings] == [3, 2]
 
 
-def test_complexity_parse_ranks_by_complexity_and_has_no_path(tmp_path):
+def test_complexity_parse_ranks_by_complexity_and_carries_location(tmp_path):
     _place(tmp_path, "crap_no_coverage.edn", "crap.edn")
     findings = complexity.parse(_ctx(tmp_path, CPX))
     assert [f.metrics["complexity"] for f in findings] == [6, 3, 3, 3, 3]
     assert [f.rank for f in findings] == [1, 2, 3, 4, 5]
     assert (findings[0].namespace, findings[0].symbol) == ("pkg.b", "branchy")
-    assert all(f.path is None and f.start_line is None and f.group is None for f in findings)
+    assert [(f.path, f.start_line, f.end_line) for f in findings[:2]] == [
+        ("src/pkg/b.py", 4, None), ("src/pkg/a.py", 10, None)]
+    assert all(f.path and f.start_line and f.group is None for f in findings)
     assert [f.symbol for f in findings[1:]] == ["total_price", "weight", "sum_cost", "sum_cost_again"]
 
 

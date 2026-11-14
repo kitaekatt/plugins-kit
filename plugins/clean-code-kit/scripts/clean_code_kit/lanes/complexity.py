@@ -1,7 +1,9 @@
 """Complexity lane: crapper's cyclomatic complexity per function, without coverage.
 
-crapper's EDN names each function by namespace and name and carries no file
-path or line, so these findings have ``path=None``.
+crapper's EDN names each function by namespace and name and gives its file
+(POSIX, relative to the scanned root, which is the pruned snapshot root and so
+the target repository root) and 1-based start line. The end line is not
+reported, so ``end_line`` is None.
 """
 
 from __future__ import annotations
@@ -34,8 +36,8 @@ def parse(ctx: LaneContext) -> list[Finding]:
     entries = read_file(ctx.analysis_root / metrics_file, read_crap)
     ordered = sorted(entries, key=lambda e: (-e["complexity"], e["namespace"], e["name"]))
     return [
-        Finding(lane=name, kind="complexity", path=None, namespace=e["namespace"], symbol=e["name"],
-                start_line=None, end_line=None,
+        Finding(lane=name, kind="complexity", path=e["path"], namespace=e["namespace"], symbol=e["name"],
+                start_line=e["line"], end_line=None,
                 metrics={"complexity": e["complexity"], "coverage": e["coverage"], "crap": e["crap"]},
                 rank=rank)
         for rank, e in enumerate(ordered, start=1)

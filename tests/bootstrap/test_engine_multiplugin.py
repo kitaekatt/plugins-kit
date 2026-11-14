@@ -1335,6 +1335,9 @@ class TestSelfRegistrationWiring:
             json.dump(config, f)
 
         env = _isolated_env(tmp_path)
+        # A launching claudx session must not leak its redirect into tests
+        # that exercise the unredirected write.
+        env.pop("CLAUDE_BOOTSTRAP_DATA_ROOT", None)
         claude_home = os.path.join(env["HOME"], ".claude")
         os.makedirs(claude_home, exist_ok=True)
         if declare_in_user_manifest:
@@ -1351,7 +1354,8 @@ class TestSelfRegistrationWiring:
 
         with open(local_path) as f:
             data = json.load(f)
-        assert data["plugins"] == [{"ref": "kit:dep-plugin", "install": "manual"}]
+        assert data["plugins"] == [{"ref": "kit:dep-plugin", "install": "manual",
+                                    "self_registered": True}]
 
     def test_second_run_is_idempotent(self, tmp_path):
         fake_root, data_dir, env, local_path = self._setup(tmp_path)
@@ -1371,6 +1375,28 @@ class TestSelfRegistrationWiring:
         result = run_engine(data_dir, plugin_root=str(fake_root), env=env)
         assert result.returncode == 0, result.stderr
         # Declared in ~/.claude/bootstrap.json -> no local entry is written.
+        assert not os.path.exists(local_path)
+
+    def test_stale_entry_is_removed_once_another_layer_declares_it(self, tmp_path):
+        fake_root, data_dir, env, local_path = self._setup(
+            tmp_path, declare_in_user_manifest=True)
+        # Written by an earlier pass, before the tracked layer declared it.
+        with open(local_path, "w") as f:
+            json.dump({"plugins": [{"ref": "kit:dep-plugin",
+                                    "install": "manual"}]}, f)
+        result = run_engine(data_dir, plugin_root=str(fake_root), env=env)
+        assert result.returncode == 0, result.stderr
+        with open(local_path) as f:
+            assert json.load(f)["plugins"] == []
+        with open(os.path.join(data_dir, "bootstrap.log")) as f:
+            assert "self-register: removed kit:dep-plugin" in f.read()
+
+    def test_redirected_data_root_never_writes_the_real_local_manifest(
+            self, tmp_path):
+        fake_root, data_dir, env, local_path = self._setup(tmp_path)
+        env["CLAUDE_BOOTSTRAP_DATA_ROOT"] = str(tmp_path / "data")
+        result = run_engine(data_dir, plugin_root=str(fake_root), env=env)
+        assert result.returncode == 0, result.stderr
         assert not os.path.exists(local_path)
 
     def test_display_line_is_not_duplicated(self, tmp_path):

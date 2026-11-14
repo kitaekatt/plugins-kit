@@ -1316,7 +1316,22 @@ def _main_pass():
     # nothing is stale in the gap. Rationale + write-target choice:
     # bootstrap_lib/self_register.py module docstring.
     from .self_register import declared_plugin_ids, ensure_self_registration
+    # A redirected test session (CLAUDE_BOOTSTRAP_DATA_ROOT, set by claudx)
+    # skips this step. The local manifest is read from the REAL $HOME, which
+    # the redirect does not move, so writing it would leak the session's
+    # working-copy plugin set into the machine's config; writing under the
+    # redirected root instead would be inert, because no layer is read there.
+    # Self-registration exists to keep INSTALLED plugins updated, which is a
+    # machine effect a claudx session does not test.
+    sr_redirected = bool(os.environ.get("CLAUDE_BOOTSTRAP_DATA_ROOT"))
     sr_declared_refs, sr_declared_names = declared_plugin_ids(layered_manifest)
+    sr_layer_refs, sr_layer_names = set(), set()
+    for _sr_path, sr_kind, sr_data in _collect_manifest_layers(
+            args.project_dir, data_dir)[0]:
+        if sr_kind != "user_local" and isinstance(sr_data, dict):
+            r, n = declared_plugin_ids(sr_data)
+            sr_layer_refs |= r
+            sr_layer_names |= n
     sr_candidates = []
     for pi in enabled_plugins + new_plugins:
         pi_manifest_path = os.path.join(pi.install_path, "bootstrap.json")
@@ -1330,10 +1345,17 @@ def _main_pass():
             sr_declared_names |= p_names
         except (json.JSONDecodeError, OSError):
             pass  # parse failure already surfaced by the per-plugin pass
-    sr_actions, sr_oks = ensure_self_registration(
-        os.path.join(home, ".claude", "bootstrap.local.json"),
-        sr_candidates, sr_declared_refs, sr_declared_names,
-    )
+    if sr_redirected:
+        sr_actions, sr_oks = [], [
+            "self-register: skipped (CLAUDE_BOOTSTRAP_DATA_ROOT is set; a "
+            "redirected session never writes ~/.claude/bootstrap.local.json)"]
+    else:
+        sr_actions, sr_oks = ensure_self_registration(
+            os.path.join(home, ".claude", "bootstrap.local.json"),
+            sr_candidates, sr_declared_refs, sr_declared_names,
+            layer_declared_refs=sr_layer_refs,
+            layer_declared_names=sr_layer_names,
+        )
     # Built by ensure_self_registration as plain lists, so they carry no
     # RecordingList; record them explicitly rather than let the one code path
     # that bypasses the list-level hook go unrecorded.
@@ -2902,6 +2924,29 @@ def _load_layered_manifests_ex(project_dir, data_dir=None):
     """
     from . import profiles as _profiles
 
+    layers, parse_errors, home = _collect_manifest_layers(project_dir, data_dir)
+
+    effective, profile_state = _profiles.resolve_layers(
+        layers,
+        project_dir=str(project_dir) if project_dir else None,
+        home=home,
+    )
+    return effective, parse_errors, profile_state
+
+
+def _collect_manifest_layers(project_dir, data_dir=None):
+    """Read the candidate manifest layers, lowest priority first.
+
+    Returns ``(layers, parse_errors, home)`` where ``layers`` is a list of
+    ``(path, kind, manifest)`` (``manifest`` is ``None`` for a layer that
+    exists but failed to parse). A self-registered entry in the
+    ``user_local`` layer that another layer declares is dropped here
+    (``self_register.drop_shadowed_self_registrations``): merge-by-ref would
+    otherwise let it override that declaration. Step 4b2 removes it from the
+    file and logs the removal.
+    """
+    from .self_register import drop_shadowed_self_registrations
+
     # HOME is preferred, USERPROFILE is the Windows fallback.
     home = os.environ.get("HOME") or os.path.expanduser("~")
     claude_home = os.path.join(home, ".claude")
@@ -2926,12 +2971,14 @@ def _load_layered_manifests_ex(project_dir, data_dir=None):
         _add_layer(os.path.join(project_claude, "bootstrap.json"), "project")
         _add_layer(os.path.join(project_claude, "bootstrap.local.json"), "project_local")
 
-    effective, profile_state = _profiles.resolve_layers(
-        layers,
-        project_dir=str(project_dir) if project_dir else None,
-        home=home,
-    )
-    return effective, parse_errors, profile_state
+    others = [data for _p, kind, data in layers if kind != "user_local"]
+    layers = [
+        (path, kind,
+         drop_shadowed_self_registrations(data, others)
+         if kind == "user_local" else data)
+        for path, kind, data in layers
+    ]
+    return layers, parse_errors, home
 
 
 def _profile_prompt_directive(profile_state, marker_dir, run_cmd, env=None):

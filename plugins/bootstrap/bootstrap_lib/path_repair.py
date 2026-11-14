@@ -14,9 +14,9 @@ HKCU PATH entries read directly via winreg (no string-size limits,
 unlike `reg query` or cmd.exe variables). Idempotent. No-op on
 non-Windows.
 
-Vendored copies live in consumer plugins (plugins/p4-kit/lib/,
-plugins/unreal-kit/lib/) so each plugin can call it without depending
-on bootstrap being importable. Keep the copies in sync with this file.
+Vendored copies live in consumer plugins (plugins/unreal-kit/lib/) so
+each plugin can call it without depending on bootstrap being importable.
+Keep the copies in sync with this file.
 """
 
 import os

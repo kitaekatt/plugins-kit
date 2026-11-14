@@ -31,12 +31,13 @@ def test_reads_captured_pairs_and_empty_dry_edn():
 def test_reads_captured_crap_edn():
     entries = read_crap(_sample("crap_no_coverage.edn"))
     assert entries[0] == {"name": "branchy", "namespace": "pkg.b", "complexity": 6,
-                          "coverage": None, "crap": None}
+                          "coverage": None, "crap": None, "path": "src/pkg/b.py", "line": 4}
     assert len(entries) == 5
 
 
 def test_crap_accepts_numeric_coverage():
-    text = '{:entries [{:name "f", :namespace "m", :complexity 2, :coverage 50.0, :crap 2.5}]}'
+    text = ('{:entries [{:name "f", :namespace "m", :complexity 2, :coverage 50.0, :crap 2.5,'
+            ' :path "m.py", :line 1}]}')
     assert read_crap(text)[0]["coverage"] == 50.0
 
 
@@ -73,8 +74,16 @@ def test_reader_rejects_unsupported_syntax(text):
         loads(text)
 
 
-def test_crap_rejects_an_entry_with_a_path():
+def test_crap_rejects_an_unexpected_key():
     text = ('{:entries [{:name "f", :namespace "m", :complexity 2, :coverage nil, :crap nil,'
-            ' :file "x.py"}]}')
+            ' :path "m.py", :line 1, :file "x.py"}]}')
     with pytest.raises(EdnError, match="unexpected keys"):
+        read_crap(text)
+
+
+@pytest.mark.parametrize("fields", ["", ':path "m.py"', ":line 1"])
+def test_crap_rejects_an_entry_without_path_and_line(fields):
+    text = ('{:entries [{:name "f", :namespace "m", :complexity 2, :coverage nil, :crap nil, %s}]}'
+            % fields).replace(", }", "}")
+    with pytest.raises(EdnError, match="missing keys"):
         read_crap(text)

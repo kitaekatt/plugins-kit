@@ -36,6 +36,23 @@ The file is real user config, not ours: unrelated keys and existing
 untouched (the layered-manifest loader already surfaces the parse failure).
 Entries written here take effect from the NEXT pass -- the plugin was just
 provisioned this pass, so nothing is stale in the gap.
+
+A self-registered entry fills a gap and must never outrank a declaration.
+Merge-by-ref lets the user-local layer override a tracked layer, so an entry
+written here before a tracked (or project) layer declared the same ref would
+otherwise shadow that declaration for ever -- e.g. ``install: "auto"`` read as
+``"manual"``. Two halves close it. Entries are written with
+``"self_registered": true`` (:func:`is_self_registered` also accepts the exact
+``{"ref", "install": "manual"}`` shape that earlier releases wrote unmarked,
+so machines that already carry those entries converge). At load time the
+engine drops such an entry from the user-local layer whenever another layer
+declares the ref (:func:`drop_shadowed_self_registrations`), so the
+declaration applies in the same pass; and :func:`ensure_self_registration`
+removes it from the file, logging an action entry. A hand-written entry (any
+other shape) is never removed and still overrides as before.
+
+A redirected test session (``CLAUDE_BOOTSTRAP_DATA_ROOT``) skips
+self-registration entirely: the engine owns the decision, see Step 4b2.
 """
 
 import json
@@ -72,8 +89,70 @@ def declared_plugin_ids(manifest):
     return refs, names
 
 
+SELF_REGISTERED_KEY = "self_registered"
+
+
+def is_self_registered(entry):
+    """True when a ``plugins[]`` entry was written by self-registration.
+
+    Marked entries carry ``"self_registered": true``. The exact unmarked shape
+    ``{"ref": <str>, "install": "manual"}`` is what releases before the marker
+    wrote, and is accepted too so those machines converge. Only meaningful for
+    entries in the user-local file; callers must not apply it to other layers.
+    """
+    if not isinstance(entry, dict) or not isinstance(entry.get("ref"), str):
+        return False
+    if entry.get(SELF_REGISTERED_KEY) is True:
+        return True
+    return set(entry) == {"ref", "install"} and entry["install"] == "manual"
+
+
+def _is_declared(ref, refs, names):
+    name = ref.split(":", 1)[1] if ":" in ref else ref
+    return ref in refs or name in names
+
+
+def drop_shadowed_self_registrations(local_manifest, other_manifests):
+    """Return ``local_manifest`` without self-registered entries another layer declares.
+
+    ``other_manifests`` are the parsed contents of every other manifest layer
+    (``None`` entries are ignored). The input is not mutated; when nothing is
+    dropped it is returned unchanged.
+    """
+    if not isinstance(local_manifest, dict):
+        return local_manifest
+    plugins = local_manifest.get("plugins")
+    if not isinstance(plugins, list):
+        return local_manifest
+    refs, names = set(), set()
+    for other in other_manifests:
+        if isinstance(other, dict):
+            r, n = declared_plugin_ids(other)
+            refs |= r
+            names |= n
+    kept = [e for e in plugins
+            if not (is_self_registered(e) and _is_declared(e["ref"], refs, names))]
+    if len(kept) == len(plugins):
+        return local_manifest
+    return {**local_manifest, "plugins": kept}
+
+
+def _refusal(actions, oks, missing):
+    """A malformed local file blocks only a pass that has something to add.
+
+    With nothing missing the refusal is demoted to a verbose ok entry: the
+    layered-manifest loader already reports the parse failure, and a stale
+    self-registered entry cannot be pruned from a file nobody can read.
+    """
+    if not missing:
+        oks.extend(actions)
+        actions.clear()
+    return actions, oks
+
+
 def ensure_self_registration(local_path, candidate_refs, declared_refs,
-                             declared_names):
+                             declared_names, layer_declared_refs=frozenset(),
+                             layer_declared_names=frozenset()):
     """Ensure every candidate plugin ref has an auto-update entry somewhere.
 
     Args:
@@ -83,6 +162,10 @@ def ensure_self_registration(local_path, candidate_refs, declared_refs,
             a ``bootstrap.json`` (i.e. are bootstrap-dependent).
         declared_refs: Full refs already declared in any processed manifest.
         declared_names: Bare plugin names already declared.
+        layer_declared_refs, layer_declared_names: Refs and bare names declared
+            by manifest layers OTHER than the local file. A self-registered
+            entry in the file whose ref is declared there is removed (it would
+            shadow that declaration under merge-by-ref).
 
     Returns:
         ``(action_entries, ok_entries)`` -- actions only when the file was
@@ -96,7 +179,7 @@ def ensure_self_registration(local_path, candidate_refs, declared_refs,
         if ref not in declared_refs
         and ref.split(":", 1)[1] not in declared_names
     ]
-    if not missing:
+    if not missing and not os.path.isfile(local_path):
         oks.append(
             f"self-register: all {len(candidates)} bootstrap-dependent "
             "plugins have auto-update entries")
@@ -112,13 +195,13 @@ def ensure_self_registration(local_path, candidate_refs, declared_refs,
                 f"self-register: {local_path} unreadable ({e}); "
                 "left untouched, no entries added",
                 short="self-register: local file unreadable"))
-            return actions, oks
+            return _refusal(actions, oks, missing)
         if not isinstance(data, dict):
             actions.append(Entry(
                 f"self-register: {local_path} is not a JSON object; "
                 "left untouched, no entries added",
                 short="self-register: local file not JSON"))
-            return actions, oks
+            return _refusal(actions, oks, missing)
 
     plugins = data.get("plugins")
     if plugins is None:
@@ -128,7 +211,17 @@ def ensure_self_registration(local_path, candidate_refs, declared_refs,
             f"self-register: {local_path} 'plugins' is not a list; "
             "left untouched, no entries added",
             short="self-register: bad 'plugins' list"))
-        return actions, oks
+        return _refusal(actions, oks, missing)
+
+    # A self-registered entry that another layer now declares would shadow
+    # that declaration under merge-by-ref: remove it.
+    removed = [e["ref"] for e in plugins
+               if is_self_registered(e)
+               and _is_declared(e["ref"], layer_declared_refs,
+                                layer_declared_names)]
+    if removed:
+        plugins = [e for e in plugins
+                   if not (is_self_registered(e) and e["ref"] in removed)]
 
     # Belt over the merged-layer check: skip refs the file itself already
     # declares (in case the caller's declared set was built from stale layers).
@@ -137,15 +230,29 @@ def ensure_self_registration(local_path, candidate_refs, declared_refs,
     for ref in missing:
         if ref in file_refs or ref.split(":", 1)[1] in file_names:
             continue
-        plugins.append({"ref": ref, "install": "manual"})
+        if _is_declared(ref, layer_declared_refs, layer_declared_names):
+            continue
+        plugins.append({"ref": ref, "install": "manual",
+                        SELF_REGISTERED_KEY: True})
         added.append(ref)
 
-    if not added:
-        oks.append("self-register: entries already present")
+    if not added and not removed:
+        if missing:
+            oks.append("self-register: entries already present")
+        else:
+            oks.append(
+                f"self-register: all {len(candidates)} bootstrap-dependent "
+                "plugins have auto-update entries")
         return actions, oks
 
     data["plugins"] = plugins
     write_atomic(local_path, json.dumps(data, indent=2) + "\n")
+    for ref in removed:
+        actions.append(Entry(
+            f"self-register: removed {ref} from {local_path} "
+            "(declared in another layer; the self-registered entry would "
+            "shadow that declaration)",
+            short=f"self-register: removed {ref}"))
     for ref in added:
         actions.append(Entry(
             f"self-register: added {ref} to {local_path} "
