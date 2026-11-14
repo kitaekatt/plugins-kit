@@ -1,0 +1,7 @@
+{:entries [
+  {:name "branchy", :namespace "pkg.b", :complexity 6, :coverage nil, :crap nil}
+  {:name "total_price", :namespace "pkg.a", :complexity 3, :coverage nil, :crap nil}
+  {:name "weight", :namespace "pkg.a.Cart", :complexity 3, :coverage nil, :crap nil}
+  {:name "sum_cost", :namespace "pkg.b", :complexity 3, :coverage nil, :crap nil}
+  {:name "sum_cost_again", :namespace "pkg.b", :complexity 3, :coverage nil, :crap nil}
+]}

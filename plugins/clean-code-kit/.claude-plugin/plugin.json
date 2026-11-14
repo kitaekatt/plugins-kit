@@ -1,0 +1,18 @@
+{
+  "name": "clean-code-kit",
+  "version": "0.1.0",
+  "description": "Which code in a git repository is duplicated or most complex: runs pinned metric tools over a snapshot of the repository and writes a ranked findings report for the developer to act on.",
+  "author": {
+    "name": "Christina"
+  },
+  "dependencies": [
+    "bootstrap"
+  ],
+  "keywords": [
+    "code-audit",
+    "duplication",
+    "complexity",
+    "metrics",
+    "clean-code"
+  ]
+}

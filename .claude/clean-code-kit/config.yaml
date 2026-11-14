@@ -1,0 +1,12 @@
+schema: 1
+snapshot: head            # head | working-tree
+languages: [python]       # subset of: python, typescript, javascript
+source_roots: [plugins]   # relative to repo root; must exist in the snapshot
+test_roots: [tests]       # validated to exist; first USED by later lanes
+exclude:                  # globs relative to repo root, fnmatch semantics on posix paths
+  - "**/bootstrap_guard.py"
+  - "plugins/prototypes/**"
+  - "plugins/yaml-data-editor-kit/**"
+lanes:
+  duplication: {enabled: true, threshold: 0.82, min_lines: 4, group_identical: true}
+  complexity:  {enabled: true, coverage: false, top: 50}

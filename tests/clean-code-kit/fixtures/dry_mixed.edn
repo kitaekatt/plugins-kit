@@ -1,0 +1,27 @@
+{:candidates [
+ {:score 1.0
+  :language "python"
+  :left {:file "src/pkg/a.py", :start-line 1, :end-line 7}
+  :right {:file "src/pkg/b.py", :start-line 1, :end-line 7}
+  :others [{:file "src/pkg/b.py", :start-line 10, :end-line 16}]
+  :left-nodes 85
+  :right-nodes 85}
+ {:score 0.8
+  :language "python"
+  :left {:file "src/pkg/a.py", :start-line 1, :end-line 7}
+  :right {:file "src/pkg/a.py", :start-line 11, :end-line 17}
+  :left-nodes 85
+  :right-nodes 88}
+ {:score 0.8
+  :language "python"
+  :left {:file "src/pkg/a.py", :start-line 11, :end-line 17}
+  :right {:file "src/pkg/b.py", :start-line 1, :end-line 7}
+  :left-nodes 88
+  :right-nodes 85}
+ {:score 0.8
+  :language "python"
+  :left {:file "src/pkg/a.py", :start-line 11, :end-line 17}
+  :right {:file "src/pkg/b.py", :start-line 10, :end-line 16}
+  :left-nodes 88
+  :right-nodes 85}
+]}
