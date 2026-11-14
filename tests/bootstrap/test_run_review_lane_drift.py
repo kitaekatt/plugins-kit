@@ -58,14 +58,16 @@ class TestWrapperCopiesMatch:
         # the guarded BOOTSTRAP_PYTHON form (interpreter contract, 0.120.0),
         # read the AGENTS.md ancestor chain (0.133.0) and the
         # review_exclusions.yaml axis (0.159.0). All three consumers of the
-        # katsoft-llm-kit package require 0.160.0, the release that revokes a
-        # shared-library link the manifest no longer declares and stamps a venv
-        # against the released-package target of its requirement. llm-kit's
-        # describe/run call bootstrap_lib.model_declaration (parse, CORE_IDS),
-        # first shipped in bootstrap 0.129.0.
+        # katsoft-llm-kit package require at least 0.160.0, the release that
+        # revokes a shared-library link the manifest no longer declares and
+        # stamps a venv against the released-package target of its requirement.
+        # git-kit and p4-kit require 0.168.0, which supplies
+        # bootstrap_lib.code_review.kit_scripts (imported by prepare_review.py).
+        # llm-kit's describe/run call bootstrap_lib.model_declaration (parse,
+        # CORE_IDS), first shipped in bootstrap 0.129.0.
         expected = {
-            "git-kit": "0.160.0",
-            "p4-kit": "0.160.0",
+            "git-kit": "0.168.0",
+            "p4-kit": "0.168.0",
             "llm-kit": "0.160.0",
         }
         minimum = {"git-kit": "0.113.0", "p4-kit": "0.113.0",

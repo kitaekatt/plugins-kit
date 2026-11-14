@@ -858,6 +858,10 @@ _CLEAN_CODE_KIT_PYTHON_ALLOWLIST: dict[str, AllowlistEntry] = {
         'GRAMMARS = ("python", "typescript")',
         "tree-sitter grammar names passed to tree_sitter_language_pack.download, "
         "not an interpreter"),
+    "plugins/clean-code-kit/scripts/clean_code_kit/languages.py": AllowlistEntry(
+        'duplication=("python", "typescript"),',
+        "\"python\" is a language name in the LANE_LANGUAGES table and \"py\" is "
+        "a file extension in SOURCE_EXTENSIONS, not interpreter invocations"),
 }
 _TRACKED_PYTHON = frozenset(_git_ls_files("*.py"))
 _PYTHON_ALLOWLIST.update({
