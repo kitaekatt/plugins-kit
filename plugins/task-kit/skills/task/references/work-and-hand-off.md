@@ -80,8 +80,10 @@ reader cannot resolve.
 
 ### Commit and push the task folder
 
-In a git task root, commit AND push the task folder under the standing
-task-record authorization. Outside a git task root there is nothing to publish.
+In a git task root, commit the task folder. Push it only when the user's own
+instructions (their CLAUDE.md files on the path) authorize pushing task
+records; otherwise report the unpushed commit to the user instead of pushing.
+Outside a git task root there is nothing to publish.
 
 ## refresh
 
@@ -136,7 +138,8 @@ agent-shell form is:
   sessions release <ref>
 ```
 
-If release reports `not published`, push the task root, then run the sessions
+If release reports `not published`, push the task root only under the same
+found authorization (otherwise report the unpushed commit), then run the sessions
 publish operation. Relay its `session:` line in one sentence. If it exits
 non-zero, relay the error and still end with the baton.
 
