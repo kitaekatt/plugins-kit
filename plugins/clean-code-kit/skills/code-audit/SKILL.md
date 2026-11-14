@@ -212,7 +212,7 @@ domain_skill:
       keywords: [init, propose config, write config, missing config, source_roots guess]
       description: >-
         Print a proposed config.yaml for a repository from its `git ls-files`
-        extension counts (a top-level directory with fewer than 3 supported files is narrowed to the deepest directory holding them; a lone file is listed, not rooted). It writes nothing; review it with the user and save
+        extension counts (each top-level directory is proposed as the deepest directory holding all its supported files; a top-level directory with a single supported file is listed, not rooted). It writes nothing; review it with the user and save
         it only after they confirm.
       operation: >-
         "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/code_audit.py" init --target <dir>

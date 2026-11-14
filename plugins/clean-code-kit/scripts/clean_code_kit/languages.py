@@ -43,7 +43,8 @@ def supported_extensions() -> set[str]:
 SOURCE_EXTENSIONS: frozenset[str] = frozenset(
     "." + name for name in (
         "py js jsx mjs cjs ts tsx mts cts gd c h cc cpp hpp cs go rs java kt swift rb php lua "
-        "scala clj cljs ex exs sh zig dart m mm").split())
+        "scala clj cljs ex exs sh zig dart m mm "
+        "gdshader glsl hlsl shader vert frag comp wgsl metal").split())
 
 KIND_MEASURED = "measured"
 KIND_SOURCE_UNMEASURED = "source-unmeasured"
