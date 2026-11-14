@@ -41,7 +41,7 @@ Each audited repository needs `.claude/clean-code-kit/config.yaml`:
 ```yaml
 schema: 1
 snapshot: head            # head | working-tree
-languages: [python]       # subset of: python, typescript, javascript
+languages: [python]       # subset of: python, typescript, javascript, gdscript, cpp
 source_roots: [src]       # relative to repo root
 test_roots: [tests]
 exclude:                  # globs relative to repo root

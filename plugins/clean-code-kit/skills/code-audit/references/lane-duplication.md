@@ -55,17 +55,17 @@ A status of `no-comparable-source` means the selection held fewer than two
 files dryer reads, so a duplicate could not exist and the tool was not run;
 `report.md` names the extensions dryer ignores (`lanes[].detail.ignored_extensions`
 in `findings.json`). It is not the same as `ok` with zero findings. A status of `no-source-files` with zero findings means the pruned selection
-held no file dryer reads. It is not an error; see the JavaScript limit below
+held no file dryer reads. It is not an error; see the languages-read limit below
 for the usual cause.
 
 ## Known limits
 
-- **JavaScript is not read.** dryer treats `.ts .tsx .mts .cts` as TypeScript
-  and ignores `.js .jsx .mjs .cjs` entirely. A target configured with
-  `languages: [javascript]` alone gets no duplication findings for those
-  files (status `no-comparable-source`), while the complexity lane does
-  score them. A clean duplication lane on JavaScript code is therefore not
-  evidence of no duplication.
+- **Languages read.** dryer reads Python, TypeScript, JavaScript
+  (`.js .jsx .mjs .cjs`), GDScript (`.gd`) and C++ (`.cpp .cc .cxx .hpp .hh .h`).
+  It skips JavaScript files named `*.test.*` or `*.spec.*`, and the coverage
+  table counts them as not measured by duplication. It does not read the C++
+  extensions `.c++` and `.hxx`; `report.md` lists them as ignored. The first
+  run of each grammar needs the parser bundle, which bootstrap pre-fetches.
 - **`.d.ts` declaration files, test files and test directories are
   skipped** by dryer itself, as are vendored and build directories; files in
   languages outside the plugin's table (Go, Java, Rust, Clojure) under a

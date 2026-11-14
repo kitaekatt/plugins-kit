@@ -25,7 +25,7 @@ A complete file:
 ```yaml
 schema: 1
 snapshot: head            # head | working-tree
-languages: [python]       # subset of: python, typescript, javascript
+languages: [python]       # subset of: python, typescript, javascript, gdscript, cpp
 source_roots: [plugins]   # relative to repo root; must exist in the snapshot
 test_roots: [tests]       # validated to exist; first USED by later lanes
 exclude:                  # globs relative to repo root, fnmatch semantics on posix paths
@@ -41,7 +41,7 @@ lanes:
 |---|---|
 | `schema` | The config format version. This version reads `1`. |
 | `snapshot` | Which state of the repository is measured: `head` or `working-tree` (see "Snapshot modes"). `run --snapshot` overrides it for one run. |
-| `languages` | The languages to measure: a non-empty list of names from `[python, typescript, javascript]`, each at most once (see "Languages and extensions"). Source files of a language left out of this list are removed from the snapshot before any tool runs. |
+| `languages` | The languages to measure: a non-empty list of names from `[python, typescript, javascript, gdscript, cpp]`, each at most once (see "Languages and extensions"). Source files of a language left out of this list are removed from the snapshot before any tool runs. |
 | `source_roots` | A non-empty list of directories, relative to the repository root and written with `/`, that hold the code to measure. An absolute path or a `..` part is refused. Each must exist in the snapshot. |
 | `test_roots` | A list (it may be empty) of directories, relative to the repository root, that hold the tests. Each must exist in the snapshot. No lane in this version reads them; the runner still checks that each exists. |
 | `exclude` | A list (it may be empty) of globs, relative to the repository root, matched case-sensitively with Python's `fnmatch.fnmatchcase` against `/`-separated relative paths. A matching file is removed from the snapshot before any tool runs. Under these rules `*` also matches `/`, and a pattern that starts with `**/` needs at least one directory before the name, so `**/x.py` does not match a top-level `x.py`. |
@@ -69,6 +69,8 @@ case:
 | Python | `.py` |
 | TypeScript | `.ts` `.tsx` `.mts` `.cts` |
 | JavaScript | `.js` `.jsx` `.mjs` `.cjs` |
+| GDScript | `.gd` |
+| C++ | `.cpp` `.cc` `.cxx` `.c++` `.h` `.hpp` `.hh` `.hxx` |
 
 Files whose extension is in the table but whose language is not in
 `languages` are removed from the snapshot. Files with any other extension are
@@ -78,9 +80,13 @@ tools read Clojure (`.clj` `.cljc` `.cljs` `.bb`, and `.cljd` for dryer), Java
 (`.java`), Go (`.go`) and Rust (`.rs`) too, so such files under a source root
 ARE measured. Add them to `exclude` to leave them out.
 
-The two tools do not treat the table's extensions identically: dryer ignores
-the JavaScript extensions, so `javascript` affects only the complexity lane.
-See each lane's reference for what that means for its findings.
+The two tools read the table's extensions per lane. dryer reads every
+extension above except `.c++` and `.hxx`, and skips JavaScript files named
+`*.test.*` or `*.spec.*` (the coverage table counts those as not measured by
+duplication). crapper reads every extension above, and scores JavaScript as
+TypeScript. Complexity of C++ and GDScript is measured without coverage: neither
+language has a coverage runner, so `lanes.complexity.coverage` has no effect
+on them. See each lane's reference.
 
 The tools also skip, on their own, test files (`test_*.py`, `*_test.py`,
 `conftest.py`, `*_test.go`, `*.test.ts`, `*.spec.ts` and the like) and the

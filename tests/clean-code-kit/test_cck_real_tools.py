@@ -68,3 +68,70 @@ def test_real_tools_empty_selection_is_no_source_files(target_repo):
     doc = _audit(target_repo)
     assert [lane["status"] for lane in doc["lanes"]] == ["no-source-files", "no-source-files"]
     assert doc["findings"] == []
+
+
+_GD_DUP = """func total(items):
+    var sum = 0
+    for item in items:
+        sum += item.price * item.count
+        if item.taxed:
+            sum += item.price * 0.2
+    return sum
+"""
+_CPP_DUP = """int total(const std::vector<int>& items) {
+    int sum = 0;
+    for (int i = 0; i < items.size(); ++i) {
+        sum += items[i] * 2;
+        if (items[i] > 10) {
+            sum += items[i] / 3;
+        }
+    }
+    return sum;
+}
+"""
+_JS_DUP = """function total(items) {
+  let sum = 0;
+  for (const item of items) {
+    sum += item.price * item.count;
+    if (item.taxed) {
+      sum += item.price * 0.2;
+    }
+  }
+  return sum;
+}
+"""
+_GD_BRANCHY = "func branchy_gd(x):\n" + "".join(
+    f"    if x == {i}:\n        return {i}\n" for i in range(12)) + "    return -1\n"
+_CPP_BRANCHY = "int branchy_cpp(int x) {\n" + "".join(
+    f"    if (x == {i}) {{ return {i}; }}\n" for i in range(12)) + "    return -1;\n}\n"
+
+
+@needs_tools
+def test_real_tools_audit_gdscript_cpp_and_javascript(target_repo):
+    config = target_repo / ".claude" / "clean-code-kit" / "config.yaml"
+    config.write_text(config.read_text().replace(
+        "languages: [python]", "languages: [gdscript, cpp, javascript]"))
+    src = target_repo / "src" / "multi"
+    src.mkdir()
+    for ext, body in (("gd", _GD_DUP), ("cpp", _CPP_DUP), ("js", _JS_DUP)):
+        (src / f"first.{ext}").write_text(body)
+        (src / f"second.{ext}").write_text(body.replace("total", "grand_total"))
+    (src / "branchy.gd").write_text(_GD_BRANCHY)
+    (src / "branchy.cpp").write_text(_CPP_BRANCHY)
+    git(target_repo, "add", "-A")
+    git(target_repo, "commit", "-q", "-m", "multi language")
+    doc = _audit(target_repo)
+    assert {lane["status"] for lane in doc["lanes"]} == {"ok"}
+    dup = [f for f in doc["findings"] if f["lane"] == "duplication"]
+    for ext in (".gd", ".cpp", ".js"):
+        pair = {span["path"] for f in dup for span in f["group"]
+                if span["path"].startswith("src/multi/") and span["path"].endswith(ext)}
+        assert pair == {f"src/multi/first{ext}", f"src/multi/second{ext}"}, ext
+    cpx = {(f["path"], f["symbol"]): f for f in doc["findings"] if f["lane"] == "complexity"}
+    for key in (("src/multi/branchy.gd", "branchy_gd"), ("src/multi/branchy.cpp", "branchy_cpp")):
+        assert key in cpx, sorted(cpx)
+        assert cpx[key]["start_line"] >= 1
+    by_ext = doc["target"]["coverage"]["by_extension"]
+    for ext in (".gd", ".cpp", ".js"):
+        assert by_ext[ext]["supported"] is True
+        assert all(n > 0 for n in by_ext[ext]["measured"].values()), (ext, by_ext[ext])

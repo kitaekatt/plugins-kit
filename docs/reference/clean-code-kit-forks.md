@@ -44,6 +44,11 @@ for all three).
 | crapper | `feat/python-subprocess-coverage` | Adds `--python-subprocess-coverage` to measure Python child processes. |
 | crapper | `feat/function-location` | Adds `:path` (POSIX, relative to the scanned root) and `:line` (1-based start line) to every `.metrics/crap.edn` entry. |
 | crapper | `feat/score-default-export` | Scores JS/TS `export default` anonymous functions as name `<default>` with `:path` and `:line`. |
+| dryer | `feat/gdscript` | Adds GDScript (`.gd`). |
+| dryer | `feat/cpp` | Adds C++ (`.cpp .cc .cxx .hpp .hh .h`). |
+| dryer | `feat/javascript` | Adds JavaScript (`.js .jsx .mjs .cjs`), skipping `.test.*` and `.spec.*`. |
+| crapper | `feat/gdscript` | Adds GDScript (`.gd`). |
+| crapper | `feat/cpp` | Adds C++ (`.cpp .cc .cxx .c++ .h .hpp .hh .hxx`). |
 | mutator | `fix/overlay-test-symlink-escape` | Keeps Python files that read `__file__` inside the worker overlay. |
 
 The crapper branches serve the coverage-backed complexity lane of a later
@@ -68,12 +73,15 @@ forward keeps every pin that was ever published reachable.
 
 State as of 2026-11-14:
 
-- dryer `clean-code-kit` = `ad6a0cec33f8e9d0a26e217edf2c881f55d8654c`: merges
+- dryer `clean-code-kit` = `e8bca626e1674ffb4bb0be581371aa70f8a56157`: merges
   of `feat/exclude-paths` and `feat/group-identical-candidates` over upstream
   `master`, plus one commit on the branch itself (`ad6a0ce`, a test exercising
-  both options together).
-- crapper `clean-code-kit` = `50236c15b469e6fb37175474c2ab472df92e6282`:
-  merges of all six crapper fix branches (`feat/function-location` at
+  both options together), then merges of `feat/gdscript` (`868c258f`),
+  `feat/cpp` (`ede64a4d`) and `feat/javascript` (`6b80e486`).
+- crapper `clean-code-kit` = `3b7d4b4a702235ac35eea67fd0cb5511348d9d1e`:
+  merges of `feat/gdscript` (`1554e240`) and `feat/cpp` (`531108ff`) over the
+  earlier head `50236c15b469e6fb37175474c2ab472df92e6282`, which had
+  merges of all six earlier crapper fix branches (`feat/function-location` at
   `a37c041da931047d0e1bc3a24323408cdcde3226`, then `feat/score-default-export` at
   `44a1af23131b519dea07955fdd9b6c1d21fd3585`), plus two commits on the branch
   itself (earlier than that merge): `e6379aa` (refuse installing outside a project venv with either
@@ -93,8 +101,8 @@ The pins live in `plugins/clean-code-kit/pyproject.toml` as PEP 508 direct
 references to the forks:
 
 ```
-dryer @ git+https://github.com/kitaekatt/dryer@ad6a0cec33f8e9d0a26e217edf2c881f55d8654c
-crapper @ git+https://github.com/kitaekatt/crapper@50236c15b469e6fb37175474c2ab472df92e6282
+dryer @ git+https://github.com/kitaekatt/dryer@e8bca626e1674ffb4bb0be581371aa70f8a56157
+crapper @ git+https://github.com/kitaekatt/crapper@3b7d4b4a702235ac35eea67fd0cb5511348d9d1e
 tree-sitter-language-pack==1.25.0
 ```
 

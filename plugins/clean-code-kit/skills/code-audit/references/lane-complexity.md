@@ -65,9 +65,10 @@ held no file crapper reads. It is not an error.
   its end line, so `end_line` is `null`. Never present a guessed end line as
   the report's.
 - **JavaScript is scored as TypeScript.** crapper treats `.js .jsx .mjs .cjs`
-  as TypeScript, as well as `.ts .tsx .mts .cts`. JavaScript functions are
-  ranked here even though the duplication lane does not read those files,
-  so the `javascript` language affects this lane only.
+  as TypeScript, as well as `.ts .tsx .mts .cts`.
+- **C++ and GDScript are scored without coverage.** crapper reads GDScript
+  (`.gd`) and C++ (`.cpp .cc .cxx .c++ .h .hpp .hh .hxx`), but neither has a
+  coverage runner, so their functions are ranked by complexity alone.
 - **`.d.ts` declaration files, test files and test directories are
   skipped** by crapper itself, as are vendored and build directories; Go,
   Java, Rust and Clojure files under a source root are scored. Both lists are

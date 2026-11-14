@@ -14,7 +14,7 @@ from collections import Counter
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from .languages import lane_extensions, kind_of, supported_extensions
+from .languages import lane_extensions, lane_skips, kind_of, supported_extensions
 from .model import LaneResult
 
 NO_EXTENSION = "(none)"
@@ -36,7 +36,7 @@ def select(root: Path, source_roots: list[str], lanes: list[str]) -> dict[str, l
             if not any(rel == r or rel.startswith(r.rstrip("/") + "/") for r in source_roots):
                 continue
             for lane in lanes:
-                if PurePosixPath(rel).suffix in exts[lane]:
+                if PurePosixPath(rel).suffix in exts[lane] and not lane_skips(lane, rel):
                     found[lane].append(rel)
     return {lane: sorted(paths) for lane, paths in found.items()}
 

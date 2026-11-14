@@ -7,11 +7,30 @@ language owns are left alone.
 
 from __future__ import annotations
 
-EXTENSIONS: dict[str, tuple[str, ...]] = dict(
-    python=(".py",),
-    typescript=(".ts", ".tsx", ".mts", ".cts"),
-    javascript=(".js", ".jsx", ".mjs", ".cjs"),
+import re
+from pathlib import PurePosixPath
+
+_PY = (".py",)
+_TS = (".ts", ".tsx", ".mts", ".cts")
+_JS = (".js", ".jsx", ".mjs", ".cjs")
+_GD = (".gd",)
+
+# Per lane, per configurable language, the extensions the lane's tool reads.
+# The tools differ: dryer ignores .c++ and .hxx, which crapper scores.
+LANE_EXTENSIONS: dict[str, dict[str, tuple[str, ...]]] = dict(
+    duplication=dict(
+        python=_PY, typescript=_TS, javascript=_JS, gdscript=_GD,
+        cpp=(".cpp", ".cc", ".cxx", ".hpp", ".hh", ".h")),
+    complexity=dict(
+        python=_PY, typescript=_TS, javascript=_JS, gdscript=_GD,
+        cpp=(".cpp", ".cc", ".cxx", ".c++", ".h", ".hpp", ".hh", ".hxx")),
 )
+
+# A language's pruning extensions: the union over the lanes that read it.
+EXTENSIONS: dict[str, tuple[str, ...]] = {}
+for _by_lang in LANE_EXTENSIONS.values():
+    for _lang, _exts in _by_lang.items():
+        EXTENSIONS[_lang] = tuple(dict.fromkeys(EXTENSIONS.get(_lang, ()) + _exts))
 
 
 def unconfigured_extensions(languages: list[str]) -> set[str]:
@@ -19,22 +38,30 @@ def unconfigured_extensions(languages: list[str]) -> set[str]:
     return {ext for lang, exts in EXTENSIONS.items() if lang not in languages for ext in exts}
 
 
-# The extensions each lane's tool reads, for the languages in EXTENSIONS. crapper
-# scores the JavaScript extensions (as TypeScript); dryer ignores them.
-LANE_LANGUAGES: dict[str, tuple[str, ...]] = dict(
-    duplication=("python", "typescript"),
-    complexity=("python", "typescript", "javascript"),
-)
+LANE_LANGUAGES: dict[str, tuple[str, ...]] = {
+    lane: tuple(by_lang) for lane, by_lang in LANE_EXTENSIONS.items()}
+
+# dryer skips test and spec JavaScript files on its own; they are not measured.
+LANE_SKIPPED_NAME = dict(duplication=(re.compile(r"\.(test|spec)\.[^.]+$"), frozenset(_JS)))
 
 
 def lane_extensions(lane: str) -> set[str]:
     """Extensions the tool behind ``lane`` reads among the table's languages."""
-    return {ext for lang in LANE_LANGUAGES[lane] for ext in EXTENSIONS[lang]}
+    return {ext for exts in LANE_EXTENSIONS[lane].values() for ext in exts}
+
+
+def lane_skips(lane: str, rel: str) -> bool:
+    """True when the lane's tool skips ``rel`` by name although it reads the extension."""
+    rule = LANE_SKIPPED_NAME.get(lane)
+    if rule is None:
+        return False
+    pattern, exts = rule
+    return PurePosixPath(rel).suffix in exts and pattern.search(PurePosixPath(rel).name) is not None
 
 
 def supported_extensions() -> set[str]:
     """Extensions at least one lane reads."""
-    return {ext for lane in LANE_LANGUAGES for ext in lane_extensions(lane)}
+    return {ext for lane in LANE_EXTENSIONS for ext in lane_extensions(lane)}
 
 
 # Extensions of source languages, whether or not any lane reads them. The coverage
