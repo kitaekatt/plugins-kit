@@ -85,6 +85,8 @@ Working-session conventions:
   has registrations and gains ``sessions`` per task in ``--format json|yaml``.
 - ``~/.claude/task.local.yaml`` ``sessions:`` takes ``record`` (false turns
   recording off) and ``host`` (replaces the derived host id).
+- ``~/.claude/task.local.yaml`` ``manage:`` takes ``commit`` (false stops
+  ``task-kit manage`` mutations from committing the task files they write).
 
 Location-op conventions (Step 5):
 - ``archive <ref>`` prints ``archived: <id>`` plus the closure-policy
