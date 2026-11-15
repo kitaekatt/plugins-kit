@@ -2,12 +2,12 @@
   "schema_version": 1,
   "directory": "plugins",
   "decision": "page",
-  "source_sha": "2020a3e05ba5cc6b5b64bef4190edf26395504ab",
+  "source_sha": "d9eb18a9944d02dd7df2129c3a2d0acde1eb96c6",
   "generation_spec_sha256": "d40323919c23e31cc9c5afe305627667e78bca3c257330f0fc0b3a9b1c826ade",
-  "input_sha256": "6311baf860e57193b7b577fd614fe7b1838e2233573cdf7d921ccca23da1c744",
-  "input_shape_sha256": "fead99c93ca9673444ef83c982d4d4bdf39e1c7d1442e66d02c2a636402d13ad",
+  "input_sha256": "bccbd4bc055be896f95ac33461f1ff4bc9d8b93158e34434e2f13abf481f9162",
+  "input_shape_sha256": "fc61bc4d6b60f1ff5da6cb87a2fc4cc4650811fe7c2f710b15db76555e18e307",
   "dirty": false,
-  "identity": "The Claude Code plugin marketplace: independently installable plugins for code review, LLM dispatch, task tracking, Hue scenes, PDF rendering, fleet secrets, and Unreal Engine automation, provisioned by the bootstrap engine and linked through shared libraries",
+  "identity": "The plugins-kit marketplace: independently installable Claude Code plugins for code review, LLM pipelines, task tracking, session tools, and domain automation, provisioned by the shared bootstrap engine",
   "instructions": "",
   "references": []
 }

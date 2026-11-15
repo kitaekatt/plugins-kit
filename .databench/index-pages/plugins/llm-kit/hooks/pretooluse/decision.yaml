@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/llm-kit/hooks/pretooluse",
+  "decision": "none",
+  "source_sha": "474106dc047ee18b90d3a4ee0aabc95df50a53b3",
+  "input_sha256": "14d0c7eb27cb0af9895e476c2e7f1450562a4b601ad2caa2ec123eeef0d0ec08",
+  "input_shape_sha256": "aec10685f78d6af5136a5e04678a171afac8cc1616d692fe5b17fe81a43003ba",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

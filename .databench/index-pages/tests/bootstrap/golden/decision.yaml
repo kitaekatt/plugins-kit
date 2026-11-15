@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "tests/bootstrap/golden",
+  "decision": "none",
+  "source_sha": "5795d51a6cabab1685a8535cbfd8ad98e2203a95",
+  "input_sha256": "f960e1ba497321b1b1f7034769744bd3cdfeb262970c006f2c511da915fea1c8",
+  "input_shape_sha256": "5113a3f54074fd8e146604d89bfa508a7026b432e16cffd1861a5e22fd3e13a6",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

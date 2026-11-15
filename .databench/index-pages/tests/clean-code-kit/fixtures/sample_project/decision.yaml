@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "tests/clean-code-kit/fixtures/sample_project",
+  "decision": "none",
+  "source_sha": "532e3c785765a8e29ef5d549aba08deb935fa83e",
+  "input_sha256": "9f7cdf34d4c83cc70f64e6b6219a9864b92390a714ecddb0e84bd95d17be36de",
+  "input_shape_sha256": "c3e3a0bc23cb904061929240c55b46849cac6a53787e8f6093267bd10d437b13",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

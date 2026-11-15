@@ -2,12 +2,12 @@
   "schema_version": 1,
   "directory": "tests/secrets-kit",
   "decision": "page",
-  "source_sha": "23ffb6c7ec503744127cbd842d9893df9f105b57",
+  "source_sha": "2c46d2513465d7c00f3168297b657af480888c22",
   "generation_spec_sha256": "8573606e5f3b827eff1eb29578efe854f3b917c38f7e9b9539ce898c925d9fa1",
-  "input_sha256": "098f1a15ad5274c004c87ec6aee63673dba71626099ee525cd0373859d59b613",
-  "input_shape_sha256": "e244633e88491bb1aca993783936289313ab33370bce9384671e3b01d93b9a29",
+  "input_sha256": "8434f9a367c97ce827104f1cb9403c90de90ea9d3277e27440479cd35c315151",
+  "input_shape_sha256": "b02da78ef0a2a3329e0cc2bbc47d9c95d6e14a916a6f8ce2e29c7ecd9d69973b",
   "dirty": false,
-  "identity": "Test suite for the secrets-kit plugin covering convergence, destination safety, pre-commit guard, repository operations, manifest validation, and cross-process locking",
+  "identity": "Test suite for the secrets-kit plugin covering convergence, destination safety, the pre-commit guard, cross-process locking, permission handling, seeding, and entry recovery",
   "instructions": "",
   "references": []
 }

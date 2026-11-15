@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "tests/clean-code-kit",
+  "decision": "none",
+  "source_sha": "aaaea8821aff003a74fb2b3d4aafb6fa7d85a634",
+  "input_sha256": "bf19cb2e9bc5e9cb2be91416b521db50ddbb190df0879529cf6c35bf54458598",
+  "input_shape_sha256": "9da680b91b3ac102dcd6456450c5d811b4117cc7c8e3c07735512c57494e1b34",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

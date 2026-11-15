@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "tests/p4-kit/golden",
+  "decision": "none",
+  "source_sha": "11d930161be3f5228f966418c102dd2f532e60ce",
+  "input_sha256": "e1f989dd8b9d7ed9daf5cd7a2688c3cb93cb806f5c3660c698a233f63db77142",
+  "input_shape_sha256": "bd767c0fb569dfad958bc374e074db8a072eaf84bcd9c686ec63a5f9982e8513",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}
