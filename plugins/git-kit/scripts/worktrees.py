@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -172,7 +173,10 @@ def contained_task(root: Path, path: Path) -> Path:
     return resolved
 
 
-def new(repo: Path, settings: WorktreeSettings, task: str, source: str | None) -> dict[str, str]:
+def new(
+    repo: Path, settings: WorktreeSettings, task: str, source: str | None,
+    *, no_setup: bool = False,
+) -> dict[str, Any]:
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", task) or task.endswith("."):
         raise ValueError("task must be one portable path component: letters, digits, _, . or -")
     if task.split(".")[0].upper() in {"CON", "PRN", "AUX", "NUL", *[f"COM{i}" for i in range(1, 10)], *[f"LPT{i}" for i in range(1, 10)]}:
@@ -191,7 +195,29 @@ def new(repo: Path, settings: WorktreeSettings, task: str, source: str | None) -
     commit = git(repo, "rev-parse", "--verify", "--end-of-options", f"{source}^{{commit}}")
     destination.parent.mkdir(parents=True, exist_ok=True)
     git(repo, "worktree", "add", "--no-track", "-b", task, str(destination), commit)
-    return {"path": str(destination), "branch": task, "from": source}
+    setup: dict[str, Any] = {"ran": False, "exit": None}
+    if not no_setup:
+        setup["ran"] = True
+        try:
+            executable = shutil.which("bootstrap")
+            if executable is None:
+                raise FileNotFoundError("bootstrap command is not on PATH")
+            # The installed PATH shim owns discovery. Keep stdout JSON-only;
+            # bootstrap's output streams directly to the diagnostic stream.
+            setup["exit"] = subprocess.run(
+                [executable, "run"], cwd=destination,
+                stdout=sys.stderr, stderr=sys.stderr, check=False,
+            ).returncode
+        except OSError as exc:
+            setup["exit"] = 127
+            print(f"bootstrap run: {exc}", file=sys.stderr)
+        if setup["exit"] != 0:
+            print(
+                f"git-kit worktrees: kept {destination}; bootstrap run failed "
+                f"(exit {setup['exit']}); see bootstrap error above",
+                file=sys.stderr,
+            )
+    return {"path": str(destination), "branch": task, "from": source, "setup": setup}
 
 
 def worktree_status(task: Path) -> tuple[bool, bool]:
@@ -264,6 +290,7 @@ def main() -> int:
     create = commands.add_parser("new")
     create.add_argument("task")
     create.add_argument("--from", dest="source")
+    create.add_argument("--no-setup", action="store_true", help="Skip bootstrap run in the new worktree")
     commands.add_parser("list")
     commands.add_parser("config", help="Read effective settings without changing files")
     delete = commands.add_parser("remove")
@@ -285,12 +312,14 @@ def main() -> int:
         elif not settings.enabled:
             raise ValueError("git_kit.worktrees.enabled is false; opt in through bootstrap.json")
         elif args.command == "new":
-            output = new(repo, settings, args.task, args.source)
+            output = new(repo, settings, args.task, args.source, no_setup=args.no_setup)
         elif args.command == "list":
             output = list_worktrees(settings)
         else:
             output = remove(repo, settings, args.path, args.include_ignored)
         print(json.dumps(output, indent=2))
+        if args.command == "new" and output["setup"]["exit"]:
+            return output["setup"]["exit"] if output["setup"]["exit"] > 0 else 1
         return 0
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         detail = exc.stderr if isinstance(exc, subprocess.CalledProcessError) else str(exc)
