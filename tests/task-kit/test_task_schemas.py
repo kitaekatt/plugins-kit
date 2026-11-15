@@ -115,6 +115,45 @@ class TestTaskSchemaRejects:
         assert any(path == "task" for path, _ in fails), fails
 
 
+class TestTaskMergeField:
+    def _with_merge(self, merge) -> dict:
+        data = _minimal_task()
+        data["task"]["merge"] = merge
+        return data
+
+    def test_absent_is_valid(self):
+        assert "merge" not in _minimal_task()["task"]
+        assert _fails(_minimal_task(), TASK_SCHEMA) == []
+
+    @pytest.mark.parametrize(
+        "merge",
+        [
+            {"policy": "on_accept", "target": "dev"},
+            {"policy": "never", "target": "main", "remote": "upstream"},
+        ],
+    )
+    def test_valid_block(self, merge):
+        assert _fails(self._with_merge(merge), TASK_SCHEMA) == []
+
+    @pytest.mark.parametrize(
+        "merge,path",
+        [
+            ("dev", "task.merge"),
+            ({"target": "dev"}, "task.merge.policy"),
+            ({"policy": "on_accept"}, "task.merge.target"),
+            ({"policy": "on_accept", "target": 7}, "task.merge.target"),
+            ({"policy": "on_accept", "target": "dev", "remote": ["origin"]}, "task.merge.remote"),
+            ({"policy": "on_accept", "target": "  "}, "task.merge.target"),
+            ({"policy": "on_accept", "target": "my branch"}, "task.merge.target"),
+            ({"policy": "on_accept", "target": "--upload-pack=x"}, "task.merge.target"),
+            ({"policy": "on_accept", "target": "dev", "remote": "-o"}, "task.merge.remote"),
+        ],
+    )
+    def test_rejected_block(self, merge, path):
+        fails = _fails(self._with_merge(merge), TASK_SCHEMA)
+        assert any(p == path for p, _ in fails), fails
+
+
 class TestTaskListSchema:
     def test_empty_refs_valid(self):
         assert _fails({"task_list": {"refs": []}}, TASK_LIST_SCHEMA) == []

@@ -153,9 +153,14 @@
         ],
         "last_activity": "2026-10-22 14:30",
         "location": "dev/tasks",
+        "merge": {
+          "policy": "on_unit_done",
+          "remote": null,
+          "target": "dev"
+        },
         "path": "dev/tasks/build-export",
         "priority": "P1",
-        "revision": "5d686d44201d24da",
+        "revision": "8889404d643206ce",
         "sessions": [
           {
             "host": "othermac",
@@ -270,6 +275,7 @@
         "items": [],
         "last_activity": "2026-10-18 08:00",
         "location": "dev/tasks",
+        "merge": null,
         "path": "dev/tasks/later-idea",
         "priority": "P2",
         "revision": "c611a477a245b21c",
@@ -367,6 +373,7 @@
         "items": [],
         "last_activity": "2026-09-02 10:00",
         "location": "dev/tasks",
+        "merge": null,
         "path": "dev/tasks/old-cleanup",
         "priority": "P3",
         "revision": "57e0e49486c0b4fe",
@@ -490,6 +497,7 @@
         "items": [],
         "last_activity": "2026-10-19 11:00",
         "location": "dev/tasks",
+        "merge": null,
         "path": "dev/tasks/wait-on-review",
         "priority": "P2",
         "revision": "310f66dab8558b38",

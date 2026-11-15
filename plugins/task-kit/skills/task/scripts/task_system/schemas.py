@@ -16,6 +16,17 @@ Schemas are floors, not ceilings: unknown keys pass (a type may add
 load-bearing fields beyond this set).
 """
 
+# Legal ``task.merge.policy`` values (a post-walker vocabulary check in
+# validate.py, like ``status``). The field only DECLARES the policy; acting on
+# it is the consumer's job, and what ``on_unit_done`` means for a whole task
+# is not defined by task-kit.
+MERGE_POLICIES: tuple[str, ...] = ("on_accept", "on_unit_done", "never")
+
+# ``merge.target`` / ``merge.remote`` end up as git arguments: refuse blank,
+# whitespace-bearing and option-looking (leading "-") values at the boundary.
+_GIT_NAME_FORBID = r"^\s*$|\s|^-"
+_GIT_NAME_MSG = "must be a non-blank name with no whitespace and no leading '-'"
+
 # task.yaml structured record, default "hand-off" type (spec 2.2).
 TASK_SCHEMA: dict = {
     "root": "task",
@@ -55,6 +66,29 @@ TASK_SCHEMA: dict = {
         # findings gate `work`, and a script cannot tell an architecture
         # spec from a throwaway analysis.
         "durable_outputs": {"required": False, "type": "list"},
+        # Merge target for the task's work, declared once per task. Optional:
+        # absent means the task declares no merge policy, and consumers must
+        # not infer one. ``remote`` is optional inside the block; a consumer
+        # reading a block without it uses ``origin``.
+        "merge": {
+            "required": False,
+            "type": "dict",
+            "keys": {
+                "policy": {"required": True, "type": "string"},
+                "target": {
+                    "required": True,
+                    "type": "string",
+                    "forbid_regex": _GIT_NAME_FORBID,
+                    "msg": _GIT_NAME_MSG,
+                },
+                "remote": {
+                    "required": False,
+                    "type": "string",
+                    "forbid_regex": _GIT_NAME_FORBID,
+                    "msg": _GIT_NAME_MSG,
+                },
+            },
+        },
     },
 }
 

@@ -106,7 +106,7 @@
       "type": "object",
       "required": [
         "checkout", "path", "stub", "location", "revision", "title", "priority", "description", "summary",
-        "summary_source", "answers", "coverage", "classification", "blocked_by", "last_activity", "updates",
+        "summary_source", "answers", "coverage", "classification", "blocked_by", "merge", "last_activity", "updates",
         "updates_total", "has_items_block", "items", "findings", "sessions"
       ],
       "additionalProperties": false,
@@ -129,6 +129,7 @@
         "coverage": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/coverage"}]},
         "classification": {"type": "string", "description": "open enum: active, blocked, deferred, closed, archived, orphaned, remote, invalid"},
         "blocked_by": {"$ref": "#/$defs/strings"},
+        "merge": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/merge"}]},
         "last_activity": {"type": ["string", "null"], "description": "YYYY-MM-DD HH:MM, the newest update; a date-only entry reads as 12:00"},
         "updates": {"type": "array", "items": {"$ref": "#/$defs/update"}},
         "updates_total": {"type": "integer", "minimum": 0},
@@ -136,6 +137,16 @@
         "items": {"type": "array", "items": {"$ref": "#/$defs/item"}},
         "findings": {"$ref": "#/$defs/findings"},
         "sessions": {"type": "array", "items": {"$ref": "#/$defs/session"}}
+      }
+    },
+    "merge": {
+      "type": "object",
+      "required": ["policy", "target", "remote"],
+      "additionalProperties": false,
+      "properties": {
+        "policy": {"$ref": "#/$defs/nullable_string"},
+        "target": {"$ref": "#/$defs/nullable_string"},
+        "remote": {"$ref": "#/$defs/nullable_string"}
       }
     },
     "answer": {

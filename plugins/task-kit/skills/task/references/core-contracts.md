@@ -47,6 +47,33 @@ ambiguous stub is an error that lists candidates. The project root remains the
 PROJECT even when `dev/tasks` links into another repository; it is never the
 link target.
 
+## Merge target (`task.yaml` `merge:`)
+
+A task may declare once where its work is meant to merge. The field is
+optional; absent means the task declares nothing and a consumer must not infer
+a policy. task-kit validates, shows and exports the declaration; it never
+merges anything.
+
+```yaml
+task:
+  merge:
+    policy: on_unit_done   # on_accept | on_unit_done | never   (required in the block)
+    target: dev            # branch to merge into              (required in the block)
+    remote: origin         # remote name                       (optional; a reader uses origin)
+```
+
+- `validate` reports an error for a non-mapping `merge`, a missing `policy` or
+  `target`, a `policy` outside the three values, and a `target` or `remote`
+  that is blank, contains whitespace or starts with `-`.
+- `show` prints `merge:` as the stored `key=value` pairs, or `-` when absent.
+- `export` carries it as `tasks[].merge` (see `task-export-protocol.md`).
+- The three policy values are only vocabulary here: `on_accept` merges as soon
+  as a run is accepted, `on_unit_done` when the unit's branch is complete,
+  `never` keeps the branch for a decision. Acting on them, and what
+  `on_unit_done` means for a whole task, belongs to the consumer.
+- Write the block into `task.yaml` by hand; `update` keeps it intact and has no
+  flag for it.
+
 ## Validation behavior
 
 Validation gates work with BOTH errors and warnings. An uncommitted dev/tasks

@@ -70,6 +70,7 @@ Every field is present; `?` marks a value that may be null.
 | `tasks[].coverage?` | `{catalog_version: integer, applicable: integer, current: integer}`: of the catalog's questions that apply to the task's classification, how many have a current answer; null when the catalog cannot be loaded |
 | `tasks[].classification` | open enum: active, blocked, deferred, closed, archived, orphaned, remote, invalid |
 | `tasks[].blocked_by` | [string] |
+| `tasks[].merge?` | `{policy?, target?, remote?: string}`: the task's declared `task.yaml` `merge:` block (policy `on_accept`, `on_unit_done` or `never`; `target` a branch; `remote` a remote name); null when the task declares none. A missing `remote` is null, and the consumer applies its own default (`origin`). |
 | `tasks[].last_activity?` | string, `YYYY-MM-DD HH:MM` of the newest update (a date-only entry reads as 12:00) |
 | `tasks[].updates[]` | `{date: string, time?: string, detail: string}`, newest first, at most 20 |
 | `tasks[].updates_total` | integer |

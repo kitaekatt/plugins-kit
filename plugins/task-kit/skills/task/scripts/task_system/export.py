@@ -251,6 +251,16 @@ def _strings(value: object) -> list[str]:
     return [entry for entry in value if isinstance(entry, str)] if isinstance(value, list) else []
 
 
+def merge_record(block: dict) -> dict | None:
+    """``task.merge`` as exported: null when the task declares none (or the value is not a mapping, which
+    validate reports); otherwise ``policy`` / ``target`` / ``remote``, each the declared string or null.
+    A missing ``remote`` stays null -- the default is the consumer's."""
+    value = block.get("merge")
+    if not isinstance(value, dict):
+        return None
+    return {key: _text(value, key) for key in ("policy", "target", "remote")}
+
+
 def item_record(item) -> dict:
     return {"id": item.id, "title": item.title, "state": item.state, "priority": item.priority, "note": item.note}
 
@@ -307,6 +317,7 @@ def task_facts(owner: _Owner, env: AnswerEnv | None = None) -> dict:
         "coverage": coverage,
         "classification": result.classification,
         "blocked_by": _strings(block.get("blocked_by")),
+        "merge": merge_record(block),
         "last_activity": max((update.timestamp for update in updates), default=None),
         "updates": [
             {"date": update.date, "time": update.time, "detail": update.detail} for update in updates[:MAX_UPDATES]

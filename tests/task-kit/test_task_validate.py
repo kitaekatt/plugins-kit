@@ -155,6 +155,39 @@ class TestClassificationOutcomes:
         assert result.clean
 
 
+class TestMergeField:
+    def test_absent_merge_is_clean(self, tmp_path):
+        make_task(tmp_path, "tmp/foo")
+        assert v("tmp/foo", tmp_path).clean
+
+    def test_declared_merge_is_clean(self, tmp_path):
+        make_task(tmp_path, "tmp/foo", merge={"policy": "on_unit_done", "target": "dev"})
+        result = v("tmp/foo", tmp_path)
+        assert result.clean
+        assert result.classification == "active"
+
+    def test_unknown_policy_is_an_error(self, tmp_path):
+        make_task(tmp_path, "tmp/foo", merge={"policy": "sometimes", "target": "dev"})
+        result = v("tmp/foo", tmp_path)
+        assert result.classification == "invalid"
+        assert any(
+            "task.merge.policy" in e and "'sometimes'" in e for e in result.errors
+        ), result.errors
+
+    def test_missing_target_is_an_error(self, tmp_path):
+        make_task(tmp_path, "tmp/foo", merge={"policy": "never"})
+        result = v("tmp/foo", tmp_path)
+        assert result.classification == "invalid"
+        assert any("task.merge.target" in e for e in result.errors), result.errors
+
+    def test_unknown_policy_is_an_error_under_an_unknown_type(self, tmp_path):
+        make_task(
+            tmp_path, "tmp/foo", type="nope", merge={"policy": "sometimes", "target": "dev"}
+        )
+        result = v("tmp/foo", tmp_path)
+        assert any("task.merge.policy" in e for e in result.errors), result.errors
+
+
 class TestTriState:
     def test_nontmp_absent_is_archived_no_findings(self, tmp_path):
         result = v("dev/tasks/long-done", tmp_path)
