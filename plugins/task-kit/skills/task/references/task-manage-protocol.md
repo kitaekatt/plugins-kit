@@ -27,7 +27,7 @@ Kinds are `manage-protocols`, `manage-input` and `manage-mutate`.
 | Exit | Error codes |
 | --- | --- |
 | 0 | Success |
-| 1 | `internal`, `publication_failed` |
+| 1 | `internal`, `publication_failed`, `commit_failed` |
 | 2 | `usage` |
 | 3 | `unknown_task`, `unknown_item` |
 | 4 | `protocol_unsupported` |
@@ -78,7 +78,7 @@ Duplicate JSON keys and non-finite numbers refuse. The request limit is 1048576 
 | `task-update` | Any of `title`, `priority`, `description`, `status`. Status is active, blocked, deferred or closed. |
 | `item-add` | Required `title`. Optional `priority`, `details`, `note`, `acceptance_argv`. The id derives from the title. |
 | `item-update` | Required `item` id. Optional `title`, `priority`, `note`, `state`, `acceptance_argv`. |
-| `item-complete` | Required `item` id and `summary`. Removes the open item and records its accomplishment. |
+| `item-complete` | Required `item` id and `summary`. Removes the open item and records its accomplishment. Also removes the item's prose section from `plan.md` when a heading is exactly `### <item id>`: the section runs through the next heading of the same or a higher level, so lower-level headings inside it go too. A heading with anything after the id (`### <id> -- title`), another level, a heading inside a code fence, or more than one exact heading leaves `plan.md` prose alone. |
 | `session-dismiss` | Required exact `host`, `session_id`, `registered_at` tuple belonging to this task. |
 | `accept-defaults` | Required non-empty `defaults` list of exact current grounded decision records, each with a default. |
 
@@ -87,8 +87,15 @@ Priority is P1, P2 or P3. An item priority can be cleared with null.
 Titles are non-empty single lines. Item details cannot close the surrounding section or leave a fence open.
 Acceptance commands are non-empty lists of non-empty string argv lists.
 
-Success payload: `{task,revision,action,item?}`. Session dismissal also carries its publication result.
+Success payload: `{task,revision,action,item?,commit}`. Session dismissal also carries its publication result.
 Semantic task edits update the canonical files and log. They do not commit arbitrary project code.
+Every action except `session-dismiss` commits the task files it wrote (`task.yaml`, `plan.md`, `log.md`; all four files for `task-create`) in the repository that physically holds the task folder, so a linked `dev/tasks` root commits in the linked tasks repository and never in the host project.
+The commit is limited to those files (`git commit --only`): other staged content stays staged and other working-tree edits stay out.
+The message is `task manage: <task> <action>` plus the item id when the request names one, for example `task manage: dev/tasks/example item-complete write-schema`.
+Mutate actions other than `session-dismiss` never push. `commit` is the sha of the commit made, or null when the folder is in no git repository, git ignores every written file, or the machine turned committing off.
+`~/.claude/task.local.yaml` takes `manage: {commit: false}` to write edits without committing them; the default is `true`. An unknown `manage` key or a non-boolean `commit` refuses (`refused`) before any write.
+A git failure (a failing hook, a held index lock, a repository probe git cannot answer such as dubious ownership; only "not a git repository" counts as no repository) returns the error `commit_failed` with the written files in `written`. The edit has already happened and stays on disk; read the task again, then commit or revert it.
+`session-dismiss` uses the session publisher, which commits and pushes the session file.
 Session dismissal uses the existing session store and publisher. An unpublished dismissal reports an explicit failure and its written files.
 
 ## Concurrency and boundaries

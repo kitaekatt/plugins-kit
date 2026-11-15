@@ -108,6 +108,8 @@ The export carries each task's registrations (`tasks[].sessions[]`), so databenc
 replace the derived host id. Registration works on macOS, Linux and Windows. The contract is in
 `skills/task/SKILL.md`.
 
+`task-kit manage` commits the task files each semantic mutation writes, in the repository that holds the task folder, and never pushes. `manage: {commit: false}` in `~/.claude/task.local.yaml` keeps those edits uncommitted (the default is `true`). The contract is in [task-manage-protocol.md](skills/task/references/task-manage-protocol.md).
+
 ## Install
 
 ```

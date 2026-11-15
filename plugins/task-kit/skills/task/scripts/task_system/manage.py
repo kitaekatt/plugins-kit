@@ -4,6 +4,8 @@ The CLI contract is references/task-manage-protocol.md. Mutations serialize by
 physical task repository, compare a four-file content revision, validate the
 candidate, and retain the task system's per-file atomic replacement behavior.
 A linked dev/tasks root is supported. Links below that root are refused.
+A semantic mutation then commits exactly the task files it wrote, in the repository that
+physically holds the task folder, and never pushes (see _commit_written).
 Harness editors do not take this lock: mutation.TaskMutator documents the
 remaining final-compare/rename race and reports partial writes explicitly.
 """
@@ -11,14 +13,16 @@ from __future__ import annotations
 
 from dataclasses import asdict
 import hashlib
+import os
 from pathlib import Path
 import re
+import subprocess
 from typing import Any, Callable
 
 import yaml
 from skills_kit_lib import schema_engine
 
-from . import authoring, export, mutation, plan_sections, schemas, sessions, session_publish, vcs
+from . import authoring, export, manage_config, mutation, plan_sections, schemas, sessions, session_publish, vcs
 from .datadir import resolve_data_dir
 from .discovery import ProjectRoot, read_task_block
 from .init import _scaffold_contents, init_task
@@ -207,6 +211,9 @@ def _complete(plan: str, item: str, summary: str) -> str:
     match, data, entries = mutation._require_block(plan)
     entries[:] = [entry for entry in entries if entry["id"] != item]
     text = mutation._splice(plan, match, data)
+    stripped = plan_sections.remove_exact_item_section(text, item)
+    if mutation.raw_items(stripped) is not None:  # never drop the task_items block with a section
+        text = stripped
     line = f"- {item}: {summary}\n"
     heading = "## Accomplished\n"
     if heading not in text:
@@ -265,6 +272,77 @@ def _edit(action: str, fields: dict[str, Any], texts: mutation.TaskTexts) -> dic
     return changes
 
 
+GIT_COMMIT_TIMEOUT_S = 60
+
+
+def _git_run(top: Path, *args: str) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(["git", "-C", str(top), *args], capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=GIT_COMMIT_TIMEOUT_S,
+                              env={**os.environ, "LC_MESSAGES": "C", "LANGUAGE": "C"})  # the probe reads git's English message
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ManageError("commit_failed", f"git {args[0]} could not run in {top}: {exc}") from exc
+
+
+def _git_detail(proc: subprocess.CompletedProcess) -> str:
+    lines = [line.strip() for line in (proc.stderr + "\n" + proc.stdout).splitlines() if line.strip()]
+    lines = [line for line in lines if not line.startswith("hint:")] or lines
+    return lines[-1] if lines else f"exit {proc.returncode}"
+
+
+def _commit_written(folder: Path, names: tuple[str, ...], message: str) -> str | None:
+    """Commit the task files just written, in the repository that physically holds ``folder``.
+
+    ``folder`` is the resolved task folder, so a linked dev/tasks root commits in the linked tasks
+    repository. The commit is limited to ``names`` (``--only``): staged content of other files stays
+    staged and unrelated working-tree edits stay out. Nothing is pushed; publishing task records is a
+    separate step. Returns the commit sha, or None when the folder is in no repository at all, or git ignores
+    every written file, so no commit is possible (a git-ignored task root, a non-git root).
+
+    A git failure, including a repository probe that fails for any reason but "not a git repository",
+    raises ``commit_failed``: the files are already written, and the error says so.
+    """
+    probe = _git_run(folder, "rev-parse", "--show-toplevel")
+    if probe.returncode != 0:
+        if "not a git repository" in probe.stderr.lower():
+            return None  # a genuine non-repository
+        raise ManageError("commit_failed", f"task files were written but not committed (git rev-parse: {_git_detail(probe)})",
+                          written=tuple(str(folder / name) for name in names))
+    top = Path(probe.stdout.strip()).resolve()
+    paths = [str(folder / name) for name in names]
+    written = tuple(paths)
+
+    def refuse(what: str, proc: subprocess.CompletedProcess) -> ManageError:
+        return ManageError("commit_failed", f"task files were written but not committed ({what}: {_git_detail(proc)})",
+                           written=written)
+
+    candidates: list[str] = []
+    untracked: list[str] = []
+    for path in paths:
+        if _git_run(top, "ls-files", "--error-unmatch", "--", path).returncode == 0:
+            candidates.append(path)
+        elif _git_run(top, "check-ignore", "-q", "--", path).returncode != 0:
+            candidates.append(path)
+            untracked.append(path)
+    if not candidates:
+        return None
+    if untracked:
+        added = _git_run(top, "add", "--", *untracked)
+        if added.returncode != 0:
+            raise refuse("git add", added)
+    done = _git_run(top, "commit", "-q", "-m", message, "--only", "--", *candidates)
+    if done.returncode != 0:
+        raise refuse("git commit", done)
+    head = _git_run(top, "rev-parse", "HEAD")
+    if head.returncode != 0:
+        raise refuse("git rev-parse", head)
+    return head.stdout.strip()
+
+
+def _message(task: str, action: str, item: object) -> str:
+    return f"task manage: {task} {action}" + (f" {item}" if isinstance(item, str) and item else "")
+
+
 def _check_defaults(folder: Path, fields: dict[str, Any]) -> None:
     from datetime import datetime
     from . import answer_store, questions
@@ -286,7 +364,8 @@ def _check_defaults(folder: Path, fields: dict[str, Any]) -> None:
 
 
 def mutate_payload(project: Path, request: object, *, data_dir: Path | None = None,
-                   resolve_machine: Callable[[], Machine] = export.current_machine) -> dict[str, Any]:
+                   resolve_machine: Callable[[], Machine] = export.current_machine,
+                   config_path: Path | None = None) -> dict[str, Any]:
     """Apply one semantic mutation. The manager validates receipt and acceptance before item-complete."""
     if not isinstance(request, dict) or set(request) != {"task", "expected_revision", "action", "fields"}:
         raise ManageError("usage", "request must contain exactly task, expected_revision, action and fields")
@@ -298,6 +377,10 @@ def mutate_payload(project: Path, request: object, *, data_dir: Path | None = No
     folder = _folder(project, task, create=action == "task-create")
     physical_folder = folder.resolve()
     fields = _fields(action, request["fields"])
+    try:  # read before any write: a bad config must not strand an edit
+        auto_commit = manage_config.load_manage_config(config_path).commit
+    except manage_config.ManageConfigError as exc:
+        raise ManageError("refused", str(exc)) from exc
     expected = request["expected_revision"]
     if action == "task-create":
         if expected is not None:
@@ -342,7 +425,9 @@ def mutate_payload(project: Path, request: object, *, data_dir: Path | None = No
             except (OSError, mutation.MutationError) as exc:
                 raise ManageError("internal", f"task created but follow-up failed: {exc}", written=written) from exc
             revision = mutation.folder_revision(folder)
-        return {"task": task, "revision": revision, "action": action}
+            commit = (_commit_written(physical_folder, tuple(contents), _message(task, action, None))
+                      if auto_commit else None)
+        return {"task": task, "revision": revision, "action": action, "commit": commit}
 
     mine = resolve_machine()
     folder = physical_folder
@@ -367,13 +452,17 @@ def mutate_payload(project: Path, request: object, *, data_dir: Path | None = No
         return {"task": task, "revision": mutation.folder_revision(folder), "action": action,
                 "publication": publication}
 
+    touched: list[str] = []
+
     def edit(texts: mutation.TaskTexts) -> dict[str, str]:
         if _folder(project, task).resolve() != folder:
             raise ManageError("conflict", "the task root changed")
         _hold(project, folder, mine)
         if action == "accept-defaults":
             _check_defaults(folder, fields)
-        return _edit(action, fields, texts)
+        changes = _edit(action, fields, texts)
+        touched[:] = [name for name in mutation.FILES if name in changes]
+        return changes
 
     def precommit() -> None:
         if _folder(project, task).resolve() != folder:
@@ -386,4 +475,12 @@ def mutate_payload(project: Path, request: object, *, data_dir: Path | None = No
     session_gate = sessions._locked(local, (), (folder.parent.resolve(),))
     revision = mutation.TaskMutator(lock).mutate(folder, edit, expected_revision=expected,
                                                 precommit=precommit, gate=session_gate)
-    return {"task": task, "revision": revision, "action": action, "item": fields.get("item")}
+    if not auto_commit:
+        return {"task": task, "revision": revision, "action": action, "item": fields.get("item"), "commit": None}
+    try:
+        with mutation.ProcessLock(lock):
+            commit = _commit_written(folder, tuple(touched), _message(task, action, fields.get("item")))
+    except mutation.MutationError as exc:
+        raise ManageError("commit_failed", f"task files were written but not committed ({exc})",
+                          written=tuple(str(folder / name) for name in touched)) from exc
+    return {"task": task, "revision": revision, "action": action, "item": fields.get("item"), "commit": commit}

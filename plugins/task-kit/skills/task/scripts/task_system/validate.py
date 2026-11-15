@@ -60,6 +60,7 @@ import yaml
 from skills_kit_lib import schema_engine
 
 from . import resolve
+from .schemas import MERGE_POLICIES
 from .task_items import read_task_items, stale_priority_refs
 from .types import DEFAULT_TYPE_NAME, TaskType, get_type
 
@@ -468,6 +469,17 @@ def validate_ref(
         fails, _ = schema_engine.validate(data, schema_type.schema)
         for path, msg in fails:
             errors.append(f"schema violation: {path}: {msg}")
+
+        # merge.policy vocabulary: independent of the task type, so it is
+        # checked even when the type is unknown.
+        merge_block = task_block.get("merge")
+        if isinstance(merge_block, dict):
+            policy = merge_block.get("policy")
+            if isinstance(policy, str) and policy not in MERGE_POLICIES:
+                errors.append(
+                    f"schema violation: task.merge.policy: {policy!r} not in "
+                    f"{list(MERGE_POLICIES)}"
+                )
 
         # Post-walker vocabulary checks -- type-dependent, so only meaningful
         # against a registered type (the layering described in schemas.py).

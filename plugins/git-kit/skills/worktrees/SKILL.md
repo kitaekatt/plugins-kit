@@ -47,6 +47,14 @@ technique_skill:
             accepts a remote-tracking branch, local branch, tag or commit. The helper
             fetches for remote-tracking sources; local sources need no network.
             A failed fetch stops creation with the Git error.
+            After creation, new runs bootstrap run in the new worktree and streams
+            its output to stderr. This sets up the worktree's own venv and packages.
+            Never link package folders from the main checkout.
+            --no-setup skips setup for a quick read-only look or a repo without a
+            bootstrap manifest. User layers apply even without a project manifest.
+            A bootstrap failure, including lock exit 2, keeps the worktree and
+            reports its path and exit code, then exits non-zero without retry.
+            The JSON result includes setup: {ran: bool, exit: int|null}.
             Work in the returned path. Never create a task
             checkout elsewhere. Existing unpublished work needs preservation before
             moving it; creation does not move edits from the original checkout.

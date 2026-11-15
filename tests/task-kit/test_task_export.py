@@ -198,3 +198,11 @@ def test_a_long_plan_section_is_truncated(world):
     payload = export.item_payload(export.checkout_id(world / "alpha"), "dev/tasks/build-export", "write-cli", (world,))
     assert len(payload["plan_section"]) == export.PLAN_SECTION_LIMIT and payload["plan_section_truncated"] is True
 
+
+
+def test_merge_is_exported_as_declared_or_null(world):
+    """Revert check: dropping merge_record from the task record (or its null for an undeclared task) turns this red."""
+    _code, doc = export_cli.document(["tasks", "--format", "json", "--protocol", "1", "--parent", str(world)], **inject())
+    by_path = {t["path"]: t for t in doc["payload"]["tasks"]}
+    assert by_path["dev/tasks/build-export"]["merge"] == {"policy": "on_unit_done", "target": "dev", "remote": None}
+    assert by_path["dev/tasks/old-cleanup"]["merge"] is None

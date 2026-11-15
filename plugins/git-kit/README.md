@@ -145,6 +145,18 @@ outside a remote's configured fetch subset. Remote configuration is unchanged.
 The task branch starts without inheriting the base branch's tracking
 configuration. Publish it explicitly with your normal push procedure.
 
+After creation, `new` runs the `bootstrap` command from PATH with argument `run`
+and the new worktree as its working directory. It streams output to stderr and
+sets up the worktree's own venv and packages. Never link package folders from
+the main checkout. User bootstrap layers apply even without a project manifest.
+Use `new <task> --no-setup` for a quick read-only look or a repository without
+a bootstrap manifest when setup is unwanted.
+
+The JSON result includes `setup: {"ran": true, "exit": 0}` after successful
+setup, or `setup: {"ran": false, "exit": null}` when skipped. A bootstrap
+failure keeps the worktree, prints its path and the bootstrap exit code and
+error, and exits non-zero. This includes lock exit 2; there is no retry.
+
 `list` emits JSON for every task directory under the root, across repositories.
 It fetches each repository's remotes before classifying entries.
 `no_unpublished_commits` means no commit is absent from all remote-tracking

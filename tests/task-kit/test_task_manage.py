@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from task_export_support import MACHINE, make_world
-from task_system import answer_store, manage, mutation, questions, session_publish
+from task_system import answer_store, discovery, manage, mutation, questions, session_publish
 from task_system.answers_types import Answerer
 from task_system.discovery import read_task_block
 from task_system.manage_cli import document
@@ -20,6 +20,12 @@ ITEM = "write-schema"
 
 def _mine():
     return MACHINE
+
+
+@pytest.fixture(autouse=True)
+def _no_user_config(tmp_path, monkeypatch):
+    """The machine's own task.local.yaml must not change what these tests see."""
+    monkeypatch.setattr(discovery, "TASK_CONFIG_PATH", tmp_path / "no-task.local.yaml")
 
 
 @pytest.fixture
@@ -320,3 +326,235 @@ def test_two_processes_with_one_revision_write_exactly_once(world):
     assert sorted(outcomes.get(timeout=5) for _ in children) == ["conflict", "written"]
     outcomes.close()
     outcomes.join_thread()
+
+
+# -- commits: a semantic mutation commits the task files it wrote, in the repository that holds the task ----------
+
+import subprocess
+
+from task_system import plan_sections
+
+
+def _run(root, *args):
+    return subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, text=True).stdout.strip()
+
+
+@pytest.fixture
+def linked(world, tmp_path):
+    """The world with dev/tasks moved into its own git repository and linked back, as a tasks repo is."""
+    root, local = world
+    tasks = tmp_path / "tasks-repo"
+    (root / "dev/tasks").rename(tasks)
+    (root / "dev/tasks").symlink_to(tasks)
+    _run(tasks, "init", "-q", "-b", "main")
+    _run(tasks, "config", "user.email", "test@example.invalid")
+    _run(tasks, "config", "user.name", "Test")
+    _run(tasks, "config", "commit.gpgsign", "false")
+    _run(tasks, "add", "-A")
+    _run(tasks, "commit", "-q", "-m", "seed tasks")
+    return root, local, tasks
+
+
+def test_mutation_commits_the_written_files_in_the_linked_tasks_repository(linked):
+    root, local, tasks = linked
+    project_head = _run(root, "rev-parse", "HEAD")
+    revision = _input(root)["task"]["revision"]
+    stray = tasks / "build-export" / "answers" / "stray.txt"
+    stray.write_text("not written by the mutation\n", encoding="utf-8")
+    _run(tasks, "add", "-N", str(stray))  # an unrelated staged-intent path stays out of the commit
+    done = _mutate((root, local), _request(revision, "item-update", {"item": ITEM, "note": "Reviewed"}))
+    assert done["commit"] == _run(tasks, "rev-parse", "HEAD")
+    assert _run(tasks, "log", "-1", "--format=%s") == f"task manage: {TASK} item-update {ITEM}"
+    committed = set(_run(tasks, "show", "--name-only", "--format=", "HEAD").splitlines())
+    assert committed == {"build-export/plan.md", "build-export/log.md"}
+    assert _run(root, "rev-parse", "HEAD") == project_head  # the host project gets no commit
+    assert _run(tasks, "status", "--porcelain", "--", "build-export/plan.md", "build-export/log.md") == ""
+
+
+def test_mutation_commit_leaves_other_staged_content_staged(linked):
+    root, local, tasks = linked
+    other = tasks / "other.txt"
+    other.write_text("staged by someone else\n", encoding="utf-8")
+    _run(tasks, "add", "other.txt")
+    revision = _input(root)["task"]["revision"]
+    done = _mutate((root, local), _request(revision))
+    assert done["commit"] == _run(tasks, "rev-parse", "HEAD")
+    assert "other.txt" not in _run(tasks, "show", "--name-only", "--format=", "HEAD").splitlines()
+    assert _run(tasks, "diff", "--cached", "--name-only") == "other.txt"
+
+
+def test_item_complete_commit_names_the_item(linked):
+    root, local, tasks = linked
+    revision = _input(root)["task"]["revision"]
+    done = _mutate((root, local), _request(revision, "item-complete", {"item": ITEM, "summary": "Acceptance passed"}))
+    assert _run(tasks, "log", "-1", "--format=%s") == f"task manage: {TASK} item-complete {ITEM}"
+    assert done["commit"] == _run(tasks, "rev-parse", "HEAD")
+    assert "Acceptance passed" in _run(tasks, "show", "HEAD:build-export/plan.md")
+
+
+def test_task_create_commits_all_four_new_files(linked):
+    root, local, tasks = linked
+    created = _mutate((root, local), _request(None, "task-create", {"title": "A new task"}, "dev/tasks/new-task"))
+    assert created["commit"] == _run(tasks, "rev-parse", "HEAD")
+    assert _run(tasks, "log", "-1", "--format=%s") == "task manage: dev/tasks/new-task task-create"
+    committed = set(_run(tasks, "show", "--name-only", "--format=", "HEAD").splitlines())
+    assert committed == {f"new-task/{name}" for name in mutation.FILES}
+
+
+def test_commit_failure_is_loud_and_says_the_edit_happened(linked):
+    root, local, tasks = linked
+    hook = tasks / ".git/hooks/pre-commit"
+    hook.write_text("#!/bin/sh\necho hook says no >&2\nexit 1\n", encoding="utf-8")
+    hook.chmod(0o755)
+    head = _run(tasks, "rev-parse", "HEAD")
+    revision = _input(root)["task"]["revision"]
+    with pytest.raises(manage.ManageError) as caught:
+        _mutate((root, local), _request(revision))
+    assert caught.value.code == "commit_failed"
+    assert "were written but not committed" in str(caught.value)
+    assert "hook says no" in str(caught.value)
+    assert {Path(path).name for path in caught.value.written} == {"task.yaml", "log.md"}
+    assert "Updated from manager" in (tasks / "build-export/task.yaml").read_text(encoding="utf-8")
+    assert _run(tasks, "rev-parse", "HEAD") == head
+
+
+def test_commit_failure_reaches_the_cli_document(linked):
+    root, local, tasks = linked
+    hook = tasks / ".git/hooks/pre-commit"
+    hook.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    hook.chmod(0o755)
+    revision = _input(root)["task"]["revision"]
+    argv = ["mutate", "--format", "json", "--protocol", "1", "--project", str(root)]
+    code, result = document(argv, stdin=StringIO(json.dumps(_request(revision))), version="test",
+                            data_dir=local, resolve_machine=_mine)
+    assert code == 1
+    assert result["error"]["code"] == "commit_failed"
+    assert result["error"]["written"]
+
+
+def test_git_ignored_task_root_is_written_without_a_commit(world):
+    root, _ = world  # the fixture's dev/tasks is git-ignored: there is nothing git can commit
+    head = _run(root, "rev-parse", "HEAD")
+    done = _mutate(world, _request(_input(root)["task"]["revision"]))
+    assert done["commit"] is None
+    assert _run(root, "rev-parse", "HEAD") == head
+
+
+EXACT_PLAN = """# Plan
+
+## Items
+
+```yaml
+task_items:
+  items:
+  - id: a
+    title: A
+```
+
+### a
+Prose for a.
+
+#### detail
+Nested detail of a.
+
+### b
+Prose for b.
+
+## Later
+"""
+
+
+def test_exact_item_section_is_removed_through_the_next_same_or_higher_heading():
+    text = plan_sections.remove_exact_item_section(EXACT_PLAN, "a")
+    assert "Prose for a." not in text
+    assert "Nested detail of a." not in text
+    assert "### b\nProse for b.\n\n## Later\n" in text
+    assert "task_items:" in text
+
+
+@pytest.mark.parametrize("plan", [
+    "# P\n\n### a -- A title\nbody\n",            # more than the id on the heading
+    "# P\n\n## a\nbody\n",                          # another level
+    "# P\n\n### a\nbody\n\n### a\nagain\n",         # ambiguous
+    "# P\n\n```\n### a\nbody\n```\n",               # inside a code fence
+    "# P\n\n### ab\nbody\n",                        # another id
+])
+def test_other_headings_are_left_alone(plan):
+    assert plan_sections.remove_exact_item_section(plan, "a") == plan
+
+
+def test_item_complete_removes_only_the_exact_prose_section(world):
+    root, _ = world
+    plan_path = root / TASK / "plan.md"
+    plan_path.write_text(plan_path.read_text(encoding="utf-8").replace(
+        "### write-schema -- Write the schema", "### write-schema"), encoding="utf-8")
+    revision = _input(root, None)["task"]["revision"]
+    _mutate(world, _request(revision, "item-complete", {"item": ITEM, "summary": "Done"}))
+    plan = plan_path.read_text(encoding="utf-8")
+    assert "### write-schema" not in plan
+    assert "Write one JSON Schema per kind and freeze it." not in plan
+    assert "### pick-name -- Pick the command name" in plan
+    assert "- write-schema: Done" in plan
+
+
+def _config(tmp_path, text):
+    path = tmp_path / "task.local.yaml"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_manage_commit_false_writes_but_does_not_commit(linked, tmp_path, monkeypatch):
+    root, local, tasks = linked
+    monkeypatch.setattr(discovery, "TASK_CONFIG_PATH", _config(tmp_path, "manage:\n  commit: false\n"))
+    head = _run(tasks, "rev-parse", "HEAD")
+    revision = _input(root)["task"]["revision"]
+    done = _mutate((root, local), _request(revision))
+    assert done["commit"] is None
+    assert _run(tasks, "rev-parse", "HEAD") == head
+    assert "Updated from manager" in (tasks / "build-export/task.yaml").read_text(encoding="utf-8")
+    assert "build-export/task.yaml" in _run(tasks, "status", "--porcelain")
+    created = _mutate((root, local), _request(None, "task-create", {"title": "Quiet"}, "dev/tasks/quiet"))
+    assert created["commit"] is None
+    assert _run(tasks, "rev-parse", "HEAD") == head
+
+
+def test_manage_commit_true_in_config_commits(linked, tmp_path, monkeypatch):
+    root, local, tasks = linked
+    monkeypatch.setattr(discovery, "TASK_CONFIG_PATH", _config(tmp_path, "manage:\n  commit: true\n"))
+    done = _mutate((root, local), _request(_input(root)["task"]["revision"]))
+    assert done["commit"] == _run(tasks, "rev-parse", "HEAD")
+
+
+@pytest.mark.parametrize("text", ["manage:\n  commit: maybe\n", "manage:\n  push: true\n", "manage: yes\n"])
+def test_bad_manage_config_refuses_before_any_write(linked, tmp_path, monkeypatch, text):
+    root, local, tasks = linked
+    monkeypatch.setattr(discovery, "TASK_CONFIG_PATH", _config(tmp_path, text))
+    before = mutation.read_files(root / TASK)
+    with pytest.raises(manage.ManageError) as caught:
+        _mutate((root, local), _request(_input(root)["task"]["revision"]))
+    assert caught.value.code == "refused"
+    assert "manage" in str(caught.value)
+    assert mutation.read_files(root / TASK) == before
+
+
+def test_a_failed_repository_probe_is_loud_not_a_silent_no_commit(linked, monkeypatch):
+    root, local, tasks = linked
+    real = manage._git_run
+
+    def dubious(top, *args):
+        if args[:1] == ("rev-parse",) and "--show-toplevel" in args:
+            return subprocess.CompletedProcess(args, 128, "", "fatal: detected dubious ownership in repository")
+        return real(top, *args)
+
+    monkeypatch.setattr(manage, "_git_run", dubious)
+    with pytest.raises(manage.ManageError) as caught:
+        _mutate((root, local), _request(_input(root)["task"]["revision"]))
+    assert caught.value.code == "commit_failed"
+    assert "dubious ownership" in str(caught.value)
+    assert caught.value.written
+
+
+def test_a_folder_in_no_repository_is_not_an_error(tmp_path):
+    folder = tmp_path / "plain" / "task"
+    folder.mkdir(parents=True)
+    assert manage._commit_written(folder, ("task.yaml",), "task manage: x") is None

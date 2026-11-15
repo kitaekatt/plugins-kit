@@ -6,3 +6,6 @@ task:
   priority: P1
   description: Export task facts as JSON for databench.
   summary: The export reads task folders; the schema is frozen; the CLI is next.
+  merge:
+    policy: on_unit_done
+    target: dev

@@ -715,6 +715,15 @@ class TestShowCLI:
         assert "agent_hint: backend-developer" in lines
         assert "skills_to_invoke: home-domain" in lines
 
+    def test_merge_is_shown_as_stored_pairs_or_dash(self, tmp_path):
+        make_task(tmp_path, "tmp/with", merge={"policy": "on_accept", "target": "dev", "remote": "origin"})
+        make_task(tmp_path, "tmp/without")
+        shown = run_cli(["show", "tmp/with", "--root", str(tmp_path)], tmp_path)
+        assert shown.returncode == 0, shown.stderr
+        assert "merge: policy=on_accept target=dev remote=origin" in shown.stdout.splitlines()
+        bare = run_cli(["show", "tmp/without", "--root", str(tmp_path)], tmp_path)
+        assert "merge: -" in bare.stdout.splitlines()
+
     def test_stub_ref_resolves(self, tmp_path):
         make_task(tmp_path, "tmp/uniq")
         proc = run_cli(["show", "uniq", "--root", str(tmp_path)], tmp_path)

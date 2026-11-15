@@ -117,3 +117,25 @@ def find_item_section(plan_text: str, item_id: str) -> PlanSection:
     if not body:
         return PlanSection(EMPTY, heading=text)
     return PlanSection(FOUND, heading=text, body=body)
+
+
+def remove_exact_item_section(plan_text: str, item_id: str) -> str:
+    """``plan_text`` without the prose section whose heading is exactly ``### <item_id>``.
+
+    The section runs from that heading through the line before the next heading of the same or a higher
+    level (a lower-level heading inside it goes with it). Headings inside code fences are not headings. A
+    heading that carries anything after the id (``### <id> -- title``), a different level, a missing
+    heading, or more than one exact heading leaves the text unchanged.
+    """
+    lines = plan_text.splitlines(keepends=True)
+    headings = _headings([line.rstrip("\r\n") for line in lines])
+    exact = [h for h in headings if h[1] == 3 and h[3] == f"### {item_id}"]
+    if len(exact) != 1:
+        return plan_text
+    index = exact[0][0]
+    end = len(lines)
+    for other_index, other_level, _token, _text in headings:
+        if other_index > index and other_level <= 3:
+            end = other_index
+            break
+    return "".join(lines[:index] + lines[end:])

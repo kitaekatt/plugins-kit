@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -19,6 +20,28 @@ def wt(tmp_path, monkeypatch):
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / ".claude"))
     monkeypatch.setenv("PYTHONPATH", str(SCRIPT.parents[2] / "bootstrap"))
+    # Every lifecycle test must stay isolated from the real provisioning CLI.
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake = fake_bin / "bootstrap"
+    fake.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys\n"
+        "from pathlib import Path\n"
+        "Path(os.environ['BOOTSTRAP_TEST_RECORD']).write_text("
+        "json.dumps({'cwd': os.getcwd(), 'args': sys.argv[1:]}))\n"
+        "print('bootstrap progress')\n"
+        "print('bootstrap diagnostic', file=sys.stderr)\n"
+        "sys.exit(int(os.environ.get('BOOTSTRAP_TEST_EXIT', '0')))\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    if os.name == "nt":
+        (fake_bin / "bootstrap.cmd").write_text(
+            f'@"{sys.executable}" "{fake}" %*\n', encoding="utf-8"
+        )
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("BOOTSTRAP_TEST_RECORD", str(tmp_path / "bootstrap-call.json"))
     spec = importlib.util.spec_from_file_location("git_kit_worktrees", SCRIPT)
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
@@ -151,6 +174,55 @@ def test_new_fresh_list_remove(wt, remote_repo):
     cli(repo, "remove", str(task))
     assert not task.exists()
     assert str(task) not in repo.git("worktree", "list").stdout
+
+
+def test_new_bootstrap_runs_in_worktree(wt, remote_repo):
+    result = cli(remote_repo, "new", "setup", check=False)
+    assert result.returncode == 0, result.stderr
+    output = json.loads(result.stdout)
+    call = json.loads(Path(os.environ["BOOTSTRAP_TEST_RECORD"]).read_text())
+    assert Path(call["cwd"]) == Path(output["path"])
+    assert call["args"] == ["run"]
+    assert output["setup"] == {"ran": True, "exit": 0}
+    assert "bootstrap progress" in result.stderr
+    assert "bootstrap diagnostic" in result.stderr
+    assert not (Path(output["path"]) / ".claude/bootstrap.json").exists()
+
+
+def test_new_no_setup(wt, remote_repo):
+    output = cli(remote_repo, "new", "bare", "--no-setup")
+    assert Path(output["path"]).is_dir()
+    assert output["setup"] == {"ran": False, "exit": None}
+    assert not Path(os.environ["BOOTSTRAP_TEST_RECORD"]).exists()
+
+
+def test_new_resolves_bootstrap_path_shim(wt, remote_repo, monkeypatch):
+    run = subprocess.run
+
+    def check_shim(command, **kwargs):
+        # Windows CreateProcess does not search PATHEXT for a bare command.
+        if command[0] == "bootstrap":
+            raise FileNotFoundError("CreateProcess cannot resolve bootstrap.cmd by bare name")
+        return run(command, **kwargs)
+
+    monkeypatch.setattr(wt.subprocess, "run", check_shim)
+    output = wt.new(remote_repo.path, wt.resolve_settings(remote_repo.path), "shim", None)
+    assert output["setup"] == {"ran": True, "exit": 0}
+
+
+@pytest.mark.parametrize("exit_code", [1, 2, 7])
+def test_new_bootstrap_failure_keeps_worktree(wt, remote_repo, monkeypatch, exit_code):
+    monkeypatch.setenv("BOOTSTRAP_TEST_EXIT", str(exit_code))
+    result = cli(remote_repo, "new", "failed-setup", check=False)
+    assert result.returncode == exit_code
+    output = json.loads(result.stdout)
+    task = Path(output["path"])
+    assert task.is_dir()
+    assert str(task) in remote_repo.git("worktree", "list").stdout
+    assert output["setup"] == {"ran": True, "exit": exit_code}
+    assert str(task) in result.stderr
+    assert f"exit {exit_code}" in result.stderr
+    assert "bootstrap diagnostic" in result.stderr
 
 
 def test_unpublished_dirty_and_outside_refused(wt, remote_repo):

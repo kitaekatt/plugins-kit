@@ -76,6 +76,9 @@ task:
   agent_hint: backend-developer   # suggested sub-agent for `work`/dispatch
   skills_to_invoke:               # self-documenting: loaded when the task is worked
     - home-domain
+  merge:                          # optional; where this task's work merges (references/core-contracts.md)
+    policy: on_unit_done
+    target: dev
 ```
 
 **Field contract (default `hand-off` type):**
@@ -95,6 +98,7 @@ task:
 | `blocked_by` | list[path] | no | Reference paths currently blocking this task (a task with non-empty `blocked_by` reads as `blocked`). |
 | `agent_hint` | string | no | Sub-agent type for `work` dispatch (e.g. `backend-developer`). |
 | `skills_to_invoke` | list[string] | no | Skills loaded when the task is worked (the self-documenting-task pattern). This is the task's *additional* set: `work` emits `BASELINE_SKILLS` ahead of it, so the always-required skills need not (and should not) be restated here. |
+| `merge` | mapping | no | Declared merge target: `policy` (`on_accept` / `on_unit_done` / `never`) and `target` (branch) required, `remote` optional (a reader uses `origin`). Declaration only; task-kit never merges. See `references/core-contracts.md`. |
 
 Notes:
 - `abstract` / `invalid` / `orphaned` / `remote` / `gone` are **computed** states (section 4), never stored.

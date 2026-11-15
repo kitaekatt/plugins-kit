@@ -85,6 +85,8 @@ Working-session conventions:
   has registrations and gains ``sessions`` per task in ``--format json|yaml``.
 - ``~/.claude/task.local.yaml`` ``sessions:`` takes ``record`` (false turns
   recording off) and ``host`` (replaces the derived host id).
+- ``~/.claude/task.local.yaml`` ``manage:`` takes ``commit`` (false stops
+  ``task-kit manage`` mutations from committing the task files they write).
 
 Location-op conventions (Step 5):
 - ``archive <ref>`` prints ``archived: <id>`` plus the closure-policy
@@ -237,11 +239,20 @@ def _cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
+_MERGE_KEY_ORDER = ("policy", "target", "remote")
+
+
 def _render_value(value: object) -> str:
     """Render one task.yaml field for line output: absent/empty -> ``-``;
     lists comma-joined; multi-line strings continuation-indented."""
     if value is None:
         return "-"
+    if isinstance(value, dict):
+        # A mapping (task.merge): the stored keys, the known ones first in
+        # the contract's order (a YAML writer may sort them), then the rest.
+        known = [k for k in _MERGE_KEY_ORDER if k in value]
+        rest = [k for k in value if k not in _MERGE_KEY_ORDER]
+        return " ".join(f"{k}={value[k]}" for k in (*known, *rest)) or "-"
     if isinstance(value, list):
         return ", ".join(str(v) for v in value) if value else "-"
     text = str(value)
@@ -408,6 +419,7 @@ _SHOW_FIELDS = (
     "agent_hint",
     "skills_to_invoke",
     "durable_outputs",
+    "merge",
 )
 
 

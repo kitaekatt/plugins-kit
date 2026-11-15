@@ -10,7 +10,7 @@ from typing import Any, TextIO
 
 from . import authoring, export, export_cli, manage, mutation, oslock, sessions
 
-EXITS = {"internal": 1, "publication_failed": 1, "usage": 2, "unknown_task": 3,
+EXITS = {"internal": 1, "publication_failed": 1, "commit_failed": 1, "usage": 2, "unknown_task": 3,
          "unknown_item": 3, "protocol_unsupported": 4, "conflict": 5,
          "refused": 6, "held": 6, "too_large": 6, "busy": 7}
 
