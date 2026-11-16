@@ -35,6 +35,9 @@ ABSENT = object()
 CFG_HINT = "See references/configuring.md."
 
 
+GUARD_KEY = f"{PID}/waiting-guard"
+
+
 def mins(n):
     """The instant n minutes before NOW."""
     return NOW - timedelta(minutes=n)
@@ -876,7 +879,7 @@ def test_r_c_w_hold_together_in_one_nudge_in_order(s):
     decision = s.stop(tasks=[SHELL], last="DONE")
     assert decision.held == ("R", "C", "W")
     assert decision.nudge == "\n".join([line_R(), line_C(), line_W()])
-    assert s.state()["nudges"] == {PID: 1}  # one nudge, one count
+    assert s.state()["nudges"] == {PID: 1, GUARD_KEY: 1}  # one nudge, one count, guard marked
     assert decision.to_output() == {
         "hookSpecificOutput": {"hookEventName": "Stop", "additionalContext": decision.nudge}
     }
@@ -899,37 +902,162 @@ def test_evaluate_makes_one_state_update_per_stop(s, monkeypatch):
     assert len(calls) == 1
 
 
+# ============================================================== job ownership
+#
+# The Stop payload lists every background task of the session, including shell jobs
+# and monitors a running subagent started. The main session's transcript records the
+# start of its own jobs as a tool result; a subagent's records live in
+# `<transcript stem>/subagents/agent-<id>.jsonl`. Measured shapes (Claude Code, Nov 2026):
+#   Command running in background with ID: <id>. Output is being written to: ...
+#   Command was moved to the background (ID: <id>) after running for 180s. ...
+#   Monitor started (task <id>, expires in 30m ...
+
+def started_record(task_id, how="running"):
+    """A transcript user line whose tool result announces `task_id` as a background task."""
+    text = {
+        "running": f"Command running in background with ID: {task_id}. Output is being written to: /x/{task_id}.output.",
+        "moved": f"Command was moved to the background (ID: {task_id}) after running for 180s. Output is being written to: /x/{task_id}.output.",
+        "monitor": f"Monitor started (task {task_id}, expires in 30m unless the source ends first).",
+    }[how]
+    return {"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "toolu_x", "content": text, "is_error": False}]}}
+
+
+def sidechain(session, name, *records):
+    """Write a subagent transcript beside the session transcript, as Claude Code lays it out."""
+    folder = session.transcript.with_suffix("") / "subagents"
+    folder.mkdir(parents=True, exist_ok=True)
+    lines = [dict(rec, isSidechain=True, agentId=name) for rec in records]
+    (folder / f"agent-{name}.jsonl").write_text("".join(json.dumps(x) + "\n" for x in lines), encoding="ascii")
+
+
+def job(task_id, description="job"):
+    return {"id": task_id, "type": "shell", "status": "running", "description": description, "command": "sleep 1"}
+
+
+@pytest.mark.parametrize("how", ["running", "moved", "monitor"])
+def test_owner_a_shell_job_only_a_subagent_started_holds_nothing(s, how):
+    s.entry(PID, "sdk", NOW)
+    sidechain(s, "w1", started_record("tsub", how))
+    decision = s.stop(tasks=[job("tsub")], last="DONE")
+    assert decision.held == () and decision.nudge is None
+
+
+def test_owner_a_job_the_main_session_started_still_holds_c_and_w(s):
+    s.entry(PID, "sdk", NOW)
+    s.add(started_record("tmain"))
+    decision = s.stop(tasks=[job("tmain")], last="DONE")
+    assert decision.held == ("C", "W")
+
+
+def test_owner_a_main_started_job_a_subagent_only_mentions_is_still_main_owned(s):
+    """A waiter's brief names the job's output path, so the id appears in a sidechain file."""
+    s.entry(PID, "sdk", NOW)
+    s.add(started_record("tmain"))
+    sidechain(s, "w1", {"type": "user", "message": {"role": "user", "content": "wait on /x/tmain.output"}},
+              started_record("tmain", "moved"))
+    assert s.stop(tasks=[job("tmain")], last="DONE").held == ("C", "W")
+
+
+def test_owner_the_nudge_names_only_the_main_sessions_jobs(s):
+    s.entry(PID, "sdk", NOW)
+    s.add(started_record("tmain"))
+    sidechain(s, "w1", started_record("tsub"))
+    decision = s.stop(tasks=[job("tsub"), job("tmain")], last="DONE")
+    assert decision.nudge == "\n".join([
+        line_C(counted="tmain (shell, running): job"),
+        line_W(counted="tmain (shell, running): job"),
+    ])
+
+
+def test_owner_without_evidence_a_job_counts(s):
+    """No subagents folder, or no announcement of the id anywhere: counted (a silent miss is worse)."""
+    s.entry(PID, "sdk", NOW)
+    assert s.stop(tasks=[job("tunknown")], last="DONE").held == ("C", "W")
+    sidechain(s, "w1", started_record("tother"))
+    assert s.stop(tasks=[job("tunknown")], last="DONE").held == ("C", "W")
+
+
+def test_owner_the_ids_are_matched_whole(s):
+    s.entry(PID, "sdk", NOW)
+    sidechain(s, "w1", started_record("tsub12"))
+    assert s.stop(tasks=[job("tsub")], last="DONE").held == ("C", "W")
+
+
+def test_owner_subagent_owned_ids_reads_main_and_sidechain_files(tmp_path):
+    main = tmp_path / "t.jsonl"
+    main.write_text(json.dumps(started_record("a1")) + "\n", encoding="ascii")
+    folder = tmp_path / "t" / "subagents"
+    folder.mkdir(parents=True)
+    (folder / "agent-x.jsonl").write_text(
+        json.dumps(started_record("a1")) + "\n" + json.dumps(started_record("b2")) + "\n", encoding="ascii")
+    (folder / "agent-x.meta.json").write_text(json.dumps(started_record("c3")), encoding="ascii")
+    assert pt.subagent_owned_ids(str(main), {"a1", "b2", "c3", "d4"}) == {"b2"}
+    assert pt.subagent_owned_ids(str(main), set()) == set()
+    assert pt.subagent_owned_ids(str(tmp_path / "missing.jsonl"), {"b2"}) == set()
+
+
 # ================================================================== rows 8 and 9
 
-def test_row8_budget_three_nudges_then_system_message_and_unresolved(s):
+def test_row8_budget_three_nudges_for_r_then_system_message_and_unresolved(s):
+    """R keeps its budget of three; the waiting guard (C, W) speaks once per prompt."""
     return_setup(s)
     kwargs = dict(tasks=[SHELL], last="DONE")
     nudges = [s.stop(**kwargs).nudge for _ in range(3)]
-    expected = "\n".join([line_R(), line_C(), line_W()])
-    assert nudges == [expected] * 3
-    assert s.state()["nudges"] == {PID: 3}
+    assert nudges == ["\n".join([line_R(), line_C(), line_W()]), line_R(), line_R()]
+    assert s.state()["nudges"] == {PID: 3, GUARD_KEY: 1}
 
     fourth = s.stop(**kwargs)
     assert fourth.nudge is None and fourth.held == ("R", "C", "W")
-    assert fourth.system_message == "\n".join([
-        L("recap-on-return", PID, "unresolved after 3 nudges: return recap not run."),
-        L("waiting-guard", PID, "unresolved after 3 nudges: no waiter agent covering the job."),
-        L("waiting-guard", PID, "unresolved after 3 nudges: turn did not end with `Waiting on <what>`."),
-    ])
+    assert fourth.system_message == L(
+        "recap-on-return", PID, "unresolved after 3 nudges: return recap not run.")
     state = s.state()
-    assert state["nudges"] == {PID: 3}  # exhaustion does not count
+    assert state["nudges"] == {PID: 3, GUARD_KEY: 1}  # exhaustion does not count
     assert state["pending_return"] is None
     assert state["unresolved"] == [
-        f"recap-on-return: return recap not run (prompt {PID})",
         f"waiting-guard: no waiter agent covering the job (prompt {PID})",
         f"waiting-guard: turn did not end with `Waiting on <what>` (prompt {PID})",
+        f"recap-on-return: return recap not run (prompt {PID})",
     ]
     assert fourth.to_output() == {"systemMessage": fourth.system_message}
 
-    fifth = s.stop(**kwargs)  # R was cleared by the exhaustion; C and W still held
-    assert fifth.nudge is None and fifth.held == ("C", "W")
-    assert len(fifth.system_message.split("\n")) == 2
+    fifth = s.stop(**kwargs)  # R was cleared by the exhaustion; C and W are repeats
+    assert fifth == pstop.StopDecision(None, None, ("C", "W"))
     assert len(s.state()["unresolved"]) == 3  # deduplicated
+
+
+def test_guard_never_repeats_the_same_nudge_within_one_prompt(s):
+    s.entry(PID, "sdk", NOW)
+    first = s.stop(tasks=[SHELL], last="DONE")
+    assert first.nudge == "\n".join([line_C(), line_W()])
+    for _ in range(3):
+        again = s.stop(tasks=[SHELL], last="DONE")
+        assert again.nudge is None and again.system_message is None and again.to_output() is None
+        assert again.held == ("C", "W")  # still held, only no longer said
+    state = s.state()
+    assert state["nudges"] == {PID: 1, GUARD_KEY: 1}
+    assert state["unresolved"] == [
+        f"waiting-guard: no waiter agent covering the job (prompt {PID})",
+        f"waiting-guard: turn did not end with `Waiting on <what>` (prompt {PID})",
+    ]
+
+
+def test_guard_speaks_once_for_each_prompt(s):
+    s.entry(PID, "sdk", NOW)
+    s.entry("prompt-2", "sdk", NOW)
+    assert s.stop(PID, tasks=[SHELL], last="DONE").nudge == "\n".join([line_C(), line_W()])
+    assert s.stop(PID, tasks=[SHELL], last="DONE").nudge is None
+    assert s.stop("prompt-2", tasks=[SHELL], last="DONE").nudge == "\n".join(
+        [line_C("prompt-2"), line_W("prompt-2")])
+    assert s.stop("prompt-2", tasks=[SHELL], last="DONE").nudge is None
+
+
+def test_guard_stays_silent_after_the_user_switches_it_off(make):
+    """The way to stop the waiting talk for good: `waiting-guard` off in a config layer."""
+    quiet = make({"waiting-guard": False}, name="quiet")
+    quiet.entry(PID, "sdk", NOW)
+    assert quiet.stop(tasks=[SHELL], last="DONE") == pstop.StopDecision(None, None, ())
+    assert quiet.state()["nudges"] == {}
 
 
 def test_row8_budget_is_per_prompt_id(s):
@@ -1234,7 +1362,7 @@ def test_decision_output_shapes():
 
 
 def test_budget_constant():
-    assert pstop.NUDGE_BUDGET == 3
+    assert pstop.NUDGE_BUDGET == 3  # R and E; the waiting guard speaks once per prompt
 
 
 # ================================================================ loud failures
