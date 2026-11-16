@@ -391,6 +391,35 @@ A first-party package registered in the marketplace's `packages/released.json` (
 - **A target that cannot be met is a FAILED venv, not a quiet skip.** The usual causes are a ledger entry whose wheel the index has not propagated yet and a stale marketplace clone; the remediation printed is `bootstrap run`, and no dependency stamp is written, so the next pass retries.
 - **A claudx session reads the working tree's ledger**, not the installed clone, and installs the released package from the index: working-tree changes to a registered package are not loaded into plugin venvs.
 
+### A session older than the installed bootstrap hands its passes off
+
+Claude Code binds `${CLAUDE_PLUGIN_ROOT}` when a session starts, so a session
+that was running when bootstrap updated keeps firing the OLD copy's hooks for
+the rest of its life. SessionStart fires again inside such a session -- on
+`/clear`, on `/compact`, and on a subagent's compaction (`SessionStart:compact`
+in the subagent transcript, carrying the parent's `session_id` and the
+subagent's cwd). Both skip gates bypass after any registry change, so that old
+copy then runs a full pass. Every copy shares one data dir and one bootstrap
+venv, so an old copy's pass and the installed copy's passes undo each other:
+each finds the venv's editable install (`__editable__.bootstrap-<other>.pth`)
+pointing at the other version and re-runs `uv sync`, and each re-points the
+levers in `~/.local/bin` (including `bootstrap`) at its own copy. A
+project-scoped install of an older version does the same.
+
+From 0.170.0, `session-bootstrap.sh` in a cache-layout copy (`.../bootstrap/<X.Y.Z>/`)
+first asks `hooks/sessionstart/newest-copy.sh` for a strictly newer complete
+copy beside it -- one carrying the hook, the engine entry point, and a
+`plugin.json` whose version equals its directory name. When one exists it logs
+a `hand-off` block naming both versions to `bootstrap.log` (or prints it, for
+`--console`) and `exec`s that copy's hook with the same arguments and unread
+stdin, so the pass, the levers and the venv are all the newest copy's. A dev
+checkout never hands off. The "installed" version here is the highest cache
+version, the same rule the `bootstrap` lever uses to find its plugin tree.
+
+The protection is only in copies from 0.170.0 on: a session pinned to an older
+copy keeps running it until that session ends. Its passes are labelled
+`bootstrap@<old>` in `bootstrap.log`; ending those sessions stops them.
+
 ### Anomalies — stop, investigate, surface to the user
 
 These mean the normal flow did **not** happen. Raise them; do not report success:

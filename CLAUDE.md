@@ -350,6 +350,12 @@ The user's rule for this repo, and the reason worktrees are rare here:
 4. **Whoever creates a worktree or scratch directory removes it as soon as it is no
    longer needed.** A script removes its own in a `finally`. This overrides the general
    habit of leaving scratch behind.
+5. **Carve-out: databench-managed agent worktrees.** databench runs headless agent
+   units in writable branch worktrees under `~/.local/share/databench/worktrees/<repo>/<unit>`
+   (branch `agent/<unit-id>`), commits there, and creates and removes them itself. They
+   belong to databench, not to an interactive session. This repository declares no
+   `merge:` policy, so databench never merges them; the owner merges by hand. Rules 1-4
+   still bind interactive work, and a session never edits inside a databench worktree.
 
 Before creating either, prefer the no-copy route: git reads any revision without a
 checkout (`git show`, `git diff`, `git log`), git plumbing builds commits without one
@@ -1256,7 +1262,7 @@ claude_md:
     - rule: Stay on dev -- never create a branch or run git checkout/switch in this working tree; scope reviews with a commit range.
       keywords: [branch, git checkout, git switch, shared working tree, concurrent session, scope a review, range]
       why: The tree is shared with other agent sessions and the checked-out branch is global to it, so a switch silently redirects their commits onto your branch. See the never_create_or_switch_branches insight and the anti-pattern section in Development Workflow.
-    - rule: All work happens in the project folder. A worktree is only a read-only copy of the project at a specific commit, a scratch directory only holds a subset of the project for a tool, and whoever creates either removes it as soon as it is no longer needed.
+    - rule: All work happens in the project folder. A worktree is only a read-only copy of the project at a specific commit, a scratch directory only holds a subset of the project for a tool, and whoever creates either removes it as soon as it is no longer needed. The one exception is a databench-managed agent worktree, which is writable and owned by databench.
       keywords: [worktree, git worktree add, EnterWorktree, isolation, second checkout, scratch directory, parallel writers, read-only snapshot, cleanup, merge-base baseline]
       why: The user's standing rule for this repo. Parallel writers share this folder with separate file ownership, and git reads or builds any revision without a checkout, so a second copy is rarely needed and never a place to do work. See "Worktrees and scratch copies" in Development Workflow.
     - rule: Every shipped model declaration lists at least one Claude-harness and one Codex-harness entry, so an action survives either usage pool running out.

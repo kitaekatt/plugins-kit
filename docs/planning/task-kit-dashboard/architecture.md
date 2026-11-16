@@ -858,8 +858,8 @@ As built (task-kit 0.12.0):
 - FastAPI/Uvicorn: rejected as dependency and lifecycle cost for a local API.
 - SSE/WebSocket: rejected for v1 because polling matches durable snapshots.
 - One machine-wide llm ledger: rejected by one-process-per-ledger ownership.
-- Worktree per run: rejected by explicit shared-tree and plugin-neutral rules.
-- Automatic agent commits: rejected because review and publication remain human.
+- Worktree per run: rejected by explicit shared-tree and plugin-neutral rules. Reversed for databench-managed agent runs (agent-runs design D3, section 6): each unit runs in a databench-owned branch worktree.
+- Automatic agent commits: rejected because review and publication remain human. Reversed for databench-managed agent runs (agent-runs design D4, section 6.1): the runner commits to the unit branch; publication stays human unless a task declares `merge:`.
 - Resume the blocked model session: rejected; current continuation is contract-only.
 - Auto-retry: rejected because repeated writes and paid calls compound failures.
 - OpenRouter top-level workers: rejected by the user ruling; helpers remain bounded.

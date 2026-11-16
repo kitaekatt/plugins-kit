@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "tests/clean-code-kit/fixtures/sample_project/src/pkg",
+  "decision": "none",
+  "source_sha": "532e3c785765a8e29ef5d549aba08deb935fa83e",
+  "input_sha256": "2b1c312c7725eeb58db775e957bb016e42246858e47a5bab00cc3acda8d5d6a5",
+  "input_shape_sha256": "468313f9a632e85f98f8d481302b3d606dc8c61d4e2c88498b60b0ebd2e2b6c5",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

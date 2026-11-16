@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": ".claude/clean-code-kit",
+  "decision": "none",
+  "source_sha": "532e3c785765a8e29ef5d549aba08deb935fa83e",
+  "input_sha256": "9ddea7b1f53d01c66eadb286e0532e1f5be43e2d70bb9c8b5bf58ddd3c64fd21",
+  "input_shape_sha256": "b8bd1e6a38dc4f5391fb548588d2d98cb8b01179a4dceef377206ae8c446b8fb",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

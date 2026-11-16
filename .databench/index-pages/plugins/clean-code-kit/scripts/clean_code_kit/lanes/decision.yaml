@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/clean-code-kit/scripts/clean_code_kit/lanes",
+  "decision": "none",
+  "source_sha": "a0940524c17758c9806ce4758c8c79bbf6edcda1",
+  "input_sha256": "384eb1d31c44929819fb56ecf6e7442926e78750b9a70fd6d14872f0b349c5b2",
+  "input_shape_sha256": "5431676621985cd64d2bbda104c724f873f302e76ee6ba914fe85621ee8649ef",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

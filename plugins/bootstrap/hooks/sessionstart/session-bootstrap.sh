@@ -64,6 +64,35 @@ BOOTSTRAP_LABEL="${MARKETPLACE_NAME}:bootstrap"
 BOOTSTRAP_DATA_ROOT="${CLAUDE_BOOTSTRAP_DATA_ROOT:-${HOME}/.claude/plugins/data}"
 PLUGIN_DATA="${BOOTSTRAP_DATA_ROOT}/${MARKETPLACE_NAME}/bootstrap"
 
+# --- Superseded-copy hand-off ---
+# A session that started before a bootstrap update keeps this OLD copy bound as
+# ${CLAUDE_PLUGIN_ROOT} for its whole life, and fires it again on every
+# SessionStart it sees (a subagent's compaction included). Every copy shares
+# one data dir and one bootstrap venv, so an old copy's pass and the installed
+# copy's passes undo each other: each re-syncs the venv's editable install to
+# its own version and re-points the levers in ~/.local/bin. So a copy that is
+# no longer the newest one in the cache hands the whole invocation -- same
+# arguments, unread stdin -- to the newest copy. Decision rules (cache layout
+# only, complete copies only): newest-copy.sh. Before the claude-plugin-test
+# stand-down on purpose: the newest copy applies that stand-down itself.
+if [ -f "$SCRIPT_DIR/newest-copy.sh" ] && . "$SCRIPT_DIR/newest-copy.sh"; then
+    _NEWER_ROOT="$(bootstrap_newer_copy "$PLUGIN_ROOT")"
+    if [ -n "$_NEWER_ROOT" ]; then
+        _HANDOFF_MSG="superseded: bootstrap $(basename "$PLUGIN_ROOT") hook handed this pass to the newest installed copy, $(basename "$_NEWER_ROOT") ($_NEWER_ROOT)"
+        if [ -n "$FLAG_CONSOLE" ]; then
+            # Console runs write no bootstrap state; print instead of logging.
+            echo "${BOOTSTRAP_LABEL}: $_HANDOFF_MSG"
+        else
+            mkdir -p "$PLUGIN_DATA" 2>/dev/null
+            printf -- '--- %s@%s hand-off %s ---\n%s\n' "$BOOTSTRAP_LABEL" \
+                "$(basename "$PLUGIN_ROOT")" \
+                "$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo unknown-time)" \
+                "$_HANDOFF_MSG" >> "$PLUGIN_DATA/bootstrap.log" 2>/dev/null
+        fi
+        exec "${BASH:-bash}" "$_NEWER_ROOT/hooks/sessionstart/session-bootstrap.sh" "$@"
+    fi
+fi
+
 # --- claude-plugin-test stand-down ---
 # In a session launched by scripts/claude_plugin_test.py, the plugin is loaded
 # from the working copy via --plugin-dir, but the marketplace-installed copy

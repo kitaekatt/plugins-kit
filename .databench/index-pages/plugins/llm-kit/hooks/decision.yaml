@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/llm-kit/hooks",
+  "decision": "none",
+  "source_sha": "8a8ce58201fdc59029eeabfd7e2762b8d03a8fb4",
+  "input_sha256": "6ce6ff9b2ed253a9556c02425763896854b438b61f6a76e12f7b00f23d18cea0",
+  "input_shape_sha256": "ecc62889689bbc6f9b0c607265fedff6b3b13f7fbf88976db010901e29f93ac3",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

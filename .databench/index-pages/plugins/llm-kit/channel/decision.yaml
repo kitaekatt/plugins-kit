@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/llm-kit/channel",
+  "decision": "none",
+  "source_sha": "474106dc047ee18b90d3a4ee0aabc95df50a53b3",
+  "input_sha256": "cc58612d8eab731b7e2f6cec92a5f1d5e0316689f785b7a9ab3f02fcada4adfd",
+  "input_shape_sha256": "a37347ddc7d1ac1eaaab4332dfb45fdec1a8d37012449d480d14eeefc0e0032b",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}
