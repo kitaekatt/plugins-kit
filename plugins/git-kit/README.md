@@ -173,9 +173,9 @@ resolves that entry's repository and project settings, so it can retire an
 entry listed for another repository. Run it outside the target directory.
 After the task is pushed or merged, `remove` runs Git's worktree removal and
 pruning. It refuses unpublished commits, modified tracked files and untracked
-files. Ignored files also block removal by default because they can contain
-local secrets or state. `remove <path> --include-ignored` deletes those ignored
-files with the worktree; it still refuses unpublished commits and dirty files.
+files. Ignored files (`.venv`, `node_modules`, build output) do not block it:
+a worktree with no uncommitted changes and no unpublished commits is removed
+with its ignored files, without a question (user ruling, 2026-11-16).
 Git also refuses locked entries. It does not delete branches.
 The script uses Python and Git argument arrays without shell commands and is
 intended for macOS, Linux and Windows Git Bash.

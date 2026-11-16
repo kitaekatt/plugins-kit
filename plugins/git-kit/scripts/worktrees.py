@@ -263,7 +263,7 @@ def list_worktrees(settings: WorktreeSettings) -> list[dict[str, Any]]:
     return result
 
 
-def remove(repo: Path, settings: WorktreeSettings, path: Path, include_ignored: bool = False) -> dict[str, str]:
+def remove(repo: Path, settings: WorktreeSettings, path: Path) -> dict[str, str]:
     task = contained_task(settings.root, path)
     entry = next((r for r in records(repo) if Path(r["worktree"]).resolve() == task), None)
     if entry is None or task == project_root(repo):
@@ -276,9 +276,8 @@ def remove(repo: Path, settings: WorktreeSettings, path: Path, include_ignored: 
     dirty, ignored = worktree_status(task)
     if dirty:
         raise ValueError(f"Refusing to remove dirty worktree: {task}")
-    if ignored and not include_ignored:
-        raise ValueError(f"Refusing to remove worktree with ignored files; use --include-ignored to delete them: {task}")
-    flags = ["--force"] if ignored and include_ignored else []
+    # Ignored files (.venv, node_modules, build output) are setup, not work: they go with a clean worktree.
+    flags = ["--force"] if ignored else []
     git(repo, "worktree", "remove", *flags, str(task))
     git(repo, "worktree", "prune")
     return {"removed": str(task)}
@@ -295,7 +294,6 @@ def main() -> int:
     commands.add_parser("config", help="Read effective settings without changing files")
     delete = commands.add_parser("remove")
     delete.add_argument("path", type=Path)
-    delete.add_argument("--include-ignored", action="store_true", help="Delete ignored files with the worktree")
     args = parser.parse_args()
     try:
         repo = Path.cwd()
@@ -316,7 +314,7 @@ def main() -> int:
         elif args.command == "list":
             output = list_worktrees(settings)
         else:
-            output = remove(repo, settings, args.path, args.include_ignored)
+            output = remove(repo, settings, args.path)
         print(json.dumps(output, indent=2))
         if args.command == "new" and output["setup"]["exit"]:
             return output["setup"]["exit"] if output["setup"]["exit"] > 0 else 1

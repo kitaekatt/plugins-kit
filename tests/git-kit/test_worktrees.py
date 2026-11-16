@@ -333,19 +333,20 @@ def test_fetch_failure_and_orphan_leftover_are_loud(wt, remote_repo):
     assert "Unregistered leftover" in failure.stderr
 
 
-def test_ignored_files_block_removal(wt, remote_repo):
+def test_ignored_files_do_not_block_removal(wt, remote_repo):
+    """A worktree with no uncommitted changes is disposable: its ignored setup (.venv, node_modules) goes with it."""
     repo = remote_repo
     task = Path(cli(repo, "new", "ignored")["path"])
-    (repo.path / ".git/info/exclude").write_text("*.secret\n", encoding="utf-8")
-    valuable = task / "only-copy.secret"
-    valuable.write_text("unique ignored content", encoding="utf-8")
+    (repo.path / ".git/info/exclude").write_text(".venv/\nnode_modules/\n", encoding="utf-8")
+    for folder in (".venv", "node_modules"):
+        (task / folder).mkdir()
+        (task / folder / "state").write_text("setup", encoding="utf-8")
     row = cli(repo, "list")[0]
     assert row["dirty"] is False
     assert row["ignored"] is True
-    failure = cli(repo, "remove", str(task), check=False)
-    assert failure.returncode != 0
-    assert "--include-ignored" in failure.stderr
-    assert valuable.read_text() == "unique ignored content"
+    assert cli(repo, "remove", str(task)) == {"removed": str(task)}
+    assert not task.exists()
+    assert str(task) not in repo.git("worktree", "list").stdout
 
 
 def test_local_branch_source_without_reachable_remote(wt, remote_repo) -> None:
@@ -382,19 +383,8 @@ def test_list_separates_dirty_and_ignored(wt, remote_repo) -> None:
     assert row["ignored"] is True
 
 
-def test_remove_include_ignored(wt, remote_repo) -> None:
-    repo = remote_repo
-    task = Path(cli(repo, "new", "disposable")["path"])
-    (repo.path / ".git/info/exclude").write_text(".venv/\n", encoding="utf-8")
-    (task / ".venv").mkdir()
-    (task / ".venv/state").write_text("disposable", encoding="utf-8")
-    assert cli(repo, "remove", str(task), "--include-ignored") == {"removed": str(task)}
-    assert not task.exists()
-    assert str(task) not in repo.git("worktree", "list").stdout
-
-
 @pytest.mark.parametrize("unsafe", ["untracked", "modified", "unpublished", "locked"])
-def test_include_ignored_preserves_other_removal_guards(wt, remote_repo, unsafe) -> None:
+def test_removal_guards_hold_with_ignored_files(wt, remote_repo, unsafe) -> None:
     repo = remote_repo
     task = Path(cli(repo, "new", "protected")["path"])
     task_repo = type(repo)(task)
@@ -409,9 +399,8 @@ def test_include_ignored_preserves_other_removal_guards(wt, remote_repo, unsafe)
         task_repo.commit_file("new.txt", "unpublished")
     else:
         repo.git("worktree", "lock", str(task))
-    failure = cli(repo, "remove", str(task), "--include-ignored", check=False)
+    failure = cli(repo, "remove", str(task), check=False)
     assert failure.returncode != 0
-    assert "unrecognized arguments" not in failure.stderr
     assert valuable.read_text() == "preserve"
 
 
