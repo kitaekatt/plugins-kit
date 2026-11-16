@@ -121,5 +121,16 @@ def test_openai_yaml_prompt_is_aligned() -> None:
     assert "Omit empty buckets" in prompt
     assert "did not already say" in prompt
     assert "verdict line alone" in prompt
+    assert "closing the task" in prompt
     # The skill's descriptor section names the same file.
     assert "agents/openai.yaml" in _SKILL_MD.read_text(encoding="utf-8")
+
+
+def test_working_a_task_makes_its_closure_the_outcome() -> None:
+    """An agent working a tracked task owns finishing and closing it; the
+    observed miss was reporting done because closure was never asked for."""
+    text = " ".join(_SKILL_MD.read_text(encoding="utf-8").split())
+    assert "the requested outcome is the task's completion as its tracker defines it" in text
+    assert "add the close to the ledger and cite that document" in text
+    assert "an open task is then a gap for step 3, not a report item" in text
+    assert "Without such a document, the close is not part of the outcome" in text
