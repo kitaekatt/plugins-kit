@@ -442,8 +442,10 @@ class TestWorkCLI:
             'Skill(skill: "md-read")',
             "agent_hint: backend-developer",
             "== then: start the work now, dispatched per orchestrate -- "
-            "do not implement inline in the main context; end the turn for "
-            "the user when the task is blocked or its CLAUDE.md claims the "
+            "do not implement inline in the main context; the work is done "
+            "only when every open item is finished and the task is closed "
+            "(task.py close), per references/work-and-hand-off.md Step 3; end "
+            "the turn for the user when the task is blocked or its CLAUDE.md claims the "
             "decision ==",
         ]
     def test_error_finding_exits_nonzero_findings_on_stderr(self, tmp_path):

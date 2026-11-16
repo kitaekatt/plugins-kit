@@ -57,6 +57,13 @@ uncommitted changes, and background work are outside this ledger. A foreign
 change enters only when it actually blocks an operation this session must perform;
 describe the blocked operation, not the other session's work.
 
+When this session works a tracked task (a task folder, ticket, or other
+record with open items), the requested outcome is the task's completion as
+its tracker defines it. When the tracker's documentation says its work ends by
+closing the task, add the close to the ledger and cite that document; an open
+task is then a gap for step 3, not a report item. Without such a document, the
+close is not part of the outcome.
+
 Completion includes required validation, review, and authorized publication.
 A clean working tree alone does not prove that external writes, migrations,
 reviews, or jobs succeeded. Confirm the state relevant to each ledger entry.

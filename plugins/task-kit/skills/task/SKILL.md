@@ -64,6 +64,8 @@ capability_skill:
           action: "Run the work verb. Any validation error or warning blocks. On success it registers this session when enabled; relay each `session:` line in one sentence."
         - n: 2
           action: "Immediately invoke EVERY emitted Skill(...) line via the Skill tool in printed order, before other tools. Obey the closing directive and START through orchestrate in this turn, honoring eligible agent_hint."
+        - n: 3
+          action: "Done means closed: when the last open item is finished, close the task without being asked (reopen undoes it), per references/work-and-hand-off.md#step-3-finish-and-close."
     - id: update
       keywords: [update task, edit fields, refresh folder, set status, set priority, rotation]
       user_objective: "Upsert a task and apply task.yaml field edits; refresh the folder."

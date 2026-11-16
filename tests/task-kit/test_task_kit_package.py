@@ -136,7 +136,10 @@ def test_the_work_capability_starts_with_the_work_verb_and_no_surface_names_task
     in a reference.
     """
     steps = skill_capabilities()["work"]["steps"]
-    assert [step["n"] for step in steps] == [1, 2]
+    assert [step["n"] for step in steps] == list(range(1, len(steps) + 1))
+    # The last step points at the one statement of the closure rule, and that heading exists.
+    assert "work-and-hand-off.md#step-3-finish-and-close" in steps[-1]["action"]
+    assert "### Step 3: finish and close" in (PLUGIN_ROOT / "skills" / "task" / "references" / "work-and-hand-off.md").read_text(encoding="utf-8")
     assert steps[0]["action"].startswith("Run the work verb")
     assert not (PLUGIN_ROOT / "skills" / "task" / "scripts" / "task_hold.py").exists()
     surfaces = {"SKILL.md": SKILL}

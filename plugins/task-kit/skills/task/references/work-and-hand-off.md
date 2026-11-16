@@ -61,6 +61,22 @@ The failure pattern is treating the initialization block as informational:
 invoking only task-declared skills, skipping orchestrate, and implementing
 inline. Invoke every line, then follow the dispatch directive.
 
+### Step 3: finish and close
+
+The `work` capability's job is to carry a named task to its end, and in this
+skill a task ends at `close` (`lifecycle-operations.md#close`). So the work is
+done only when every open item in plan.md's `task_items:` block is finished and
+removed, required verification, review, and authorized publication have passed,
+and the task is closed. Close it without a separate ask: close only sets
+`status: closed` and keeps the folder, and the user can undo it with
+`task.py reopen <ref>`.
+
+When the last item is removed, run `bring_current` (rotate and update,
+self-verify), then `task.py close <ref>`, then commit and push the task folder
+per `bring_current`. Report the task as closed. Only a real blocker or a
+decision the task's CLAUDE.md claims for the user leaves it open; name that
+dependency instead of reporting done.
+
 ## bring_current
 
 The passes that `refresh` and `hand_off` share. Both cite this section; the

@@ -536,7 +536,9 @@ def _emit_work(result) -> None:
     skills and then implementing inline anyway). It also says to START:
     the second observed miss was orienting correctly and then ending the
     turn on an unblocked task, which costs the user a round trip to say
-    "go". It names the two cases that still stop the turn -- a blocker, and
+    "go". It says the work ends at closure: the third observed miss was
+    an agent reporting done with the task still open because nobody had
+    asked it to close the task. It names the two cases that still stop the turn -- a blocker, and
     a decision the task folder's CLAUDE.md claims for the user -- so it
     removes a dead checkpoint without removing a real one."""
     print("== task init -- invoke each of these now, one Skill call each ==")
@@ -546,7 +548,10 @@ def _emit_work(result) -> None:
         print(f"agent_hint: {result.agent_hint}")
     print(
         "== then: start the work now, dispatched per orchestrate -- "
-        "do not implement inline in the main context; end the turn for the "
+        "do not implement inline in the main context; the work is done "
+        "only when every open item is finished and the task is closed "
+        "(task.py close), per references/work-and-hand-off.md Step 3; end "
+        "the turn for the "
         "user when the task is blocked or its CLAUDE.md claims the "
         "decision =="
     )
