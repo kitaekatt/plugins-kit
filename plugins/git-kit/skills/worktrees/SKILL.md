@@ -72,11 +72,14 @@ technique_skill:
           action: |
             After the task is pushed or merged, run outside its directory:
             "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/worktrees.py" remove <path>.
-            The helper refuses unpublished commits, tracked changes and untracked
-            files. Ignored files (.venv, node_modules, build output) do not block it.
-            Policy and hazard: plugins/CLAUDE.md register entry
-            "git-kit removes clean worktrees together with ignored files".
-            Git also refuses locked entries. Cleanup then runs
+            The helper refuses unpublished commits, modified tracked files and
+            untracked files. Git also refuses locked entries.
+            For a clean, unlocked worktree, remove deletes the worktree together
+            with its ignored files (.venv, node_modules, build output).
+            This also deletes an ignored hand-made file whose only copy is in
+            the worktree, such as .env or a local database.
+            Copy such files outside the worktree before removal.
+            Cleanup then runs
             git worktree remove and git worktree prune. A failure
             stops cleanup; report it. Branch deletion is a separate user decision.
       checklist:
