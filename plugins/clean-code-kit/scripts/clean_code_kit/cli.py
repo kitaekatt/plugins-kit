@@ -87,13 +87,15 @@ def run(args: argparse.Namespace) -> Path:
 
     scratch = Path(tempfile.mkdtemp(prefix="clean-code-kit-"))
     try:
-        snapshot.take(repo, mode, scratch)
-        snapshot.require_roots(scratch, cfg.source_roots, "source_roots", cfg.path, mode)
-        snapshot.require_roots(scratch, cfg.test_roots, "test_roots", cfg.path, mode)
-        snapshot.prune(scratch, cfg.exclude, cfg.languages)
+        tracked = snapshot.tracked_files(repo, mode)
+        snapshot.require_roots(tracked, cfg.source_roots, "source_roots", cfg.path, mode)
+        snapshot.require_roots(tracked, cfg.test_roots, "test_roots", cfg.path, mode)
+        roots = [*cfg.source_roots, *cfg.test_roots]
+        snapshot.take(repo, mode, scratch, snapshot.select_paths(
+            tracked, cfg.source_roots, cfg.test_roots, cfg.exclude, cfg.languages), roots)
         selection = coverage.select(scratch, cfg.source_roots, list(LANES))
         skipped = coverage.select_skipped(scratch, cfg.source_roots, list(LANES))
-        target["coverage"] = coverage.table(snapshot.tracked_files(repo, mode),
+        target["coverage"] = coverage.table(tracked,
                                             {n: selection[n] for n in names},
                                             {n: skipped[n] for n in names})
         results = []

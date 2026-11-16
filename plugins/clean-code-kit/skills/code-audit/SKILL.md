@@ -53,9 +53,10 @@ domain_skill:
       containing `--target`, which may be any directory inside it (default:
       the current directory). It reads the target's config at
       `.claude/clean-code-kit/config.yaml`, where every key is required and
-      none has a default, copies a
-      snapshot of the repository (committed HEAD, or the working tree) into a
-      temporary directory, prunes it to the configured languages and excludes,
+      none has a default, selects from git's file list for a snapshot of the
+      repository (committed HEAD, or the working tree) the files under
+      `source_roots` and `test_roots` that survive `exclude` and `languages`,
+      copies only those into a temporary directory,
       runs each lane's tool on that copy, and writes `report.md` plus
       `findings.json` into a report directory under the target's
       `.local-data/`. The temporary copy is removed afterwards, and nothing

@@ -99,8 +99,8 @@ source root, and it is why no lane in this version measures test code.
 
 ## Snapshot modes
 
-The tools never run on the repository itself. The runner copies a snapshot
-into a temporary directory, prunes it, runs the lanes there, and removes the
+The tools never run on the repository itself. The runner selects, from git's file list,
+the files under `source_roots` and `test_roots` that survive `exclude` and `languages`, copies only those into a temporary directory, runs the lanes there, and removes the
 directory when the run ends, whether it succeeded or failed. Any files a tool
 writes beside the code it scans land in that copy, not in the target.
 
