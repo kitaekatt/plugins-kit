@@ -81,6 +81,15 @@ unconfigurable opinion whose test passes is a finding.
   documented in `secrets-kit/skills/secrets-kit/SKILL.md`. A consumer that needs another
   layout must use a separate repository contract or fork the plugin; there is no supported
   layout override to leave half-configured.
+- **git-kit removes clean worktrees together with ignored files.** `worktrees.py remove`
+  deletes a worktree together with its ignored files when it has no unpublished commits,
+  no modified tracked files, no untracked files and is not locked. There is no confirmation
+  or configuration seam for ignored files. User ruling (2026-11-16): "node_modules and .venv
+  shouldn't block deleting a worktree; we can delete a worktree without confirmation if it
+  has no uncommitted changes". We retain this policy so disposable dependencies and build
+  output do not block cleanup. The known hazard is that an ignored hand-made file whose
+  only copy is in the worktree (for example `.env` or a local database) is deleted too.
+  A user who needs that data must preserve it outside the worktree before removal.
 - **skills-kit's Architectural rule tier is not configurable.** The type contracts are what
   make an audit comparable across projects; a project that disables them is not running the
   same audit. Optional-tier rules and thresholds ARE configurable, and
