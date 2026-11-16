@@ -22,7 +22,9 @@ opt-in by installation. Every behavior has an id and can be switched off.
 - **Guards waiting.** While background work runs, non-agent jobs get a waiter
   agent so the terminal shows work, a watcher (`scripts/watch.py`) reports
   progress every 20 minutes and a stall after 20 quiet minutes (both by
-  default), and the turn ends with `Waiting on <what>`.
+  default), and the turn ends with `Waiting on <what>`. It counts only jobs the
+  main session started, not a running subagent's, and says the waiting nudge once
+  per prompt.
 - **Keeps away turns quiet.** Short interim messages, questions parked for the
   recap, and a push notification only when your input is needed.
 

@@ -22,7 +22,8 @@ import presence_config as pc
 import presence_state as ps
 import presence_transcript as pt
 
-NUDGE_BUDGET = 3
+NUDGE_BUDGET = 3  # R and E; the waiting guard (GUARD_CODES) speaks once per prompt
+GUARD_CODES = ("C", "W")
 
 # These types are agent work (they show "working" by themselves); every other type
 # is non-agent and needs a waiter agent.
@@ -141,6 +142,23 @@ def _owned_tasks(tasks: list[dict] | None) -> list[dict] | None:
     if tasks is None:
         return None
     return [task for task in tasks if not _is_finished(task) and not _is_artifact_monitor(task)]
+
+
+def _drop_subagent_owned(tasks: list[dict] | None, transcript: str | None) -> list[dict] | None:
+    """`tasks` without the jobs a subagent started: they belong to that subagent, which
+    reports to the main session when it ends. Nothing is dropped unless the transcripts
+    show a subagent as the owner; None stays None."""
+    if tasks is None:
+        return None
+    ids = {
+        task["id"]
+        for task in _owned_tasks(tasks) or []
+        if not _is_agent(task) and isinstance(task.get("id"), str)
+    }
+    foreign = pt.subagent_owned_ids(transcript, ids)
+    if not foreign:
+        return tasks
+    return [task for task in tasks if task.get("id") not in foreign]
 
 
 def _needs_waiter(tasks: list[dict]) -> bool:
@@ -304,25 +322,41 @@ def _nudge_line(code: str, doc: dict, pid: str, counted: dict[str, str]) -> str:
     return pc.line(_CODE_IDS[code], pid, text)
 
 
+def _record_unresolved(doc: dict, pid: str, code: str) -> None:
+    ids = _CODE_IDS[code]
+    entry = f"{ids}: {pc.S6_LABELS[code]} (prompt {pid})"
+    if entry not in doc["unresolved"]:
+        doc["unresolved"].append(entry)
+
+
 def _budget(
     doc: dict, pid: str, held: list[str], counted: dict[str, str]
 ) -> tuple[str | None, list[str]]:
     """Rows 8-9. `counted` maps C and W to the owned work each counted.
-    Returns (nudge, exhaustion lines)."""
+    Returns (nudge, exhaustion lines).
+
+    The waiting guard (C, W) speaks once per prompt: a repeat is recorded as
+    unresolved and said nowhere. R and E keep NUDGE_BUDGET nudges per prompt,
+    then one exhaustion line each."""
     if not held:
         doc["greeted"] = doc["recaps"].get(pid) in ENDING_RECAPS
         return None, []
+    guard_spoke = ps.guard_nudged(doc, pid)
+    for code in held:
+        if code in GUARD_CODES and guard_spoke:
+            _record_unresolved(doc, pid, code)
+    speak = [code for code in held if code not in GUARD_CODES or not guard_spoke]
+    if not speak:
+        return None, []
     if doc["nudges"].get(pid, 0) < NUDGE_BUDGET:
         ps.bump_nudge(doc, pid)
-        return "\n".join(_nudge_line(code, doc, pid, counted) for code in held), []
+        if any(code in GUARD_CODES for code in speak):
+            ps.mark_guard_nudged(doc, pid)
+        return "\n".join(_nudge_line(code, doc, pid, counted) for code in speak), []
     lines = []
-    for code in held:
-        ids = _CODE_IDS[code]
-        label = pc.S6_LABELS[code]
-        lines.append(pc.line(ids, pid, pc.S6_UNRESOLVED.format(label=label)))
-        entry = f"{ids}: {label} (prompt {pid})"
-        if entry not in doc["unresolved"]:
-            doc["unresolved"].append(entry)
+    for code in speak:
+        lines.append(pc.line(_CODE_IDS[code], pid, pc.S6_UNRESOLVED.format(label=pc.S6_LABELS[code])))
+        _record_unresolved(doc, pid, code)
     doc["pending_return"] = None
     return None, lines
 
@@ -340,6 +374,7 @@ def evaluate(payload: dict, cfg: pc.Config, env: Mapping[str, str], now: datetim
     if not isinstance(last_message, str):
         last_message = None
     tasks, tasks_cause = _background_tasks(payload)
+    tasks = _drop_subagent_owned(tasks, transcript)
     crons, crons_cause = _session_crons(payload)
 
     entry, entry_cause = pt.find_prompt_entry(transcript, pid)

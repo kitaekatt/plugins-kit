@@ -459,6 +459,21 @@ def bump_nudge(state: dict, pid: str) -> int:
     return count
 
 
+GUARD_SUFFIX = "/waiting-guard"
+
+
+def guard_nudged(state: dict, pid: str) -> bool:
+    """True when the waiting guard (C, W) already nudged for `pid`."""
+    return check_prompt_id(pid) + GUARD_SUFFIX in state["nudges"]
+
+
+def mark_guard_nudged(state: dict, pid: str) -> None:
+    """Record that the waiting guard nudged for `pid`: a `nudges` entry keyed
+    `<pid>/waiting-guard`, valued 1, so the guard speaks once per prompt while R and E
+    keep their counted budget under the bare pid key."""
+    _touch(state["nudges"], check_prompt_id(pid) + GUARD_SUFFIX, 1)
+
+
 def add_notice(state: dict, cause: str) -> bool:
     """Record a cause once per session; True when it was new."""
     if cause in state["notices"]:

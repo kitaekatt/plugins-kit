@@ -529,7 +529,7 @@ def test_stop_nudge_end_to_end(world):
             "additionalContext": L("waiting-guard", pid, C_LINE) + "\n" + L("waiting-guard", pid, W_LINE),
         }
     }) + "\n"
-    assert world.state(payload["session_id"])["nudges"] == {pid: 1}
+    assert world.state(payload["session_id"])["nudges"] == {pid: 1, f"{pid}/waiting-guard": 1}
 
 
 def test_stop_silent_allow_prints_nothing(world):
@@ -765,14 +765,13 @@ def user_task_entry(pid, when):
     return obj
 
 
-def test_stop_budget_exhaustion_through_the_cli(world):
-    """Three nudges, then the exhaustion systemMessage with no nudge."""
+def test_stop_waiting_guard_nudges_once_per_prompt_through_the_cli(world):
+    """The nudge appears once; the repeats of the same prompt print nothing."""
     payload = load_fixture("a1-03-Stop", world.root)
+    assert "hookSpecificOutput" in run_stop(world, payload).obj
     for _ in range(3):
-        assert "hookSpecificOutput" in run_stop(world, payload).obj
-    last = run_stop(world, payload).obj
-    assert list(last) == ["systemMessage"]
-    assert last["systemMessage"].count("unresolved after 3 nudges") == 2
+        res = run_stop(world, payload)
+        assert res.rc == 0 and res.out == ""
 
 
 # --------------------------------------------------- subprocess, real script

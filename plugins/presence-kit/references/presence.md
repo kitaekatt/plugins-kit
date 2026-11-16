@@ -110,12 +110,24 @@ agent (section Waiter agent) plus a Monitor on the shipped watcher (section
 Watcher) for progress. While owned work runs
 or a session cron is pending, end the turn with the last line
 `Waiting on <what>`, where `<what>` names the work. Never hold the main session
-with a foreground wait. The Stop hook checks this and nudges at most three
-times per prompt. A finished task (status `completed`, `failed` or `killed`)
-and an Artifact live-updates monitor (description starts with
-`live updates for artifact `) are not owned work: they need no waiter and no
-`Waiting on` line. The nudge lists the tasks it counted. With `waiting-guard`
-off, none of this applies.
+with a foreground wait. The Stop hook checks this and nudges once per prompt.
+A finished task (status `completed`, `failed` or `killed`),
+an Artifact live-updates monitor (description starts with
+`live updates for artifact `) and a shell job or monitor that a subagent started
+are not owned work: they need no waiter and no `Waiting on` line. A subagent's
+jobs are its own, and it reports to you when it ends. The hook tells them apart
+by the transcripts: a job announced in
+`<session transcript without .jsonl>/subagents/agent-*.jsonl` and not in the
+main transcript is the subagent's; a job it cannot place counts as yours. The
+nudge lists the tasks it counted. With `waiting-guard` off, none of this applies.
+
+The guard speaks once per prompt: it never repeats the waiting nudge (waiter
+agent, `Waiting on` line) within a prompt, and a condition it left unsaid goes to
+the unresolved list for the recap. Only the recap nudges (return, ending) repeat,
+up to three times per prompt. When the user asks you to stop mentioning that you
+are waiting, set `waiting-guard` to `false` in the user config layer
+(`configuring.md`), tell the user once in one line, and stop the `Waiting on`
+lines; the guard then says nothing.
 
 ## While away
 
@@ -146,7 +158,9 @@ pattern in a file. `--slice-seconds <s>` defaults to 540; the waiter passes
 `--slice-seconds 150` and runs wait.py in a foreground Bash call with
 `timeout: 170000` (the default Bash timeout is 120000 ms, below a 150 s slice). A
 call that runs past about 180 s is moved to the background and the waiter goes
-idle, so the terminal shows idle. The waiter runs it again on exit 4. The brief names the job's exact output file (its task output path);
+idle, so the terminal shows idle. A 150 s slice returns before that window, so
+the waiter is between calls for about a second and stays a running agent
+(terminal shows working) from slice to slice. The waiter runs it again on exit 4. The brief names the job's exact output file (its task output path);
 the waiter never picks a file by recency, because it can then watch another job.
 
 | Exit | Meaning |

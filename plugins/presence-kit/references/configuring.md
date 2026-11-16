@@ -59,7 +59,7 @@ All default to `true`. Off means the behavior does not apply.
 | `afk-on-quiet` | Stop hook | No message of your own for `afk_quiet_minutes` enters afk | You stay present however long you are quiet |
 | `autonomous-on-handover` | `presence-kit:autonomous` | An explicit hand-over enters autonomous | Claude does not enter autonomous on its own; your own `/presence-kit:autonomous` still works |
 | `recap-on-return` | prompt hook, Stop hook, `presence.md` | Your first message after afk gets the return recap | You become present with no return recap and no nudge |
-| `waiting-guard` | Stop hook, `presence.md` | While owned work runs, non-agent jobs get a waiter agent and the turn ends with `Waiting on <what>`; a task the harness armed itself is not owned work | No waiting check |
+| `waiting-guard` | Stop hook, `presence.md` | While owned work runs, non-agent jobs get a waiter agent and the turn ends with `Waiting on <what>`; a task the harness armed itself, and a job a subagent started, are not owned work; the waiting nudge is said once per prompt | No waiting check; the way to stop the `Waiting on` talk |
 | `ending-recap` | Stop hook | An away turn with nothing running ends with one recap (in autonomy: or keeps working until the goal is done) | No ending recap is demanded |
 | `terse-while-away` | `presence.md` | Interim messages are short while you are away | Messages keep normal length |
 | `park-questions` | `presence.md` | Questions wait for the recap while independent work continues | Claude asks as it would when you are present |

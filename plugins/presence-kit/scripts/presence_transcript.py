@@ -13,6 +13,7 @@ orders entries by file order.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -104,3 +105,43 @@ def newest_human_before(path: str, entry: Entry) -> Entry | None:
         prompt_id: Any = obj.get("promptId")
         return Entry(prompt_id if isinstance(prompt_id, str) else "", HUMAN, timestamp, index)
     return None
+
+
+# How Claude Code announces a background task to the session that started it, in
+# the tool result (measured, Claude Code 2.1.x): a run_in_background Bash call, a
+# foreground Bash call moved to the background after 180 s, and a Monitor.
+_STARTED = re.compile(
+    rb"(?:background with ID: |moved to the background \(ID: |Monitor started \(task )([A-Za-z0-9]+)"
+)
+
+
+def _announced(path: Path) -> set[str]:
+    """The task ids the file at `path` announces as started. A missing file announces none."""
+    try:
+        data = path.read_bytes()
+    except FileNotFoundError:
+        return set()
+    return {m.decode("ascii") for m in _STARTED.findall(data)}
+
+
+def subagent_owned_ids(path: str | None, ids: set[str]) -> set[str]:
+    """The ids in `ids` that a subagent started and the main session did not.
+
+    The main transcript holds only the main session's own records; each subagent's
+    records live in `<transcript stem>/subagents/agent-*.jsonl`. A task announced
+    in a subagent file and nowhere in the main transcript is the subagent's. Any
+    other id (announced by the main session, or by neither file) is not returned:
+    when ownership cannot be shown, the caller counts the task.
+    """
+    if not path or not ids:
+        return set()
+    main = Path(path)
+    folder = main.with_suffix("") / "subagents"
+    if not folder.is_dir():
+        return set()
+    theirs: set[str] = set()
+    for agent in sorted(folder.glob("agent-*.jsonl")):
+        theirs |= _announced(agent) & ids
+    if not theirs:
+        return set()
+    return theirs - _announced(main)
