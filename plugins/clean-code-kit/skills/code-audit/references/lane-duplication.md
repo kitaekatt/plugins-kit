@@ -1,6 +1,6 @@
 # Lane: duplication (dryer)
 
-The `duplication` lane runs `dryer` over the pruned snapshot and reports code
+The `duplication` lane runs `dryer` over the selected files and reports code
 that has the same structure in more than one place. The descriptions of what
 dryer does below come from dryer's own help text (`dryer --help`) at the
 commit the plugin pins.
@@ -54,7 +54,7 @@ the exact `argv`, the exit status, the run time and the lane `status`.
 A status of `no-comparable-source` means the selection held fewer than two
 files dryer reads, so a duplicate could not exist and the tool was not run;
 `report.md` names the extensions dryer ignores (`lanes[].detail.ignored_extensions`
-in `findings.json`). It is not the same as `ok` with zero findings. A status of `no-source-files` with zero findings means the pruned selection
+in `findings.json`). It is not the same as `ok` with zero findings. A status of `no-source-files` with zero findings means the selection
 held no file dryer reads. It is not an error; see the languages-read limit below
 for the usual cause.
 

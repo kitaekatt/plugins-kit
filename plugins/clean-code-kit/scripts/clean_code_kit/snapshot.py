@@ -1,17 +1,19 @@
-"""Copy the target into a scratch directory and prune it to the analysis inputs.
+"""Copy the files the audit reads into a scratch directory, and nothing else.
 
 The metric tools write into the directory they scan, so they never scan the
-target itself: they scan a snapshot, which the caller removes afterwards.
+target itself: they scan a snapshot, which the caller removes afterwards. The
+path list is chosen from git's file list before anything is written, so a file
+the audit never reads (outside every root, excluded, or of an unconfigured
+language) is never copied.
 """
 
 from __future__ import annotations
 
 import fnmatch
-import os
 import shutil
 import subprocess
 import tarfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from .errors import Refusal
 from .languages import unconfigured_extensions
@@ -67,14 +69,37 @@ def tracked_files(repo: Path, mode: str) -> list[str]:
     return paths
 
 
-def snapshot_head(repo: Path, dest: Path) -> None:
-    """Extract ``git archive HEAD`` into ``dest``; members may not leave ``dest``."""
+def _under(rel: str, roots: list[str]) -> bool:
+    return any(rel == r or rel.startswith(r.rstrip("/") + "/") for r in roots)
+
+
+def select_paths(tracked: list[str], source_roots: list[str], test_roots: list[str],
+                 exclude: list[str], languages: list[str]) -> list[str]:
+    """The ``tracked`` paths the audit reads: under a root, not excluded, not of an unconfigured language."""
+    drop_ext = unconfigured_extensions(languages)
+    roots = [*source_roots, *test_roots]
+    return [rel for rel in tracked
+            if _under(rel, roots)
+            and not any(fnmatch.fnmatchcase(rel, glob) for glob in exclude)
+            and PurePosixPath(rel).suffix not in drop_ext]
+
+
+def snapshot_head(repo: Path, dest: Path, paths: list[str], roots: list[str]) -> None:
+    """Extract only ``paths`` from ``git archive HEAD -- <roots>`` into ``dest``; members may not leave ``dest``.
+
+    Limiting the archive to ``roots`` keeps git from producing (and smudging) blobs outside them.
+    """
+    wanted = set(paths)
+    seen: set[str] = set()
     proc = subprocess.Popen(
-        ["git", "-C", str(repo), "archive", "--format=tar", "HEAD"],
+        ["git", "-C", str(repo), "archive", "--format=tar", "HEAD", "--", *(f":(literal){r}" for r in roots)],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
         with tarfile.open(fileobj=proc.stdout, mode="r|") as archive:
-            archive.extractall(dest, filter="data")
+            for member in archive:
+                if member.name in wanted:
+                    seen.add(member.name)
+                    archive.extract(member, dest, filter="data")
     finally:
         proc.stdout.close()
         stderr = proc.stderr.read().decode("utf-8", errors="replace")
@@ -82,49 +107,32 @@ def snapshot_head(repo: Path, dest: Path) -> None:
         code = proc.wait()
     if code != 0:
         raise Refusal(f"git archive HEAD failed in {repo}: {stderr.strip()}")
+    if seen != wanted:
+        raise Refusal(f"git archive HEAD in {repo} lacks {len(wanted - seen)} listed paths, "
+                      f"for example {sorted(wanted - seen)[0]!r}")
 
 
-def snapshot_working_tree(repo: Path, dest: Path) -> None:
-    """Copy every tracked or untracked-but-not-ignored path that exists on disk."""
-    listing = git(repo, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
-    for rel in sorted({p for p in listing.split("\0") if p}):
-        src = repo / rel
-        if not (src.is_symlink() or src.is_file()):
-            continue  # deleted from the working tree, or a submodule directory
+def snapshot_working_tree(repo: Path, dest: Path, paths: list[str]) -> None:
+    """Copy ``paths`` (files or symlinks on disk) from the working tree into ``dest``."""
+    for rel in paths:
         out = dest / rel
         out.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, out, follow_symlinks=False)
+        shutil.copy2(repo / rel, out, follow_symlinks=False)
 
 
-def take(repo: Path, mode: str, dest: Path) -> None:
+def take(repo: Path, mode: str, dest: Path, paths: list[str], roots: list[str]) -> None:
+    """Write ``paths`` (from ``tracked_files(repo, mode)``, all under ``roots``) into ``dest`` and nothing else."""
     if mode == "head":
-        snapshot_head(repo, dest)
+        snapshot_head(repo, dest, paths, roots)
     elif mode == "working-tree":
-        snapshot_working_tree(repo, dest)
+        snapshot_working_tree(repo, dest, paths)
     else:
         raise Refusal(f"unknown snapshot mode {mode!r}")
 
 
-def require_roots(root: Path, roots: list[str], key: str, config_path: Path, mode: str) -> None:
+def require_roots(tracked: list[str], roots: list[str], key: str, config_path: Path, mode: str) -> None:
+    """Refuse a root that no path of the ``mode`` snapshot is, or is under."""
     for rel in roots:
-        if not (root / rel).exists():
+        if not any(_under(path, [rel]) for path in tracked):
             raise Refusal(f"{config_path}: {key} entry {rel!r} does not exist in the {mode} snapshot")
 
-
-def prune(root: Path, exclude: list[str], languages: list[str]) -> dict[str, int]:
-    """Delete excluded files and sources of unconfigured languages; keep everything else."""
-    drop_ext = unconfigured_extensions(languages)
-    counts = {"excluded": 0, "other_language": 0}
-    files = [Path(top) / name
-             for top, dirs, names in os.walk(root, followlinks=False)
-             for name in names]
-    for path in sorted(files):
-        rel = path.relative_to(root).as_posix()
-        if any(fnmatch.fnmatchcase(rel, glob) for glob in exclude):
-            counts["excluded"] += 1
-        elif path.suffix in drop_ext:
-            counts["other_language"] += 1
-        else:
-            continue
-        os.unlink(path)
-    return counts

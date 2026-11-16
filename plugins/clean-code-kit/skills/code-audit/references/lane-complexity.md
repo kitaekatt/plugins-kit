@@ -1,6 +1,6 @@
 # Lane: complexity (crapper, without coverage)
 
-The `complexity` lane runs `crapper` over the pruned snapshot without
+The `complexity` lane runs `crapper` over the selected files without
 coverage and ranks functions by cyclomatic complexity. The descriptions of
 what crapper does below come from crapper's help text (`crapper --help`) and
 source at the commit the plugin pins.
@@ -59,7 +59,7 @@ selection; the count is in the coverage table's `skipped (tests)` column and
 
 JS/TS `export default` anonymous functions are scored with the name `<default>`.
 
-A status of `no-source-files` with zero findings means the pruned selection
+A status of `no-source-files` with zero findings means the selection
 held no file crapper reads. It is not an error.
 
 ## Known limits
