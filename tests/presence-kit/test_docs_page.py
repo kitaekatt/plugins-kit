@@ -74,3 +74,13 @@ def test_page_and_presence_md_agree_on_the_hook_behavior():
     ):
         assert needle in md, needle
     assert "arrives in a later one" not in md and "not part of this release" not in md
+
+
+def test_presence_md_states_job_ownership_and_the_once_per_prompt_guard():
+    """The model file is the single source: pin the guard rules the Stop hook implements."""
+    text = _flat(PRESENCE_MD.read_text(encoding="ascii"))
+    assert "a shell job or monitor that a subagent started are not owned work" in text
+    assert "nudges once per prompt" in text
+    assert "it never repeats the waiting nudge" in text
+    assert "set `waiting-guard` to `false` in the user config layer" in text
+    assert "A 150 s slice returns before that window" in text
