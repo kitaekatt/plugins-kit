@@ -517,7 +517,7 @@ C_LINE = f"add a waiter agent; the terminal shows idle. Counted as running non-a
 W_LINE = f"end with `Waiting on <what>`. Counted as owned work: {A103}."
 M_LINE = (
     "arm a liveness watch: a Monitor on `watch.py --task <id>` for each job you own "
-    f"(progress at most every 20 minutes, a stall report). No liveness watch on: {A103}."
+    f"(it reports progress and a stall). No liveness watch on: {A103}."
 )
 
 

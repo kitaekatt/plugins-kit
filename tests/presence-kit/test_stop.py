@@ -1006,7 +1006,7 @@ def test_owner_subagent_owned_ids_reads_main_and_sidechain_files(tmp_path):
 # command names the job's id (its output path, or watch.py --task <id>), joined by
 # tool_use_id to the "Monitor started (task <monitor id>, ..." tool result.
 
-M_TEXT = "arm a liveness watch: a Monitor on `watch.py --task <id>` for each job you own (progress at most every 20 minutes, a stall report). {gaps}"
+M_TEXT = "arm a liveness watch: a Monitor on `watch.py --task <id>` for each job you own (it reports progress and a stall). {gaps}"
 NOWATCH = "No liveness watch on: {tasks}."
 REARM = "Liveness watch ended while the job still runs, re-arm it on: {tasks}."
 
@@ -1724,3 +1724,13 @@ def test_stop_records_nothing_with_afk_on_departure_off(make):
     sess.entry(PID, "human", NOW)
     sess.stop(crons=[CRON_BARE])
     assert sess.state()["cron_prompts"] == []
+
+
+def test_m_nudge_states_no_progress_interval():
+    """The progress interval follows the configurable progress_minutes, so the
+    shipped nudge text must not pin a number that a non-default setting falsifies."""
+    import re
+
+    import presence_config as pc
+
+    assert not re.search(r"\d", pc.M_WATCH.replace("<id>", ""))

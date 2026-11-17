@@ -352,7 +352,7 @@ M_IDS = "liveness-watch"
 # {gaps}: built by presence_stop.watch_gaps_text from the NOWATCH and REARM parts.
 M_WATCH = (
     "arm a liveness watch: a Monitor on `watch.py --task <id>` for each job you own "
-    "(progress at most every 20 minutes, a stall report). {gaps}"
+    "(it reports progress and a stall). {gaps}"
 )
 M_NOWATCH = "No liveness watch on: {tasks}."
 M_REARM = "Liveness watch ended while the job still runs, re-arm it on: {tasks}."

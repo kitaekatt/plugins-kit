@@ -143,7 +143,7 @@ when a departure word sets you afk (P3); everything else it says is read-only.
 | R | Claude, Stop nudge | `recap-on-return` | the user is back; invoke `presence-kit:recap return <prompt id>`. |
 | C | Claude, Stop nudge | `waiting-guard` | add a waiter agent; the terminal shows idle. Counted as running non-agent work: `<id> (<type>, <status>): <description>` per task. |
 | W | Claude, Stop nudge | `waiting-guard` | end with `Waiting on <what>`. Counted as owned work: `<id> (<type>, <status>): <description>` per task, then the session cron count. |
-| M | Claude, Stop nudge | `liveness-watch` | arm a liveness watch: a Monitor on `watch.py --task <id>` for each job you own (progress at most every 20 minutes, a stall report). Then `No liveness watch on: <id (type, status): description per job>.` and/or `Liveness watch ended while the job still runs, re-arm it on: <jobs>.` |
+| M | Claude, Stop nudge | `liveness-watch` | arm a liveness watch: a Monitor on `watch.py --task <id>` for each job you own (it reports progress and a stall). Then `No liveness watch on: <id (type, status): description per job>.` and/or `Liveness watch ended while the job still runs, re-arm it on: <jobs>.` |
 | E (autonomous) | Claude, Stop nudge | `ending-recap` | autonomous: if `<goal>` is done, invoke `presence-kit:recap autonomous-done <prompt id>`, else keep working. |
 | E (afk) | Claude, Stop nudge | `ending-recap` | invoke `presence-kit:recap afk-ending <prompt id>`. |
 | N1 | you, once per session | `afk-on-quiet,recap-on-return` | skipped quiet-afk and return detection: the transcript has no user entry for this prompt yet. |

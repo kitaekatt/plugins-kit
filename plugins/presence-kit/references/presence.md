@@ -237,8 +237,8 @@ cadence for one run. It never writes a file.
 | `DONE: <line>` | `--done-output`: the last non-empty line is `[exited with code N]`; `--done-file`: the pattern matches a line; the watcher then exits 0 |
 
 A `STALL` line reports a fact and prescribes nothing: what to do about the job
-is your decision. While the user is afk, notify them of every `STALL` you receive
-with the PushNotification tool, one line naming the job and the quiet minutes,
+is your decision. While the user is afk and `notify-for-input` is on, notify them of
+every `STALL` you receive with the PushNotification tool, one line naming the job and the quiet minutes,
 because a stalled job waits for them and they are not watching the terminal (the
 watcher cannot push; you do). An invalid configuration or bad arguments print to
 stderr and exit 2; a process sampling failure exits 1.
