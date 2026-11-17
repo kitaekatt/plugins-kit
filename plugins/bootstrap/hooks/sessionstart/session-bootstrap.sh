@@ -368,6 +368,20 @@ if [ -z "$FLAG_CONSOLE" ] && [ -n "${CLAUDE_ENV_FILE:-}" ]; then
     [ -z "$_pr_out" ] || printf '%s%s' "$_pr_sep" "$_pr_out" 2>/dev/null >> "$CLAUDE_ENV_FILE" || :
 fi
 
+# --- Helper-session opt-out (BOOTSTRAP_NO_PASS) ---
+# A tool that launches Claude sessions for its own work (a review lane in a
+# frozen copy of a repository, a consultation in a scratch directory) sets
+# BOOTSTRAP_NO_PASS=1. Such a session needs the interpreter names written above
+# and nothing else: a pass there provisions a throwaway directory as a project.
+# Placed before the per-session marker, so nothing in the data tree records the
+# session. An explicit --console run ignores it. Mirrored in
+# bootstrap-display.sh and in bootstrap_cli.py's codex-hook.
+if [ -n "${BOOTSTRAP_NO_PASS:-}" ] && [ -z "$FLAG_CONSOLE" ]; then
+    echo '{"continue": true, "suppressOutput": true}'
+    HOOK_OUTPUT_EMITTED=1
+    exit 0
+fi
+
 # --- Per-session marker (SessionStart-missed rescue's detection signal) ---
 # Touch sessions/<session_id> at ENTRY -- before the gates, so even a gate-
 # skipped invocation records "a pass was invoked for this session". The

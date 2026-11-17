@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import hashlib
 import importlib
 import json
+import os
 from pathlib import Path
 import re
 import shlex
@@ -423,6 +424,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 cwd=str(cwd),
+                # A dispatched session starts in a scratch directory; this stops
+                # its bootstrap hook from provisioning that directory as a project
+                # (bootstrap's BOOTSTRAP_NO_PASS gate, session-bootstrap.sh).
+                env={**os.environ, "BOOTSTRAP_NO_PASS": "1"},
                 check=False,
             )
         exit_code = completed.returncode

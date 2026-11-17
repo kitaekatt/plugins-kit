@@ -191,3 +191,19 @@ def test_the_wrapper_binds_the_real_owner_main(monkeypatch: pytest.MonkeyPatch) 
     from llm_kit.dispatch import review_lane
 
     assert namespace["_main"] is review_lane.main
+
+
+def test_lane_sessions_run_no_bootstrap_pass(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A lane's Claude or Codex child starts in a frozen copy of the repository;
+    BOOTSTRAP_NO_PASS stops that child from provisioning the copy as a project."""
+    import os
+
+    monkeypatch.delenv("BOOTSTRAP_NO_PASS", raising=False)
+    seen = {}
+
+    def main():
+        seen["value"] = os.environ.get("BOOTSTRAP_NO_PASS")
+        return 0
+
+    assert _run_wrapper(monkeypatch, *_fake_owner(main)) == 0
+    assert seen["value"] == "1"

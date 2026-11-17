@@ -462,6 +462,9 @@ def cmd_codex_hook(args) -> int:
     returns success after emitting its context so a bootstrap defect cannot
     prevent Codex from opening the project.
     """
+    if os.environ.get("BOOTSTRAP_NO_PASS"):
+        # Helper-session opt-out; see the gate in session-bootstrap.sh.
+        return 0
     from bootstrap_lib import codex_hook
 
     session_input = _codex_session_input()

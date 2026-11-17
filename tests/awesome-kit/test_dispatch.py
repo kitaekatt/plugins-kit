@@ -547,3 +547,21 @@ def test_an_absent_llm_kit_is_refused_as_unprovisioned(tmp_path):
     assert proc.returncode == dispatch.EXIT_BOOTSTRAP_MISSING, proc.stderr
     assert "has not provisioned" in proc.stderr and "missing: llm_kit" in proc.stderr
     assert "predates" not in proc.stderr
+
+
+def test_dispatched_session_runs_no_bootstrap_pass(tmp_path, monkeypatch, capsys):
+    """A dispatched Codex session starts in a scratch directory; BOOTSTRAP_NO_PASS
+    stops its bootstrap hook from provisioning that directory as a project."""
+    monkeypatch.delenv("BOOTSTRAP_NO_PASS", raising=False)
+    brief = _brief(tmp_path)
+    calls: list[dict[str, object]] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(kwargs)
+        Path(argv[argv.index("-o") + 1]).write_text("result\n", encoding="utf-8")
+        return dispatch.subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(dispatch.subprocess, "run", fake_run)
+    assert dispatch.main(_run_args(tmp_path, brief, tmp_path / "cache")) == 0
+    assert calls[0]["env"]["BOOTSTRAP_NO_PASS"] == "1"
+    assert calls[0]["env"]["PATH"] == os.environ["PATH"]
