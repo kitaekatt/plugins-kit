@@ -1501,7 +1501,10 @@ def _pass_self_register_declared(st):
     sr_layer_refs, sr_layer_names = set(), set()
     for _sr_path, sr_kind, sr_data in _collect_manifest_layers(
             st.args.project_dir, st.data_dir)[0]:
-        if sr_kind != "user_local" and isinstance(sr_data, dict):
+        # Only the user layer: the local file is shared by every project, so a
+        # project layer removing an entry made it flip between projects. The
+        # loader already drops a project-shadowed entry for that project's pass.
+        if sr_kind == "user" and isinstance(sr_data, dict):
             r, n = declared_plugin_ids(sr_data)
             sr_layer_refs |= r
             sr_layer_names |= n
