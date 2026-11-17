@@ -60,7 +60,14 @@ class _Buf:
         self.lines_flushed = self.text.count("\n")
 
 
-def run(argv, clock, tmp_path, env=None):
+@pytest.fixture(autouse=True)
+def _no_real_process_sampling(monkeypatch):
+    """Tests that do not inject process samples see no processes at all."""
+    monkeypatch.setattr(watch, "_sample_procs", lambda: {})
+    monkeypatch.setattr(watch, "_sample_cwds", lambda pids: {})
+
+
+def run(argv, clock, tmp_path, env=None, **kw):
     """Run to completion or until clock.stop_after sleeps; returns (code, out, err)."""
     out, err = _Buf(), _Buf()
     env = {"CLAUDE_CONFIG_DIR": str(tmp_path / "cfg"), "CLAUDE_PROJECT_DIR": str(tmp_path / "proj")} if env is None else env
@@ -74,6 +81,7 @@ def run(argv, clock, tmp_path, env=None):
             stderr=err,
             env=env,
             cwd=str(tmp_path),
+            **kw,
         )
     except StopRun:
         code = None
@@ -191,9 +199,9 @@ def test_git_directories_are_skipped(tmp_path):
     root = tmp_path / "repo"
     make_file(root / "src.txt", -25 * 60)
     make_file(root / ".git" / "index", 0)  # fresh, but inside .git
-    clock = FakeClock(stop_after=1)
+    clock = FakeClock(stop_after=2)  # a watched directory is confirmed at the second poll
     _, out, _ = run(["--path", str(root), "--progress-minutes", "10000"], clock, tmp_path)
-    assert stalls(out) == ["STALL: no change in watched paths for 25m"]
+    assert stalls(out) == ["STALL: no change in watched paths for 30m"]
 
 
 def test_a_file_appearing_later_ends_the_stall(tmp_path):
@@ -403,3 +411,452 @@ def test_real_process_prints_done_and_exits_0(tmp_path):
     assert result.returncode == 0, result.stderr
     assert result.stdout == f"DONE: {TRAILER}\n"
     assert result.stderr == ""
+
+
+@pytest.mark.parametrize("name", [".pytest_cache", "__pycache__", ".mypy_cache", ".ruff_cache"])
+def test_cache_directories_are_not_activity(tmp_path, name):
+    root = tmp_path / "repo"
+    make_file(root / "src.txt", -25 * 60)
+    make_file(root / name / "v" / "cache" / "nodeids", 0)  # fresh, but a tool cache
+    clock = FakeClock(stop_after=2)
+    _, out, _ = run(["--path", str(root), "--progress-minutes", "10000"], clock, tmp_path)
+    assert stalls(out) == ["STALL: no change in watched paths for 30m"]
+
+
+# --- --task ------------------------------------------------------------------------
+#
+# Claude Code keeps a background task's output at
+#   <tmp>/claude-<uid>/<project slug>/<session id>/tasks/<task id>.output
+# A shell task's file is plain text ending in "[exited with code N]". An agent task's
+# file is a symlink to the agent's transcript, whose records carry the agent's `cwd`.
+
+SESSION = "sess-1234"
+
+
+def task_env(tmp_path, **extra):
+    return {"CLAUDE_CONFIG_DIR": str(tmp_path / "cfg"), "CLAUDE_PROJECT_DIR": str(tmp_path / "proj"),
+            "CLAUDE_CODE_SESSION_ID": SESSION, **extra}
+
+
+def task_dir(root):
+    return root / f"claude-{os.getuid()}" / "-proj-slug" / SESSION / "tasks"
+
+
+def test_task_watches_the_shell_task_output_and_ends_on_its_trailer(tmp_path):
+    root = tmp_path / "tmp"
+    out_file = make_file(task_dir(root) / "b123.output", 0, f"working\n{TRAILER}\n")
+    code, out, _ = run(["--task", "b123"], FakeClock(stop_after=3), tmp_path, task_env(tmp_path), task_root=root)
+    assert code == 0
+    assert lines(out) == [f"DONE: {TRAILER}"]
+    assert out_file.exists()
+
+
+def test_task_progress_names_the_derived_output_path(tmp_path):
+    root = tmp_path / "tmp"
+    out_file = make_file(task_dir(root) / "b123.output", 0, "working\n")
+    _, out, _ = run(["--task", "b123", "--progress-minutes", "5"], FakeClock(stop_after=2), tmp_path,
+                    task_env(tmp_path), task_root=root)
+    assert progresses(out) == [f"PROGRESS 5m: last change 5m ago in {out_file}"]
+
+
+def test_task_for_an_agent_also_watches_the_agent_working_directory(tmp_path):
+    root = tmp_path / "tmp"
+    worktree = tmp_path / "wt"
+    make_file(worktree / "src" / "a.py", 0)
+    transcript = make_file(tmp_path / "agent-a1.jsonl", 0, json.dumps({"cwd": str(worktree), "type": "user"}) + "\n")
+    tdir = task_dir(root)
+    tdir.mkdir(parents=True)
+    (tdir / "a1.output").symlink_to(transcript)
+
+    def touch(n, clock):
+        if n == 3:
+            set_mtime(worktree / "src" / "a.py", clock.t)
+
+    code, out, _ = run(["--task", "a1", "--progress-minutes", "20"], FakeClock(on_sleep=touch, stop_after=5),
+                       tmp_path, task_env(tmp_path), task_root=root)
+    assert code is None  # no hand-back in the transcript: it runs until killed
+    assert stalls(out) == []  # the worktree edit at 15m kept the quiet period short
+
+
+def test_task_without_a_session_id_fails_loudly(tmp_path):
+    env = task_env(tmp_path)
+    del env["CLAUDE_CODE_SESSION_ID"]
+    code, _, err = run(["--task", "b123"], FakeClock(stop_after=1), tmp_path, env, task_root=tmp_path)
+    assert code == 2 and "CLAUDE_CODE_SESSION_ID" in err.text
+
+
+def test_task_with_no_output_file_fails_loudly(tmp_path):
+    code, _, err = run(["--task", "nope"], FakeClock(stop_after=1), tmp_path, task_env(tmp_path),
+                       task_root=tmp_path / "tmp")
+    assert code == 2 and "nope" in err.text and "tasks" in err.text
+
+
+def test_task_ids_are_matched_whole(tmp_path):
+    root = tmp_path / "tmp"
+    make_file(task_dir(root) / "b1234.output", 0, TRAILER + "\n")
+    code, _, err = run(["--task", "b123"], FakeClock(stop_after=1), tmp_path, task_env(tmp_path), task_root=root)
+    assert code == 2
+
+
+def test_task_and_an_explicit_done_option_both_hold(tmp_path):
+    root = tmp_path / "tmp"
+    make_file(task_dir(root) / "b123.output", 0, "working\n")
+    log = make_file(tmp_path / "x.log", 0, "PUBLISH_EXIT\n")
+    code, out, _ = run(["--task", "b123", "--done-file", str(log), "--done-pattern", "PUBLISH_EXIT"],
+                       FakeClock(stop_after=3), tmp_path, task_env(tmp_path), task_root=root)
+    assert code == 0 and lines(out) == ["DONE: PUBLISH_EXIT"]
+
+
+def test_task_an_id_that_could_climb_out_of_the_tasks_directory_is_refused(tmp_path):
+    code, _, err = run(["--task", "../x"], FakeClock(stop_after=1), tmp_path, task_env(tmp_path), task_root=tmp_path)
+    assert code == 2 and "task id" in err.text
+
+
+# --- process activity ---------------------------------------------------------------
+#
+# A live process whose working directory is inside a watched directory (or that descends
+# from a --pid) and used CPU since the previous poll is a sign of work: a long command
+# changes no file. A process seen for the first time is a baseline, not activity.
+
+Proc = watch.Proc
+ME = os.getpid()
+
+
+class World:
+    """Injected process table; `cpu` maps pid -> cumulative CPU seconds, advanced by tests."""
+
+    def __init__(self, rows, cwds):
+        self.rows = rows  # pid -> (ppid, command)
+        self.cpu = {pid: 0.0 for pid in rows}
+        self.cwd = cwds
+        self.cwd_calls = []
+
+    def procs(self):
+        return {pid: Proc(ppid, self.cpu[pid], cmd) for pid, (ppid, cmd) in self.rows.items()}
+
+    def cwds(self, pids):
+        self.cwd_calls.append(sorted(pids))
+        return {pid: self.cwd[pid] for pid in pids if pid in self.cwd}
+
+
+def burn(world, pid, per_poll=60.0, until=None):
+    """on_sleep hook: the process uses `per_poll` CPU seconds each poll (until poll `until`)."""
+    def hook(n, clock):
+        if until is None or n <= until:
+            world.cpu[pid] += per_poll
+    return hook
+
+
+def run_world(argv, clock, tmp_path, world, **kw):
+    return run(argv + ["--progress-minutes", "10000"], clock, tmp_path, procs=world.procs, cwds=world.cwds, **kw)
+
+
+def test_a_cpu_using_process_in_a_watched_directory_prevents_a_stall(tmp_path):
+    watched = tmp_path / "work"
+    watched.mkdir()
+    make_file(watched / "a.txt", 0)  # the only file change is at the start
+    world = World({ME: (1, "pytest"), 900: (ME, "git push")}, {900: str(watched)})
+    clock = FakeClock(on_sleep=burn(world, 900), stop_after=30)  # 150 minutes
+    _, out, _ = run_world(["--path", str(watched)], clock, tmp_path, world)
+    assert stalls(out) == []
+
+
+def test_the_same_process_without_cpu_growth_stalls(tmp_path):
+    watched = tmp_path / "work"
+    watched.mkdir()
+    make_file(watched / "a.txt", 0)
+    world = World({ME: (1, "pytest"), 900: (ME, "git push")}, {900: str(watched)})
+    clock = FakeClock(stop_after=30)
+    _, out, _ = run_world(["--path", str(watched)], clock, tmp_path, world)
+    assert len(stalls(out)) == 1
+
+
+def test_stall_follows_once_the_process_stops_using_cpu(tmp_path):
+    watched = tmp_path / "work"
+    watched.mkdir()
+    make_file(watched / "a.txt", 0)
+
+    def episode(stop_after):
+        world = World({ME: (1, "pytest"), 900: (ME, "git push")}, {900: str(watched)})
+        clock = FakeClock(on_sleep=burn(world, 900, until=12), stop_after=stop_after)  # busy to 60m
+        return run_world(["--path", str(watched)], clock, tmp_path, world)[1]
+
+    assert stalls(episode(16)) == []  # 15 sleeps = 75m: 15m since the last CPU use
+    # 17 sleeps = 80m: 20m since it, counted from the last poll that saw CPU, not from the file
+    assert stalls(episode(18)) == ["STALL: no change in watched paths for 20m"]
+
+
+def test_a_process_seen_for_the_first_time_is_a_baseline_not_activity(tmp_path):
+    watched = tmp_path / "work"
+    watched.mkdir()
+    make_file(watched / "a.txt", 0)
+    world = World({ME: (1, "pytest"), 900: (ME, "git push")}, {900: str(watched)})
+    world.cpu[900] = 5000.0  # a big cumulative figure the watcher never saw grow
+    clock = FakeClock(stop_after=6)
+    _, out, _ = run_world(["--path", str(watched)], clock, tmp_path, world)
+    assert len(stalls(out)) == 1
+
+
+def test_a_process_that_appears_between_polls_is_a_baseline_too(tmp_path):
+    watched = tmp_path / "work"
+    watched.mkdir()
+    make_file(watched / "a.txt", 0)
+    world = World({ME: (1, "pytest")}, {900: str(watched)})
+
+    def appear(n, clock):
+        if n == 3:
+            world.rows[900] = (ME, "git push")
+            world.cpu[900] = 5000.0  # first sighting: no earlier figure to subtract
+
+    clock = FakeClock(on_sleep=appear, stop_after=6)  # 25 minutes, one stall at 20m
+    _, out, _ = run_world(["--path", str(watched)], clock, tmp_path, world)
+    assert len(stalls(out)) == 1
+
+
+def test_a_cpu_using_process_outside_the_watched_directories_does_not_count(tmp_path):
+    watched = tmp_path / "work"
+    watched.mkdir()
+    make_file(watched / "a.txt", 0)
+    elsewhere = tmp_path / "other"
+    elsewhere.mkdir()
+    world = World({ME: (1, "pytest"), 900: (1, "cc")}, {900: str(elsewhere)})
+    clock = FakeClock(on_sleep=burn(world, 900), stop_after=30)
+    _, out, _ = run_world(["--path", str(watched)], clock, tmp_path, world)
+    assert len(stalls(out)) == 1
+
+
+def test_a_process_in_a_subdirectory_of_a_watched_directory_counts(tmp_path):
+    watched = tmp_path / "work"
+    (watched / "sub").mkdir(parents=True)
+    make_file(watched / "a.txt", 0)
+    world = World({ME: (1, "pytest"), 900: (1, "make")}, {900: str(watched / "sub")})
+    clock = FakeClock(on_sleep=burn(world, 900), stop_after=30)
+    _, out, _ = run_world(["--path", str(watched)], clock, tmp_path, world)
+    assert stalls(out) == []
+
+
+def test_a_directory_whose_name_only_starts_like_a_watched_one_does_not_count(tmp_path):
+    watched = tmp_path / "work"
+    watched.mkdir()
+    make_file(watched / "a.txt", 0)
+    sibling = tmp_path / "work2"
+    sibling.mkdir()
+    world = World({ME: (1, "pytest"), 900: (1, "make")}, {900: str(sibling)})
+    clock = FakeClock(on_sleep=burn(world, 900), stop_after=30)
+    _, out, _ = run_world(["--path", str(watched)], clock, tmp_path, world)
+    assert len(stalls(out)) == 1
+
+
+def test_a_descendant_of_a_given_pid_counts_wherever_its_working_directory_is(tmp_path):
+    job = make_file(tmp_path / "job.log", 0)
+    world = World({ME: (1, "pytest"), 700: (1, "hook"), 701: (700, "gc"), 800: (1, "other")},
+                  {701: "/nowhere", 800: "/nowhere"})
+    clock = FakeClock(on_sleep=burn(world, 701), stop_after=30)
+    _, out, _ = run_world(["--path", str(job), "--pid", "700"], clock, tmp_path, world)
+    assert stalls(out) == []
+
+
+def test_a_non_descendant_of_the_given_pid_does_not_count(tmp_path):
+    job = make_file(tmp_path / "job.log", 0)
+    world = World({ME: (1, "pytest"), 700: (1, "hook"), 800: (1, "other")}, {800: "/nowhere"})
+    clock = FakeClock(on_sleep=burn(world, 800), stop_after=30)
+    _, out, _ = run_world(["--path", str(job), "--pid", "700"], clock, tmp_path, world)
+    assert len(stalls(out)) == 1
+
+
+def test_the_given_pid_itself_counts(tmp_path):
+    job = make_file(tmp_path / "job.log", 0)
+    world = World({ME: (1, "pytest"), 700: (1, "hook")}, {})
+    clock = FakeClock(on_sleep=burn(world, 700), stop_after=30)
+    _, out, _ = run_world(["--path", str(job), "--pid", "700"], clock, tmp_path, world)
+    assert stalls(out) == []
+
+
+def test_the_watcher_and_its_ancestors_are_never_counted(tmp_path):
+    watched = tmp_path / "work"
+    watched.mkdir()
+    make_file(watched / "a.txt", 0)
+    # 500 is the Monitor shell above the watcher, 400 its parent: both sit in the watched directory
+    world = World({ME: (500, "watch.py"), 500: (400, "sh"), 400: (1, "claude")},
+                  {ME: str(watched), 500: str(watched), 400: str(watched)})
+    def hook(n, clock):
+        for pid in (ME, 500, 400):
+            world.cpu[pid] += 60.0
+    clock = FakeClock(on_sleep=hook, stop_after=30)
+    _, out, _ = run_world(["--path", str(watched)], clock, tmp_path, world)
+    assert len(stalls(out)) == 1
+
+
+def test_a_trickle_of_cpu_is_not_activity(tmp_path):
+    watched = tmp_path / "work"
+    watched.mkdir()
+    make_file(watched / "a.txt", 0)
+    world = World({ME: (1, "pytest"), 900: (1, "idle")}, {900: str(watched)})
+    clock = FakeClock(on_sleep=burn(world, 900, per_poll=0.5), stop_after=30)  # 0.2% of a core
+    _, out, _ = run_world(["--path", str(watched)], clock, tmp_path, world)
+    assert len(stalls(out)) == 1
+
+
+def test_working_directories_are_looked_up_only_for_processes_that_used_cpu(tmp_path):
+    watched = tmp_path / "work"
+    watched.mkdir()
+    make_file(watched / "a.txt", 0)
+    world = World({ME: (1, "pytest"), 900: (1, "busy"), 901: (1, "idle")}, {900: str(watched), 901: str(watched)})
+    clock = FakeClock(on_sleep=burn(world, 900), stop_after=4)
+    run_world(["--path", str(watched)], clock, tmp_path, world)
+    assert world.cwd_calls and all(call == [900] for call in world.cwd_calls)
+
+
+def test_progress_names_the_process_that_was_last_seen_working(tmp_path):
+    watched = tmp_path / "work"
+    watched.mkdir()
+    make_file(watched / "a.txt", 0)
+    world = World({ME: (1, "pytest"), 900: (ME, "git push origin dev")}, {900: str(watched)})
+    clock = FakeClock(on_sleep=burn(world, 900), stop_after=5)
+    _, out, _ = run(["--path", str(watched), "--progress-minutes", "10"], clock, tmp_path,
+                    procs=world.procs, cwds=world.cwds)
+    assert progresses(out)
+    assert all("process 900 (git push origin dev) using CPU" in line for line in progresses(out))
+
+
+def test_progress_still_names_a_file_when_a_file_changed_more_recently(tmp_path):
+    watched = tmp_path / "work"
+    watched.mkdir()
+    job = make_file(watched / "a.txt", 0)
+    world = World({ME: (1, "pytest"), 900: (ME, "git push")}, {900: str(watched)})
+
+    def hook(n, clock):
+        if n <= 3:
+            world.cpu[900] += 60.0  # last CPU use is seen at 15m
+        if n == 4:
+            set_mtime(job, clock.t)  # the file changes at 20m, after it
+
+    clock = FakeClock(on_sleep=hook, stop_after=6)
+    _, out, _ = run(["--path", str(watched), "--progress-minutes", "10"], clock, tmp_path,
+                    procs=world.procs, cwds=world.cwds)
+    assert f"in {job}" in progresses(out)[-1]
+
+
+def test_a_sampler_failure_exits_1_loudly_instead_of_counting_as_no_activity(tmp_path):
+    watched = tmp_path / "work"
+    watched.mkdir()
+
+    def broken():
+        raise watch.ProcessSampleError("ps exited 3: boom")
+
+    clock = FakeClock(stop_after=5)
+    code, out, err = run(["--path", str(watched)], clock, tmp_path, procs=broken, cwds=lambda pids: {})
+    assert code == 1
+    assert "ps exited 3: boom" in err.text
+
+
+def test_no_sampling_when_nothing_could_match(tmp_path):
+    job = make_file(tmp_path / "job.log", 0)  # a file, no directory, no --pid
+    calls = []
+    clock = FakeClock(stop_after=3)
+    run(["--path", str(job)], clock, tmp_path, procs=lambda: calls.append(1) or {}, cwds=lambda p: {})
+    assert calls == []
+
+
+@pytest.mark.parametrize("text,seconds", [
+    ("0:00.05", 0.05),
+    ("1:02.50", 62.5),
+    ("1:02:03", 3723.0),
+    ("00:00:07", 7.0),
+    ("2-01:00:00", 2 * 86400 + 3600.0),
+])
+def test_cpu_time_formats_of_macos_and_linux_ps(text, seconds):
+    assert watch._parse_cpu(text) == pytest.approx(seconds)
+
+
+def test_an_unparseable_cpu_time_fails_loudly():
+    with pytest.raises(watch.ProcessSampleError):
+        watch._parse_cpu("garbage")
+
+
+def test_the_real_samplers_see_this_process_and_its_working_directory(monkeypatch):
+    monkeypatch.undo()  # the autouse stub replaced the real samplers
+    table = watch._sample_procs()
+    assert ME in table and table[ME].ppid == os.getppid()
+    assert table[ME].cpu >= 0.0
+    cwd = watch._sample_cwds([ME])
+    assert os.path.realpath(cwd[ME]) == os.path.realpath(os.getcwd())
+
+
+def test_the_first_poll_does_not_report_a_stall_it_cannot_yet_check(tmp_path):
+    watched = tmp_path / "work"
+    watched.mkdir()
+    make_file(watched / "a.txt", -25 * 60)  # already quiet for 25 minutes
+    world = World({ME: (1, "pytest"), 900: (ME, "git push")}, {900: str(watched)})
+    clock = FakeClock(on_sleep=burn(world, 900), stop_after=3)
+    _, out, _ = run_world(["--path", str(watched)], clock, tmp_path, world)
+    assert stalls(out) == []  # the process was working all along
+    world2 = World({ME: (1, "pytest"), 900: (ME, "git push")}, {900: str(watched)})
+    _, out2, _ = run_world(["--path", str(watched)], FakeClock(stop_after=3), tmp_path, world2)
+    assert stalls(out2) == ["STALL: no change in watched paths for 30m"]  # confirmed at the second poll
+
+
+# --- --task on an agent: the hand-back ends the watch ---------------------------------
+#
+# A finished agent's transcript ends with an assistant record whose tool_use is
+# SubagentHandback, answered by a user record with toolEndsTurn true whose
+# sourceToolAssistantUUID names that assistant record.
+
+
+def _rec(kind, uuid, **extra):
+    return {"type": kind, "uuid": uuid, **extra}
+
+
+def _handback_records():
+    return [
+        _rec("assistant", "u1", message={"role": "assistant", "content": [
+            {"type": "tool_use", "name": "SubagentHandback", "id": "t1", "input": {"message": "report"}}]}),
+        _rec("user", "u2", toolEndsTurn=True, sourceToolAssistantUUID="u1",
+             message={"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1"}]}),
+    ]
+
+
+def _agent_task(tmp_path, records):
+    root = tmp_path / "tmp"
+    worktree = tmp_path / "wt"
+    make_file(worktree / "a.py", 0)
+    head = {"cwd": str(worktree), "type": "user", "uuid": "u0"}
+    transcript = make_file(tmp_path / "agent-a1.jsonl", 0, "".join(json.dumps(r) + "\n" for r in [head, *records]))
+    tdir = task_dir(root)
+    tdir.mkdir(parents=True)
+    (tdir / "a1.output").symlink_to(transcript)
+    return root
+
+
+def _run_agent(tmp_path, records):
+    root = _agent_task(tmp_path, records)
+    return run(["--task", "a1"], FakeClock(stop_after=3), tmp_path, task_env(tmp_path), task_root=root)
+
+
+def test_task_for_an_agent_ends_with_done_when_the_agent_hands_back(tmp_path):
+    code, out, _ = _run_agent(tmp_path, _handback_records())
+    assert code == 0
+    assert lines(out) == ["DONE: agent handed back its report"]
+
+
+def test_task_for_an_agent_mid_run_does_not_end(tmp_path):
+    records = _handback_records()[:1] + [
+        _rec("user", "u2", sourceToolAssistantUUID="u1",
+             message={"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1"}]})]
+    code, out, _ = _run_agent(tmp_path, records)
+    assert code is None and "DONE" not in out.text
+
+
+def test_a_turn_ending_tool_other_than_the_hand_back_is_not_done(tmp_path):
+    records = _handback_records()
+    records[0]["message"]["content"][0]["name"] = "ExitPlanMode"
+    code, out, _ = _run_agent(tmp_path, records)
+    assert code is None and "DONE" not in out.text
+
+
+def test_an_agent_resumed_after_its_hand_back_is_not_done(tmp_path):
+    records = _handback_records() + [
+        _rec("assistant", "u3", message={"role": "assistant", "content": [
+            {"type": "tool_use", "name": "Bash", "id": "t2", "input": {}}]})]
+    code, out, _ = _run_agent(tmp_path, records)
+    assert code is None and "DONE" not in out.text

@@ -104,10 +104,26 @@ seat routing for a load-bearing call; this plugin does not change that policy.
 
 ## Waiting rule
 
-`waiting-guard`, all modes. Agent and workflow work shows "working" by itself.
-Non-agent work (a shell job, a Codex CLI job, an external job) needs a waiter
-agent (section Waiter agent) plus a Monitor on the shipped watcher (section
-Watcher) for progress. While owned work runs
+`waiting-guard`, all modes. Agent and workflow work keeps the terminal on
+"working" by itself. Non-agent work (a shell job, a Codex CLI job, an external
+job) needs a waiter agent (section Waiter agent) so the terminal shows work.
+
+`liveness-watch`, all modes. Every owned job, agent and workflow work
+included, needs a Monitor on the shipped watcher (section Watcher): it reports
+progress at most every `progress_minutes` and a stall after quiet minutes, which
+the job's own completion notice never does, because a stuck job never completes.
+Arm it with `watch.py --task <id>` right after the job starts. A Monitor lives
+for its `timeout_ms` (30 minutes unless you set more); when it ends while the
+job still runs, arm another. The Stop hook finds the Monitor you armed for a job
+in the main transcript (a Monitor call whose command names the job's id, joined
+to its "Monitor started (task <id>" result) and checks the payload for it still
+running. A running owned job with none gets one nudge: `No liveness watch on:
+<job>`; a job whose Monitor is no longer running gets `Liveness watch ended while
+the job still runs, re-arm it on: <job>`. A Monitor, an Artifact monitor, a
+finished task and a subagent's own job need no watch. Like the waiting guard it
+speaks once per prompt. With `liveness-watch` off, none of this applies.
+
+While owned work runs
 or a session cron is pending, end the turn with the last line
 `Waiting on <what>`, where `<what>` names the work. Never hold the main session
 with a foreground wait. The Stop hook checks this and nudges once per prompt.
@@ -172,29 +188,63 @@ the waiter never picks a file by recency, because it can then watch another job.
 
 ## Watcher
 
-`scripts/watch.py` is the Monitor's command for a non-agent job. Arm a Monitor
+`scripts/watch.py` is the Monitor's command for any owned job. Arm a Monitor
 on it instead of writing a watcher script of your own: its cadence is fixed, so
 the user is not flooded with progress lines. It prints one line per event and
-runs until its done condition holds or it is killed:
+runs until its done condition holds or it is killed. For a background task, pass
+its id:
+
+    "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${PRESENCE_KIT_ROOT:?presence-kit is not provisioned}/scripts/watch.py" --task <task id> [--path <extra dir> ...] [--stall-minutes <n>]
+
+`--task` derives the paths from the id and `CLAUDE_CODE_SESSION_ID`: the task's
+output file `<tmp>/claude-<uid>/<project slug>/<session id>/tasks/<id>.output`
+(found by pattern; `<tmp>` is `/tmp`). A shell task's output file is watched and
+its `[exited with code N]` trailer is the done condition. An agent task's output
+file is a symlink to the agent's transcript; the watcher also watches the working
+directory that transcript records (the agent's worktree), and ends with `DONE:
+agent handed back its report` once the transcript's last record answers the
+agent's SubagentHandback call. An agent resumed later by SendMessage needs a new
+watcher. File changes under `.git` and tool caches (`.pytest_cache`,
+`__pycache__`, `.mypy_cache`, `.ruff_cache`) are not activity. A missing session
+id, a missing output file or a non-POSIX platform exits 2 with the reason. For
+anything else, name the paths yourself:
 
     "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${PRESENCE_KIT_ROOT:?presence-kit is not provisioned}/scripts/watch.py" --path <file-or-dir> [--path ...] [--done-output <task output file> | --done-file <path> --done-pattern <regex>]
 
 Every `--poll-seconds` (default 300) it takes the newest modification time
 across the `--path` values: a file's own mtime, or the newest mtime of any file
 under a directory (`.git` directories are skipped). A missing path counts for
-nothing. The done file is watched too. `--stall-minutes` (default 20) and
+nothing. The done file is watched too.
+
+A running process is activity too, because a long command (a pre-push hook, a
+build, a test run) changes no file. When a `--path` is a directory, or `--pid
+<pid>` is given (repeatable), each poll counts a process that used CPU since the
+previous poll: its working directory is inside a watched directory, or it is a
+`--pid` process or one of its descendants. It must have used at least 1% of one
+core over the interval, so an idle process does not count. A process first seen
+at a poll is only a baseline, so the first poll of a directory watch cannot
+report a stall. The watcher's own process and its ancestors (the Monitor shell,
+the session) never count. A `--task` shell job whose command runs in some other
+directory is covered by naming that directory with `--path` or the job's pid
+with `--pid`. Sampling uses `ps` plus `/proc/<pid>/cwd` (Linux) or `lsof`
+(macOS), and `lsof` runs only for the processes that used CPU. A sampling error
+prints `process sampling failed: <reason>` to stderr and exits 1: it is never
+read as no activity. `--stall-minutes` (default 20) and
 `--progress-minutes` (default: the `progress_minutes` value, 20) change the
 cadence for one run. It never writes a file.
 
 | Line | Meaning |
 |---|---|
-| `PROGRESS <elapsed>m: last change <age>m ago in <path>` | every `--progress-minutes`, changed or not; `no watched path exists yet` replaces the tail while no watched path exists |
-| `STALL: no change in watched paths for <N>m` | the newest mtime is at least `--stall-minutes` old; printed once per quiet episode, re-armed by any newer mtime; the watcher keeps running |
-| `DONE: <line>` | `--done-output`: the last non-empty line is `[exited with code N]`; `--done-file`: the pattern matches a line; the watcher then exits 0 |
+| `PROGRESS <elapsed>m: last change <age>m ago in <path>` | every `--progress-minutes`, changed or not; `no watched path exists yet` replaces the tail while no watched path exists; `last activity <age>m ago: process <pid> (<command>) using CPU` replaces the tail when the latest sign of work is a process, not a file |
+| `STALL: no change in watched paths for <N>m` | no file change and no process using CPU for at least `--stall-minutes`; printed once per quiet episode, re-armed by any newer mtime or process activity; the watcher keeps running |
+| `DONE: <line>` | `--done-output`: the last non-empty line is `[exited with code N]`; `--done-file`: the pattern matches a line; `--task` on an agent: the agent handed back its report; the watcher then exits 0 |
 
 A `STALL` line reports a fact and prescribes nothing: what to do about the job
-is your decision. An invalid configuration or bad arguments print to stderr and
-exit 2.
+is your decision. While the user is afk and `notify-for-input` is on, notify them of
+every `STALL` you receive with the PushNotification tool, one line naming the job and the quiet minutes,
+because a stalled job waits for them and they are not watching the terminal (the
+watcher cannot push; you do). An invalid configuration or bad arguments print to
+stderr and exit 2; a process sampling failure exits 1.
 
 ## Commands
 

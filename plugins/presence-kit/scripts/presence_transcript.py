@@ -145,3 +145,57 @@ def subagent_owned_ids(path: str | None, ids: set[str]) -> set[str]:
     if not theirs:
         return set()
     return theirs - _announced(main)
+
+
+_MONITOR_STARTED = re.compile(r"Monitor started \(task ([A-Za-z0-9]+)")
+
+
+def _result_text(block: dict) -> str:
+    content = block.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(
+            part["text"] for part in content if isinstance(part, dict) and isinstance(part.get("text"), str)
+        )
+    return ""
+
+
+def armed_monitors(path: str, ids: set[str]) -> dict[str, set[str]]:
+    """Which Monitors the main transcript armed for each id in `ids`.
+
+    A Monitor tool_use whose `command` names a task id as a whole token (its
+    `tasks/<id>.output` path, or `watch.py --task <id>`) is joined by tool_use_id to
+    the result "Monitor started (task <monitor id>, ...". Returns {task id: {monitor
+    ids}}; an id nothing armed is absent. A missing file raises FileNotFoundError.
+    """
+    if not ids:
+        return {}
+    patterns = {i: re.compile(r"(?<![A-Za-z0-9])" + re.escape(i) + r"(?![A-Za-z0-9])") for i in ids}
+    watching: dict[str, set[str]] = {}  # tool_use_id -> task ids its command names
+    started: dict[str, str] = {}  # tool_use_id -> monitor id
+    for _, obj in _records(Path(path)):
+        message = obj.get("message")
+        blocks = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(blocks, list):
+            continue
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use" and block.get("name") == "Monitor":
+                command = (block.get("input") or {}).get("command")
+                if isinstance(command, str) and isinstance(block.get("id"), str):
+                    named = {i for i, rx in patterns.items() if rx.search(command)}
+                    if named:
+                        watching[block["id"]] = named
+            elif block.get("type") == "tool_result" and isinstance(block.get("tool_use_id"), str):
+                found = _MONITOR_STARTED.search(_result_text(block))
+                if found:
+                    started[block["tool_use_id"]] = found.group(1)
+    armed: dict[str, set[str]] = {}
+    for tool_use_id, named in watching.items():
+        monitor = started.get(tool_use_id)
+        if monitor is not None:
+            for task_id in named:
+                armed.setdefault(task_id, set()).add(monitor)
+    return armed

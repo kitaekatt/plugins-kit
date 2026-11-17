@@ -33,7 +33,7 @@ ps = _load_module()
 
 BEHAVIOR_IDS = (
     "afk-on-departure", "afk-on-quiet", "autonomous-on-handover", "recap-on-return",
-    "waiting-guard", "ending-recap", "terse-while-away", "park-questions",
+    "waiting-guard", "liveness-watch", "ending-recap", "terse-while-away", "park-questions",
     "notify-for-input",
 )
 SID = "sess-1"

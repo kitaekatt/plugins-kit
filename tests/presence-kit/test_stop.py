@@ -188,7 +188,9 @@ def make(tmp_path):
     def factory(behaviors=None, values=None, name="s"):
         root = tmp_path / name
         root.mkdir(parents=True, exist_ok=True)
-        return Session(root, make_config(root, behaviors, values))
+        # liveness-watch is off by default here so the older tests, which list jobs
+        # without arming a Monitor, keep testing the waiting guard alone.
+        return Session(root, make_config(root, {"liveness-watch": False, **(behaviors or {})}, values))
 
     return factory
 
@@ -997,6 +999,135 @@ def test_owner_subagent_owned_ids_reads_main_and_sidechain_files(tmp_path):
     assert pt.subagent_owned_ids(str(tmp_path / "missing.jsonl"), {"b2"}) == set()
 
 
+# ============================================================ liveness watch (M)
+#
+# Every owned running job, agent work included, needs a running Monitor. The hook
+# links a Monitor to a job through the main transcript: a Monitor tool_use whose
+# command names the job's id (its output path, or watch.py --task <id>), joined by
+# tool_use_id to the "Monitor started (task <monitor id>, ..." tool result.
+
+M_TEXT = "arm a liveness watch: a Monitor on `watch.py --task <id>` for each job you own (it reports progress and a stall). {gaps}"
+NOWATCH = "No liveness watch on: {tasks}."
+REARM = "Liveness watch ended while the job still runs, re-arm it on: {tasks}."
+
+
+def line_M(gaps, pid=PID):
+    return L("liveness-watch", pid, M_TEXT.format(gaps=gaps))
+
+
+def arm_monitor(session, tuid, monitor_id, command):
+    """The main transcript records a Monitor call and its started result."""
+    session.add({"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": tuid, "name": "Monitor",
+         "input": {"command": command, "description": "liveness", "timeout_ms": 1800000}}]}})
+    session.add({"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": tuid, "content":
+         f"Monitor started (task {monitor_id}, expires in 30m unless the source ends first).",
+         "is_error": False}]}})
+
+
+def live_monitor(monitor_id, status="running"):
+    return {"id": monitor_id, "type": "monitor", "status": status, "description": "liveness"}
+
+
+@pytest.fixture
+def w(make):
+    """A session with liveness-watch on and a non-human prompt entry."""
+    session = make({"liveness-watch": True})
+    session.entry(PID, "sdk", NOW)
+    return session
+
+
+def test_watch_a_job_with_no_monitor_holds_m(w):
+    decision = w.stop(tasks=[SHELL], last=WAITING_LAST)
+    assert decision.held == ("C", "M")
+    assert decision.nudge.splitlines()[-1] == line_M(NOWATCH.format(tasks=SHELL_COUNTED))
+
+
+def test_watch_agent_work_needs_a_watch_too(w):
+    decision = w.stop(tasks=[AGENT], last=WAITING_LAST)
+    assert decision.held == ("M",)
+    assert decision.nudge == line_M(NOWATCH.format(tasks=AGENT_COUNTED))
+
+
+@pytest.mark.parametrize("command", [
+    'x/watch.py --path /tmp/s/tasks/t1.output --stall-minutes 15 2>&1',
+    'x/watch.py --task t1',
+])
+def test_watch_a_running_monitor_naming_the_job_covers_it(w, command):
+    arm_monitor(w, "toolu_m1", "m1", command)
+    assert w.stop(tasks=[SHELL, live_monitor("m1")], last=WAITING_LAST).held == ("C",)
+
+
+def test_watch_a_monitor_that_is_gone_from_the_payload_is_a_rearm(w):
+    arm_monitor(w, "toolu_m1", "m1", "watch.py --task t1")
+    decision = w.stop(tasks=[SHELL], last=WAITING_LAST)
+    assert decision.held == ("C", "M")
+    assert decision.nudge.splitlines()[-1] == line_M(REARM.format(tasks=SHELL_COUNTED))
+
+
+@pytest.mark.parametrize("status", ["completed", "failed", "killed"])
+def test_watch_a_finished_monitor_is_a_rearm(w, status):
+    arm_monitor(w, "toolu_m1", "m1", "watch.py --task t1")
+    decision = w.stop(tasks=[SHELL, live_monitor("m1", status)], last=WAITING_LAST)
+    assert decision.nudge.splitlines()[-1] == line_M(REARM.format(tasks=SHELL_COUNTED))
+
+
+def test_watch_a_job_with_a_longer_id_is_not_covered_by_a_prefix(w):
+    arm_monitor(w, "toolu_m1", "m1", "watch.py --task t10")
+    decision = w.stop(tasks=[SHELL, live_monitor("m1")], last=WAITING_LAST)
+    assert decision.held == ("C", "M")
+    assert NOWATCH.format(tasks=SHELL_COUNTED) in decision.nudge
+
+
+def test_watch_unwatched_and_expired_are_named_apart(w):
+    other = dict(SHELL, id="t3", description="other")
+    arm_monitor(w, "toolu_m1", "m1", "watch.py --task t3")
+    decision = w.stop(tasks=[SHELL, other], last=WAITING_LAST)
+    gaps = NOWATCH.format(tasks=SHELL_COUNTED) + " " + REARM.format(tasks="t3 (shell, running): other")
+    assert decision.nudge.splitlines()[-1] == line_M(gaps)
+
+
+def test_watch_monitors_and_artifact_monitors_need_no_watch(w):
+    artifact = {"id": "a9", "type": "monitor", "status": "running",
+                "description": "live updates for artifact https://claude.ai/artifact/x (auto-armed on publish)"}
+    assert w.stop(tasks=[live_monitor("m1"), artifact], last=WAITING_LAST).held == ("C",)
+
+
+def test_watch_a_job_a_subagent_started_needs_no_watch(w):
+    sidechain(w, "w1", started_record("tsub"))
+    assert w.stop(tasks=[job("tsub")], last=WAITING_LAST).held == ()
+
+
+def test_watch_the_behavior_off_holds_nothing(make):
+    session = make({"liveness-watch": False})
+    session.entry(PID, "sdk", NOW)
+    assert session.stop(tasks=[AGENT], last=WAITING_LAST).held == ()
+
+
+def test_watch_no_transcript_file_means_no_evidence_and_no_nudge(make):
+    session = make({"liveness-watch": True})
+    payload = session.payload(tasks=[AGENT], last=WAITING_LAST)
+    decision = pstop.evaluate(payload, session.cfg, session.env, NOW)
+    assert "M" not in decision.held
+
+
+def test_watch_the_guard_speaks_once_per_prompt(w):
+    first = w.stop(tasks=[AGENT], last=WAITING_LAST)
+    second = w.stop(tasks=[AGENT], last=WAITING_LAST)
+    assert first.held == ("M",) and second.nudge is None
+    assert any("liveness-watch" in entry for entry in w.state()["unresolved"])
+
+
+def test_watch_armed_monitors_reads_only_matching_calls(tmp_path):
+    session_like = type("S", (), {"lines": [], "add": lambda self, o: self.lines.append(o)})()
+    arm_monitor(session_like, "toolu_a", "m1", "watch.py --task t1")
+    arm_monitor(session_like, "toolu_b", "m2", "tail -f other.log")
+    path = write_lines(tmp_path / "t.jsonl", session_like.lines)
+    assert pt.armed_monitors(path, {"t1", "t2"}) == {"t1": {"m1"}}
+    assert pt.armed_monitors(path, set()) == {}
+
+
 # ================================================================== rows 8 and 9
 
 def test_row8_budget_three_nudges_for_r_then_system_message_and_unresolved(s):
@@ -1593,3 +1724,13 @@ def test_stop_records_nothing_with_afk_on_departure_off(make):
     sess.entry(PID, "human", NOW)
     sess.stop(crons=[CRON_BARE])
     assert sess.state()["cron_prompts"] == []
+
+
+def test_m_nudge_states_no_progress_interval():
+    """The progress interval follows the configurable progress_minutes, so the
+    shipped nudge text must not pin a number that a non-default setting falsifies."""
+    import re
+
+    import presence_config as pc
+
+    assert not re.search(r"\d", pc.M_WATCH.replace("<id>", ""))

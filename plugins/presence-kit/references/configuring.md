@@ -60,6 +60,7 @@ All default to `true`. Off means the behavior does not apply.
 | `autonomous-on-handover` | `presence-kit:autonomous` | An explicit hand-over enters autonomous | Claude does not enter autonomous on its own; your own `/presence-kit:autonomous` still works |
 | `recap-on-return` | prompt hook, Stop hook, `presence.md` | Your first message after afk gets the return recap | You become present with no return recap and no nudge |
 | `waiting-guard` | Stop hook, `presence.md` | While owned work runs, non-agent jobs get a waiter agent and the turn ends with `Waiting on <what>`; a task the harness armed itself, and a job a subagent started, are not owned work; the waiting nudge is said once per prompt | No waiting check; the way to stop the `Waiting on` talk |
+| `liveness-watch` | Stop hook, `presence.md` | A running owned job (agent work included) with no running Monitor gets one nudge: arm `watch.py --task <id>`, or re-arm it when the Monitor ended while the job still runs; the nudge is said once per prompt | No watch check |
 | `ending-recap` | Stop hook | An away turn with nothing running ends with one recap (in autonomy: or keeps working until the goal is done) | No ending recap is demanded |
 | `terse-while-away` | `presence.md` | Interim messages are short while you are away | Messages keep normal length |
 | `park-questions` | `presence.md` | Questions wait for the recap while independent work continues | Claude asks as it would when you are present |
@@ -142,6 +143,7 @@ when a departure word sets you afk (P3); everything else it says is read-only.
 | R | Claude, Stop nudge | `recap-on-return` | the user is back; invoke `presence-kit:recap return <prompt id>`. |
 | C | Claude, Stop nudge | `waiting-guard` | add a waiter agent; the terminal shows idle. Counted as running non-agent work: `<id> (<type>, <status>): <description>` per task. |
 | W | Claude, Stop nudge | `waiting-guard` | end with `Waiting on <what>`. Counted as owned work: `<id> (<type>, <status>): <description>` per task, then the session cron count. |
+| M | Claude, Stop nudge | `liveness-watch` | arm a liveness watch: a Monitor on `watch.py --task <id>` for each job you own (it reports progress and a stall). Then `No liveness watch on: <id (type, status): description per job>.` and/or `Liveness watch ended while the job still runs, re-arm it on: <jobs>.` |
 | E (autonomous) | Claude, Stop nudge | `ending-recap` | autonomous: if `<goal>` is done, invoke `presence-kit:recap autonomous-done <prompt id>`, else keep working. |
 | E (afk) | Claude, Stop nudge | `ending-recap` | invoke `presence-kit:recap afk-ending <prompt id>`. |
 | N1 | you, once per session | `afk-on-quiet,recap-on-return` | skipped quiet-afk and return detection: the transcript has no user entry for this prompt yet. |

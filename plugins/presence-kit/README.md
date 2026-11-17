@@ -25,6 +25,11 @@ opt-in by installation. Every behavior has an id and can be switched off.
   default), and the turn ends with `Waiting on <what>`. It counts only jobs the
   main session started, not a running subagent's, and says the waiting nudge once
   per prompt.
+- **Requires a liveness watch on every owned job.** Agent work included: a
+  Monitor on `watch.py --task <id>` reports progress and stalls, which a job's
+  completion notice cannot. The stop hook nudges once per prompt when a running
+  job has no running Monitor, or when its Monitor ended while the job still
+  runs (`liveness-watch`).
 - **Keeps away turns quiet.** Short interim messages, questions parked for the
   recap, and a push notification only when your input is needed.
 
