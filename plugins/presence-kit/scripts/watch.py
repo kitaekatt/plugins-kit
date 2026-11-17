@@ -1,7 +1,7 @@
 """presence-kit watcher: one stdout line per event, for a Monitor to turn into notifications.
 
 Usage:
-  watch.py [--task ID] [--path PATH ...]
+  watch.py [--task ID] [--path PATH ...] [--pid PID ...]
            [--done-output FILE | --done-file PATH --done-pattern REGEX]
            [--stall-minutes N] [--progress-minutes N] [--poll-seconds S]
 
@@ -19,23 +19,31 @@ across the watched paths: a file's own mtime, or for a directory the newest mtim
 any file under it (`.git` directories are skipped). A missing path contributes
 nothing. The --done-output / --done-file path is watched too.
 
+A live process is activity too (a long command changes no file). When a --path is a
+directory, or --pid is given, each poll counts a process that used CPU (at least 1% of
+a core) since the previous poll and whose working directory is inside a watched
+directory, or that is a --pid process or its descendant. A process first seen at a
+poll is a baseline, so the first poll of a directory watch cannot report a stall. The
+watcher and its ancestors never count. A process-sampling error exits 1 loudly.
+
 Lines, each flushed as it is printed:
   STALL: no change in watched paths for <N>m
-      The newest mtime is at least --stall-minutes (default 20) old by the wall
-      clock. Printed once per quiet episode; any newer mtime re-arms it. The
+      The newest mtime, or the latest poll that saw a process using CPU, is at
+      least --stall-minutes (default 20) old by the wall clock. Printed once per quiet episode; any newer mtime re-arms it. The
       watcher keeps running. The line reports; it prescribes no response.
   PROGRESS <elapsed>m: last change <age>m ago in <path>
       Every --progress-minutes (default: the progress_minutes value of the
       presence-kit configuration, 20 unless changed), whether or not anything
       changed. `no watched path exists yet` replaces the tail while no watched
-      path exists.
+      path exists; `last activity <age>m ago: process <pid> (<command>) using CPU`
+      replaces it when the latest sign of work is a process.
   DONE: <line>
       The done condition holds (same detection as wait.py: --done-output, the
       last non-empty line is "[exited with code N]"; --done-file, REGEX matches a
       line). Checked on every poll. The watcher then exits 0. Without a done
       option it runs until killed.
 
-Exit codes: 0 done; 2 bad arguments or invalid configuration.
+Exit codes: 0 done; 1 process sampling failed; 2 bad arguments or invalid configuration.
 
 The script never writes any file.
 """
@@ -44,8 +52,10 @@ import glob
 import json
 import os
 import re
+import subprocess
 import sys
 import time
+from collections import namedtuple
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -57,6 +67,16 @@ SKIPPED_DIRECTORY = ".git"
 SESSION_ENV = "CLAUDE_CODE_SESSION_ID"
 TASK_ID = re.compile(r"[A-Za-z0-9]+")
 PROJECT_ENV = "CLAUDE_PROJECT_DIR"
+# A process counts as working when it used at least this fraction of one core since the
+# previous poll: an idle process still ticks a little, a build or a hook does not.
+MIN_CPU_FRACTION = 0.01
+COMMAND_SHOWN = 60
+
+Proc = namedtuple("Proc", "ppid cpu command")
+
+
+class ProcessSampleError(RuntimeError):
+    """The process table or a working directory could not be read."""
 
 
 class _BadArguments(wait._BadArguments):
@@ -68,10 +88,21 @@ class _Parser(argparse.ArgumentParser):
         raise _BadArguments(message)
 
 
+def _pid(text):
+    try:
+        value = int(text)
+    except ValueError:
+        value = 0
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"invalid pid {text!r}: a positive integer is required")
+    return value
+
+
 def _build_parser():
     parser = _Parser(prog="watch.py", allow_abbrev=False)
     parser.add_argument("--task", dest="task", metavar="ID")
     parser.add_argument("--path", dest="paths", action="append", default=[], metavar="PATH")
+    parser.add_argument("--pid", dest="pids", action="append", default=[], type=_pid, metavar="PID")
     # dest names match what wait._match_line reads (args.output, args.regex).
     parser.add_argument("--done-output", dest="output", metavar="FILE")
     parser.add_argument("--done-file", dest="file", metavar="PATH")
@@ -101,8 +132,8 @@ def _parse(argv):
     watched = list(args.paths)
     if args.done_path is not None and args.done_path not in watched:
         watched.append(args.done_path)
-    if not watched and args.task is None:
-        raise _BadArguments("at least one --path, --task or done option is required")
+    if not watched and args.task is None and not args.pids:
+        raise _BadArguments("at least one --path, --task, --pid or done option is required")
     args.watched = watched
     return args
 
@@ -132,6 +163,112 @@ def _newest(paths):
             if best is None or mtime > best[0]:
                 best = (mtime, candidate)
     return best
+
+
+# --- process activity ----------------------------------------------------------------
+
+_CPU_TIME = re.compile(r"(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)")
+
+
+def _parse_cpu(text):
+    """Cumulative CPU seconds from ps: `[[DD-]HH:]MM:SS[.ss]` (macOS and Linux spellings)."""
+    match = _CPU_TIME.fullmatch(text)
+    if match is None:
+        raise ProcessSampleError(f"unrecognized CPU time {text!r} in ps output")
+    days, hours, minutes, seconds = match.groups()
+    return int(days or 0) * 86400 + int(hours or 0) * 3600 + int(minutes) * 60 + float(seconds)
+
+
+def _run_tool(argv, ok_codes=(0,)):
+    try:
+        done = subprocess.run(argv, capture_output=True, text=True, check=False)
+    except OSError as exc:
+        raise ProcessSampleError(f"cannot run {argv[0]}: {exc}")
+    if done.returncode not in ok_codes:
+        raise ProcessSampleError(f"{argv[0]} exited {done.returncode}: {done.stderr.strip()}")
+    return done.stdout
+
+
+def _sample_procs():
+    """pid -> Proc(ppid, cumulative CPU seconds, command) for every process."""
+    table = {}
+    for raw in _run_tool(["ps", "-A", "-o", "pid=,ppid=,time=,command="]).splitlines():
+        fields = raw.split(None, 3)
+        if len(fields) < 3:
+            continue
+        try:
+            pid, ppid = int(fields[0]), int(fields[1])
+        except ValueError:
+            raise ProcessSampleError(f"unrecognized ps line {raw!r}")
+        table[pid] = Proc(ppid, _parse_cpu(fields[2]), fields[3] if len(fields) > 3 else "")
+    return table
+
+
+def _sample_cwds(pids):
+    """pid -> working directory, for the pids whose directory can be read (others are absent)."""
+    if not pids:
+        return {}
+    if os.path.isdir("/proc/self"):
+        found = {}
+        for pid in pids:
+            try:
+                found[pid] = os.readlink(f"/proc/{pid}/cwd")
+            except (FileNotFoundError, PermissionError, ProcessLookupError):
+                continue  # exited, or another user's process
+        return found
+    # lsof exits 1 when a pid is gone or unreadable; anything else is a real failure.
+    text = _run_tool(["lsof", "-a", "-d", "cwd", "-Fpn", "-p", ",".join(str(p) for p in sorted(pids))],
+                     ok_codes=(0, 1))
+    found, pid = {}, None
+    for raw in text.splitlines():
+        if raw.startswith("p"):
+            pid = int(raw[1:])
+        elif raw.startswith("n") and pid is not None:
+            found[pid] = raw[1:]
+    return found
+
+
+def _ancestors(table, pid):
+    """pid and every ancestor reachable in the table."""
+    seen = set()
+    while pid in table and pid not in seen:
+        seen.add(pid)
+        pid = table[pid].ppid
+    seen.add(pid)
+    return seen
+
+
+def _descendants(table, roots):
+    """The given pids and every process below them."""
+    below = set(roots)
+    grew = True
+    while grew:
+        grew = False
+        for pid, proc in table.items():
+            if pid not in below and proc.ppid in below:
+                below.add(pid)
+                grew = True
+    return below
+
+
+def _within(path, roots):
+    return any(path == root or path.startswith(root.rstrip(os.sep) + os.sep) for root in roots)
+
+
+def _working(prev, table, elapsed, own, roots, pids, cwds):
+    """Processes that used CPU since `prev` (pid -> CPU seconds) and belong to the watched job.
+
+    A process absent from `prev` (first sighting, or a reused pid whose counter went
+    backwards) is a baseline. Returns [(pid, command)].
+    """
+    threshold = MIN_CPU_FRACTION * max(elapsed, 0.0)
+    busy = [pid for pid, proc in table.items()
+            if pid not in own and pid in prev and proc.cpu - prev[pid] > threshold]
+    below = _descendants(table, pids) if pids else set()
+    unknown = [pid for pid in busy if pid not in below]
+    where = cwds(unknown) if roots and unknown else {}
+    return [(pid, table[pid].command) for pid in sorted(busy)
+            if pid in below or (pid in where and _within(os.path.realpath(where[pid]), roots))]
 
 
 def _task_base(tmp_root):
@@ -191,7 +328,7 @@ def _project_dir(env, cwd):
 
 
 def main(argv=None, *, now=time.monotonic, sleep=time.sleep, wall=time.time,
-         stdout=None, stderr=None, env=None, cwd=None, task_root=None):
+         stdout=None, stderr=None, env=None, cwd=None, task_root=None, procs=None, cwds=None):
     out = stdout if stdout is not None else sys.stdout
     err = stderr if stderr is not None else sys.stderr
     env = os.environ if env is None else env
@@ -222,6 +359,12 @@ def main(argv=None, *, now=time.monotonic, sleep=time.sleep, wall=time.time,
     start_wall = wall()
     next_progress = start + progress_every
     stall_reported_at = None  # baseline mtime of the quiet episode already reported
+    sample_procs = procs if procs is not None else _sample_procs
+    sample_cwds = cwds if cwds is not None else _sample_cwds
+    prev_cpu = None  # pid -> CPU seconds at the previous sample
+    prev_t = None
+    last_work = None  # (wall time, pid, command) of the latest process seen using CPU
+    baselined = False  # a first process sample exists, so CPU growth can be measured
 
     while True:
         t = now()
@@ -235,19 +378,43 @@ def main(argv=None, *, now=time.monotonic, sleep=time.sleep, wall=time.time,
                     emit(f"DONE: {line}")
                     return 0
 
+        roots = [os.path.realpath(p) for p in args.watched if os.path.isdir(p)]
+        if roots or args.pids:
+            try:
+                table = sample_procs()
+                if prev_cpu is not None:
+                    own = _ancestors(table, os.getpid())
+                    found = _working(prev_cpu, table, t - prev_t, own, roots, args.pids, sample_cwds)
+                    if found:
+                        last_work = (w, *found[0])
+                baselined = prev_cpu is not None
+                prev_cpu = {pid: proc.cpu for pid, proc in table.items()}
+                prev_t = t
+            except ProcessSampleError as exc:
+                print(f"process sampling failed: {exc}", file=err)
+                return 1
+
         newest = _newest(args.watched)
         # With nothing to age, the quiet period runs from the watcher's own start.
         baseline = newest[0] if newest is not None else start_wall
+        working = last_work is not None and last_work[0] >= baseline
+        if working:
+            baseline = last_work[0]
         age = w - baseline
 
         if stall_reported_at is not None and baseline > stall_reported_at:
             stall_reported_at = None
-        if stall_reported_at is None and age >= stall_window:
+        # The first poll only baselines process CPU, so it cannot rule out a working process.
+        sampling = bool(roots or args.pids)
+        if stall_reported_at is None and age >= stall_window and (baselined or not sampling):
             stall_reported_at = baseline
             emit(f"STALL: no change in watched paths for {_minutes(age)}m")
 
         if t >= next_progress:
-            if newest is None:
+            if working:
+                command = last_work[2][:COMMAND_SHOWN]
+                tail = f"last activity {_minutes(age)}m ago: process {last_work[1]} ({command}) using CPU"
+            elif newest is None:
                 tail = "no watched path exists yet"
             else:
                 tail = f"last change {_minutes(age)}m ago in {newest[1]}"

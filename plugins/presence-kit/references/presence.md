@@ -211,19 +211,37 @@ anything else, name the paths yourself:
 Every `--poll-seconds` (default 300) it takes the newest modification time
 across the `--path` values: a file's own mtime, or the newest mtime of any file
 under a directory (`.git` directories are skipped). A missing path counts for
-nothing. The done file is watched too. `--stall-minutes` (default 20) and
+nothing. The done file is watched too.
+
+A running process is activity too, because a long command (a pre-push hook, a
+build, a test run) changes no file. When a `--path` is a directory, or `--pid
+<pid>` is given (repeatable), each poll counts a process that used CPU since the
+previous poll: its working directory is inside a watched directory, or it is a
+`--pid` process or one of its descendants. It must have used at least 1% of one
+core over the interval, so an idle process does not count. A process first seen
+at a poll is only a baseline, so the first poll of a directory watch cannot
+report a stall. The watcher's own process and its ancestors (the Monitor shell,
+the session) never count. A `--task` shell job whose command runs in some other
+directory is covered by naming that directory with `--path` or the job's pid
+with `--pid`. Sampling uses `ps` plus `/proc/<pid>/cwd` (Linux) or `lsof`
+(macOS), and `lsof` runs only for the processes that used CPU. A sampling error
+prints `process sampling failed: <reason>` to stderr and exits 1: it is never
+read as no activity. `--stall-minutes` (default 20) and
 `--progress-minutes` (default: the `progress_minutes` value, 20) change the
 cadence for one run. It never writes a file.
 
 | Line | Meaning |
 |---|---|
-| `PROGRESS <elapsed>m: last change <age>m ago in <path>` | every `--progress-minutes`, changed or not; `no watched path exists yet` replaces the tail while no watched path exists |
-| `STALL: no change in watched paths for <N>m` | the newest mtime is at least `--stall-minutes` old; printed once per quiet episode, re-armed by any newer mtime; the watcher keeps running |
+| `PROGRESS <elapsed>m: last change <age>m ago in <path>` | every `--progress-minutes`, changed or not; `no watched path exists yet` replaces the tail while no watched path exists; `last activity <age>m ago: process <pid> (<command>) using CPU` replaces the tail when the latest sign of work is a process, not a file |
+| `STALL: no change in watched paths for <N>m` | no file change and no process using CPU for at least `--stall-minutes`; printed once per quiet episode, re-armed by any newer mtime or process activity; the watcher keeps running |
 | `DONE: <line>` | `--done-output`: the last non-empty line is `[exited with code N]`; `--done-file`: the pattern matches a line; the watcher then exits 0 |
 
 A `STALL` line reports a fact and prescribes nothing: what to do about the job
-is your decision. An invalid configuration or bad arguments print to stderr and
-exit 2.
+is your decision. While the user is afk, notify them of every `STALL` you receive
+with the PushNotification tool, one line naming the job and the quiet minutes,
+because a stalled job waits for them and they are not watching the terminal (the
+watcher cannot push; you do). An invalid configuration or bad arguments print to
+stderr and exit 2; a process sampling failure exits 1.
 
 ## Commands
 

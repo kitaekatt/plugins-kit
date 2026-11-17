@@ -70,7 +70,9 @@ always works; your own invocation honors the configuration.
    presence model describes, for the behaviors that are on: the waiting rule
    (start each waiter agent on the model named by `values.waiter_model`), terse
    interim messages, parked questions, and a notification only when the user's
-   input is needed. Independent work continues.
+   input is needed. Independent work continues. A `STALL` line from a watcher
+   Monitor counts as a notification case: push-notify the user with the
+   PushNotification tool, one line naming the job and the quiet minutes.
 
 6. **End with the recap.** When the Stop hook's `ending-recap` line names a
    prompt id and a recap trigger, invoke the Skill `presence-kit:recap` with
