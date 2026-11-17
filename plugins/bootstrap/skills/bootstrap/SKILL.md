@@ -38,7 +38,7 @@ reference_skill:
         | silent skip    | First session on fresh machine               | Nothing (engine runs next)      |
         | fix-all        | User action required                         | Remediation message + prompt    |
       gotchas:
-        - A session started with BOOTSTRAP_NO_PASS=1 runs no pass, harvest, rescue or display relay; its SessionStart writes only the interpreter names. Set it on a helper Claude or Codex session that a tool launches in a throwaway directory (git-kit and p4-kit review lanes and awesome-kit dispatch do this). An explicit `bootstrap run` ignores it.
+        - A session started with BOOTSTRAP_NO_PASS=1 runs no pass, harvest, rescue or display relay; its SessionStart writes only the interpreter names and the recorded plugin-root variables. Set it on a helper Claude or Codex session that a tool launches in a throwaway directory (git-kit and p4-kit review lanes and awesome-kit dispatch do this). An explicit `bootstrap run` ignores it.
         - Healthy bootstrap is invisible -- no output means everything checked clean, not that bootstrap is broken. Verify by checking each plugin's log at ~/.claude/plugins/data/<marketplace>/<plugin>/bootstrap.log. If the log doesn't exist, bootstrap never reached that plugin.
     - id: update_lifecycle
       summary: A published bootstrap update converges in ONE session via the harvest; provisioning is done when engine_ran_version == the installed version, and a restart is needed only to load new plugin CODE. Both session-bootstrap.sh skip gates bypass on a registry change, so `claude --resume` re-runs after an update. A SessionStart that never fired at all (fresh machine mid-sync) is caught by the UserPromptSubmit rescue.

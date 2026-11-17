@@ -4,7 +4,8 @@ A tool that starts Claude or Codex sessions for its own work (a review lane in
 a frozen copy of a repository, a consultation in a scratch directory) sets
 BOOTSTRAP_NO_PASS=1 in their environment. Each hook entry then stands down: no
 engine pass, no harvest, no SessionStart rescue, no display relay. The
-SessionStart hook still writes the interpreter names first, so the session's
+SessionStart hook still writes the interpreter names and plugin-root
+variables first, so the session's
 commands keep BOOTSTRAP_PYTHON. An explicit `bootstrap run` (console mode)
 ignores the variable.
 """

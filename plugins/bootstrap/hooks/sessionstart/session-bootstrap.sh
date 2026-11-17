@@ -371,8 +371,8 @@ fi
 # --- Helper-session opt-out (BOOTSTRAP_NO_PASS) ---
 # A tool that launches Claude sessions for its own work (a review lane in a
 # frozen copy of a repository, a consultation in a scratch directory) sets
-# BOOTSTRAP_NO_PASS=1. Such a session needs the interpreter names written above
-# and nothing else: a pass there provisions a throwaway directory as a project.
+# BOOTSTRAP_NO_PASS=1. Such a session needs the interpreter names and plugin-root
+# variables written above and nothing else: a pass there provisions a throwaway directory as a project.
 # Placed before the per-session marker, so nothing in the data tree records the
 # session. An explicit --console run ignores it. Mirrored in
 # bootstrap-display.sh and in bootstrap_cli.py's codex-hook.
