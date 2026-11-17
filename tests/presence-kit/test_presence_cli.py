@@ -32,7 +32,7 @@ import presence_state as ps  # noqa: E402
 
 BEHAVIOR_IDS = (
     "afk-on-departure", "afk-on-quiet", "autonomous-on-handover", "recap-on-return",
-    "waiting-guard", "ending-recap", "terse-while-away", "park-questions",
+    "waiting-guard", "liveness-watch", "ending-recap", "terse-while-away", "park-questions",
     "notify-for-input",
 )
 AWAY_IDS = ("terse-while-away", "park-questions", "notify-for-input")
@@ -515,6 +515,10 @@ def run_stop(world, payload, attended="1", **kw):
 A103 = "b0sln3cn0 (shell, running): Run sleep 120 in background"
 C_LINE = f"add a waiter agent; the terminal shows idle. Counted as running non-agent work: {A103}."
 W_LINE = f"end with `Waiting on <what>`. Counted as owned work: {A103}."
+M_LINE = (
+    "arm a liveness watch: a Monitor on `watch.py --task <id>` for each job you own "
+    f"(progress at most every 20 minutes, a stall report). No liveness watch on: {A103}."
+)
 
 
 def test_stop_nudge_end_to_end(world):
@@ -526,7 +530,11 @@ def test_stop_nudge_end_to_end(world):
     assert res.out == json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "Stop",
-            "additionalContext": L("waiting-guard", pid, C_LINE) + "\n" + L("waiting-guard", pid, W_LINE),
+            "additionalContext": "\n".join([
+                L("waiting-guard", pid, C_LINE),
+                L("waiting-guard", pid, W_LINE),
+                L("liveness-watch", pid, M_LINE),
+            ]),
         }
     }) + "\n"
     assert world.state(payload["session_id"])["nudges"] == {pid: 1, f"{pid}/waiting-guard": 1}
@@ -684,7 +692,7 @@ def test_stop_project_dir_sources(world, tmp_path, monkeypatch, source):
     off = tmp_path / "off"
     (off / ".claude").mkdir(parents=True)
     (off / ".claude" / "presence-kit.json").write_text(
-        json.dumps({"behaviors": {"waiting-guard": False}}), encoding="ascii"
+        json.dumps({"behaviors": {"waiting-guard": False, "liveness-watch": False}}), encoding="ascii"
     )
     payload = load_fixture("a1-03-Stop", world.root)
     env_over = {"CLAUDE_PROJECT_DIR": None}

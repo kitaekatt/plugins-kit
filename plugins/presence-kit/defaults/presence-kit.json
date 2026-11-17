@@ -6,6 +6,7 @@
     "autonomous-on-handover": true,
     "recap-on-return": true,
     "waiting-guard": true,
+    "liveness-watch": true,
     "ending-recap": true,
     "terse-while-away": true,
     "park-questions": true,

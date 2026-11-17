@@ -1,9 +1,18 @@
 """presence-kit watcher: one stdout line per event, for a Monitor to turn into notifications.
 
 Usage:
-  watch.py --path PATH [--path PATH ...]
+  watch.py [--task ID] [--path PATH ...]
            [--done-output FILE | --done-file PATH --done-pattern REGEX]
            [--stall-minutes N] [--progress-minutes N] [--poll-seconds S]
+
+--task ID derives the paths of a background task: its output file
+`<tmp>/claude-<uid>/<project slug>/<CLAUDE_CODE_SESSION_ID>/tasks/<ID>.output` (<tmp> is
+/tmp; the file is found by pattern, so the slug need not be known). A shell task's file is both watched and the done condition
+(unless a done option is given). An agent task's file is a symlink to the agent's
+transcript, whose records carry the agent's working directory (its worktree): that
+directory is watched too and the agent has no done condition (its completion is
+announced to the session). The id must be a whole name of one file; an unset
+CLAUDE_CODE_SESSION_ID, an unsupported platform or a missing output file exits 2.
 
 Every --poll-seconds (default 300) the watcher takes the newest modification time
 across the watched paths: a file's own mtime, or for a directory the newest mtime of
@@ -31,6 +40,8 @@ Exit codes: 0 done; 2 bad arguments or invalid configuration.
 The script never writes any file.
 """
 import argparse
+import glob
+import json
 import os
 import re
 import sys
@@ -43,6 +54,8 @@ import presence_config as pc  # noqa: E402
 import wait  # noqa: E402
 
 SKIPPED_DIRECTORY = ".git"
+SESSION_ENV = "CLAUDE_CODE_SESSION_ID"
+TASK_ID = re.compile(r"[A-Za-z0-9]+")
 PROJECT_ENV = "CLAUDE_PROJECT_DIR"
 
 
@@ -57,6 +70,7 @@ class _Parser(argparse.ArgumentParser):
 
 def _build_parser():
     parser = _Parser(prog="watch.py", allow_abbrev=False)
+    parser.add_argument("--task", dest="task", metavar="ID")
     parser.add_argument("--path", dest="paths", action="append", default=[], metavar="PATH")
     # dest names match what wait._match_line reads (args.output, args.regex).
     parser.add_argument("--done-output", dest="output", metavar="FILE")
@@ -82,11 +96,13 @@ def _parse(argv):
         except re.error as exc:
             raise _BadArguments(f"invalid --done-pattern: {exc}")
     args.done_path = args.output if args.output is not None else args.file
+    if args.task is not None and TASK_ID.fullmatch(args.task) is None:
+        raise _BadArguments(f"invalid task id {args.task!r}: letters and digits only")
     watched = list(args.paths)
     if args.done_path is not None and args.done_path not in watched:
         watched.append(args.done_path)
-    if not watched:
-        raise _BadArguments("at least one --path (or a done option) is required")
+    if not watched and args.task is None:
+        raise _BadArguments("at least one --path, --task or done option is required")
     args.watched = watched
     return args
 
@@ -118,6 +134,53 @@ def _newest(paths):
     return best
 
 
+def _task_base(tmp_root):
+    """`<tmp>/claude-<uid>`: where Claude Code keeps a session's task files (POSIX only)."""
+    if not hasattr(os, "getuid"):
+        raise _BadArguments("--task needs a POSIX platform: the task output layout is not known elsewhere")
+    return Path(tmp_root if tmp_root is not None else "/tmp") / f"claude-{os.getuid()}"
+
+
+def _agent_cwd(output):
+    """The working directory recorded in an agent task's transcript, or None."""
+    with open(output, encoding="utf-8") as handle:
+        for raw in handle:
+            try:
+                obj = json.loads(raw)
+            except ValueError:
+                continue
+            if isinstance(obj, dict) and isinstance(obj.get("cwd"), str):
+                return obj["cwd"]
+    return None
+
+
+def _resolve_task(args, env, task_root):
+    """Add the task's output file (and an agent's working directory) to args.watched."""
+    session = env.get(SESSION_ENV)
+    if not session:
+        raise _BadArguments(f"--task needs {SESSION_ENV} to find the task output file")
+    root = _task_base(task_root)
+    pattern = os.path.join(glob.escape(str(root)), "*", glob.escape(session), "tasks", f"{args.task}.output")
+    found = sorted(glob.glob(pattern))
+    if not found:
+        raise _BadArguments(
+            f"no output file for task {args.task}: nothing matches {root}/*/{session}/tasks/{args.task}.output"
+        )
+    if len(found) > 1:
+        raise _BadArguments(f"task {args.task} output is ambiguous: {', '.join(found)}")
+    output = found[0]
+    args.watched.append(output)
+    real = os.path.realpath(output)
+    if real.endswith(".jsonl"):
+        cwd = _agent_cwd(real)
+        if cwd is None:
+            raise _BadArguments(f"agent transcript {real} records no working directory")
+        args.watched.append(cwd)
+    elif args.done_path is None:
+        args.output = output
+        args.done_path = output
+
+
 def _minutes(seconds):
     return int(max(0.0, seconds) // 60)
 
@@ -128,12 +191,14 @@ def _project_dir(env, cwd):
 
 
 def main(argv=None, *, now=time.monotonic, sleep=time.sleep, wall=time.time,
-         stdout=None, stderr=None, env=None, cwd=None):
+         stdout=None, stderr=None, env=None, cwd=None, task_root=None):
     out = stdout if stdout is not None else sys.stdout
     err = stderr if stderr is not None else sys.stderr
     env = os.environ if env is None else env
     try:
         args = _parse(sys.argv[1:] if argv is None else argv)
+        if args.task is not None:
+            _resolve_task(args, env, task_root)
     except wait._BadArguments as exc:
         print(f"bad arguments: {exc}", file=err)
         return 2

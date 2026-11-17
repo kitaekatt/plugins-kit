@@ -27,6 +27,7 @@ BEHAVIOR_IDS: tuple[str, ...] = (
     "autonomous-on-handover",
     "recap-on-return",
     "waiting-guard",
+    "liveness-watch",
     "ending-recap",
     "terse-while-away",
     "park-questions",
@@ -347,6 +348,14 @@ C_IDS = "waiting-guard"
 C_WAITER = "add a waiter agent; the terminal shows idle. Counted as running non-agent work: {counted}."
 W_IDS = "waiting-guard"
 W_WAITING = "end with `Waiting on <what>`. Counted as owned work: {counted}."
+M_IDS = "liveness-watch"
+# {gaps}: built by presence_stop.watch_gaps_text from the NOWATCH and REARM parts.
+M_WATCH = (
+    "arm a liveness watch: a Monitor on `watch.py --task <id>` for each job you own "
+    "(progress at most every 20 minutes, a stall report). {gaps}"
+)
+M_NOWATCH = "No liveness watch on: {tasks}."
+M_REARM = "Liveness watch ended while the job still runs, re-arm it on: {tasks}."
 E_IDS = "ending-recap"
 E_AUTONOMOUS = (
     "autonomous: if {goal} is done, invoke `presence-kit:recap autonomous-done {pid}`, "
@@ -379,5 +388,6 @@ S6_LABELS = {
     "R": "return recap not run",
     "C": "no waiter agent covering the job",
     "W": "turn did not end with `Waiting on <what>`",
+    "M": "no running liveness watch on an owned job",
     "E": "no ending recap or goal check",
 }

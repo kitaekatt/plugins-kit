@@ -60,7 +60,7 @@ class _Buf:
         self.lines_flushed = self.text.count("\n")
 
 
-def run(argv, clock, tmp_path, env=None):
+def run(argv, clock, tmp_path, env=None, **kw):
     """Run to completion or until clock.stop_after sleeps; returns (code, out, err)."""
     out, err = _Buf(), _Buf()
     env = {"CLAUDE_CONFIG_DIR": str(tmp_path / "cfg"), "CLAUDE_PROJECT_DIR": str(tmp_path / "proj")} if env is None else env
@@ -74,6 +74,7 @@ def run(argv, clock, tmp_path, env=None):
             stderr=err,
             env=env,
             cwd=str(tmp_path),
+            **kw,
         )
     except StopRun:
         code = None
@@ -403,3 +404,92 @@ def test_real_process_prints_done_and_exits_0(tmp_path):
     assert result.returncode == 0, result.stderr
     assert result.stdout == f"DONE: {TRAILER}\n"
     assert result.stderr == ""
+
+
+# --- --task ------------------------------------------------------------------------
+#
+# Claude Code keeps a background task's output at
+#   <tmp>/claude-<uid>/<project slug>/<session id>/tasks/<task id>.output
+# A shell task's file is plain text ending in "[exited with code N]". An agent task's
+# file is a symlink to the agent's transcript, whose records carry the agent's `cwd`.
+
+SESSION = "sess-1234"
+
+
+def task_env(tmp_path, **extra):
+    return {"CLAUDE_CONFIG_DIR": str(tmp_path / "cfg"), "CLAUDE_PROJECT_DIR": str(tmp_path / "proj"),
+            "CLAUDE_CODE_SESSION_ID": SESSION, **extra}
+
+
+def task_dir(root):
+    return root / f"claude-{os.getuid()}" / "-proj-slug" / SESSION / "tasks"
+
+
+def test_task_watches_the_shell_task_output_and_ends_on_its_trailer(tmp_path):
+    root = tmp_path / "tmp"
+    out_file = make_file(task_dir(root) / "b123.output", 0, f"working\n{TRAILER}\n")
+    code, out, _ = run(["--task", "b123"], FakeClock(stop_after=3), tmp_path, task_env(tmp_path), task_root=root)
+    assert code == 0
+    assert lines(out) == [f"DONE: {TRAILER}"]
+    assert out_file.exists()
+
+
+def test_task_progress_names_the_derived_output_path(tmp_path):
+    root = tmp_path / "tmp"
+    out_file = make_file(task_dir(root) / "b123.output", 0, "working\n")
+    _, out, _ = run(["--task", "b123", "--progress-minutes", "5"], FakeClock(stop_after=2), tmp_path,
+                    task_env(tmp_path), task_root=root)
+    assert progresses(out) == [f"PROGRESS 5m: last change 5m ago in {out_file}"]
+
+
+def test_task_for_an_agent_also_watches_the_agent_working_directory(tmp_path):
+    root = tmp_path / "tmp"
+    worktree = tmp_path / "wt"
+    make_file(worktree / "src" / "a.py", 0)
+    transcript = make_file(tmp_path / "agent-a1.jsonl", 0, json.dumps({"cwd": str(worktree), "type": "user"}) + "\n")
+    tdir = task_dir(root)
+    tdir.mkdir(parents=True)
+    (tdir / "a1.output").symlink_to(transcript)
+
+    def touch(n, clock):
+        if n == 3:
+            set_mtime(worktree / "src" / "a.py", clock.t)
+
+    code, out, _ = run(["--task", "a1", "--progress-minutes", "20"], FakeClock(on_sleep=touch, stop_after=5),
+                       tmp_path, task_env(tmp_path), task_root=root)
+    assert code is None  # an agent task has no trailer: it runs until killed
+    assert stalls(out) == []  # the worktree edit at 15m kept the quiet period short
+
+
+def test_task_without_a_session_id_fails_loudly(tmp_path):
+    env = task_env(tmp_path)
+    del env["CLAUDE_CODE_SESSION_ID"]
+    code, _, err = run(["--task", "b123"], FakeClock(stop_after=1), tmp_path, env, task_root=tmp_path)
+    assert code == 2 and "CLAUDE_CODE_SESSION_ID" in err.text
+
+
+def test_task_with_no_output_file_fails_loudly(tmp_path):
+    code, _, err = run(["--task", "nope"], FakeClock(stop_after=1), tmp_path, task_env(tmp_path),
+                       task_root=tmp_path / "tmp")
+    assert code == 2 and "nope" in err.text and "tasks" in err.text
+
+
+def test_task_ids_are_matched_whole(tmp_path):
+    root = tmp_path / "tmp"
+    make_file(task_dir(root) / "b1234.output", 0, TRAILER + "\n")
+    code, _, err = run(["--task", "b123"], FakeClock(stop_after=1), tmp_path, task_env(tmp_path), task_root=root)
+    assert code == 2
+
+
+def test_task_and_an_explicit_done_option_both_hold(tmp_path):
+    root = tmp_path / "tmp"
+    make_file(task_dir(root) / "b123.output", 0, "working\n")
+    log = make_file(tmp_path / "x.log", 0, "PUBLISH_EXIT\n")
+    code, out, _ = run(["--task", "b123", "--done-file", str(log), "--done-pattern", "PUBLISH_EXIT"],
+                       FakeClock(stop_after=3), tmp_path, task_env(tmp_path), task_root=root)
+    assert code == 0 and lines(out) == ["DONE: PUBLISH_EXIT"]
+
+
+def test_task_an_id_that_could_climb_out_of_the_tasks_directory_is_refused(tmp_path):
+    code, _, err = run(["--task", "../x"], FakeClock(stop_after=1), tmp_path, task_env(tmp_path), task_root=tmp_path)
+    assert code == 2 and "task id" in err.text

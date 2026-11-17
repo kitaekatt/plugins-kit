@@ -104,10 +104,26 @@ seat routing for a load-bearing call; this plugin does not change that policy.
 
 ## Waiting rule
 
-`waiting-guard`, all modes. Agent and workflow work shows "working" by itself.
-Non-agent work (a shell job, a Codex CLI job, an external job) needs a waiter
-agent (section Waiter agent) plus a Monitor on the shipped watcher (section
-Watcher) for progress. While owned work runs
+`waiting-guard`, all modes. Agent and workflow work keeps the terminal on
+"working" by itself. Non-agent work (a shell job, a Codex CLI job, an external
+job) needs a waiter agent (section Waiter agent) so the terminal shows work.
+
+`liveness-watch`, all modes. Every owned job, agent and workflow work
+included, needs a Monitor on the shipped watcher (section Watcher): it reports
+progress at most every `progress_minutes` and a stall after quiet minutes, which
+the job's own completion notice never does, because a stuck job never completes.
+Arm it with `watch.py --task <id>` right after the job starts. A Monitor lives
+for its `timeout_ms` (30 minutes unless you set more); when it ends while the
+job still runs, arm another. The Stop hook finds the Monitor you armed for a job
+in the main transcript (a Monitor call whose command names the job's id, joined
+to its "Monitor started (task <id>" result) and checks the payload for it still
+running. A running owned job with none gets one nudge: `No liveness watch on:
+<job>`; a job whose Monitor is no longer running gets `Liveness watch ended while
+the job still runs, re-arm it on: <job>`. A Monitor, an Artifact monitor, a
+finished task and a subagent's own job need no watch. Like the waiting guard it
+speaks once per prompt. With `liveness-watch` off, none of this applies.
+
+While owned work runs
 or a session cron is pending, end the turn with the last line
 `Waiting on <what>`, where `<what>` names the work. Never hold the main session
 with a foreground wait. The Stop hook checks this and nudges once per prompt.
@@ -172,10 +188,23 @@ the waiter never picks a file by recency, because it can then watch another job.
 
 ## Watcher
 
-`scripts/watch.py` is the Monitor's command for a non-agent job. Arm a Monitor
+`scripts/watch.py` is the Monitor's command for any owned job. Arm a Monitor
 on it instead of writing a watcher script of your own: its cadence is fixed, so
 the user is not flooded with progress lines. It prints one line per event and
-runs until its done condition holds or it is killed:
+runs until its done condition holds or it is killed. For a background task, pass
+its id:
+
+    "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${PRESENCE_KIT_ROOT:?presence-kit is not provisioned}/scripts/watch.py" --task <task id> [--path <extra dir> ...] [--stall-minutes <n>]
+
+`--task` derives the paths from the id and `CLAUDE_CODE_SESSION_ID`: the task's
+output file `<tmp>/claude-<uid>/<project slug>/<session id>/tasks/<id>.output`
+(found by pattern; `<tmp>` is `/tmp`). A shell task's output file is watched and
+its `[exited with code N]` trailer is the done condition. An agent task's output
+file is a symlink to the agent's transcript; the watcher also watches the working
+directory that transcript records (the agent's worktree) and has no done
+condition, because the agent's completion is announced to you. A missing session
+id, a missing output file or a non-POSIX platform exits 2 with the reason. For
+anything else, name the paths yourself:
 
     "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${PRESENCE_KIT_ROOT:?presence-kit is not provisioned}/scripts/watch.py" --path <file-or-dir> [--path ...] [--done-output <task output file> | --done-file <path> --done-pattern <regex>]
 

@@ -13,6 +13,7 @@ StateError.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -23,7 +24,7 @@ import presence_state as ps
 import presence_transcript as pt
 
 NUDGE_BUDGET = 3  # R and E; the waiting guard (GUARD_CODES) speaks once per prompt
-GUARD_CODES = ("C", "W")
+GUARD_CODES = ("C", "W", "M")
 
 # These types are agent work (they show "working" by themselves); every other type
 # is non-agent and needs a waiter agent.
@@ -52,6 +53,7 @@ _CODE_IDS = {
     "R": pc.R_IDS,
     "C": pc.C_IDS,
     "W": pc.W_IDS,
+    "M": pc.M_IDS,
     "E": pc.E_IDS,
 }
 
@@ -167,6 +169,40 @@ def _needs_waiter(tasks: list[dict]) -> bool:
     return bool(tasks) and not any(_is_agent(task) for task in tasks)
 
 
+def watch_gaps(
+    owned: list[dict] | None, tasks: list[dict] | None, transcript: str | None
+) -> tuple[list[dict], list[dict]]:
+    """(unwatched, expired): the owned running jobs no Monitor ever covered, and the
+    ones whose Monitor is no longer running. A Monitor covers a job when the main
+    transcript shows it armed on the job's id; it is running when the payload lists
+    it unfinished. Monitors themselves need no watch. No readable transcript is no
+    evidence, so both lists are empty (row 2 reports the missing transcript)."""
+    jobs = [
+        task for task in owned or []
+        if task.get("type") != ARTIFACT_MONITOR_TYPE and isinstance(task.get("id"), str)
+    ]
+    if not jobs or not transcript or not Path(transcript).is_file():
+        return [], []
+    armed = pt.armed_monitors(transcript, {task["id"] for task in jobs})
+    running = {
+        task["id"] for task in tasks or []
+        if task.get("type") == ARTIFACT_MONITOR_TYPE and not _is_finished(task)
+        and isinstance(task.get("id"), str)
+    }
+    unwatched = [task for task in jobs if task["id"] not in armed]
+    expired = [task for task in jobs if task["id"] in armed and not armed[task["id"]] & running]
+    return unwatched, expired
+
+
+def watch_gaps_text(unwatched: list[dict], expired: list[dict]) -> str:
+    parts = []
+    if unwatched:
+        parts.append(pc.M_NOWATCH.format(tasks="; ".join(describe_task(t) for t in unwatched)))
+    if expired:
+        parts.append(pc.M_REARM.format(tasks="; ".join(describe_task(t) for t in expired)))
+    return " ".join(parts)
+
+
 def _ascii(value: Any, fallback: str) -> str:
     """`value` as one-line ASCII text; `fallback` when it is not a non-empty string or number."""
     if isinstance(value, bool) or not isinstance(value, (str, int, float)):
@@ -279,6 +315,7 @@ def _held_codes(
     tasks: list[dict] | None,
     crons: list | None,
     last_message: str | None,
+    watch_gap: bool = False,
 ) -> list[str]:
     """Rows 5-7 over the document AFTER rows 3-4 (D8); codes in R, C, W, E order.
 
@@ -297,6 +334,7 @@ def _held_codes(
     )
     c = waiting_guard and tasks is not None and _needs_waiter(tasks)
     w = waiting_guard and owned and not _ends_with_waiting(last_message)
+    m = cfg.enabled("liveness-watch") and watch_gap
     e = (
         cfg.enabled("ending-recap")
         and doc["presence"] == "afk"
@@ -305,7 +343,7 @@ def _held_codes(
         and not r
         and recaps.get(pid) not in ENDING_RECAPS
     )
-    return [code for code, held in (("R", r), ("C", c), ("W", w), ("E", e)) if held]
+    return [code for code, held in (("R", r), ("C", c), ("W", w), ("M", m), ("E", e)) if held]
 
 
 def _nudge_line(code: str, doc: dict, pid: str, counted: dict[str, str]) -> str:
@@ -315,6 +353,8 @@ def _nudge_line(code: str, doc: dict, pid: str, counted: dict[str, str]) -> str:
         text = pc.C_WAITER.format(counted=counted["C"])
     elif code == "W":
         text = pc.W_WAITING.format(counted=counted["W"])
+    elif code == "M":
+        text = pc.M_WATCH.format(gaps=counted["M"])
     elif doc["goal"] is not None:
         text = pc.E_AUTONOMOUS.format(goal=doc["goal"], pid=pid)
     else:
@@ -383,6 +423,8 @@ def evaluate(payload: dict, cfg: pc.Config, env: Mapping[str, str], now: datetim
         human = pt.newest_human_before(transcript, entry)
     causes = [cause for cause in (entry_cause, tasks_cause, crons_cause) if cause]
     state_file = str(ps.state_path(sid, env))
+    owned = _owned_tasks(tasks)
+    unwatched, expired = watch_gaps(owned, tasks, transcript) if cfg.enabled("liveness-watch") else ([], [])
 
     out: list[StopDecision] = []
 
@@ -391,9 +433,12 @@ def evaluate(payload: dict, cfg: pc.Config, env: Mapping[str, str], now: datetim
         _record_cron_prompts(doc, cfg, crons)
         _quiet_afk(doc, cfg, now, entry, human)
         _user_returned(doc, cfg, pid, entry, state_file)
-        held = _held_codes(doc, cfg, pid, tasks, crons, last_message)
-        owned = _owned_tasks(tasks)
-        counted = {"C": counted_work(owned, None), "W": counted_work(owned, crons)}
+        held = _held_codes(doc, cfg, pid, tasks, crons, last_message, bool(unwatched or expired))
+        counted = {
+            "C": counted_work(owned, None),
+            "W": counted_work(owned, crons),
+            "M": watch_gaps_text(unwatched, expired),
+        }
         nudge, exhaustion = _budget(doc, pid, held, counted)
         ps.prune(doc)
         messages.extend(exhaustion)
