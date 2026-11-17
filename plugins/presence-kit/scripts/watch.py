@@ -10,13 +10,15 @@ Usage:
 /tmp; the file is found by pattern, so the slug need not be known). A shell task's file is both watched and the done condition
 (unless a done option is given). An agent task's file is a symlink to the agent's
 transcript, whose records carry the agent's working directory (its worktree): that
-directory is watched too and the agent has no done condition (its completion is
-announced to the session). The id must be a whole name of one file; an unset
+directory is watched too. The agent's done condition is its hand-back: the watcher
+ends with DONE once the transcript's last record answers a SubagentHandback tool call.
+An agent resumed later by SendMessage needs a new watcher. The id must be a whole name of one file; an unset
 CLAUDE_CODE_SESSION_ID, an unsupported platform or a missing output file exits 2.
 
 Every --poll-seconds (default 300) the watcher takes the newest modification time
 across the watched paths: a file's own mtime, or for a directory the newest mtime of
-any file under it (`.git` directories are skipped). A missing path contributes
+any file under it (`.git` and tool cache directories such as `.pytest_cache` and
+`__pycache__` are skipped). A missing path contributes
 nothing. The --done-output / --done-file path is watched too.
 
 A live process is activity too (a long command changes no file). When a --path is a
@@ -63,7 +65,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import presence_config as pc  # noqa: E402
 import wait  # noqa: E402
 
-SKIPPED_DIRECTORY = ".git"
+SKIPPED_DIRECTORIES = frozenset({".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"})
+HANDBACK_TOOL = "SubagentHandback"
 SESSION_ENV = "CLAUDE_CODE_SESSION_ID"
 TASK_ID = re.compile(r"[A-Za-z0-9]+")
 PROJECT_ENV = "CLAUDE_PROJECT_DIR"
@@ -135,6 +138,7 @@ def _parse(argv):
     if not watched and args.task is None and not args.pids:
         raise _BadArguments("at least one --path, --task, --pid or done option is required")
     args.watched = watched
+    args.agent_transcript = None
     return args
 
 
@@ -151,7 +155,7 @@ def _newest(paths):
         candidates = []
         if os.path.isdir(root):
             for directory, subdirs, files in os.walk(root, onerror=_on_walk_error):
-                subdirs[:] = [d for d in subdirs if d != SKIPPED_DIRECTORY]
+                subdirs[:] = [d for d in subdirs if d not in SKIPPED_DIRECTORIES]
                 candidates.extend(os.path.join(directory, name) for name in files)
         else:
             candidates.append(root)
@@ -291,6 +295,33 @@ def _agent_cwd(output):
     return None
 
 
+def _agent_finished(transcript):
+    """True when the transcript's last record answers a SubagentHandback tool call."""
+    records = []
+    with open(transcript, encoding="utf-8") as handle:
+        for raw in handle:
+            try:
+                obj = json.loads(raw)
+            except ValueError:
+                continue
+            if isinstance(obj, dict):
+                records.append(obj)
+    if not records:
+        return False
+    last = records[-1]
+    if last.get("toolEndsTurn") is not True:
+        return False
+    source = last.get("sourceToolAssistantUUID")
+    for obj in reversed(records):
+        if obj.get("uuid") == source and obj.get("type") == "assistant":
+            content = (obj.get("message") or {}).get("content")
+            return isinstance(content, list) and any(
+                isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == HANDBACK_TOOL
+                for b in content
+            )
+    return False
+
+
 def _resolve_task(args, env, task_root):
     """Add the task's output file (and an agent's working directory) to args.watched."""
     session = env.get(SESSION_ENV)
@@ -313,6 +344,7 @@ def _resolve_task(args, env, task_root):
         if cwd is None:
             raise _BadArguments(f"agent transcript {real} records no working directory")
         args.watched.append(cwd)
+        args.agent_transcript = real
     elif args.done_path is None:
         args.output = output
         args.done_path = output
@@ -377,6 +409,10 @@ def main(argv=None, *, now=time.monotonic, sleep=time.sleep, wall=time.time,
                 if line is not None:
                     emit(f"DONE: {line}")
                     return 0
+
+        if args.agent_transcript is not None and _agent_finished(args.agent_transcript):
+            emit("DONE: agent handed back its report")
+            return 0
 
         roots = [os.path.realpath(p) for p in args.watched if os.path.isdir(p)]
         if roots or args.pids:

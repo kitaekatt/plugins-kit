@@ -201,8 +201,11 @@ output file `<tmp>/claude-<uid>/<project slug>/<session id>/tasks/<id>.output`
 (found by pattern; `<tmp>` is `/tmp`). A shell task's output file is watched and
 its `[exited with code N]` trailer is the done condition. An agent task's output
 file is a symlink to the agent's transcript; the watcher also watches the working
-directory that transcript records (the agent's worktree) and has no done
-condition, because the agent's completion is announced to you. A missing session
+directory that transcript records (the agent's worktree), and ends with `DONE:
+agent handed back its report` once the transcript's last record answers the
+agent's SubagentHandback call. An agent resumed later by SendMessage needs a new
+watcher. File changes under `.git` and tool caches (`.pytest_cache`,
+`__pycache__`, `.mypy_cache`, `.ruff_cache`) are not activity. A missing session
 id, a missing output file or a non-POSIX platform exits 2 with the reason. For
 anything else, name the paths yourself:
 
@@ -234,7 +237,7 @@ cadence for one run. It never writes a file.
 |---|---|
 | `PROGRESS <elapsed>m: last change <age>m ago in <path>` | every `--progress-minutes`, changed or not; `no watched path exists yet` replaces the tail while no watched path exists; `last activity <age>m ago: process <pid> (<command>) using CPU` replaces the tail when the latest sign of work is a process, not a file |
 | `STALL: no change in watched paths for <N>m` | no file change and no process using CPU for at least `--stall-minutes`; printed once per quiet episode, re-armed by any newer mtime or process activity; the watcher keeps running |
-| `DONE: <line>` | `--done-output`: the last non-empty line is `[exited with code N]`; `--done-file`: the pattern matches a line; the watcher then exits 0 |
+| `DONE: <line>` | `--done-output`: the last non-empty line is `[exited with code N]`; `--done-file`: the pattern matches a line; `--task` on an agent: the agent handed back its report; the watcher then exits 0 |
 
 A `STALL` line reports a fact and prescribes nothing: what to do about the job
 is your decision. While the user is afk and `notify-for-input` is on, notify them of

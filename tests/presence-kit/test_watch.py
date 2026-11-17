@@ -413,6 +413,16 @@ def test_real_process_prints_done_and_exits_0(tmp_path):
     assert result.stderr == ""
 
 
+@pytest.mark.parametrize("name", [".pytest_cache", "__pycache__", ".mypy_cache", ".ruff_cache"])
+def test_cache_directories_are_not_activity(tmp_path, name):
+    root = tmp_path / "repo"
+    make_file(root / "src.txt", -25 * 60)
+    make_file(root / name / "v" / "cache" / "nodeids", 0)  # fresh, but a tool cache
+    clock = FakeClock(stop_after=2)
+    _, out, _ = run(["--path", str(root), "--progress-minutes", "10000"], clock, tmp_path)
+    assert stalls(out) == ["STALL: no change in watched paths for 30m"]
+
+
 # --- --task ------------------------------------------------------------------------
 #
 # Claude Code keeps a background task's output at
@@ -464,7 +474,7 @@ def test_task_for_an_agent_also_watches_the_agent_working_directory(tmp_path):
 
     code, out, _ = run(["--task", "a1", "--progress-minutes", "20"], FakeClock(on_sleep=touch, stop_after=5),
                        tmp_path, task_env(tmp_path), task_root=root)
-    assert code is None  # an agent task has no trailer: it runs until killed
+    assert code is None  # no hand-back in the transcript: it runs until killed
     assert stalls(out) == []  # the worktree edit at 15m kept the quiet period short
 
 
@@ -784,3 +794,69 @@ def test_the_first_poll_does_not_report_a_stall_it_cannot_yet_check(tmp_path):
     world2 = World({ME: (1, "pytest"), 900: (ME, "git push")}, {900: str(watched)})
     _, out2, _ = run_world(["--path", str(watched)], FakeClock(stop_after=3), tmp_path, world2)
     assert stalls(out2) == ["STALL: no change in watched paths for 30m"]  # confirmed at the second poll
+
+
+# --- --task on an agent: the hand-back ends the watch ---------------------------------
+#
+# A finished agent's transcript ends with an assistant record whose tool_use is
+# SubagentHandback, answered by a user record with toolEndsTurn true whose
+# sourceToolAssistantUUID names that assistant record.
+
+
+def _rec(kind, uuid, **extra):
+    return {"type": kind, "uuid": uuid, **extra}
+
+
+def _handback_records():
+    return [
+        _rec("assistant", "u1", message={"role": "assistant", "content": [
+            {"type": "tool_use", "name": "SubagentHandback", "id": "t1", "input": {"message": "report"}}]}),
+        _rec("user", "u2", toolEndsTurn=True, sourceToolAssistantUUID="u1",
+             message={"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1"}]}),
+    ]
+
+
+def _agent_task(tmp_path, records):
+    root = tmp_path / "tmp"
+    worktree = tmp_path / "wt"
+    make_file(worktree / "a.py", 0)
+    head = {"cwd": str(worktree), "type": "user", "uuid": "u0"}
+    transcript = make_file(tmp_path / "agent-a1.jsonl", 0, "".join(json.dumps(r) + "\n" for r in [head, *records]))
+    tdir = task_dir(root)
+    tdir.mkdir(parents=True)
+    (tdir / "a1.output").symlink_to(transcript)
+    return root
+
+
+def _run_agent(tmp_path, records):
+    root = _agent_task(tmp_path, records)
+    return run(["--task", "a1"], FakeClock(stop_after=3), tmp_path, task_env(tmp_path), task_root=root)
+
+
+def test_task_for_an_agent_ends_with_done_when_the_agent_hands_back(tmp_path):
+    code, out, _ = _run_agent(tmp_path, _handback_records())
+    assert code == 0
+    assert lines(out) == ["DONE: agent handed back its report"]
+
+
+def test_task_for_an_agent_mid_run_does_not_end(tmp_path):
+    records = _handback_records()[:1] + [
+        _rec("user", "u2", sourceToolAssistantUUID="u1",
+             message={"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1"}]})]
+    code, out, _ = _run_agent(tmp_path, records)
+    assert code is None and "DONE" not in out.text
+
+
+def test_a_turn_ending_tool_other_than_the_hand_back_is_not_done(tmp_path):
+    records = _handback_records()
+    records[0]["message"]["content"][0]["name"] = "ExitPlanMode"
+    code, out, _ = _run_agent(tmp_path, records)
+    assert code is None and "DONE" not in out.text
+
+
+def test_an_agent_resumed_after_its_hand_back_is_not_done(tmp_path):
+    records = _handback_records() + [
+        _rec("assistant", "u3", message={"role": "assistant", "content": [
+            {"type": "tool_use", "name": "Bash", "id": "t2", "input": {}}]})]
+    code, out, _ = _run_agent(tmp_path, records)
+    assert code is None and "DONE" not in out.text
