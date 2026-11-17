@@ -10,6 +10,7 @@ flags and signatures, so this wrapper probes none of them.
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
@@ -84,4 +85,8 @@ except ModuleNotFoundError as exc:
     raise
 
 if __name__ == "__main__":
+    # The lane's Claude or Codex child starts in a frozen copy of the
+    # repository. Without this, its bootstrap hook provisions that copy as a
+    # project (bootstrap's BOOTSTRAP_NO_PASS gate, session-bootstrap.sh).
+    os.environ["BOOTSTRAP_NO_PASS"] = "1"
     sys.exit(_main())

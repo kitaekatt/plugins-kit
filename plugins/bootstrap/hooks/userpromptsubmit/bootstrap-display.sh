@@ -34,6 +34,9 @@ if [ -n "${CLAUDE_PLUGIN_TEST:-}" ] && case "$PLUGIN_ROOT" in
     */.claude/plugins/cache/*) true ;; *) false ;; esac; then
     exit 0
 fi
+# Helper-session opt-out: no harvest, no rescue, no relay of another session's
+# results. Rationale: the BOOTSTRAP_NO_PASS gate in session-bootstrap.sh.
+[ -z "${BOOTSTRAP_NO_PASS:-}" ] || exit 0
 PENDING="${DATA_DIR}/bootstrap_display.pending"
 SIDECAR="${DATA_DIR}/bootstrap_display.wrapper_import.pending"
 

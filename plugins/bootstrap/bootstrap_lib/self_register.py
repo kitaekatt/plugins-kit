@@ -47,8 +47,11 @@ otherwise shadow that declaration for ever -- e.g. ``install: "auto"`` read as
 so machines that already carry those entries converge). At load time the
 engine drops such an entry from the user-local layer whenever another layer
 declares the ref (:func:`drop_shadowed_self_registrations`), so the
-declaration applies in the same pass; and :func:`ensure_self_registration`
-removes it from the file, logging an action entry. A hand-written entry (any
+declaration applies in the same pass; and when the user layer
+(``~/.claude/bootstrap.json``) declares it, :func:`ensure_self_registration`
+removes it from the file, logging an action entry. A project layer never
+removes it: the file serves every project, so that removal was undone by the
+next pass in another project. A hand-written entry (any
 other shape) is never removed and still overrides as before.
 
 A redirected test session (``CLAUDE_BOOTSTRAP_DATA_ROOT``) skips
@@ -163,7 +166,8 @@ def ensure_self_registration(local_path, candidate_refs, declared_refs,
         declared_refs: Full refs already declared in any processed manifest.
         declared_names: Bare plugin names already declared.
         layer_declared_refs, layer_declared_names: Refs and bare names declared
-            by manifest layers OTHER than the local file. A self-registered
+            by the user layer (``~/.claude/bootstrap.json``; the engine
+            passes no project layer). A self-registered
             entry in the file whose ref is declared there is removed (it would
             shadow that declaration under merge-by-ref).
 
@@ -250,7 +254,7 @@ def ensure_self_registration(local_path, candidate_refs, declared_refs,
     for ref in removed:
         actions.append(Entry(
             f"self-register: removed {ref} from {local_path} "
-            "(declared in another layer; the self-registered entry would "
+            "(declared in ~/.claude/bootstrap.json; the self-registered entry would "
             "shadow that declaration)",
             short=f"self-register: removed {ref}"))
     for ref in added:

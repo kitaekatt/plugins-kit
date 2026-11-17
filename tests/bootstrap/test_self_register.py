@@ -212,7 +212,7 @@ class TestSelfRegisteredEntriesYieldToDeclarations:
              "min_version": "1.0"}]
         removed = [a for a in actions if "removed" in a]
         assert len(removed) == 2
-        assert all("declared in another layer" in a for a in removed)
+        assert all("declared in ~/.claude/bootstrap.json" in a for a in removed)
 
 
 class TestLoaderIgnoresShadowingSelfRegistration:
@@ -270,3 +270,56 @@ def test_unreadable_file_is_quiet_when_nothing_is_missing(tmp_path):
     assert actions == []
     assert any("unreadable" in o for o in oks)
     assert local.read_text() == "{not json"
+
+
+class TestProjectDeclarationsDoNotRewriteTheUserFile:
+    """~/.claude/bootstrap.local.json is one file for every project, so only a
+    user-level declaration may remove a self-registered entry from it. A
+    project-layer declaration removed it, and the next pass in a project
+    without that declaration added it back: the entry flipped on every move
+    between projects. The loader drops a shadowing entry in memory for the
+    project's own pass, so the project declaration still wins there."""
+
+    def _declared(self, tmp_path, monkeypatch, user_plugins, project_plugins):
+        from types import SimpleNamespace
+        from bootstrap_lib.engine import (
+            _load_layered_manifests, _pass_self_register_declared)
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        claude = tmp_path / ".claude"
+        claude.mkdir()
+        (claude / "bootstrap.json").write_text(
+            json.dumps({"plugins": user_plugins}))
+        (claude / "bootstrap.local.json").write_text(json.dumps({"plugins": [
+            {"ref": "plugins-kit:git-kit", "install": "manual",
+             "self_registered": True}]}))
+        project = tmp_path / "project"
+        (project / ".claude").mkdir(parents=True)
+        (project / ".claude" / "bootstrap.json").write_text(
+            json.dumps({"plugins": project_plugins}))
+        merged, errors = _load_layered_manifests(str(project))
+        assert errors == []
+        st = SimpleNamespace(
+            layered_manifest=merged, data_dir=str(tmp_path / "data"),
+            args=SimpleNamespace(project_dir=str(project)),
+            enabled_plugins=[], new_plugins=[])
+        return merged, _pass_self_register_declared(st)
+
+    def test_project_declaration_keeps_the_user_file_entry(
+            self, tmp_path, monkeypatch):
+        merged, (_c, _r, _n, layer_refs, layer_names) = self._declared(
+            tmp_path, monkeypatch, [],
+            [{"ref": "plugins-kit:git-kit", "install": "auto"}])
+        assert "plugins-kit:git-kit" not in layer_refs
+        assert "git-kit" not in layer_names
+        # The project's declaration still wins for this project's pass.
+        by_ref = {p["ref"]: p for p in merged["plugins"]}
+        assert by_ref["plugins-kit:git-kit"]["install"] == "auto"
+
+    def test_user_declaration_still_removes_the_entry(
+            self, tmp_path, monkeypatch):
+        _merged, (_c, _r, _n, layer_refs, _names) = self._declared(
+            tmp_path, monkeypatch,
+            [{"ref": "plugins-kit:git-kit", "install": "auto"}], [])
+        assert "plugins-kit:git-kit" in layer_refs
