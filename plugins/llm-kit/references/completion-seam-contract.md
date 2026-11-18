@@ -122,9 +122,11 @@ every file-writing, shell and subagent tool instead of denying named ones. It
 is armed by the backend field `text_only` (advertised as the param
 `backend.text_only`), which `requirements.arm_call` sets when a `guarantees`
 requirement admitted the entry, so the requirement and the mode cannot come
-apart. In claude's mode the argv carries neither `--allowedTools` nor
-`--permission-mode bypassPermissions`, which is why `permission-bypass` is
-advertised with `source: request` and `when_value: "false"`.
+apart. In claude's mode the argv carries neither `--allowedTools` nor a
+permission bypass. It is the argv a call with no tool grant carries anyway
+(`--tools ""`, no MCP servers, skills, settings or CLAUDE.md, `--permission-mode
+dontAsk`). `permission-bypass` is advertised with `source: request` and
+`when_value: "*"`: only `allowed_tools="*"` (`ALL_TOOLS`) emits it.
 
 When only `subagent-spawn` needs arming, `arm_call` first uses an advertised
 named-tool deny control. It retains the caller's existing policy and appends
@@ -133,12 +135,34 @@ tools available. An explicitly text-only backend stays text-only. Broad write
 or shell guarantees retain text-only selection. The mode-only compatibility
 helper `arm_requirements` is unchanged; dispatching callers use `arm_call`.
 
+**`allowed_tools` selects one of three tool modes** (from the release after
+1.36.0; earlier releases sent `--permission-mode bypassPermissions
+--allowedTools ""` for a call with no grant, which the record called "no tools"
+but left every tool available, because the CLI's `--allowedTools` approves
+tools and does not restrict them):
+
+- `None` or `""`: no tools. The argv is the text-only argv above, reported as
+  `text-only-mode`. A caller that relied on the old default must now grant
+  tools or pass `ALL_TOOLS`.
+- Tool names or rules (`"Read,Grep,Glob"`): `--tools` makes only those
+  built-in tools available, `--allowedTools` pre-approves every clause except a
+  bare Read, Grep or Glob, and `--permission-mode dontAsk` follows with the same
+  isolation, so a call that would prompt is denied. A bare Read, Grep or Glob
+  therefore reads only inside the working directory. `default`, MCP tool names,
+  names starting with `-` and non-string grants are refused before dispatch.
+  The record reports this as the `tool-grant` control (plus `allowed-tools`
+  when the argv carries `--allowedTools`).
+- `ALL_TOOLS` (`"*"`, from `llm_kit.completion.types`): the agent-worker argv,
+  `--permission-mode bypassPermissions --allowedTools ""`, every built-in tool
+  and no permission check. The record reports it as `allowed-tools` plus
+  `permission-bypass`. Completion jobs that name no grant pass `ALL_TOOLS`;
+  agent-loop review lanes grant only Read, Grep and Glob.
+
 The deny control is the adapter's one CONDITIONAL control, and the asymmetry
-with `allowed-tools` beside it is deliberate. `--allowedTools` is emitted on
-every call, passing `""` when the caller named no tools, because an empty
-ALLOW-list is a real restriction (allow nothing) and is therefore reported.
-An empty DENY-list restricts nothing, so an unset `disallowed_tools` emits no
-flag and reports no control -- suppressing a flag is not a control.
+with the tool-grant controls beside it is deliberate. Which of them is
+reported follows the mode actually emitted. An empty DENY-list restricts
+nothing, so an unset `disallowed_tools` emits no flag and reports no control --
+suppressing a flag is not a control.
 
 **A param that is honored for SOME values and not others reports per call,
 never in the static advertisement.** opencode's `disallowed_tools` is not in
@@ -177,10 +201,10 @@ it -- codex's `sandbox-mode` is `source=REQUEST` yet emitted on every call
 because it has a default -- so `CodexCliBackend` reads its controls off the
 BUILT ARGV (the argv is the emission, and codex's argv is built in another
 plugin), `OpencodeCliBackend` reads its advertised `FIXED` set because all of
-its controls are unconditional, and `ClaudeCliBackend` names its three
-unconditional ones. `--allowedTools` goes out even when the caller named no
-tools: an empty allow-list is an emitted allow-list, not a suppression, so it is
-reported.
+its controls are unconditional, and `ClaudeCliBackend` names the controls of
+the tool mode it emitted. A call with no grant reports `text-only-mode`; a named
+grant reports `tool-grant` (and `allowed-tools` when its argv carries
+`--allowedTools`); `ALL_TOOLS` reports `allowed-tools` and `permission-bypass`.
 
 **Structured output is parsed only under a caller schema.** codex advertises
 `result: parsed` and the adapter parses its `-o` file into `structured` when --

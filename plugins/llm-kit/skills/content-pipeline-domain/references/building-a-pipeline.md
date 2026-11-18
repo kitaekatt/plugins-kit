@@ -243,7 +243,11 @@ of this.
   endpoint, OpenRouter included (named `OpenRouterBackend` before 1.17.0; the old name warns
   and is removable after 1.19.0) (uses
   `llm_kit.registry` and `llm_kit.adapters` for key + model + client).
-- **`ClaudeCliBackend`** -- an agent-loop transport.
+- **`ClaudeCliBackend`** -- a `claude -p` transport. A call with no `options.allowed_tools`
+  is tool-less and loads no settings, CLAUDE.md, hooks, skills or MCP servers; name
+  tools to grant them, or pass `ALL_TOOLS` (`"*"`, from `llm_kit.completion.types`) for
+  the agent-worker mode (from the release after 1.36.0; earlier releases gave every
+  tool by default).
 - **`CodexCliBackend`** -- an agent-loop transport over `codex exec`.
 - **`OpencodeCliBackend`** -- an agent-loop transport over `opencode run`; its
   model id is the user's `provider/model` string and its answer is on stdout.
@@ -296,7 +300,8 @@ transformations of fully-supplied context -- summarize, classify, translate,
 rewrite, extract, score. A harness (`ClaudeCliBackend`, `CodexCliBackend`,
 `OpencodeCliBackend`) adds an agent loop, tools, instruction-file ingestion,
 and a working directory; filesystem posture is backend-specific (OpenCode is
-unconfined). At roughly 11k-34k tokens of fixed prompt overhead per unit, it turns
+unconfined). A `ClaudeCliBackend` call with no tool grant carries no tools and
+loads no instruction files. At roughly 11k-34k tokens of fixed prompt overhead per unit, it turns
 a seconds-long call into a minutes-long session. It earns that only when the
 information needed is not knowable when the prompt is written: the unit must
 discover what to read, verify its own output, iterate, edit in place across
