@@ -39,6 +39,7 @@ PLUGIN = "presence-kit"
 
 PRESENCE_VALUES = ("present", "afk")
 RECAP_TRIGGERS = ("return", "afk-ending", "autonomous-done")
+ENDING_TRIGGERS = ("afk-ending", "autonomous-done")
 SET_TARGETS = ("afk", "autonomous", "normal", "present")
 SET_BYS = ("user", "model")
 # `state set ... --by model` is gated by these behavior ids (contracts.md section 2).
@@ -482,6 +483,63 @@ def add_notice(state: dict, cause: str) -> bool:
     return True
 
 
+MARKER_SEP = "|"
+MARKER_KEEP = 4  # markers of one kind kept in `notices`; the oldest go first
+
+
+def marker_entry(kind: str, key: str, value: str) -> str:
+    """The `notices` string for a once-per-episode marker: `kind|key|value`."""
+    return MARKER_SEP.join((kind, key, value))
+
+
+def find_marker(state: dict, kind: str, key: str) -> str | None:
+    """The value of the marker `kind|key|...` in `notices`, or None when absent."""
+    head = kind + MARKER_SEP + key + MARKER_SEP
+    for entry in reversed(state["notices"]):
+        if entry.startswith(head):
+            return entry[len(head):]
+    return None
+
+
+def set_marker(state: dict, kind: str, key: str, value: str) -> None:
+    """Record the marker `kind|key|value` in `notices`, replacing one with the same kind
+    and key, and drop the oldest markers of the kind beyond MARKER_KEEP.
+
+    Markers are plain strings in the existing `notices` list, so the state file keeps
+    its strict version-3 shape and an older build reads it unchanged."""
+    head = kind + MARKER_SEP + key + MARKER_SEP
+    notices = [entry for entry in state["notices"] if not entry.startswith(head)]
+    notices.append(head + value)
+    own = [entry for entry in notices if entry.startswith(kind + MARKER_SEP)]
+    for entry in own[: max(0, len(own) - MARKER_KEEP)]:
+        notices.remove(entry)
+    state["notices"] = notices
+
+
+ENDING_MARKER = "ending-recap"
+AWAY_MARKER = "away"
+
+
+def ending_key(state: dict) -> str | None:
+    """The key of the ending-recap marker for the current episode: `afk_since` and the
+    granted goal's generation (`goal_since`, `-` with no goal), so a new afk episode or a
+    new goal re-arms the ending recap. None while no afk episode is recorded."""
+    if state["afk_since"] is None:
+        return None
+    return state["afk_since"] + MARKER_SEP + (state["goal_since"] or "-")
+
+
+def mark_ending_recap(state: dict, stamp: str, also_without_goal: bool = False) -> None:
+    """Record that an ending recap ran at `stamp` for the current afk episode and goal
+    (and, with `also_without_goal`, for the episode once its goal is cleared)."""
+    key = ending_key(state)
+    if key is None:
+        return
+    set_marker(state, ENDING_MARKER, key, stamp)
+    if also_without_goal:
+        set_marker(state, ENDING_MARKER, state["afk_since"] + MARKER_SEP + "-", stamp)
+
+
 def prune(state: dict) -> None:
     """Keep the KEEP_PROMPTS most recently touched pids of `recaps` and `nudges`."""
     for key in ("recaps", "nudges"):
@@ -558,6 +616,8 @@ def recap_done(
 
     def apply(doc: dict) -> None:
         mark_recap(doc, trigger, pid)
+        if trigger in ENDING_TRIGGERS:
+            mark_ending_recap(doc, format_timestamp(now), also_without_goal=trigger == "autonomous-done")
         if trigger == "return":
             set_present(doc)
             doc["greeted"] = False

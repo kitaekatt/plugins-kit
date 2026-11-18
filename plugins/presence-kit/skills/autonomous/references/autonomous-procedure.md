@@ -65,7 +65,8 @@ own command always works; your own invocation honors the configuration.
    autonomous mode in the presence model, with the away behaviors that are on
    (the waiting rule included; start each waiter agent with
    `subagent_type: presence-kit:waiter` on the model named by
-   `values.waiter_model`). Keep a line for each load-bearing decision you take,
+   `values.waiter_model`, with the job's command and directory in its brief so
+   it starts the job itself). Keep a line for each load-bearing decision you take,
    for the recap.
 
 7. **Finish with one recap.** When the Stop hook's `ending-recap` line names a

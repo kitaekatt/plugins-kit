@@ -17,19 +17,21 @@ opt-in by installation. Every behavior has an id and can be switched off.
   explicit hand-over, records the goal, and ends when you revoke it or the goal
   is done.
 - **Recaps to fit the moment.** On your return, when an away turn ends with
-  nothing running, and when an autonomous goal is done, you get a recap shaped
-  for that trigger.
+  nothing running (once per afk episode, again after more work), and when an
+  autonomous goal is done, you get a recap shaped for that trigger. The away
+  line is said once per afk episode too.
 - **Guards waiting.** While background work runs, non-agent jobs get a waiter
-  agent (`presence-kit:waiter`) so the terminal shows work, and a watcher
-  (`scripts/watch.py`) reports a stall after 20 quiet minutes (progress lines
-  are off unless you set `progress_minutes`). It counts only jobs the main
-  session started, not a running subagent's, and says the waiting nudge once
-  per prompt.
-- **Requires a liveness watch on every owned job.** Agent work included: a
-  Monitor on `watch.py --task <id>` reports a stall, which a job's
-  completion notice cannot. The stop hook nudges once per prompt when a running
-  job has no running Monitor, or when its Monitor ended while the job still
-  runs (`liveness-watch`).
+  agent (`presence-kit:waiter`) that starts the job itself and waits on it, so
+  the terminal shows work and you get one wake and one line when it ends. It
+  reports a stall after quiet minutes only when no process of the job is using
+  CPU. It counts only jobs the main session started, not a running subagent's,
+  and says the waiting nudge once per prompt.
+- **Asks for a liveness watch on long jobs.** A job that has run `watch_after_minutes`
+  (20 by default) and that no waiter covers needs a Monitor on
+  `watch.py --task <id>`, which reports a stall (progress lines are off unless you set
+  `progress_minutes`). The stop hook nudges once per prompt when such a job has
+  no running Monitor, or when its Monitor ended while the job still runs
+  (`liveness-watch`). Agent work included.
 - **Keeps away turns quiet.** Short interim messages, questions parked for the
   recap, and a push notification only when your input is needed.
 
@@ -57,7 +59,7 @@ install. The hooks act only in an attended, interactive session.
 
 ## Configure
 
-Every behavior is on by default. Turn any off, and change four values, in
+Every behavior is on by default. Turn any off, and change five values, in
 `~/.claude/config/presence-kit.json` or `<project>/.claude/presence-kit.json`.
 The layers, file format, every behavior id and value, the error messages and
 the hook messages are in [references/configuring.md](references/configuring.md).

@@ -17,6 +17,7 @@ DEFAULT_VALUES = {
     "departure_words": ["afk"],
     "waiter_model": "haiku",
     "progress_minutes": 0,
+    "watch_after_minutes": 20,
 }
 
 
@@ -253,6 +254,8 @@ def test_comment_only_file_is_valid(tmp_path, home, defaults):
         ("waiter_model", "claude-haiku-5-5"),
         ("progress_minutes", 1),
         ("progress_minutes", 0),
+        ("watch_after_minutes", 1),
+        ("watch_after_minutes", 0),
     ],
 )
 def test_valid_values_are_accepted(user_file, name, value):
@@ -396,7 +399,7 @@ def test_unknown_value_name(user_file):
     assert err.kind == "unknown-value"
     assert err.text == (
         f"{user_file}: unknown value 'nope'; valid names: afk_quiet_minutes, departure_words, waiter_model, "
-        "progress_minutes"
+        "progress_minutes, watch_after_minutes"
     )
 
 
@@ -417,6 +420,33 @@ def test_progress_minutes_must_be_a_non_negative_int(user_file, bad):
         f"{user_file}: value 'progress_minutes' must be a non-negative integer "
         f"(0 turns PROGRESS lines off); got {json.dumps(bad)}"
     )
+
+
+@pytest.mark.parametrize("bad", [-1, 1.5, "20", True, False, None])
+def test_watch_after_minutes_must_be_a_non_negative_int(user_file, bad):
+    err = _error_for_user(user_file, {"values": {"watch_after_minutes": bad}})
+    assert err.kind == "bad-value-type"
+    assert err.text == (
+        f"{user_file}: value 'watch_after_minutes' must be a non-negative integer "
+        f"(0 asks for a liveness watch on every job at once); got {json.dumps(bad)}"
+    )
+
+
+def test_the_shipped_defaults_define_watch_after_minutes_as_twenty():
+    shipped = pc.load_layer(pc._DEFAULTS_FILE, "defaults")
+    assert shipped["values"]["watch_after_minutes"] == 20
+    assert set(shipped["values"]) == set(pc.VALUE_NAMES)
+
+
+def test_a_user_file_without_watch_after_minutes_resolves_to_the_default(tmp_path):
+    """A file written for 0.7 (or any user file) never has to carry the new value: the
+    shipped defaults supply it, and nothing writes it into a shared user file."""
+    cfg_dir = tmp_path / "cfg"
+    write(cfg_dir / "config" / "presence-kit.json", {"behaviors": {"waiting-guard": False}})
+    before = (cfg_dir / "config" / "presence-kit.json").read_bytes()
+    cfg = pc.resolve(None, {"CLAUDE_CONFIG_DIR": str(cfg_dir)})
+    assert cfg.values["watch_after_minutes"] == 20
+    assert (cfg_dir / "config" / "presence-kit.json").read_bytes() == before
 
 
 @pytest.mark.parametrize("bad", [[], "afk", ["a b"], [""], [1], ["ok", "bad-word"], ["x-y"]])

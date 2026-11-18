@@ -45,6 +45,12 @@ TERMINAL_STATUSES = ("completed", "failed", "killed")
 ARTIFACT_MONITOR_TYPE = "monitor"
 ARTIFACT_MONITOR_PREFIX = "live updates for artifact "
 DESCRIPTION_LIMIT = 80
+# A waiter agent task is recognized by its agent type (the Stop payload's `agent_type` of
+# a subagent task: `general-purpose` for the built-in type; a plugin agent is expected
+# under its qualified name, so both the qualified and the bare spelling are matched) or,
+# when the payload carries neither, by the `waiter:` description prefix the waiting rule
+# asks the launching session to use.
+WAITER_DESCRIPTION_PREFIX = "waiter:"
 
 # Held-condition codes in nudge order, with the behavior id that owns each.
 _CODE_IDS = {
@@ -160,26 +166,81 @@ def _drop_subagent_owned(tasks: list[dict] | None, transcript: str | None) -> li
     return [task for task in tasks if task.get("id") not in foreign]
 
 
-def _needs_waiter(tasks: list[dict]) -> bool:
-    """C: an owned non-agent task is listed and no owned agent task is. `tasks` is
-    already filtered by `_owned_tasks`, so a finished agent covers nothing."""
-    return bool(tasks) and not any(_is_agent(task) for task in tasks)
+def _is_waiter_agent(task: dict) -> bool:
+    """A running waiter agent: it exists to keep the terminal on "working", so it needs
+    no liveness watch of its own."""
+    if not _is_agent(task):
+        return False
+    agent_type = task.get("agent_type")
+    if isinstance(agent_type, str) and agent_type in pt.WAITER_TYPES:
+        return True
+    description = task.get("description")
+    return isinstance(description, str) and description.lstrip().lower().startswith(WAITER_DESCRIPTION_PREFIX)
+
+
+def waiter_coverage(owned: list[dict] | None, transcript: str | None) -> tuple[set[str], set[str]]:
+    """(covered, lost): the owned non-agent jobs a waiter agent covers right now, and the
+    ones a waiter was launched for whose waiters have all ended.
+
+    The main transcript says which waiter agents were launched for a job (a launch whose
+    prompt names the job's id or its output path); the payload says which are running.
+    A job nothing was launched for is in neither set."""
+    jobs = {
+        task["id"] for task in owned or []
+        if not _is_agent(task) and isinstance(task.get("id"), str)
+    }
+    if not jobs or not transcript or not Path(transcript).is_file():
+        return set(), set()
+    launched = pt.waiter_agents(transcript, jobs)
+    running = {task["id"] for task in owned or [] if _is_agent(task) and isinstance(task.get("id"), str)}
+    covered = {job for job, agents in launched.items() if agents & running}
+    return covered, set(launched) - covered
+
+
+def _needs_waiter(tasks: list[dict], lost: set[str] | frozenset[str] = frozenset()) -> list[dict]:
+    """C: the owned non-agent tasks that need a waiter. `tasks` is already filtered by
+    `_owned_tasks`, so a finished agent covers nothing. With no owned agent running every
+    non-agent task counts (the terminal shows idle). With an agent running the terminal
+    shows working, so only a job whose waiter has ended (`lost`) counts: it was handed
+    to a waiter that is gone, and nothing else is watching it."""
+    jobs = [task for task in tasks if not _is_agent(task)]
+    if not any(_is_agent(task) for task in tasks):
+        return jobs
+    return [task for task in jobs if task.get("id") in lost]
 
 
 def watch_gaps(
-    owned: list[dict] | None, tasks: list[dict] | None, transcript: str | None
+    owned: list[dict] | None,
+    tasks: list[dict] | None,
+    transcript: str | None,
+    now: datetime | None = None,
+    after_minutes: int = 0,
+    covered: set[str] | frozenset[str] = frozenset(),
 ) -> tuple[list[dict], list[dict]]:
     """(unwatched, expired): the owned running jobs no Monitor ever covered, and the
     ones whose Monitor is no longer running. A Monitor covers a job when the main
     transcript shows it armed on the job's id; it is running when the payload lists
-    it unfinished. Monitors themselves need no watch. No readable transcript is no
-    evidence, so both lists are empty (row 2 reports the missing transcript)."""
+    it unfinished. Monitors themselves, a running waiter agent and a job a running waiter
+    covers (`covered`) need no watch, and neither does a job younger than `after_minutes`
+    (its age runs from the transcript record that announced it; a job whose start the
+    transcript does not show counts as old). No readable transcript is no evidence, so
+    both lists are empty (row 2 reports the missing transcript)."""
     jobs = [
         task for task in owned or []
         if task.get("type") != ARTIFACT_MONITOR_TYPE and isinstance(task.get("id"), str)
+        and not _is_waiter_agent(task) and task["id"] not in covered
     ]
     if not jobs or not transcript or not Path(transcript).is_file():
         return [], []
+    if now is not None and after_minutes > 0:
+        starts = pt.job_starts(transcript, {task["id"] for task in jobs})
+        floor = timedelta(minutes=after_minutes)
+        jobs = [
+            task for task in jobs
+            if starts[task["id"]] is None or now - starts[task["id"]] >= floor
+        ]
+        if not jobs:
+            return [], []
     armed = pt.armed_monitors(transcript, {task["id"] for task in jobs})
     running = {
         task["id"] for task in tasks or []
@@ -311,6 +372,8 @@ def _held_codes(
     tasks: list[dict] | None,
     crons: list | None,
     watch_gap: bool = False,
+    lost: set[str] | frozenset[str] = frozenset(),
+    ending_done: bool = False,
 ) -> list[str]:
     """Rows 5-7 over the document AFTER rows 3-4 (D8); codes in R, C, M, E order.
 
@@ -327,7 +390,7 @@ def _held_codes(
         and doc["pending_return"] == pid
         and recaps.get(pid) != "return"
     )
-    c = waiting_guard and tasks is not None and _needs_waiter(tasks)
+    c = waiting_guard and tasks is not None and bool(_needs_waiter(tasks, lost))
     m = cfg.enabled("liveness-watch") and watch_gap
     e = (
         cfg.enabled("ending-recap")
@@ -336,8 +399,24 @@ def _held_codes(
         and not owned
         and not r
         and recaps.get(pid) not in ENDING_RECAPS
+        and not ending_done
     )
     return [code for code, held in (("R", r), ("C", c), ("M", m), ("E", e)) if held]
+
+
+def _ending_recapped(doc: dict, transcript: str | None) -> bool:
+    """True when an ending recap already ran for this afk episode and goal and no tool
+    work has happened since it (work after the recap re-arms E). The marker is written
+    by `recap-done`; its key is `afk_since` and the goal's `goal_since`, so a new episode
+    or a new goal finds none."""
+    key = ps.ending_key(doc)
+    if key is None:
+        return False
+    value = ps.find_marker(doc, ps.ENDING_MARKER, key)
+    stamp = ps.parse_timestamp(value)
+    if stamp is None:
+        return False
+    return not pt.work_since(transcript, stamp)
 
 
 def _nudge_line(code: str, doc: dict, pid: str, counted: dict[str, str]) -> str:
@@ -413,7 +492,11 @@ def evaluate(payload: dict, cfg: pc.Config, env: Mapping[str, str], now: datetim
     causes = [cause for cause in (entry_cause, tasks_cause, crons_cause) if cause]
     state_file = str(ps.state_path(sid, env))
     owned = _owned_tasks(tasks)
-    unwatched, expired = watch_gaps(owned, tasks, transcript) if cfg.enabled("liveness-watch") else ([], [])
+    covered, lost = waiter_coverage(owned, transcript)
+    unwatched, expired = (
+        watch_gaps(owned, tasks, transcript, now, cfg.values["watch_after_minutes"], covered)
+        if cfg.enabled("liveness-watch") else ([], [])
+    )
 
     out: list[StopDecision] = []
 
@@ -423,9 +506,11 @@ def evaluate(payload: dict, cfg: pc.Config, env: Mapping[str, str], now: datetim
         _record_cron_prompts(doc, cfg, crons)
         _quiet_afk(doc, cfg, now, entry, human)
         _user_returned(doc, cfg, pid, entry, state_file)
-        held = _held_codes(doc, cfg, pid, tasks, crons, bool(unwatched or expired))
+        held = _held_codes(
+            doc, cfg, pid, tasks, crons, bool(unwatched or expired), lost, _ending_recapped(doc, transcript)
+        )
         counted = {
-            "C": counted_work(owned),
+            "C": counted_work(_needs_waiter(owned or [], lost)),
             "M": watch_gaps_text(unwatched, expired),
         }
         nudge, exhaustion = _budget(doc, pid, held, counted)

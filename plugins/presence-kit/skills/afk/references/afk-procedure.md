@@ -69,7 +69,8 @@ always works; your own invocation honors the configuration.
 5. **Say in one line that afk is on.** Then cover any running work as the
    presence model describes, for the behaviors that are on: the waiting rule
    (start each waiter agent with `subagent_type: presence-kit:waiter` on the
-   model named by `values.waiter_model`), terse interim messages, parked questions, and a notification only when the user's
+   model named by `values.waiter_model`, with the job's command and directory in
+   its brief so it starts the job itself), terse interim messages, parked questions, and a notification only when the user's
    input is needed. Independent work continues. A `STALL` line from a watcher
    Monitor counts as a notification case: push-notify the user with the
    PushNotification tool, one line naming the job and the quiet minutes.

@@ -1618,7 +1618,7 @@ def test_later_pid_entry_missing_leaves_the_user_afk_until_something_returns_the
     later = A1_HOOK + timedelta(minutes=20)
     out = hook(s, "prompt-2", "back", later)
     # the hook asks for the return recap only with recap-on-return on
-    assert (p2_clause("prompt-2") in out.additional_context) is recap_on_return
+    assert (p2_clause("prompt-2") in (out.additional_context or "")) is recap_on_return
     decision = s.stop(pid="prompt-2", now=later + timedelta(seconds=5), tasks=[], crons=[])   # prompt-2 has no entry
     state = s.state()
     assert state["presence"] == "afk"                      # row 4 cannot see the entry
@@ -1763,3 +1763,311 @@ def test_no_ignored_ids_no_notice(s):
     s.entry(PID, "sdk", NOW)
     assert s.stop().system_message is None
     assert s.state()["notices"] == []
+
+
+# ====================================================================== 0.8.0
+#
+# Job age (M waits for jobs that have run a while), the waiter's coverage, and the
+# ending recap once per afk episode. Transcript records carry timestamps; a record
+# without one (a compacted or hand-written transcript) makes a job count as old.
+
+WAITER_TYPE = "presence-kit:waiter"
+
+
+def at(record, when):
+    return dict(record, timestamp=stamp(when))
+
+
+def tool_use_record(when, name="Bash", tuid="toolu_x", **input_):
+    return {"type": "assistant", "timestamp": stamp(when), "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": tuid, "name": name, "input": input_}]}}
+
+
+def agent_launch(session, tuid, agent_id, when, subagent_type="general-purpose", prompt="work", description="agent"):
+    """The main transcript records an Agent launch and its async result, as Claude Code writes them."""
+    session.add(at(tool_use_record(when, "Agent", tuid, subagent_type=subagent_type, prompt=prompt,
+                                   description=description, run_in_background=True), when))
+    session.add(at({"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": tuid, "is_error": False, "content": [{"type": "text", "text":
+         "Async agent launched successfully. (This tool result is internal metadata -- never quote it.)\n"
+         f"agentId: {agent_id} (internal ID - do not mention to user. Use SendMessage with to: '{agent_id}')\n"
+         "The agent is working in the background."}]}]}}, when))
+
+
+def subagent(task_id, agent_type="general-purpose", description="agent", status="running"):
+    return {"id": task_id, "type": "subagent", "status": status, "description": description,
+            "agent_type": agent_type}
+
+
+def old_job(session, task_id, minutes, how="running"):
+    """A shell job the main session announced `minutes` ago."""
+    session.add(at(started_record(task_id, how), mins(minutes)))
+    return job(task_id)
+
+
+# ---- the transcript reader
+
+def test_job_starts_reads_each_announcement_shape_with_its_timestamp(tmp_path):
+    recs = [
+        at(started_record("s1", "running"), mins(50)),
+        at(started_record("s2", "moved"), mins(40)),
+        at(started_record("s3", "monitor"), mins(30)),
+    ]
+    holder = type("S", (), {"lines": [], "add": lambda self, o: self.lines.append(o)})()
+    for rec in recs:
+        holder.add(rec)
+    agent_launch(holder, "toolu_a", "a1b2c3", mins(20))
+    path = write_lines(tmp_path / "t.jsonl", holder.lines)
+    got = pt.job_starts(path, {"s1", "s2", "s3", "a1b2c3", "nope"})
+    assert got == {"s1": NOW - timedelta(minutes=50), "s2": NOW - timedelta(minutes=40),
+                   "s3": NOW - timedelta(minutes=30), "a1b2c3": NOW - timedelta(minutes=20), "nope": None}
+
+
+def test_job_starts_a_resumed_agent_counts_from_the_resume(tmp_path):
+    holder = type("S", (), {"lines": [], "add": lambda self, o: self.lines.append(o)})()
+    agent_launch(holder, "toolu_a", "a1b2c3", mins(90))
+    holder.add(tool_use_record(mins(5), "SendMessage", "toolu_s", to="a1b2c3", message="more"))
+    holder.add(tool_use_record(mins(3), "SendMessage", "toolu_t", to="other", message="x"))
+    path = write_lines(tmp_path / "t.jsonl", holder.lines)
+    assert pt.job_starts(path, {"a1b2c3"}) == {"a1b2c3": NOW - timedelta(minutes=5)}
+
+
+def test_job_starts_a_record_without_a_timestamp_is_unknown(tmp_path):
+    path = write_lines(tmp_path / "t.jsonl", [started_record("s1")])
+    assert pt.job_starts(path, {"s1"}) == {"s1": None}
+    assert pt.job_starts(str(tmp_path / "missing.jsonl"), {"s1"}) == {"s1": None}
+    assert pt.job_starts(path, set()) == {}
+
+
+def test_waiter_agents_joins_the_launch_prompt_to_the_agent_id(tmp_path):
+    holder = type("S", (), {"lines": [], "add": lambda self, o: self.lines.append(o)})()
+    agent_launch(holder, "toolu_w", "w1", mins(5), WAITER_TYPE,
+                 prompt="Run wait.py --output /x/tasks/t1.output --stall-minutes 10")
+    agent_launch(holder, "toolu_g", "g1", mins(5), "general-purpose", prompt="wait on /x/tasks/t2.output")
+    agent_launch(holder, "toolu_w2", "w2", mins(5), "waiter", prompt="wait on /x/tasks/t10.output")
+    path = write_lines(tmp_path / "t.jsonl", holder.lines)
+    assert pt.waiter_agents(path, {"t1", "t2", "t3", "t10"}) == {"t1": {"w1"}, "t10": {"w2"}}
+    assert pt.waiter_agents(path, set()) == {}
+
+
+def test_compacted_since_and_work_since(tmp_path):
+    boundary = at({"type": "system", "subtype": "compact_boundary", "content": "Conversation compacted"}, mins(10))
+    path = write_lines(tmp_path / "t.jsonl", [
+        at(tool_use_record(mins(20)), mins(20)), boundary,
+        at({"type": "system", "subtype": "other"}, mins(1)),
+        at(tool_use_record(mins(2), command="recap-done afk-ending p"), mins(2)),
+        at({"type": "user", "message": {"role": "user", "content": "hi"}}, mins(1)),
+    ])
+    assert pt.compacted_since(path, mins(30)) is True
+    assert pt.compacted_since(path, mins(10)) is False  # the boundary is not after itself
+    assert pt.compacted_since(path, mins(5)) is False
+    assert pt.compacted_since(str(tmp_path / "missing.jsonl"), mins(30)) is False
+    assert pt.work_since(path, mins(30)) is True
+    assert pt.work_since(path, mins(15)) is False  # the only later tool call is the recap-done itself
+    assert pt.work_since(str(tmp_path / "missing.jsonl"), mins(30)) is False
+
+
+# ---- M waits for a job to be old
+
+def test_m_a_young_job_draws_no_m_and_an_old_one_does(w):
+    young = old_job(w, "t1", 8)
+    assert w.stop(tasks=[young], last=WAITING_LAST).held == ("C",)
+    older = old_job(w, "t9", 25)
+    assert w.stop("p2", tasks=[older], last=WAITING_LAST).held == ("C", "M")
+
+
+def test_m_the_boundary_is_at_the_configured_minutes(make):
+    sess = make({"liveness-watch": True}, values={"watch_after_minutes": 30})
+    sess.entry(PID, "sdk", NOW)
+    assert sess.stop(tasks=[old_job(sess, "t1", 29)], last=WAITING_LAST).held == ("C",)
+    assert sess.stop("p2", tasks=[old_job(sess, "t2", 30)], last=WAITING_LAST).held == ("C", "M")
+
+
+def test_m_zero_minutes_asks_for_a_watch_on_every_job(make):
+    sess = make({"liveness-watch": True}, values={"watch_after_minutes": 0})
+    sess.entry(PID, "sdk", NOW)
+    assert sess.stop(tasks=[old_job(sess, "t1", 0)], last=WAITING_LAST).held == ("C", "M")
+
+
+def test_m_a_job_with_no_start_record_or_no_timestamp_is_old(w):
+    # SHELL is announced nowhere: its age is unknown, so it counts as old.
+    assert w.stop(tasks=[SHELL], last=WAITING_LAST).held == ("C", "M")
+    w.add(started_record("t2"))  # announced, but the record carries no timestamp
+    assert w.stop("p2", tasks=[job("t2")], last=WAITING_LAST).held == ("C", "M")
+
+
+def test_m_agent_work_is_aged_from_its_launch_record(w):
+    agent_launch(w, "toolu_a", "a1", mins(8))
+    assert w.stop(tasks=[subagent("a1")], last=WAITING_LAST).held == ()
+    agent_launch(w, "toolu_b", "a2", mins(25))
+    decision = w.stop("p2", tasks=[subagent("a2")], last=WAITING_LAST)
+    assert decision.held == ("M",)
+    assert decision.nudge == line_M(NOWATCH.format(tasks="a2 (subagent, running): agent"), "p2")
+
+
+def test_m_a_resumed_agent_is_aged_from_the_resume(w):
+    agent_launch(w, "toolu_a", "a1", mins(90))
+    w.add(tool_use_record(mins(4), "SendMessage", "toolu_s", to="a1", message="continue"))
+    assert w.stop(tasks=[subagent("a1")], last=WAITING_LAST).held == ()
+
+
+def test_m_the_rearm_text_also_waits_for_age(w):
+    arm_monitor(w, "toolu_m1", "m1", "watch.py --task t1")
+    w.add(at(started_record("t1"), mins(5)))
+    assert w.stop(tasks=[job("t1")], last=WAITING_LAST).held == ("C",)  # ended Monitor, job young
+    w.add(at(started_record("t2"), mins(40)))
+    arm_monitor(w, "toolu_m2", "m2", "watch.py --task t2")
+    assert w.stop("p2", tasks=[job("t2")], last=WAITING_LAST).held == ("C", "M")
+
+
+# ---- the waiter agent
+
+@pytest.mark.parametrize("agent_type,description", [
+    ("presence-kit:waiter", "agent"),
+    ("waiter", "agent"),
+    ("general-purpose", "waiter: cargo build"),
+])
+def test_waiter_a_running_waiter_agent_needs_no_watch(w, agent_type, description):
+    agent_launch(w, "toolu_a", "w1", mins(60))
+    task = subagent("w1", agent_type, description)
+    assert w.stop(tasks=[task], last=WAITING_LAST).held == ()
+
+
+def test_waiter_another_agent_type_still_needs_a_watch_when_old(w):
+    agent_launch(w, "toolu_a", "g1", mins(60))
+    assert w.stop(tasks=[subagent("g1", "general-purpose")], last=WAITING_LAST).held == ("M",)
+
+
+def test_waiter_a_job_covered_by_a_running_waiter_needs_no_watch_and_no_waiter(w):
+    """The fallback case: the main session launched the job and a waiter waits on its output."""
+    w.add(at(started_record("t1"), mins(60)))
+    agent_launch(w, "toolu_w", "w1", mins(59), WAITER_TYPE,
+                 prompt="wait.py --output /x/tasks/t1.output --stall-minutes 10")
+    decision = w.stop(tasks=[job("t1"), subagent("w1", WAITER_TYPE)], last=WAITING_LAST)
+    assert decision.held == () and decision.nudge is None
+
+
+def test_waiter_a_waiter_on_another_job_leaves_this_job_to_m(w):
+    w.add(at(started_record("t1"), mins(60)))
+    w.add(at(started_record("t2"), mins(60)))
+    agent_launch(w, "toolu_w", "w1", mins(59), WAITER_TYPE, prompt="wait.py --output /x/tasks/t2.output")
+    decision = w.stop(tasks=[job("t1"), job("t2"), subagent("w1", WAITER_TYPE)], last=WAITING_LAST)
+    assert decision.held == ("M",)
+    assert decision.nudge == line_M(NOWATCH.format(tasks="t1 (shell, running): job"))
+
+
+def test_waiter_ended_with_the_job_still_running_holds_c_again(w):
+    w.add(at(started_record("t1"), mins(60)))
+    agent_launch(w, "toolu_w", "w1", mins(59), WAITER_TYPE, prompt="wait.py --output /x/tasks/t1.output")
+    decision = w.stop(tasks=[job("t1")], last=WAITING_LAST)  # w1 is gone from the payload
+    assert decision.held == ("C", "M")
+
+
+def test_waiter_ended_holds_c_even_while_an_unrelated_agent_runs(w):
+    """The terminal shows working for the unrelated agent, but the job lost its waiter: say so."""
+    w.add(at(started_record("t1"), mins(60)))
+    agent_launch(w, "toolu_w", "w1", mins(59), WAITER_TYPE, prompt="wait.py --output /x/tasks/t1.output")
+    agent_launch(w, "toolu_g", "g1", mins(5), "general-purpose")
+    decision = w.stop(tasks=[job("t1"), subagent("g1")], last=WAITING_LAST)
+    assert decision.held == ("C", "M")
+    assert decision.nudge.splitlines()[0] == line_C(counted="t1 (shell, running): job")
+
+
+def test_waiter_an_unrelated_agent_alone_still_covers_the_terminal(w):
+    """Unchanged: with no waiter ever launched for the job, a running agent holds no C."""
+    w.add(at(started_record("t1"), mins(5)))
+    decision = w.stop(tasks=[job("t1"), subagent("g1")], last=WAITING_LAST)
+    assert "C" not in decision.held
+
+
+def test_waiter_a_running_waiter_for_the_job_means_no_c_even_beside_an_ended_one(w):
+    w.add(at(started_record("t1"), mins(60)))
+    agent_launch(w, "toolu_w1", "w1", mins(59), WAITER_TYPE, prompt="wait.py --output /x/tasks/t1.output")
+    agent_launch(w, "toolu_w2", "w2", mins(30), WAITER_TYPE, prompt="wait.py --output /x/tasks/t1.output")
+    decision = w.stop(tasks=[job("t1"), subagent("w2", WAITER_TYPE)], last=WAITING_LAST)
+    assert decision.held == ()
+
+
+def test_waiter_a_job_the_waiter_launched_is_the_waiters_own(w):
+    """Announced only in the waiter's own transcript: dropped as subagent-owned, no C and no M."""
+    sidechain(w, "w1", started_record("tsub"))
+    agent_launch(w, "toolu_w", "w1", mins(59), WAITER_TYPE, prompt="Run `make test`, wait for it.")
+    decision = w.stop(tasks=[job("tsub"), subagent("w1", WAITER_TYPE)], last=WAITING_LAST)
+    assert decision.held == ()
+
+
+# ---- the ending recap once per afk episode
+
+def e_session(s, since=None, goal=None):
+    s.go_afk(since=since, goal=goal)
+    s.entry(PID, "sdk", NOW)
+    return s
+
+
+def test_e_after_the_ending_recap_a_later_quiet_stop_holds_no_e(s):
+    e_session(s)
+    assert s.stop().held == ("E",)
+    s.recap_done("afk-ending")
+    s.entry("p2", "task_notification", NOW + timedelta(minutes=5))
+    assert s.stop("p2").held == ()
+
+
+def test_e_work_after_the_recap_re_arms_it(s):
+    e_session(s)
+    s.recap_done("afk-ending")
+    s.add(tool_use_record(NOW + timedelta(minutes=3), command="cat out.txt"))
+    s.entry("p2", "task_notification", NOW + timedelta(minutes=5))
+    assert s.stop("p2").held == ("E",)
+
+
+def test_e_the_recap_done_call_itself_is_not_work(s):
+    e_session(s)
+    s.recap_done("afk-ending")
+    s.add(tool_use_record(NOW - timedelta(seconds=1), command="presence.py recap-done afk-ending prompt-1"))
+    s.add(tool_use_record(NOW + timedelta(seconds=1), command="presence.py recap-done afk-ending prompt-1"))
+    s.entry("p2", "task_notification", NOW + timedelta(minutes=5))
+    assert s.stop("p2").held == ()
+
+
+def test_e_a_new_afk_episode_re_arms_it(s):
+    e_session(s)
+    s.recap_done("afk-ending")
+    s.set_state(presence="present")
+    s.go_afk(since=NOW + timedelta(minutes=10))
+    s.entry("p2", "sdk", NOW + timedelta(minutes=20))
+    assert s.stop("p2", now=NOW + timedelta(minutes=21)).held == ("E",)
+
+
+def test_e_a_new_goal_in_the_same_episode_re_arms_it(s):
+    e_session(s, goal="first goal")
+    s.recap_done("autonomous-done")
+    s.entry("p2", "sdk", NOW + timedelta(minutes=5))
+    assert s.stop("p2").held == ()
+    ps.update(SID, lambda doc: ps.enter_autonomous(doc, "second goal", ps.format_timestamp(NOW + timedelta(minutes=6))), s.env)
+    s.entry("p3", "sdk", NOW + timedelta(minutes=8))
+    decision = s.stop("p3")
+    assert decision.held == ("E",)
+    assert "second goal" in decision.nudge
+
+
+def test_e_the_goal_check_keeps_asking_until_the_goal_is_recapped(s):
+    e_session(s, goal="ship it")
+    assert s.stop().held == ("E",)
+    s.entry("p2", "sdk", NOW + timedelta(minutes=1))
+    assert s.stop("p2").held == ("E",)
+
+
+def test_e_the_marker_is_a_string_in_the_strict_v3_notices_list(s):
+    e_session(s)
+    s.recap_done("afk-ending")
+    doc = s.state()
+    assert doc["version"] == 3 and set(doc) == set(ps.default_state())
+    markers = [n for n in doc["notices"] if n.startswith("ending-recap|")]
+    assert markers == [f"ending-recap|{doc['afk_since']}|-|{ps.format_timestamp(NOW)}"]
+    assert ps._validate(doc) is None
+
+
+def test_e_a_stale_marker_of_an_old_episode_is_ignored(s):
+    e_session(s, since=mins(90))
+    s.set_state(notices=["ending-recap|2026-01-01T00:00:00Z|-|2026-01-01T00:05:00Z"])
+    assert s.stop().held == ("E",)

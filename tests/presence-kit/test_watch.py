@@ -914,7 +914,7 @@ def test_windows_sampling_never_runs_ps(monkeypatch):
     def refuse(*args, **kwargs):
         raise AssertionError(f"a Windows sampler ran an external tool: {args}")
 
-    monkeypatch.setattr(watch.subprocess, "run", refuse)
+    monkeypatch.setattr(watch.procwatch.subprocess, "run", refuse)
     table = watch._sample_procs()
     assert table[ME].ppid == os.getppid()
     assert watch._sample_cwds([ME])[ME]
