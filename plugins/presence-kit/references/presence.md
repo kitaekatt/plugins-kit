@@ -132,7 +132,16 @@ waiter and nudges once per prompt. A finished task (status
 `completed`, `failed` or `killed`), an Artifact live-updates monitor
 (description starts with `live updates for artifact `) and a shell job or
 monitor that a subagent started are not owned work: they need no waiter and no
-watch. A subagent's jobs are its own, and it reports to you when it ends. The
+watch. A subagent's jobs are its own, and it reports to you when it ends. A
+subagent that waits on a background job it started (not an agent) does not end
+its turn while the job runs, because an idle subagent leaves the terminal
+showing idle. It runs wait.py itself in foreground Bash calls, the loop
+`agents/waiter.md` runs: `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}"
+"${PRESENCE_KIT_ROOT:?presence-kit is not provisioned}/scripts/wait.py" --output
+<task output file> --stall-minutes <n>` with `timeout: 170000` (slices of 150 s,
+never above 160), rerun on exit 4, stop on exit 0, 2 or 3. It
+does not spawn a waiter. (Hypothesis, untested: whether a waiter spawned by a subagent keeps the
+main terminal working.)
 hook tells them apart by the transcripts: a job announced in
 `<session transcript without .jsonl>/subagents/agent-*.jsonl` and not in the
 main transcript is the subagent's; a job it cannot place counts as yours. The
