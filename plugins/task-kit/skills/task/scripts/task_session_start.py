@@ -4,13 +4,14 @@
 saw a session file in the project that the event can affect. The input's ``source`` selects the work. The
 registrations are read from the git-tracked ``.sessions/<host>.yaml`` files of the project the session runs in:
 ``$CLAUDE_PROJECT_DIR`` when set, else the input's ``cwd``. A session that registered tasks in a different
-project than that one is not refreshed or re-keyed (its registration is then corrected at its next
+project than that one is not refreshed or released (its registration is then corrected at its next
 ``/task work`` there).
 
 * ``resume`` -- the session id is kept and the process is new: ``sessions.refresh`` gives every record of this
   machine carrying that id the new process stamp and the transcript path.
-* ``clear`` -- the session id changes and the process stays: ``sessions.rekey_after_clear`` moves every record of
-  the calling process to the new id.
+* ``clear`` -- the session id changes and the process stays, but the cleared conversation no longer works the
+  tasks: ``sessions.release_after_clear`` removes every record of the calling process (compaction, which keeps
+  the session id, keeps the registration) and the old session id's statusline pointers are removed with them.
 * anything else (``fork``, ``startup``, ``compact``) does nothing: a fork has a fresh id and registers through
   ``/task work``.
 
@@ -101,7 +102,7 @@ def run(raw: str, env: Mapping[str, str] | None = None, *, data_dir: Path | None
     ``data_dir``, ``machine``, ``identity``, ``publish``, ``log`` and ``project_root`` default to the real ones
     (the project is ``$CLAUDE_PROJECT_DIR``, else the input's ``cwd``); tests inject them.
     """
-    from task_system import datadir, harness, machine as machine_module, sessions
+    from task_system import datadir, harness, machine as machine_module, sessions, statusline_pointer
 
     env = os.environ if env is None else env
     data = parse_input(raw)
@@ -133,11 +134,11 @@ def run(raw: str, env: Mapping[str, str] | None = None, *, data_dir: Path | None
         result = sessions.refresh(identity, machine, recorded, project_root=project_root, data_dir=data_dir)
         outcome = f"resume {session_id[:8]}: refreshed {len(result.refreshed)}, dropped {len(result.dropped)}"
     else:
-        result = sessions.rekey_after_clear(identity, machine, recorded, project_root=project_root,
-                                              data_dir=data_dir)
-        outcome = (f"clear {session_id[:8]}: re-keyed {len(result.rekeyed)} from "
-                   f"{', '.join(i[:8] for i in result.previous_ids) or 'no previous session'}, "
-                   f"dropped {len(result.dropped)}")
+        result = sessions.release_after_clear(identity, machine, project_root=project_root, data_dir=data_dir)
+        for gone in result.released:
+            statusline_pointer.remove(data_dir, gone.session_id, gone.root / gone.task)
+        outcome = (f"clear {session_id[:8]}: released {len(result.released)} from "
+                   f"{', '.join(i[:8] for i in result.previous_ids) or 'no previous session'}")
     for note in result.notes:
         log(f"note: {note}")
     if result.changed_files:

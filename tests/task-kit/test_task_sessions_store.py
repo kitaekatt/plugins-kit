@@ -80,8 +80,8 @@ class World:
     def refresh(self, ident, path=None, machine=HOST):
         return sessions.refresh(ident, machine, path, project_root=self.project, data_dir=self.data)
 
-    def rekey(self, ident, path=None, machine=HOST):
-        return sessions.rekey_after_clear(ident, machine, path, project_root=self.project, data_dir=self.data)
+    def clear_release(self, ident, machine=HOST):
+        return sessions.release_after_clear(ident, machine, project_root=self.project, data_dir=self.data)
 
     def records(self, machine=HOST, root: Path | None = None):
         return sessions.read_root(root or self.root, machine).records
@@ -583,99 +583,96 @@ def test_refresh_never_edits_another_machines_records(world):
     assert path.read_bytes() == before
 
 
-# -- clear re-key and the lifecycle ---------------------------------------------------------------------
+# -- clear release and the lifecycle ---------------------------------------------------------------------
 
 
-def test_two_registered_tasks_across_clear_exit_and_resume(world):
-    """The user's lifecycle: register two tasks, /clear, exit, resume, hand off one."""
+def test_clear_releases_and_a_later_exit_and_resume_of_another_task_is_unaffected(world):
+    """The lifecycle: register two tasks, /clear releases both, a new registration then survives exit and resume."""
     first_process = world.proc()
     before_clear = world.ident("sess-before", first_process)
     world.register(before_clear, "alpha")
     world.register(before_clear, "beta")
 
-    # /clear: a new session id, the same process
+    # /clear: a new session id, the same process; the cleared conversation no longer works either task
     after_clear = world.ident("sess-after", first_process)
-    result = world.rekey(after_clear, "~/.claude/projects/-p/sess-after.jsonl")
-    assert result.previous_ids == ("sess-before",)
-    assert world.keys() == [("alpha", "sess-after"), ("beta", "sess-after")]
-    assert all(r.state == sessions.STATE_RUNNING for r in world.records())
+    result = world.clear_release(after_clear)
+    assert result.previous_ids == ("sess-before",) and len(result.released) == 2
+    assert world.keys() == []
 
-    # exit: the harness process ends; both registrations stay
+    # the cleared session starts a task again, then exits and is resumed
+    world.register(after_clear, "alpha")
     world.kill(first_process)
-    assert [r.state for r in world.records()] == [sessions.STATE_NOT_RUNNING] * 2
-
-    # resume of the post-clear conversation: same id, a new process
+    assert [r.state for r in world.records()] == [sessions.STATE_NOT_RUNNING]
     resumed = world.ident("sess-after")
     assert world.refresh(resumed).refreshed and world.refresh(resumed).refreshed == ()
-    assert [r.state for r in world.records()] == [sessions.STATE_RUNNING] * 2
-    assert {r.stamp for r in world.records()} == {resumed.stamp}
+    assert [r.state for r in world.records()] == [sessions.STATE_RUNNING]
 
-    # hand-off of one task releases only that one
     world.release(resumed, "alpha")
-    assert world.keys() == [("beta", "sess-after")]
+    assert world.keys() == []
     assert world.local_files() == []
 
 
-def test_rekey_moves_every_registration_in_every_root(world):
+def test_clear_release_removes_every_registration_in_every_root(world):
     proc = world.proc()
     before = world.ident("sess-before", proc)
     world.register(before, "alpha")
     world.register(before, "tmp/delta")
-    result = world.rekey(world.ident("sess-after", proc))
-    assert len(result.rekeyed) == 2
-    assert world.keys() == [("alpha", "sess-after")] and world.keys(root=world.tmp_root) == [("delta", "sess-after")]
+    result = world.clear_release(world.ident("sess-after", proc))
+    assert len(result.released) == 2 and {r.root for r in result.released} == {world.root, world.tmp_root}
+    assert world.keys() == [] and world.keys(root=world.tmp_root) == []
 
 
-def test_rekey_leaves_other_processes_registrations_alone(world):
+def test_clear_release_leaves_other_processes_registrations_alone(world):
     mine = world.proc()
     world.register(world.ident("sess-mine", mine), "alpha")
     world.register(world.ident("sess-bystander"), "beta")
-    world.rekey(world.ident("sess-after", mine))
-    assert world.keys() == [("alpha", "sess-after"), ("beta", "sess-bystander")]
+    world.clear_release(world.ident("sess-after", mine))
+    assert world.keys() == [("beta", "sess-bystander")]
 
 
-def test_rekey_with_no_registration_of_the_process_writes_nothing(world):
+def test_clear_release_with_no_registration_of_the_process_writes_nothing(world):
     world.register(world.ident("sess-one"), "alpha")
     before = world.file().read_bytes()
-    result = world.rekey(world.ident("sess-after"))
+    result = world.clear_release(world.ident("sess-after"))
     assert result.previous_ids == () and result.changed_files == ()
     assert world.file().read_bytes() == before and world.local_files() == []
 
 
-def test_rekey_merges_a_record_the_new_id_already_registered(world):
-    """/task work ran under the new id before the hook did: one record per (task, session)."""
+def test_clear_release_also_removes_a_record_the_new_id_already_registered_only_for_the_old_id(world):
+    """/task work ran under the new id before the hook did: the new id's record is the live one and stays."""
     proc = world.proc()
     world.register(world.ident("sess-before", proc), "alpha")
-    # the same-process register already re-keys (refresh in place); recreate the split state by hand
     document = yaml.safe_load(world.file().read_text(encoding="utf-8"))
     duplicate = dict(document["sessions"][0], session_id="sess-after")
     document["sessions"].append(duplicate)
     world.file().write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
-    world.rekey(world.ident("sess-after", proc))
+    world.clear_release(world.ident("sess-after", proc))
     assert world.keys() == [("alpha", "sess-after")]
 
 
 def test_no_session_state_is_kept_in_the_data_directory_only_lock_files(world):
-    """Guard (distributed truth, principle 1): register, release, refresh, re-key and dismiss leave nothing under
+    """Guard (distributed truth, principle 1): register, release, refresh, clear release and dismiss leave nothing under
     ``<data>/sessions/`` but information-free lock files, however many sessions and roots are involved."""
     proc = world.proc()
     before = world.ident("sess-before", proc)
     for ref in ("alpha", "beta", "tmp/delta"):
         world.register(before, ref)
     assert world.local_files() == []
-    world.rekey(world.ident("sess-after", proc), "~/.claude/projects/-p/sess-after.jsonl")
-    assert world.local_files() == []
+    world.release(world.ident("sess-before", proc), "alpha")
     world.kill(proc)
-    world.refresh(world.ident("sess-after"), "~/.claude/projects/-p/sess-after-2.jsonl")
+    world.refresh(world.ident("sess-before"), "~/.claude/projects/-p/sess-before-2.jsonl")
     assert world.local_files() == []
-    world.release(world.ident("sess-after"), "alpha")
-    world.release(None, "beta", all_local=True)
+    world.release(world.ident("sess-before"), "beta")
+    world.release(None, "tmp/delta", all_local=True)
+    other = world.proc()
+    world.register(world.ident("sess-x", other), "alpha")
+    world.clear_release(world.ident("sess-y", other))
     assert world.local_files() == []
     locks = sorted(p.name for p in (world.data / "sessions").rglob("*") if p.is_file())
     assert locks and all(name.endswith(".lock") for name in locks), locks
 
 
-def test_refresh_and_rekey_find_the_registrations_through_the_files_alone(world):
+def test_refresh_and_clear_release_find_the_registrations_through_the_files_alone(world):
     """No data directory exists at all: the files in the project are enough to find, and to correct, a session."""
     proc = world.proc()
     ident = world.ident("sess-one", proc)
@@ -690,9 +687,9 @@ def test_refresh_and_rekey_find_the_registrations_through_the_files_alone(world)
     assert sorted(r.task for r in result.refreshed) == ["alpha", "delta"], "both roots are refreshed"
     assert {r.stamp for r in world.records()} == {resumed.stamp}
     shutil.rmtree(world.data)
-    result = world.rekey(harness.Identity("sess-three", resumed.pid, resumed.stamp))  # /clear of the resumed process
-    assert result.previous_ids == ("sess-one",) and len(result.rekeyed) == 2
-    assert world.keys() == [("alpha", "sess-three")] and world.keys(root=world.tmp_root) == [("delta", "sess-three")]
+    result = world.clear_release(harness.Identity("sess-three", resumed.pid, resumed.stamp))  # /clear of the resumed process
+    assert result.previous_ids == ("sess-one",) and len(result.released) == 2
+    assert world.keys() == [] and world.keys(root=world.tmp_root) == []
 
 
 def test_refresh_does_not_see_a_registration_in_another_project(world, tmp_path):

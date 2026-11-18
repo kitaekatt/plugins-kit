@@ -363,7 +363,7 @@ def test_resume_with_no_record_for_the_session_writes_and_publishes_nothing(worl
     assert world.publishes == []
 
 
-def test_clear_rekeys_every_registration_of_the_process_then_publishes(world):
+def test_clear_releases_every_registration_of_the_process_then_publishes(world):
     proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
     world.procs.append(proc)
     world.register(world.ident("sess-one", proc), "alpha")
@@ -373,10 +373,37 @@ def test_clear_rekeys_every_registration_of_the_process_then_publishes(world):
 
     outcome = world.run("clear", "sess-two", world.ident("sess-two", proc))
 
-    assert world.keys() == [("alpha", "sess-two"), ("beta", "sess-two")], "both registrations move, not one"
-    assert world.local_files() == [], "the re-key is found and written through the git-tracked files alone"
-    assert "re-keyed 2" in outcome
+    assert world.keys() == [], "both registrations are released, none is carried to the new id"
+    assert world.local_files() == [], "the release is found and written through the git-tracked files alone"
+    assert outcome == "clear sess-two: released 2 from sess-one"
     assert world.publishes == [(world.root / ".sessions" / "testhost.yaml",)]
+
+
+def test_clear_removes_the_old_statusline_pointer_and_creates_no_new_one(world):
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
+    world.procs.append(proc)
+    world.register(world.ident("sess-one", proc), "alpha")
+    pointers = world.data / "statusline"
+    pointers.mkdir(parents=True)
+    (pointers / "sess-one").write_text(os.path.realpath(world.root / "alpha") + "\n", encoding="utf-8")
+
+    world.run("clear", "sess-two", world.ident("sess-two", proc))
+
+    assert not (pointers / "sess-one").exists()
+    assert not (pointers / "sess-two").exists()
+
+
+def test_clear_leaves_other_processes_registrations_and_a_rerun_is_a_no_op(world):
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
+    world.procs.append(proc)
+    world.register(world.ident("sess-one", proc), "alpha")
+    world.register(world.ident("sess-bystander"), "beta")
+    world.run("clear", "sess-two", world.ident("sess-two", proc))
+    assert world.keys() == [("beta", "sess-bystander")]
+    before = world.snapshot()
+    outcome = world.run("clear", "sess-two", world.ident("sess-two", proc))
+    assert outcome == "clear sess-two: released 0 from no previous session"
+    assert world.snapshot() == before
 
 
 def test_the_project_is_found_through_claude_project_dir_before_the_inputs_cwd(world):
