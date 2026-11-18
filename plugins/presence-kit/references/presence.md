@@ -167,16 +167,22 @@ Covers one non-agent job. Start a background Agent whose model is the
 show). The agent runs this until exit 0, 2 or 3, reports one line, and changes
 nothing; its completion wakes the main session:
 
-    "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${PRESENCE_KIT_ROOT:?presence-kit is not provisioned}/scripts/wait.py" --output <task output file> --stall-minutes <n> --slice-seconds 150
+    "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${PRESENCE_KIT_ROOT:?presence-kit is not provisioned}/scripts/wait.py" --output <task output file> --stall-minutes <n>
 
 Use `--file <path> --pattern <regex>` instead of `--output` to wait for a
-pattern in a file. `--slice-seconds <s>` defaults to 540; the waiter passes
-`--slice-seconds 150` and runs wait.py in a foreground Bash call with
-`timeout: 170000` (the default Bash timeout is 120000 ms, below a 150 s slice). A
-call that runs past about 180 s is moved to the background and the waiter goes
-idle, so the terminal shows idle. A 150 s slice returns before that window, so
+pattern in a file. `--slice-seconds <s>` defaults to 150; leave it alone. The
+waiter runs wait.py in a foreground Bash call with `timeout: 170000` (the
+default Bash timeout is 120000 ms, below a 150 s slice). The harness moves any
+foreground command that runs past about 180 s to the background ("Command did not
+complete within its 180s timeout and was moved to the background"), whatever
+`timeout` the call sets (a `timeout: 600000` call was moved four times). The
+waiter then ends its turn waiting on its own background job and the terminal
+shows idle, which defeats the waiter. A 150 s slice returns before that window, so
 the waiter is between calls for about a second and stays a running agent
-(terminal shows working) from slice to slice. The waiter runs it again on exit 4. The brief names the job's exact output file (its task output path);
+(terminal shows working) from slice to slice. Never pass a `--slice-seconds`
+above 160, never run wait.py in the background, and keep any other poll the
+waiter writes (for example a `sleep 5` loop checking the done condition) under
+160 s per call. The waiter runs it again on exit 4. The brief names the job's exact output file (its task output path);
 the waiter never picks a file by recency, because it can then watch another job.
 
 | Exit | Meaning |
@@ -211,6 +217,10 @@ anything else, name the paths yourself:
 
     "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${PRESENCE_KIT_ROOT:?presence-kit is not provisioned}/scripts/watch.py" --path <file-or-dir> [--path ...] [--done-output <task output file> | --done-file <path> --done-pattern <regex>]
 
+`--done-file` requires `--done-pattern`, and `--done-pattern` goes with
+`--done-file` only (otherwise exit 2: `--done-file requires --done-pattern`);
+`--done-output` and `--done-file` exclude each other.
+
 Every `--poll-seconds` (default 300) it takes the newest modification time
 across the `--path` values: a file's own mtime, or the newest mtime of any file
 under a directory (`.git` directories are skipped). A missing path counts for
@@ -227,7 +237,11 @@ report a stall. The watcher's own process and its ancestors (the Monitor shell,
 the session) never count. A `--task` shell job whose command runs in some other
 directory is covered by naming that directory with `--path` or the job's pid
 with `--pid`. Sampling uses `ps` plus `/proc/<pid>/cwd` (Linux) or `lsof`
-(macOS), and `lsof` runs only for the processes that used CPU. A sampling error
+(macOS), and `lsof` runs only for the processes that used CPU. On Windows
+(native Python, including under Git Bash, whose `ps` has no `-A`) it calls the Win32
+API instead: a Toolhelp snapshot, `GetProcessTimes` and each process's own
+working directory; a process whose directory cannot be read (another user's) is
+skipped. A sampling error
 prints `process sampling failed: <reason>` to stderr and exits 1: it is never
 read as no activity. `--stall-minutes` (default 20) and
 `--progress-minutes` (default: the `progress_minutes` value, 20) change the

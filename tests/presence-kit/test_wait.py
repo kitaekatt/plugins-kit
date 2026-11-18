@@ -287,3 +287,17 @@ def test_recently_written_file_does_not_stall_across_slices(tmp_path):
     )
     assert code == 4
     assert out == f"slice over: {job} still live\n"
+
+
+def test_default_slice_ends_before_the_harness_backgrounds_a_foreground_command(tmp_path):
+    # The harness moves a foreground Bash command past ~180 s to the background, which
+    # ends a waiter's wait; with no --slice-seconds the slice must end inside that window.
+    job = tmp_path / "job.out"
+    job.write_text("still running\n", encoding="utf-8")
+    code, out, _, clock = run(
+        ["--output", str(job), "--stall-minutes", "10", "--poll-seconds", "1"],
+        FakeClock(lambda n: append(job, f"tick {n}\n")),
+    )
+    assert code == 4
+    assert out == f"slice over: {job} still live\n"
+    assert clock.t < 170.0
