@@ -31,8 +31,9 @@ works: the task folder name plus its status, for example `better-statusbar [acti
 file `<task-kit data dir>/statusline/<session id>`; `sessions release` removes it. A bootstrap script copies
 `statusline/segment.sh` to claude-ui-kit's `segments/99-task.sh` (the `99-` prefix sorts it last). The segment needs
 `jq` (`BOOTSTRAP_BIN_JQ` overrides the probe; set but empty declares no jq) and shows nothing for a session with no
-pointer. Compaction keeps the cell, because the session still works the task. `/clear` drops it: the hook does not
-carry the pointer to the new session id, since the agent is no longer working the task. `/task work` again restores it.
+pointer. Compaction keeps the cell, because the session still works the task. `/clear` drops it: the SessionStart `clear` hook
+releases every registration of the cleared session's process and removes its pointer, since the agent is no longer
+working the task. `/task work` again registers it and restores the cell.
 
 The setting `statusline: {cell: false}` in `~/.claude/task.local.yaml` turns the cell off (default true). On the next
 bootstrap pass the installer removes a `99-task.sh` it installed and logs the removal; a `99-task.sh` it did not

@@ -1,4 +1,4 @@
-"""The session store survives an interruption after every phase of register, release, refresh and clear re-key.
+"""The session store survives an interruption after every phase of register, release, refresh and clear release.
 
 Each operation names its phases with ``sessions._checkpoint``. For every phase of an uninterrupted run, a fresh
 scenario is interrupted there (the exception releases the OS locks as a dying process would), and then:
@@ -8,7 +8,7 @@ scenario is interrupted there (the exception releases the OS locks as a dying pr
    (under the old or the new session id), and a reader still works;
 2. running the same operation again completes it to the same end state: each root file is replaced in one
    atomic write and the operation rediscovers its remaining work from the files (the session id, or the
-   process stamp for a re-key), so every phase is idempotent.
+   process stamp for a release), so every phase is idempotent.
 
 The order assertions pin the protocol: nothing visible changes before a root's single file write.
 """
@@ -129,36 +129,37 @@ class RefreshScenario(Scenario):
         assert {r.transcript_path for r in self.world.records()} == {"~/.claude/projects/-p/sess-one.jsonl"}
 
 
-class RekeyScenario(Scenario):
+class ClearReleaseScenario(Scenario):
     """/clear with two tasks in the dev/tasks root and one in the tmp root."""
 
-    name = "rekey"
+    name = "clear_release"
 
     @property
     def must_keep(self):
-        return ((self.world.root, "alpha"), (self.world.root, "beta"), (self.world.tmp_root, "delta"))
+        return ((self.world.root, "gamma"),)  # another process's registration is never touched
 
     def setup(self) -> None:
         self.proc = self.world.proc()
         before = self.world.ident("sess-before", self.proc)
         for ref in ("alpha", "beta", "tmp/delta"):
             self.world.register(before, ref)
+        self.world.register(self.world.ident("sess-bystander"), "gamma")
         self.after = self.world.ident("sess-after", self.proc)
 
     def operate(self) -> None:
-        self.world.rekey(self.after)
+        self.world.clear_release(self.after)
 
     def check_done(self) -> None:
-        assert self.world.keys() == [("alpha", "sess-after"), ("beta", "sess-after")]
-        assert self.world.keys(root=self.world.tmp_root) == [("delta", "sess-after")]
+        assert self.world.keys() == [("gamma", "sess-bystander")]
+        assert self.world.keys(root=self.world.tmp_root) == []
 
 
-SCENARIOS = (RegisterScenario, ReleaseScenario, RefreshScenario, RekeyScenario)
+SCENARIOS = (RegisterScenario, ReleaseScenario, RefreshScenario, ClearReleaseScenario)
 ORDER = {  # the protocol: (checkpoint that must come first, the one that must come after)
     "register": ("before_write", "root_written"),
     "release": ("before_write", "root_written"),
     "refresh": ("before_write", "root_written"),
-    "rekey": ("before_write:0", "root_written:0"),
+    "clear_release": ("before_write:0", "root_written:0"),
 }
 
 
@@ -218,13 +219,13 @@ def test_an_interruption_after_any_phase_loses_nothing_and_a_rerun_completes(tmp
 def test_an_interrupted_clear_before_any_record_moves_leaves_every_record_under_the_old_id(tmp_path, monkeypatch):
     base = tmp_path / "union"
     base.mkdir()
-    scenario = RekeyScenario(World(base, monkeypatch))
+    scenario = ClearReleaseScenario(World(base, monkeypatch))
     try:
         scenario.setup()
         record_checkpoints(monkeypatch, interrupt_at=0)  # inside the first root, before its file is written
         with pytest.raises(Interrupted, match="before_write:0"):
             scenario.operate()
-        assert {sid for _t, sid in scenario.world.keys()} == {"sess-before"}  # no record has moved yet
+        assert {sid for t, sid in scenario.world.keys() if t != "gamma"} == {"sess-before"}  # none released yet
         assert {sid for _t, sid in scenario.world.keys(root=scenario.world.tmp_root)} == {"sess-before"}
         assert scenario.world.local_files() == []
     finally:
@@ -232,20 +233,19 @@ def test_an_interrupted_clear_before_any_record_moves_leaves_every_record_under_
 
 
 def test_a_clear_interrupted_between_roots_is_found_again_by_the_process_stamp(tmp_path, monkeypatch):
-    """One root is already moved, the other is not; the rerun starts from the files alone."""
+    """One root is already released, the other is not; the rerun starts from the files alone."""
     base = tmp_path / "between"
     base.mkdir()
-    scenario = RekeyScenario(World(base, monkeypatch))
+    scenario = ClearReleaseScenario(World(base, monkeypatch))
     try:
         scenario.setup()
         record_checkpoints(monkeypatch, interrupt_at=1)  # after the first root, before the second
         with pytest.raises(Interrupted, match="root_written:0"):
             scenario.operate()
-        assert {sid for _t, sid in scenario.world.keys(root=scenario.world.tmp_root)} == {"sess-after"}  # tmp moved
-        assert {sid for _t, sid in scenario.world.keys()} == {"sess-before"}  # dev/tasks not yet
+        assert scenario.world.keys(root=scenario.world.tmp_root) == []  # tmp released
+        assert {sid for t, sid in scenario.world.keys() if t != "gamma"} == {"sess-before"}  # dev/tasks not yet
         record_checkpoints(monkeypatch)
         scenario.operate()
         scenario.check_done()
-        assert procstamp.same_process(scenario.world.records()[0].stamp, scenario.after.stamp)
     finally:
         scenario.world.close()

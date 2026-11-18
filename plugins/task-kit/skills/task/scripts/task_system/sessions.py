@@ -15,7 +15,7 @@ The data directory holds NO session state. ``<data dir>/sessions/locks/`` keeps 
 files and nothing else: a registration, a session id, a root or a stub is never written there (distributed
 truth, principle 1: git is the single source of truth). Every operation finds its work by scanning the task
 roots of the project it is given (:func:`task_roots`) for this machine's own file, matching the session id
-(refresh) or the process stamp (clear re-key, register). A session that registered tasks in another project
+(refresh) or the process stamp (clear release, register). A session that registered tasks in another project
 than the one scanned is not seen from here. Writers take the per-session locks (by id), then the per-root
 lock, and never nest otherwise. Each root file is replaced in one atomic write and every operation is
 idempotent and rediscovers its work from the files, so an interruption leaves each root either wholly old or
@@ -232,9 +232,9 @@ class ReconcileResult:
 
 
 @dataclass(frozen=True)
-class RekeyResult:
+class ClearReleaseResult:
     previous_ids: tuple[str, ...]
-    rekeyed: tuple[Record, ...]
+    released: tuple[Record, ...]  # each carries its ``root``; the caller removes the statusline pointer of each
     dropped: tuple[Record, ...]
     changed_files: tuple[Path, ...]
     notes: tuple[str, ...]
@@ -911,36 +911,35 @@ def refresh(identity: harness.Identity, machine: Machine, transcript_path: str |
     return RefreshResult(tuple(refreshed), tuple(dropped), tuple(changed), tuple(notes))
 
 
-def rekey_after_clear(identity: harness.Identity, machine: Machine, transcript_path: str | None = None, *,
-                      project_root: Path, data_dir: Path | None = None) -> RekeyResult:
-    """After ``/clear`` (new session id, same process): move EVERY registration of the calling process to the
-    new session id, in one idempotent operation.
+def release_after_clear(identity: harness.Identity, machine: Machine, *,
+                        project_root: Path, data_dir: Path | None = None) -> ClearReleaseResult:
+    """After ``/clear`` (new session id, same process): release EVERY registration of the calling process, in one
+    idempotent operation. The cleared conversation no longer works the tasks (compaction keeps a registration;
+    ``/clear`` does not), so nothing is carried to the new session id.
 
     The registrations are this machine's records, in the ``project_root``'s task roots, whose process stamp is
     the caller's and whose session id is not the new one (a registration made in another project is not seen
-    from here). Each root's matching records are rewritten under that root's lock, one atomic file write per
-    root. A run interrupted between roots leaves the rest still carrying the process stamp, so the same
-    operation, re-run, finds and completes them. ``transcript_path`` (the post-clear transcript, home-relative)
-    is recorded when given.
+    from here). Each root's matching records are removed under that root's lock, one atomic file write per
+    root, exactly as :func:`release` removes them. A run interrupted between roots leaves the rest still
+    carrying the process stamp, so the same operation, re-run, finds and completes them.
     """
     new_id = _check_session_id(identity.session_id)
     local = _sessions_dir(data_dir)
     notes: list[str] = []
 
-    def moves(record: Record) -> bool:
+    def goes(record: Record) -> bool:
         return record.session_id != new_id and procstamp.same_process(record.stamp, identity.stamp)
 
     found: list[tuple[Path, set[str]]] = []
     for root in task_roots(project_root):
         ids = {r.session_id for item in _scan_root(root) if _owns(item, machine) for r in item.data.records
-               if moves(r)}
+               if goes(r)}
         if ids:
             found.append((root, ids))
     previous = sorted({sid for _root, ids in found for sid in ids})
     if not previous:
-        return RekeyResult((), (), (), (), tuple(notes))
-    now = utc_now()
-    rekeyed: list[Record] = []
+        return ClearReleaseResult((), (), (), (), tuple(notes))
+    released: list[Record] = []
     dropped: list[Record] = []
     changed: list[Path] = []
     with _locked(local, {*previous, new_id}):
@@ -948,20 +947,17 @@ def rekey_after_clear(identity: harness.Identity, machine: Machine, transcript_p
             with _locked(local, (), (root,)):
                 edit = _RootEdit(root, machine)
                 notes.extend(edit.notes)
-                touched = []
+                removed = []
                 for path, record in edit.own_records():
-                    if moves(record):
-                        new = dataclasses.replace(record, session_id=new_id, stamp=identity.stamp, recorded_at=now,
-                                                  transcript_path=transcript_path or record.transcript_path)
-                        edit.replace(path, record, new)
-                        touched.append((path, new))
-                _merge_duplicates(edit)
+                    if goes(record):
+                        edit.remove(path, record)
+                        removed.append((path, record))
                 dropped.extend(_decorated(edit, edit.sweep(), notes))
                 _checkpoint(f"before_write:{number}")
                 changed.extend(edit.commit())
-                rekeyed.extend(_decorated(edit, [(p, r) for p, r in touched if r in edit.files[p]], notes))
+                released.extend(_decorated(edit, removed, notes))
                 _checkpoint(f"root_written:{number}")
-    return RekeyResult(tuple(previous), tuple(rekeyed), tuple(dropped), tuple(changed), tuple(notes))
+    return ClearReleaseResult(tuple(previous), tuple(released), tuple(dropped), tuple(changed), tuple(notes))
 
 
 def dismiss(machine: Machine, project_root: Path, target_host: str, session_id: str, registered_at: str, *,

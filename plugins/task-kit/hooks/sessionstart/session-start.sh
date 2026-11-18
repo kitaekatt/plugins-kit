@@ -1,9 +1,10 @@
 #!/bin/sh
 # session-start.sh -- SessionStart hook for task-kit (matchers resume and clear, async).
 #
-# Keeps this machine's working-session registrations current when a session
-# resumes (same session id, new process) or is cleared (new session id, same
-# process). The hook input arrives on stdin; the `source` field selects the work.
+# Keeps this machine's working-session registrations current: a resumed session
+# (same session id, new process) is restamped; a cleared session (new session
+# id, same process) releases them, because it no longer works the tasks.
+# Compaction keeps the registration (no event here). The hook input arrives on stdin; the `source` field selects the work.
 # A `fork` or any other source does nothing.
 #
 # FAST PATH. The registrations live only in git: the project's
