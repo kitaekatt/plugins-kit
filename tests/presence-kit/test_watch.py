@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 SCRIPT = Path(__file__).resolve().parents[2] / "plugins" / "presence-kit" / "scripts" / "watch.py"
+SHIPPED = SCRIPT.parents[1] / "defaults" / "presence-kit.json"
 _spec = importlib.util.spec_from_file_location("watch_under_test", SCRIPT)
 watch = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(watch)
@@ -244,11 +245,48 @@ def test_progress_says_when_no_watched_path_exists_yet(tmp_path):
     assert progresses(out) == ["PROGRESS 20m: no watched path exists yet"]
 
 
-def test_progress_interval_defaults_to_the_shipped_config_value(tmp_path):
+def test_progress_is_off_by_default_and_the_shipped_value_is_zero(tmp_path):
+    assert json.loads(SHIPPED.read_text(encoding="utf-8"))["values"]["progress_minutes"] == 0
     job = make_file(tmp_path / "job.log", 0)
     clock = FakeClock(on_sleep=lambda n, c: set_mtime(job, c.t), stop_after=14)  # t up to 65m
+    code, out, _ = run(["--path", str(job)], clock, tmp_path)
+    assert code is None
+    assert progresses(out) == []
+    assert out.text == ""  # a busy job, no STALL, no PROGRESS: the Monitor says nothing
+
+
+def test_stall_and_done_are_unchanged_with_progress_off(tmp_path):
+    job = make_file(tmp_path / "job.log", 0)
+    clock = FakeClock(stop_after=20)  # 100 quiet minutes
     _, out, _ = run(["--path", str(job)], clock, tmp_path)
-    assert [p.split(":")[0] for p in progresses(out)] == ["PROGRESS 20m", "PROGRESS 40m", "PROGRESS 60m"]
+    assert stalls(out) == ["STALL: no change in watched paths for 20m"]
+    assert progresses(out) == []
+    done = make_file(tmp_path / "job.out", 0, "x\n" + TRAILER + "\n")
+    code, out, _ = run(["--done-output", str(done)], FakeClock(), tmp_path)
+    assert code == 0 and lines(out) == [f"DONE: {TRAILER}"]
+
+
+def test_a_config_value_of_zero_is_off_and_an_explicit_flag_still_turns_progress_on(tmp_path):
+    cfg = tmp_path / "cfg" / "config"
+    cfg.mkdir(parents=True)
+    (cfg / "presence-kit.json").write_text(json.dumps({"values": {"progress_minutes": 0}}), encoding="utf-8")
+    job = make_file(tmp_path / "job.log", 0)
+    keep_fresh = lambda n, clock: set_mtime(job, clock.t)  # noqa: E731
+    _, out, _ = run(["--path", str(job)], FakeClock(on_sleep=keep_fresh, stop_after=14), tmp_path)
+    assert progresses(out) == []
+    _, out, _ = run(["--path", str(job), "--progress-minutes", "30"],
+                    FakeClock(on_sleep=keep_fresh, stop_after=14), tmp_path)
+    assert [p.split(":")[0] for p in progresses(out)] == ["PROGRESS 30m", "PROGRESS 60m"]
+
+
+def test_the_flag_zero_means_off_even_over_a_positive_config_value(tmp_path):
+    cfg = tmp_path / "cfg" / "config"
+    cfg.mkdir(parents=True)
+    (cfg / "presence-kit.json").write_text(json.dumps({"values": {"progress_minutes": 10}}), encoding="utf-8")
+    job = make_file(tmp_path / "job.log", 0)
+    clock = FakeClock(on_sleep=lambda n, c: set_mtime(job, c.t), stop_after=14)
+    _, out, _ = run(["--path", str(job), "--progress-minutes", "0"], clock, tmp_path)
+    assert progresses(out) == []
 
 
 def test_progress_interval_follows_the_user_config_and_the_flag_overrides_it(tmp_path):
@@ -273,12 +311,14 @@ def test_invalid_config_fails_loudly_with_exit_2(tmp_path):
     cfg = tmp_path / "cfg" / "config"
     cfg.mkdir(parents=True)
     bad = cfg / "presence-kit.json"
-    bad.write_text(json.dumps({"values": {"progress_minutes": 0}}), encoding="utf-8")
+    bad.write_text(json.dumps({"values": {"progress_minutes": -1}}), encoding="utf-8")
     clock = FakeClock(stop_after=3)
     code, out, err = run(["--path", str(tmp_path / "x")], clock, tmp_path)
     assert code == 2
     assert out.text == ""
-    assert err.text == f"{bad}: value 'progress_minutes' must be a positive integer; got 0\n"
+    assert err.text == (
+        f"{bad}: value 'progress_minutes' must be a non-negative integer (0 turns PROGRESS lines off); got -1\n"
+    )
     assert clock.sleeps == 0
 
 

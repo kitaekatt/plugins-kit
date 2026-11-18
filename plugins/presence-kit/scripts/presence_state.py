@@ -463,7 +463,7 @@ GUARD_SUFFIX = "/waiting-guard"
 
 
 def guard_nudged(state: dict, pid: str) -> bool:
-    """True when the waiting guard (C, W) already nudged for `pid`."""
+    """True when the waiting guard (C, M) already nudged for `pid`."""
     return check_prompt_id(pid) + GUARD_SUFFIX in state["nudges"]
 
 

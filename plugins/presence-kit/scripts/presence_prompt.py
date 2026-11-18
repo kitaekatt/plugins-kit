@@ -7,12 +7,13 @@ that contains a configured departure word while `afk-on-departure` is on sets th
 user afk itself (`enter_afk(..., prompt=pid)`) and says so in `additionalContext`,
 so Claude can undo a wrong match with `state set present`. The hook never infers a
 departure from anything but the word, and it never reads the transcript (the new
-prompt's entry is not written yet at this hook).
+prompt's entry is not written yet at this hook). Its one other write is the
+once-per-session notice of ignored behavior ids (N6), a `systemMessage` to the user.
 
 Already afk, a departure word keeps the user afk (ruling 19, 2026-10-19): the
 hook records the prompt as `afk_prompt` (the Stop hook then does not count this
 prompt as a return) and withholds the return-recap line. Output goes to Claude
-only (`additionalContext`); the one `systemMessage` is the config error.
+only (`additionalContext`); the `systemMessage`s are the config error and N6.
 
 The caller (presence.py) has already parsed the payload and validated `session_id`
 and `prompt_id` (class `payload` errors); the checks here are a backstop and raise
@@ -58,6 +59,12 @@ def _cron_firing(prompt: str, doc: dict) -> bool:
     return prompt.strip() in doc["cron_prompts"]
 
 
+def _automatic(prompt: str, doc: dict) -> bool:
+    """True for a prompt the user did not type: a known envelope or a recorded cron firing.
+    P3 never reads such a prompt for a departure word, and P1 and P2 are not said on it."""
+    return _not_the_user(prompt) or _cron_firing(prompt, doc)
+
+
 @dataclass(frozen=True)
 class PromptOutput:
     additional_context: str | None
@@ -91,7 +98,7 @@ def _departure_word(cfg: pc.Config, prompt: str, doc: dict) -> str | None:
     """The matched departure word, or None (off, an excluded prompt kind, or no match)."""
     if not cfg.enabled("afk-on-departure"):
         return None
-    if _not_the_user(prompt) or _cron_firing(prompt, doc):
+    if _automatic(prompt, doc):
         return None
     found = pc.departure_pattern(cfg.values["departure_words"]).search(prompt)
     return None if found is None else found.group(0)
@@ -126,7 +133,9 @@ def evaluate(
 
     P3 (a departure was acted on) then P1 (the user counts as away); P2 (return recap)
     only when afk, `recap-on-return` is on and this prompt is not the one the hook
-    itself set or kept afk on. Present with no departure: nothing. `now` is injected.
+    itself set or kept afk on. P1 and P2 are withheld on an automatic prompt (an envelope
+    or a cron firing: a wake, not the user). Present with no departure: nothing. `now`
+    is injected.
     """
     sid = ps.check_session_id(payload.get("session_id"))
     pid = ps.check_prompt_id(payload.get("prompt_id"))
@@ -136,9 +145,11 @@ def evaluate(
     state_file = str(ps.state_path(sid, env))
 
     out: list[PromptOutput] = []
+    ignored = pc.ignored_notice(cfg)
 
     def apply(doc: dict) -> None:
         lines: list[str] = []
+        automatic = _automatic(prompt, doc)
         word = _departure_word(cfg, prompt, doc)
         if word is not None:
             kept = doc["presence"] == "afk"
@@ -150,10 +161,14 @@ def evaluate(
                     "malformed",
                     f"{state_file}: malformed state file -- presence is afk but afk_since is null",
                 )
-            lines.append(_away_line(doc, pid))
-            if cfg.enabled("recap-on-return") and doc["afk_prompt"] != pid:
-                lines.append(pc.line(pc.P2_RECAP_IDS, pid, pc.P2_RECAP.format(pid=pid)))
-        out.append(PromptOutput("\n".join(lines) or None, None))
+            if not automatic:
+                lines.append(_away_line(doc, pid))
+                if cfg.enabled("recap-on-return") and doc["afk_prompt"] != pid:
+                    lines.append(pc.line(pc.P2_RECAP_IDS, pid, pc.P2_RECAP.format(pid=pid)))
+        notice = None
+        if ignored is not None and ps.add_notice(doc, pc.N6_CAUSE):
+            notice = pc.line(pc.CONFIG_IDS, pid, ignored)
+        out.append(PromptOutput("\n".join(lines) or None, notice))
 
     ps.update(sid, apply, env)
     return out[0]

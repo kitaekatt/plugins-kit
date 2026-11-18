@@ -128,14 +128,15 @@ def test_config_defaults(world):
     res = world.run("config")
     assert res.rc == 0 and res.err == ""
     obj = res.obj
-    assert list(obj) == ["behaviors", "values", "layers"]
+    assert list(obj) == ["behaviors", "values", "layers", "ignored"]
+    assert obj["ignored"] == []
     assert tuple(obj["behaviors"]) == BEHAVIOR_IDS
     assert all(v is True for v in obj["behaviors"].values())
     assert obj["values"] == {
         "afk_quiet_minutes": 10,
         "departure_words": ["afk"],
         "waiter_model": "haiku",
-        "progress_minutes": 20,
+        "progress_minutes": 0,
     }
     assert [layer["name"] for layer in obj["layers"]] == ["defaults", "user", "project"]
     assert [layer["present"] for layer in obj["layers"]] == [True, False, False]
@@ -178,11 +179,26 @@ def test_config_project_dir_sources(world, tmp_path, monkeypatch):
 
 
 def test_config_error_is_an_error_object(world):
-    world.config(behaviors={"no-such-id": True})
+    world.config(behaviors={"recap-on-return": "maybe"})
     res = world.run("config")
-    obj = error_of(res, 1, "config", "unknown-behavior")
-    assert "unknown behavior id 'no-such-id'" in obj["message"]
+    obj = error_of(res, 1, "config", "bad-behavior-value")
+    assert "behavior 'recap-on-return' accepts only" in obj["message"]
     assert obj["message"].startswith(str(world.root / "cfg" / "config" / "presence-kit.json"))
+
+
+def test_config_shows_ignored_behavior_ids(world):
+    world.config(behaviors={"no-such-id": True, "waiting-guard": False})
+    world.config(behaviors={"also-gone": "on"}, where="project")
+    res = world.run("config")
+    assert res.rc == 0 and res.err == ""
+    assert res.obj["behaviors"]["waiting-guard"] is False
+    assert "no-such-id" not in res.obj["behaviors"]
+    assert res.obj["ignored"] == [
+        {"layer": "user", "path": str(world.root / "cfg" / "config" / "presence-kit.json"),
+         "id": "no-such-id"},
+        {"layer": "project", "path": str(world.project / ".claude" / "presence-kit.json"),
+         "id": "also-gone"},
+    ]
 
 
 def test_config_malformed_json_error(world):
@@ -514,15 +530,14 @@ def run_stop(world, payload, attended="1", **kw):
 
 A103 = "b0sln3cn0 (shell, running): Run sleep 120 in background"
 C_LINE = f"add a waiter agent; the terminal shows idle. Counted as running non-agent work: {A103}."
-W_LINE = f"end with `Waiting on <what>`. Counted as owned work: {A103}."
 M_LINE = (
     "arm a liveness watch: a Monitor on `watch.py --task <id>` for each job you own "
-    f"(it reports progress and a stall). No liveness watch on: {A103}."
+    f"(it reports a stall and the job's end). No liveness watch on: {A103}."
 )
 
 
 def test_stop_nudge_end_to_end(world):
-    """a1-03: a running shell, an sdk entry, a last line that is not `Waiting on`: C and W in one nudge."""
+    """a1-03: a running shell, an sdk entry, a last line that is not `Waiting on`: the waiter nudge (C) and the watch nudge (M); no W."""
     payload = load_fixture("a1-03-Stop", world.root)
     res = run_stop(world, payload)
     assert res.rc == 0 and res.err == ""
@@ -532,7 +547,6 @@ def test_stop_nudge_end_to_end(world):
             "hookEventName": "Stop",
             "additionalContext": "\n".join([
                 L("waiting-guard", pid, C_LINE),
-                L("waiting-guard", pid, W_LINE),
                 L("liveness-watch", pid, M_LINE),
             ]),
         }
@@ -688,7 +702,7 @@ def test_stop_notice_and_nudge_share_one_object(world):
 
 @pytest.mark.parametrize("source", ["env", "payload-cwd", "process-cwd"])
 def test_stop_project_dir_sources(world, tmp_path, monkeypatch, source):
-    """waiting-guard off in a project layer silences a1-03's C/W nudge, so the nudge shows which dir was read."""
+    """waiting-guard off in a project layer silences a1-03's C nudge, so the nudge shows which dir was read."""
     off = tmp_path / "off"
     (off / ".claude").mkdir(parents=True)
     (off / ".claude" / "presence-kit.json").write_text(
@@ -816,7 +830,7 @@ def test_subprocess_stop_with_attended_gate(tmp_path, attended):
     if attended == "1":
         out = json.loads(run.stdout)
         ctx = out["hookSpecificOutput"]
-        assert ctx["hookEventName"] == "Stop" and C_LINE in ctx["additionalContext"] and W_LINE in ctx["additionalContext"]
+        assert ctx["hookEventName"] == "Stop" and C_LINE in ctx["additionalContext"] and "Waiting on" not in ctx["additionalContext"]
         assert state_file.is_file()
     else:
         assert run.stdout == ""

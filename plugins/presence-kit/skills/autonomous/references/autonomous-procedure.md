@@ -63,7 +63,8 @@ own command always works; your own invocation honors the configuration.
 
 6. **Say in one line that the goal is recorded.** Then work the goal under the
    autonomous mode in the presence model, with the away behaviors that are on
-   (the waiting rule included; start each waiter agent on the model named by
+   (the waiting rule included; start each waiter agent with
+   `subagent_type: presence-kit:waiter` on the model named by
    `values.waiter_model`). Keep a line for each load-bearing decision you take,
    for the recap.
 

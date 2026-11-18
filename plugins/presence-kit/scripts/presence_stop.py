@@ -1,7 +1,7 @@
 """presence-kit Stop-hook evaluation (rows 2-9; row 1 is config_error_decision).
 
 Stdlib only; sibling imports. Contract: dev/tasks/presence-kit/contracts.md
-sections 1, 5, 6, 7 and 11. Owned work (C, W, E) is every listed task that has not
+sections 1, 5, 6, 7 and 11. Owned work (C, E) is every listed task that has not
 finished, except an Artifact live-update monitor, plus every session cron. `evaluate` makes ONE presence_state.update call per
 stop, so rows 3-4 (which write presence) and rows 5-9 (which read it, D8) see one
 consistent document. It returns a StopDecision; presence.py prints it.
@@ -12,7 +12,6 @@ StateError.
 """
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -24,7 +23,7 @@ import presence_state as ps
 import presence_transcript as pt
 
 NUDGE_BUDGET = 3  # R and E; the waiting guard (GUARD_CODES) speaks once per prompt
-GUARD_CODES = ("C", "W", "M")
+GUARD_CODES = ("C", "M")
 
 # These types are agent work (they show "working" by themselves); every other type
 # is non-agent and needs a waiter agent.
@@ -46,13 +45,11 @@ TERMINAL_STATUSES = ("completed", "failed", "killed")
 ARTIFACT_MONITOR_TYPE = "monitor"
 ARTIFACT_MONITOR_PREFIX = "live updates for artifact "
 DESCRIPTION_LIMIT = 80
-_WAITING = re.compile(r"Waiting on \S")
 
 # Held-condition codes in nudge order, with the behavior id that owns each.
 _CODE_IDS = {
     "R": pc.R_IDS,
     "C": pc.C_IDS,
-    "W": pc.W_IDS,
     "M": pc.M_IDS,
     "E": pc.E_IDS,
 }
@@ -223,19 +220,9 @@ def describe_task(task: dict) -> str:
     )
 
 
-def counted_work(tasks: list[dict] | None, crons: list | None) -> str:
-    """The owned work a C or W nudge counted: one entry per task, then the cron count."""
-    parts = [describe_task(task) for task in tasks or []]
-    if crons:
-        parts.append(f"{len(crons)} session cron{'s' if len(crons) != 1 else ''}")
-    return "; ".join(parts) or "none"
-
-
-def _ends_with_waiting(last_message: str | None) -> bool:
-    if last_message is None:
-        return False
-    lines = [text.strip() for text in last_message.splitlines() if text.strip()]
-    return bool(lines) and _WAITING.match(lines[-1]) is not None
+def counted_work(tasks: list[dict] | None) -> str:
+    """The owned work a C nudge counted: one entry per task."""
+    return "; ".join(describe_task(task) for task in tasks or []) or "none"
 
 
 # ------------------------------------------------------------------------- rows
@@ -248,6 +235,15 @@ def _notice_lines(doc: dict, pid: str, causes: list[str]) -> list[str]:
             ids, text = _NOTICES[cause]
             lines.append(pc.line(ids, pid, text))
     return lines
+
+
+def _ignored_notice(doc: dict, cfg: pc.Config, pid: str) -> list[str]:
+    """N6: the ids the user or project layer set that this plugin does not know, once per
+    session (the prompt hook gives it too; whichever runs first records it)."""
+    text = pc.ignored_notice(cfg)
+    if text is None or not ps.add_notice(doc, pc.N6_CAUSE):
+        return []
+    return [pc.line(pc.CONFIG_IDS, pid, text)]
 
 
 def _record_cron_prompts(doc: dict, cfg: pc.Config, crons: list | None) -> None:
@@ -314,13 +310,12 @@ def _held_codes(
     pid: str,
     tasks: list[dict] | None,
     crons: list | None,
-    last_message: str | None,
     watch_gap: bool = False,
 ) -> list[str]:
-    """Rows 5-7 over the document AFTER rows 3-4 (D8); codes in R, C, W, E order.
+    """Rows 5-7 over the document AFTER rows 3-4 (D8); codes in R, C, M, E order.
 
     Finished tasks and Artifact live-update monitors are dropped first: they are not
-    owned work for C, W or E."""
+    owned work for C or E."""
     tasks = _owned_tasks(tasks)
     recaps = doc["recaps"]
     waiting_guard = cfg.enabled("waiting-guard")
@@ -333,7 +328,6 @@ def _held_codes(
         and recaps.get(pid) != "return"
     )
     c = waiting_guard and tasks is not None and _needs_waiter(tasks)
-    w = waiting_guard and owned and not _ends_with_waiting(last_message)
     m = cfg.enabled("liveness-watch") and watch_gap
     e = (
         cfg.enabled("ending-recap")
@@ -343,7 +337,7 @@ def _held_codes(
         and not r
         and recaps.get(pid) not in ENDING_RECAPS
     )
-    return [code for code, held in (("R", r), ("C", c), ("W", w), ("M", m), ("E", e)) if held]
+    return [code for code, held in (("R", r), ("C", c), ("M", m), ("E", e)) if held]
 
 
 def _nudge_line(code: str, doc: dict, pid: str, counted: dict[str, str]) -> str:
@@ -351,8 +345,6 @@ def _nudge_line(code: str, doc: dict, pid: str, counted: dict[str, str]) -> str:
         text = pc.R_RETURN.format(pid=pid)
     elif code == "C":
         text = pc.C_WAITER.format(counted=counted["C"])
-    elif code == "W":
-        text = pc.W_WAITING.format(counted=counted["W"])
     elif code == "M":
         text = pc.M_WATCH.format(gaps=counted["M"])
     elif doc["goal"] is not None:
@@ -372,10 +364,10 @@ def _record_unresolved(doc: dict, pid: str, code: str) -> None:
 def _budget(
     doc: dict, pid: str, held: list[str], counted: dict[str, str]
 ) -> tuple[str | None, list[str]]:
-    """Rows 8-9. `counted` maps C and W to the owned work each counted.
+    """Rows 8-9. `counted` maps C and M to what each counted.
     Returns (nudge, exhaustion lines).
 
-    The waiting guard (C, W) speaks once per prompt: a repeat is recorded as
+    The waiting guard (C, M) speaks once per prompt: a repeat is recorded as
     unresolved and said nowhere. R and E keep NUDGE_BUDGET nudges per prompt,
     then one exhaustion line each."""
     if not held:
@@ -410,9 +402,6 @@ def evaluate(payload: dict, cfg: pc.Config, env: Mapping[str, str], now: datetim
     transcript = payload.get("transcript_path")
     if not isinstance(transcript, str) or not transcript:
         transcript = None
-    last_message = payload.get("last_assistant_message")
-    if not isinstance(last_message, str):
-        last_message = None
     tasks, tasks_cause = _background_tasks(payload)
     tasks = _drop_subagent_owned(tasks, transcript)
     crons, crons_cause = _session_crons(payload)
@@ -430,13 +419,13 @@ def evaluate(payload: dict, cfg: pc.Config, env: Mapping[str, str], now: datetim
 
     def apply(doc: dict) -> None:
         messages = _notice_lines(doc, pid, causes)
+        messages.extend(_ignored_notice(doc, cfg, pid))
         _record_cron_prompts(doc, cfg, crons)
         _quiet_afk(doc, cfg, now, entry, human)
         _user_returned(doc, cfg, pid, entry, state_file)
-        held = _held_codes(doc, cfg, pid, tasks, crons, last_message, bool(unwatched or expired))
+        held = _held_codes(doc, cfg, pid, tasks, crons, bool(unwatched or expired))
         counted = {
-            "C": counted_work(owned, None),
-            "W": counted_work(owned, crons),
+            "C": counted_work(owned),
             "M": watch_gaps_text(unwatched, expired),
         }
         nudge, exhaustion = _budget(doc, pid, held, counted)
