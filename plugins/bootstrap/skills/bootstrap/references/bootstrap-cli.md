@@ -43,6 +43,49 @@ A terminal pass differs from a hook pass only where it must:
 | Exits 1 when the pass reports failures (`--exit-status`) | A hook pass always exits 0 so a defect cannot block a session |
 | stdin is closed | A manifest command or custom script cannot prompt on, or hang on, the terminal |
 
+## Project-only mode
+
+`bootstrap run --project-only` makes a checkout ready without the full pass:
+for example a fresh Git worktree that a tool prepares for a headless agent.
+The CLI passes `--run-kind project` to the engine (`_pass_project_lane`).
+
+It reads only the project layers of the working directory:
+
+1. `<working-directory>/.claude/bootstrap.json`
+2. `<working-directory>/.claude/bootstrap.local.json`
+
+It runs, in the full pass's order: the pass record; that layer's
+`project_git_pull`; the project interpreter default (`BOOTSTRAP_PROJECT_PYTHON`
+inside the pass); the layer's manifest phases except `marketplaces` and
+`plugins`; `project_venv` and its interpreter export; `project_npm`;
+`agent_skills_link`; project `links`; and the project venv's
+`shared_lib_imports` links.
+
+It skips self-setup, registry repair, marketplace refresh, plugin tiers,
+installs, updates and uninstalls, every installed plugin's manifest, env.json,
+self-registration, the plugin-root env record, the shared-lib sweep, the
+reload notices, the Codex hook, and `BOOTSTRAP_PYTHON` persistence with the
+shell hook (machine-wide settings read from user layers).
+
+It is a console pass like `bootstrap run`, so it writes no `bootstrap.log`,
+engine version stamp, env gate stamp, pending display file or fix-all queue.
+It takes the same lock. When it loses the lock it exits 2 and, unlike a full
+pass, does not clear the project's SessionStart cooldown, which it never
+consumed. The engine refuses `--run-kind project` without `--console` and
+with `--fix-all`. The pass record's start event carries `run_kind: project`,
+and the display label ends in `project-only`.
+
+Limits that follow from skipping the user layers:
+
+- A project value that names a variable declared only in a user layer's
+  `env_vars` (for example a `links` target under `$DEVROOT`) resolves only
+  when the caller's environment already carries it. Otherwise that entry
+  fails loudly.
+- A profile selected in `~/.claude/bootstrap.local.json` is not seen; a
+  selection in the project's `bootstrap.local.json` is.
+- The libraries a project venv links through `shared_lib_imports` must
+  already be published by an earlier full pass.
+
 ## Invocation
 
 ```bash
@@ -50,6 +93,7 @@ bootstrap                 # report; follow a running lifecycle pass to completio
 bootstrap --json          # non-blocking machine-readable status
 bootstrap run             # run the full pass now for the working directory
 bootstrap run --verbose   # accepted; a console pass is already verbose
+bootstrap run --project-only  # only the project layers and project venv
 bootstrap codex-hook      # synchronous full pass + Codex SessionStart JSON
 bootstrap reset           # clear this project's next-session throttle
 bootstrap reset --all     # all projects; --status and --project also supported

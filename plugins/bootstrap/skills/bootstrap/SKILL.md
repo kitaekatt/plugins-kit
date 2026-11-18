@@ -126,7 +126,9 @@ reference_skill:
         not throttle it, so it is the force path. Bare bootstrap reports and
         follows running lifecycle passes; --json is non-blocking. bootstrap
         reset clears the next-session throttle through bootstrap-reset-cooldown.
-      keywords: [bootstrap CLI, bootstrap run, force a pass, apply published update, marketplace refresh, plugin update, user manifests, project manifests, working directory, manifest scope, bootstrap reset, running pass, BOOTSTRAP_MARKETPLACE, BOOTSTRAP_PLUGIN_ROOT]
+        bootstrap run --project-only applies only the working directory's
+        project layers and project venv, for preparing a fresh checkout.
+      keywords: [bootstrap CLI, bootstrap run, force a pass, apply published update, marketplace refresh, plugin update, user manifests, project manifests, working directory, manifest scope, bootstrap reset, running pass, BOOTSTRAP_MARKETPLACE, BOOTSTRAP_PLUGIN_ROOT, project-only, --project-only, prepare a worktree, fresh checkout, run kind project]
       detail: |
         Execution: scripts/bootstrap.sh -> scripts/bootstrap_cli.py ->
         engine/bootstrap_engine.py --console --project-key _global_
@@ -154,6 +156,15 @@ reference_skill:
         Bare status still follows a running pass; --json never blocks.
         bootstrap profile set converges through the same pass.
 
+        bootstrap run --project-only passes --run-kind project: it reads only
+        <working-directory>/.claude/bootstrap.json and bootstrap.local.json
+        and runs their phases (minus marketplaces and plugins), the project
+        venv, project_npm, agent_skills_link, project links and the project
+        venv's shared-lib links. It skips self-setup, registry repair,
+        marketplace refresh, plugin tiers/installs/updates, every plugin
+        manifest, env.json, self-registration and the Codex hook. It takes the
+        same lock and writes no stamp; a stand-down rolls back no cooldown.
+
         BOOTSTRAP_PLUGIN_ROOT selects the engine tree; otherwise the highest
         cached bootstrap version is preferred, then the marketplace clone.
         Multiple bootstrap data marketplaces require BOOTSTRAP_MARKETPLACE.
@@ -168,6 +179,11 @@ reference_skill:
         - bootstrap run is a live pass, not a read-only probe. It installs,
           updates and rewrites registry state like a hook pass, so snapshot a
           broken machine's state before running it there.
+        - --project-only does not apply the user layers, so a project value
+          that names a variable only a user layer's env_vars declares (for
+          example a links target under $DEVROOT) resolves only when the
+          caller's environment already carries it; otherwise that entry fails.
+          A profile selected in ~/.claude/bootstrap.local.json is not seen.
     - id: cooldown_reset_request
       summary: >-
         A request about the cooldown ITSELF asks only for the skip stamps to be deleted -- it

@@ -18,6 +18,7 @@ import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -279,6 +280,41 @@ class TestRun:
         assert "--console" in cmd and "--exit-status" in cmd
         # A pass's commands must never read the caller's terminal.
         assert seen["stdin"] is cli.subprocess.DEVNULL
+
+    def _captured_run_cmd(self, tmp_path, monkeypatch, capsys, argv):
+        monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(tmp_path))
+        monkeypatch.setattr(cli, "marketplaces", lambda: ["mkt-a"])
+        monkeypatch.setattr(cli, "holder", lambda d: None)
+        monkeypatch.setattr(cli, "find_plugin_root", lambda m, f="": "/plug")
+        seen = {}
+
+        def fake_run(cmd, **kw):
+            seen["cmd"] = cmd
+            return _ExitedProcess()
+
+        monkeypatch.setattr(cli.subprocess, "Popen", fake_run)
+        monkeypatch.setattr(cli, "FINAL_GRACE_SECONDS", 0.0)
+        monkeypatch.setattr(cli, "POLL_INTERVAL", 0.0)
+        assert cli.main(argv) == 0
+        out = capsys.readouterr().out
+        return seen["cmd"], out
+
+    def test_project_only_reaches_the_engine_as_the_project_run_kind(
+            self, tmp_path, monkeypatch, capsys):
+        cmd, out = self._captured_run_cmd(
+            tmp_path, monkeypatch, capsys, ["run", "--project-only", "--verbose"])
+        assert cmd[cmd.index("--run-kind") + 1] == "project"
+        # Pass-through flags still reach the engine beside the new flag.
+        assert "--verbose" in cmd
+        assert "--console" in cmd and "--exit-status" in cmd
+        assert "--project-only" not in cmd
+        # Only the project layers are named as candidates.
+        assert str(Path.home() / ".claude" / "bootstrap.json") not in out
+        assert "Project-only pass" in out
+
+    def test_a_plain_run_names_no_run_kind(self, tmp_path, monkeypatch, capsys):
+        cmd, _out = self._captured_run_cmd(tmp_path, monkeypatch, capsys, ["run"])
+        assert "--run-kind" not in cmd
 
     def test_unknown_flag_without_run_is_still_an_error(self, capsys):
         with pytest.raises(SystemExit):

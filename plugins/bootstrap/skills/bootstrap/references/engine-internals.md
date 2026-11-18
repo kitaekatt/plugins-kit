@@ -29,6 +29,8 @@ The bootstrap engine has two distinct setup phases:
 
    **Dev layout note**: When running the engine directly against the source tree (e.g. `"$BOOTSTRAP_PYTHON" plugins/bootstrap/engine/bootstrap_engine.py --plugin-root plugins/bootstrap ...` -- the engine is bootstrap's own code, so it is launched under the forced form, never `uv run python`; see references/python-interpreter.md), `plugins/installed_plugins.json` does not exist. `list_enabled_plugins()` returns `[], False` and sibling plugins (unreal-kit, p4-kit, ...) are not auto-discovered. This is expected and not part of any real dev workflow -- the engine runs cleanly with no plugin output.
 
+**Run kinds** (`--run-kind`): `full` is the phase sequence this file describes. `always` is the throttled always lane (`_pass_always_lane`): only `cadence: "always"` env_checks entries. `project` (`_pass_project_lane`, launched by `bootstrap run --project-only`) runs neither phase above: it reads only the two project layers (`_PROJECT_LAYER_KINDS`), drops their `marketplaces` and `plugins` keys, and runs Steps 3c-pull, the project half of 3c1, 3c, 3d, 3d2-3d4 and 4c2. It is console-only, takes the engine lock, and writes no stamp; its stand-down rolls back no cooldown. Scope and limits: references/bootstrap-cli.md, "Project-only mode".
+
 Discovery results are cached in `plugins/data/plugins-kit/bootstrap/config.json` under `bootstrap_cache` to avoid repeated filesystem scans — entries are added on first discovery and removed if `bootstrap.json` disappears (e.g. after a plugin update). Users can permanently opt out a plugin by adding its ref to `no_bootstrap` in that config file.
 
 ### Step 3b2: Registry self-repair (`registry_repair.py`, 0.62.0)
