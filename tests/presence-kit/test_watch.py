@@ -860,3 +860,73 @@ def test_an_agent_resumed_after_its_hand_back_is_not_done(tmp_path):
             {"type": "tool_use", "name": "Bash", "id": "t2", "input": {}}]})]
     code, out, _ = _run_agent(tmp_path, records)
     assert code is None and "DONE" not in out.text
+
+
+# --- Windows process sampling (native Python: Git Bash's ps has no -A) ---------------
+
+windows_only = pytest.mark.skipif(os.name != "nt", reason="Windows process sampling")
+
+
+@windows_only
+def test_windows_sampling_never_runs_ps(monkeypatch):
+    monkeypatch.undo()  # the autouse stub replaced the real samplers
+
+    def refuse(*args, **kwargs):
+        raise AssertionError(f"a Windows sampler ran an external tool: {args}")
+
+    monkeypatch.setattr(watch.subprocess, "run", refuse)
+    table = watch._sample_procs()
+    assert table[ME].ppid == os.getppid()
+    assert watch._sample_cwds([ME])[ME]
+
+
+@windows_only
+def test_windows_cpu_time_of_a_busy_child_grows_between_samples(monkeypatch, tmp_path):
+    monkeypatch.undo()
+    # A venv python is a launcher that runs the real interpreter as its child, so the
+    # CPU is counted over the child and everything below it.
+    child = subprocess.Popen([sys.executable, "-c", "while True: pass"], cwd=tmp_path)
+
+    def tree_cpu():
+        table = watch._sample_procs()
+        assert table[child.pid].ppid == ME
+        return sum(table[pid].cpu for pid in watch._descendants(table, [child.pid]))
+
+    try:
+        first = tree_cpu()
+        import time as real_time
+        real_time.sleep(0.5)
+        assert tree_cpu() - first > 0.1
+    finally:
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(child.pid)], capture_output=True, check=False)
+        child.wait()
+
+
+@windows_only
+def test_windows_working_directory_of_a_child_process_is_read_back(monkeypatch, tmp_path):
+    monkeypatch.undo()
+    work = tmp_path / "Mixed Case dir"
+    work.mkdir()
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], cwd=work)
+    try:
+        import time as real_time
+        deadline = real_time.monotonic() + 30
+        cwd = None
+        while cwd is None:  # the image's parameters are readable once it has started
+            assert real_time.monotonic() < deadline, "the child's working directory never became readable"
+            cwd = watch._sample_cwds([child.pid]).get(child.pid)
+            real_time.sleep(0.05)
+        assert os.path.realpath(cwd) == os.path.realpath(work)
+        # a directory watch recognises it, whatever case the process reports
+        roots = [os.path.realpath(tmp_path).upper()]
+        assert watch._within(os.path.realpath(cwd), roots)
+    finally:
+        child.kill()
+        child.wait()
+
+
+@windows_only
+def test_windows_unreadable_working_directories_are_absent_not_errors(monkeypatch):
+    monkeypatch.undo()
+    # pid 4 is the System process: it cannot be opened, so it is simply absent
+    assert 4 not in watch._sample_cwds([4])

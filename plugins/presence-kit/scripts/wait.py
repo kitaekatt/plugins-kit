@@ -11,7 +11,8 @@ Exit codes:
   3  stalled: no size or mtime change for N minutes. Staleness is measured from the
      file's own mtime against the wall clock, so a file already quiet for N minutes
      when a slice starts stalls on the first poll instead of after N more minutes.
-  4  slice over: S seconds elapsed, still live. Run again.
+  4  slice over: S seconds elapsed (default 150, under the ~180 s after which the
+     harness backgrounds a foreground command), still live. Run again.
   2  bad arguments, or the file never appears within N minutes.
 
 The script never writes anything.
@@ -23,6 +24,10 @@ import re
 import sys
 import time
 
+# The harness moves a foreground Bash command that runs past about 180 s to the
+# background whatever its timeout, which ends a waiter agent's wait: a slice must
+# return well inside that window.
+DEFAULT_SLICE_SECONDS = 150.0
 TRAILER = re.compile(r"\[exited with code \d+\]")
 
 
@@ -52,7 +57,7 @@ def _build_parser():
     group.add_argument("--file", metavar="PATH")
     parser.add_argument("--pattern", metavar="REGEX")
     parser.add_argument("--stall-minutes", dest="stall_minutes", type=_positive, required=True)
-    parser.add_argument("--slice-seconds", dest="slice_seconds", type=_positive, default=540.0)
+    parser.add_argument("--slice-seconds", dest="slice_seconds", type=_positive, default=DEFAULT_SLICE_SECONDS)
     parser.add_argument("--poll-seconds", dest="poll_seconds", type=_positive, default=2.0)
     return parser
 
