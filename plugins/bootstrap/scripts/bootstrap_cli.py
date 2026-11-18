@@ -378,7 +378,8 @@ def cmd_run(args) -> int:
             % (marketplace, marketplace, marketplace))
         return 2
 
-    return _launch_pass(plugin_root, data_dir, Path.cwd(), args.forward)
+    return _launch_pass(plugin_root, data_dir, Path.cwd(), args.forward,
+                        project_only=getattr(args, "project_only", False))
 
 
 # --------------------------------------------------------------------------
@@ -554,8 +555,11 @@ TERMINAL_PROJECT_KEY = "_global_"
 #: Layer files a terminal pass reads for its project, printed before it runs.
 _LAYER_FILENAMES = ("bootstrap.json", "bootstrap.local.json")
 
+#: The engine run kind `bootstrap run --project-only` selects.
+PROJECT_RUN_KIND = "project"
 
-def _engine_cmd(plugin_root, data_dir, project_dir, forward=()):
+
+def _engine_cmd(plugin_root, data_dir, project_dir, forward=(), project_only=False):
     """The engine argv shared by `run` and `profile set`.
 
     The same entry point the hooks run (engine/bootstrap_engine.py, launched
@@ -563,6 +567,8 @@ def _engine_cmd(plugin_root, data_dir, project_dir, forward=()):
     pass are these flags: --console (terminal output; no log writes or
     lifecycle stamps), --project-key _global_ (no interpreter record) and
     --exit-status (a pass with failures exits 1, a stand-down 2).
+    ``project_only`` adds --run-kind project: only the project layers and the
+    project venv (engine._pass_project_lane).
 
     `profile set` passes its OWN resolved `project_dir` here rather than
     `Path.cwd()` -- `cmd_run` converges the working directory unconditionally
@@ -578,10 +584,11 @@ def _engine_cmd(plugin_root, data_dir, project_dir, forward=()):
         "--project-dir", str(project_dir),
         "--project-key", TERMINAL_PROJECT_KEY,
         "--console", "--exit-status",
-    ] + list(forward)
+    ] + (["--run-kind", PROJECT_RUN_KIND] if project_only else []) + list(forward)
 
 
-def _launch_pass(plugin_root, data_dir, project_dir, forward=()) -> int:
+def _launch_pass(plugin_root, data_dir, project_dir, forward=(),
+                 project_only=False) -> int:
     """Run one engine pass for `project_dir`, stream it, return its exit code.
 
     stdin is closed: a manifest command or custom script the pass runs must
@@ -589,7 +596,12 @@ def _launch_pass(plugin_root, data_dir, project_dir, forward=()) -> int:
     """
     print("Bootstrap engine: %s" % plugin_root)
     home = Path(os.environ.get("HOME") or Path.home())
-    for directory in (home / ".claude", Path(project_dir) / ".claude"):
+    directories = [home / ".claude", Path(project_dir) / ".claude"]
+    if project_only:
+        print("Project-only pass: user layers, marketplaces, plugin updates "
+              "and plugin manifests are skipped.")
+        directories = directories[1:]
+    for directory in directories:
         for filename in _LAYER_FILENAMES:
             path = directory / filename
             print("  %s: %s" % (path, "present" if path.is_file() else "absent"))
@@ -597,7 +609,8 @@ def _launch_pass(plugin_root, data_dir, project_dir, forward=()) -> int:
     code = _stream_until_exit(
         data_dir,
         lambda: subprocess.Popen(
-            _engine_cmd(plugin_root, data_dir, project_dir, forward),
+            _engine_cmd(plugin_root, data_dir, project_dir, forward,
+                        project_only=project_only),
             stdin=subprocess.DEVNULL))
     if code == 0:
         print("Bootstrap pass completed.")
@@ -1687,12 +1700,20 @@ def main(argv=None) -> int:
     parser.add_argument("--json", action="store_true",
                         help="machine-readable status")
     sub = parser.add_subparsers(dest="command")
-    sub.add_parser("run",
-                   help="run the full bootstrap pass the session hooks run "
-                        "(marketplace refresh, plugin updates, plugin and "
-                        "user/project manifests) for the working directory, "
-                        "ignoring the cooldown; refuse while another pass is "
-                        "running")
+    run_parser = sub.add_parser(
+        "run",
+        help="run the full bootstrap pass the session hooks run "
+             "(marketplace refresh, plugin updates, plugin and "
+             "user/project manifests) for the working directory, "
+             "ignoring the cooldown; refuse while another pass is "
+             "running")
+    # Declared on `run` only (never on `parser`), so the shared-dest discard
+    # trap below does not apply; every other token still passes through.
+    run_parser.add_argument(
+        "--project-only", dest="project_only", action="store_true",
+        help="apply only <cwd>/.claude/bootstrap.json and bootstrap.local.json "
+             "and the project venv; skip user layers, marketplace refresh, "
+             "plugin updates and plugin manifests")
     # add_help=False so `bootstrap reset --help` reaches the lever this verb
     # delegates to and prints ITS flags, rather than argparse printing a
     # subcommand help that lists none of them.

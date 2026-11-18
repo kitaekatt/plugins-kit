@@ -98,6 +98,18 @@ def main():
         # some OTHER launch legitimately owns and force a full pass.
         return
 
+    if run_kind == "project":
+        # A project-only run (`bootstrap run --project-only`) consumed no
+        # cooldown stamp and carries no update forward (it never stamps
+        # engine_ran_version), so it neither rolls back a guard nor takes the
+        # version-aware retry. It still reports the stand-down and exits 2.
+        _stand_down_lock_contended(data_dir, project_dir, plugin_root,
+                                   console=console, background=background,
+                                   rollback=False)
+        if _exit_status_requested():
+            sys.exit(2)
+        return
+
     if _carries_update(data_dir, plugin_root):
         with _retry_engine_lock(data_dir) as acquired:
             if acquired:
@@ -208,7 +220,7 @@ def _peek_lock_args() -> tuple:
 
 
 def _stand_down_lock_contended(data_dir, project_dir, plugin_root="",
-                               console=False, background=False):
+                               console=False, background=False, rollback=True):
     """Another engine instance already holds the lock -- this pass never ran.
     Roll back the ONE guard that is unambiguously OURS: the per-project
     cooldown stamp session-bootstrap.sh writes BEFORE launching the engine.
@@ -233,19 +245,24 @@ def _stand_down_lock_contended(data_dir, project_dir, plugin_root="",
     THIS launch, and neither is version-keyed, so neither can wedge the way
     the harvest marker did.
 
+    ``rollback=False`` (a project-only run) skips both: that run wrote no
+    cooldown stamp, and it cannot carry an update because it never stamps
+    engine_ran_version. The stand-down is still logged and reported.
+
     Logged so a stand-down is visible in bootstrap.log rather than silently
     invisible (the "every remediation-like action logs its outcome" rule this
     repo's CLAUDE.md holds tooling to). Best-effort; never raises -- a failure
     here just costs one retry cycle, never a crash.
     """
-    try:
-        _clear_project_cooldown(data_dir, project_dir)
-    except Exception:
-        pass
+    if rollback:
+        try:
+            _clear_project_cooldown(data_dir, project_dir)
+        except Exception:
+            pass
     own_version = _plugin_root_version(plugin_root)
     rearmed = False
     try:
-        if _carries_update(data_dir, plugin_root):
+        if rollback and _carries_update(data_dir, plugin_root):
             from .stamps import global_stamp
             global_stamp(data_dir, "harvest_launched_version").clear()
             rearmed = True
@@ -255,10 +272,13 @@ def _stand_down_lock_contended(data_dir, project_dir, plugin_root="",
     who = f"engine {own_version}" if own_version else "engine"
     where = f" (pid {holder})" if holder else ""
     headline = f"stand-down: {who} yielded to running engine pass{where}"
-    entry = (
-        f"{headline}; this project's cooldown was cleared for a retry on the "
-        "next opportunity"
-    )
+    if rollback:
+        entry = (
+            f"{headline}; this project's cooldown was cleared for a retry on the "
+            "next opportunity"
+        )
+    else:
+        entry = f"{headline}; project-only run, no guard rolled back"
     if rearmed:
         entry += "; harvest re-armed (this engine carries an update)"
     try:
@@ -650,6 +670,9 @@ def _main_pass():
     if getattr(args, "run_kind", "full") == "always":
         _pass_always_lane(st)
         return
+    if getattr(args, "run_kind", "full") == "project":
+        _pass_project_lane(st)
+        return
     _pass_open_record(st)
     _pass_identity(st)
     _pass_version_change(st)
@@ -713,9 +736,11 @@ def _parse_pass_args():
     parser.add_argument("--background", action="store_true",
         help="Write display output to bootstrap_display.json instead of stdout")
     parser.add_argument("--run-kind", dest="run_kind", default="full",
-                        choices=("full", "always"),
+                        choices=("full", "always", "project"),
                         help="full: the ordinary pass. always: only env_checks entries "
-                             "declaring cadence 'always', run silently, writing no stamps.")
+                             "declaring cadence 'always', run silently, writing no stamps. "
+                             "project: only the project manifest layers and project venv "
+                             "(`bootstrap run --project-only`); requires --console.")
     parser.add_argument("--fix-all", dest="fix_all", action="store_true",
         help="Interactive remediation run triggered by the user typing "
              "'fix-all'. This is user consent for elevation: on Windows the "
@@ -738,6 +763,14 @@ def _parse_pass_args():
              "the SessionStart and Codex hooks never pass it, so their exit "
              "status is unchanged.")
     args = parser.parse_args()
+    if args.run_kind == "project":
+        # The project kind is defined only as a console pass, which writes no
+        # log, pending display file, fix queue or lifecycle stamp. Refused
+        # rather than run as a hook pass whose outputs it does not define.
+        if not args.console:
+            parser.error("--run-kind project requires --console")
+        if args.fix_all:
+            parser.error("--run-kind project does not support --fix-all")
 
     # --console implies --verbose
     if args.console:
@@ -871,6 +904,101 @@ def _pass_always_lane(st):
         write_log_block(st.data_dir, "bootstrap always", entries)
 
 
+#: Layers a project-only pass reads: the project's tracked bootstrap.json and
+#: its gitignored local variant. Every user layer (~/.claude/bootstrap.json,
+#: ~/.claude/bootstrap.local.json, the legacy data-dir file) is left out.
+_PROJECT_LAYER_KINDS = frozenset(("project", "project_local"))
+
+#: Layered-manifest keys a project-only pass does not apply: marketplace
+#: refresh and plugin installs/updates/uninstalls are the full pass's job.
+_PROJECT_LANE_SKIPPED_KEYS = ("marketplaces", "plugins")
+
+
+def _pass_project_lane(st):
+    """The project run kind (`bootstrap run --project-only`).
+
+    Applies only the project manifest layers and the project venv, so a fresh
+    checkout (a databench worktree, say) is ready without the full pass's
+    marketplace refresh, plugin updates and plugin manifests. Console only
+    (_parse_pass_args refuses anything else), so it writes no bootstrap.log,
+    pending display file or fix queue; and it reaches none of the stamp
+    writers -- no last_version (_pass_version_change), no engine_ran_version
+    or import-retry/plugin-snapshot stamps (_pass_complete), no env gate
+    stamp (_pass_env_json), no cooldown (the shell hook writes that, and a
+    stand-down of this kind does not roll it back; see main()). The engine
+    lock is taken in main() exactly as for a full pass.
+
+    Kept, in the full pass's order: the pass record, bootstrap's identity
+    (for the label), the bootstrap venv on sys.path (no provisioning), the
+    project layers with their project_git_pull, the project interpreter
+    default, the layered manifest's phases minus marketplaces/plugins, the
+    project venv and its interpreter export, project_npm, agent_skills_link,
+    project links, and Step 4c2's project-venv shared-lib links.
+    """
+    st.layer_kinds = _PROJECT_LAYER_KINDS
+    _pass_open_record(st)
+    _pass_identity(st)
+    st.bootstrap_label = f"{st.bootstrap_label} project-only"
+    # sys.path only: self-setup's provisioning is the full pass's.
+    _activate_bootstrap_venv(st.data_dir)
+    _pass_load_layered(st)
+    _pass_project_scope_manifest(st)
+    _pass_project_interpreter_env(st)
+    _pass_layered_manifest(st)
+    _pass_project_venv(st)
+    _pass_project_npm_and_links(st)
+    st.display_sections.append(
+        (st.bootstrap_label, list(st.boot_action), list(st.boot_ok)))
+    _pass_project_shared_libs(st)
+    for notice in st.project_pull_notices:
+        _pass_notice(st, notice)
+    display_lines = _pass_display_lines(st.display_sections)
+    _record_failures(st.recorder, st.all_failures)
+    _pass_console_report(st, display_lines)
+
+
+def _pass_project_scope_manifest(st):
+    """Drop the layered keys a project-only pass does not apply, saying so."""
+    manifest = st.layered_manifest
+    if not manifest:
+        return
+    for key in _PROJECT_LANE_SKIPPED_KEYS:
+        if manifest.pop(key, None):
+            st.boot_ok.append(
+                f"project-only: `{key}` in the project layer skipped "
+                "(a full `bootstrap run` applies it)")
+
+
+def _pass_project_interpreter_env(st):
+    """Step 3c-python, project half only: the manifest-aware project default.
+
+    BOOTSTRAP_PYTHON persistence and the shell hook are machine-wide settings
+    read from user layers, so they are the full pass's (_pass_interpreter_env).
+    """
+    st.project_python_source = None
+    if not st.args.project_dir:
+        return
+    _user_layers, project_layers = _interpreter_env_layers(
+        st.args.project_dir, st.profile_state)
+    _pp_value, st.project_python_source = _export_project_default_for_pass(
+        st.args.project_dir, st.layered_manifest, st.project_key,
+        st.boot_ok, st.boot_quiet, user_layers=(), project_layers=project_layers)
+
+
+def _pass_project_shared_libs(st):
+    """Step 4c2 alone: link the project venv's declared shared libs.
+
+    The convergence sweep and revocation (Steps 4c, 4c1) act on plugin venvs
+    and are skipped; the libraries linked here were published by the plugins
+    on an earlier full pass.
+    """
+    actions, quiets, oks = _pass_link_project_shared_libs(st)
+    link_summary = st.shared_lib_links.summary()
+    if link_summary:
+        actions = actions + [link_summary]
+    _pass_shared_libs_report(st, actions, quiets, oks)
+
+
 def _pass_open_record(st):
     """Open the pass record and the entry lists every later phase appends to."""
     args = st.args
@@ -888,11 +1016,14 @@ def _pass_open_record(st):
     # evidence of. See records.py.
     from .records import entry_list as _entry_list
     st.recorder = recorder = _new_recorder(st.data_dir, st.start_time, args)
-    recorder.record("meta", "engine pass started",
-                    detail={"os": st.current_os, "project_dir": args.project_dir,
-                            "plugin_root": st.plugin_root,
-                            "log_success": st.log_success,
-                            "fix_all": bool(getattr(args, "fix_all", False))})
+    detail = {"os": st.current_os, "project_dir": args.project_dir,
+              "plugin_root": st.plugin_root,
+              "log_success": st.log_success,
+              "fix_all": bool(getattr(args, "fix_all", False))}
+    run_kind = getattr(args, "run_kind", "full")
+    if run_kind != "full":
+        detail["run_kind"] = run_kind
+    recorder.record("meta", "engine pass started", detail=detail)
 
     st.all_failures = []
     # Bootstrap's own entries (self-bootstrap + user) -- written to bootstrap's log.
@@ -1092,16 +1223,17 @@ def _pass_load_layered(st):
     reload, and the parse-error report for every layer that failed to parse.
     """
     args, data_dir = st.args, st.data_dir
+    kinds = getattr(st, "layer_kinds", None)
     # Deprecation: warn if legacy user-bootstrap.json exists
     legacy_path = os.path.join(data_dir, "user-bootstrap.json")
-    if os.path.isfile(legacy_path):
+    if os.path.isfile(legacy_path) and (kinds is None or "legacy" in kinds):
         st.boot_action.append(
             "DEPRECATED: user-bootstrap.json found in data dir. "
             "Migrate to ~/.claude/bootstrap.json (still processed this session)."
         )
 
     st.layered_manifest, st.layered_parse_errors, st.profile_state = (
-        _load_layered_manifests_ex(args.project_dir, data_dir))
+        _pass_read_layers(st))
     st.project_pull_notices = []
     _pass_project_git_pull(st)
     for pe in st.layered_parse_errors:
@@ -1123,6 +1255,15 @@ def _pass_load_layered(st):
             "plugin": "bootstrap",
             "persist_across_sessions": True,
         })
+
+
+def _pass_read_layers(st):
+    """The layered manifests this pass reads: every layer, or only
+    ``st.layer_kinds`` when the run kind sets it (the project kind)."""
+    kinds = getattr(st, "layer_kinds", None)
+    if kinds is None:
+        return _load_layered_manifests_ex(st.args.project_dir, st.data_dir)
+    return _load_layered_manifests_ex(st.args.project_dir, st.data_dir, kinds=kinds)
 
 
 def _pass_project_git_pull(st):
@@ -1147,7 +1288,7 @@ def _pass_project_git_pull(st):
         st.project_pull_notices.append(pull_notice)
     if pull_moved:
         st.layered_manifest, st.layered_parse_errors, st.profile_state = (
-            _load_layered_manifests_ex(args.project_dir, st.data_dir))
+            _pass_read_layers(st))
 
 
 def _extend_config_entries(st, actions, oks, quiets):
@@ -1624,13 +1765,10 @@ def _pass_shared_libs(st):
     # Step 4c2: link the declared project_venv shared libs. Deliberately HERE,
     # after the sweep (every owner has published), and NOT inline at Step 3d,
     # which runs before any owner publishes and would soft-skip on a first pass.
-    if st.project_venv_def and st.args.project_dir:
-        pl_actions, pl_quiets, pl_oks, pl_failures = _link_project_shared_libs(
-            st.project_venv_def, st.args.project_dir, st.data_dir, st.shared_lib_links)
-        sweep_actions = sweep_actions + pl_actions
-        sweep_quiets = sweep_quiets + pl_quiets
-        sweep_oks = sweep_oks + pl_oks
-        st.all_failures.extend(pl_failures)
+    pl_actions, pl_quiets, pl_oks = _pass_link_project_shared_libs(st)
+    sweep_actions = sweep_actions + pl_actions
+    sweep_quiets = sweep_quiets + pl_quiets
+    sweep_oks = sweep_oks + pl_oks
     # ONE aggregated display line for every shared-lib success in the pass, from
     # BOTH emission sites (per-plugin manifest phase + this sweep), deduped and
     # grouped by lib -- the per-plugin lines are log-only (see _SharedLibLinkLog).
@@ -1639,6 +1777,19 @@ def _pass_shared_libs(st):
     if link_summary:
         sweep_actions = sweep_actions + [link_summary]
     _pass_shared_libs_report(st, sweep_actions, sweep_quiets, sweep_oks)
+
+
+def _pass_link_project_shared_libs(st):
+    """Step 4c2: link the project_venv's declared shared libs into the project venv.
+
+    Returns (actions, quiets, oks); failures go to st.all_failures.
+    """
+    if not (st.project_venv_def and st.args.project_dir):
+        return [], [], []
+    pl_actions, pl_quiets, pl_oks, pl_failures = _link_project_shared_libs(
+        st.project_venv_def, st.args.project_dir, st.data_dir, st.shared_lib_links)
+    st.all_failures.extend(pl_failures)
+    return pl_actions, pl_quiets, pl_oks
 
 
 def _pass_shared_libs_report(st, sweep_actions, sweep_quiets, sweep_oks):
@@ -3163,7 +3314,7 @@ def _read_manifest_layer(path, parse_errors):
     return layer
 
 
-def _load_layered_manifests_ex(project_dir, data_dir=None):
+def _load_layered_manifests_ex(project_dir, data_dir=None, kinds=None):
     """Load, merge, and apply the selected bootstrap profile over the layers.
 
     Builds the same candidate layers ``_load_layered_manifests`` has always
@@ -3180,10 +3331,17 @@ def _load_layered_manifests_ex(project_dir, data_dir=None):
     Returns ``(effective_manifest, parse_errors, ProfileState)``. ``profiles``
     and ``profile`` are stripped from ``effective_manifest`` in every
     ``ProfileState`` status (see ``resolve_layers``).
+
+    ``kinds`` (a set of ``profiles.LAYER_KINDS`` names) restricts the read to
+    those layers; the project run kind passes ``_PROJECT_LAYER_KINDS``.
     """
     from . import profiles as _profiles
 
-    layers, parse_errors, home = _collect_manifest_layers(project_dir, data_dir)
+    if kinds is None:
+        layers, parse_errors, home = _collect_manifest_layers(project_dir, data_dir)
+    else:
+        layers, parse_errors, home = _collect_manifest_layers(
+            project_dir, data_dir, kinds=kinds)
 
     effective, profile_state = _profiles.resolve_layers(
         layers,
@@ -3193,7 +3351,7 @@ def _load_layered_manifests_ex(project_dir, data_dir=None):
     return effective, parse_errors, profile_state
 
 
-def _collect_manifest_layers(project_dir, data_dir=None):
+def _collect_manifest_layers(project_dir, data_dir=None, kinds=None):
     """Read the candidate manifest layers, lowest priority first.
 
     Returns ``(layers, parse_errors, home)`` where ``layers`` is a list of
@@ -3203,6 +3361,9 @@ def _collect_manifest_layers(project_dir, data_dir=None):
     (``self_register.drop_shadowed_self_registrations``): merge-by-ref would
     otherwise let it override that declaration. Step 4b2 removes it from the
     file and logs the removal.
+
+    ``kinds``, when given, reads only the layers of those kinds; the others
+    are not opened, so their parse errors are not reported either.
     """
     from .self_register import drop_shadowed_self_registrations
 
@@ -3214,6 +3375,8 @@ def _collect_manifest_layers(project_dir, data_dir=None):
     parse_errors = []
 
     def _add_layer(path, kind):
+        if kinds is not None and kind not in kinds:
+            return
         if not os.path.isfile(path):
             return
         layers.append((path, kind, _read_manifest_layer(path, parse_errors)))

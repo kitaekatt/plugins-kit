@@ -127,3 +127,86 @@ def test_a_stand_down_exits_2_only_with_exit_status(tmp_path):
     assert refused.returncode == 2, refused.stdout + refused.stderr
     assert "stand-down" in refused.stdout
     assert hook.returncode == 0
+
+
+# --------------------------------------------------------------------------
+# bootstrap run --project-only
+# --------------------------------------------------------------------------
+
+def _shim_run_project_only(world):
+    return subprocess.run(["bash", SHIM, "run", "--project-only"], capture_output=True,
+                          text=True, cwd=world.project, env=world.env,
+                          stdin=subprocess.DEVNULL)
+
+
+def _git_project(world, ignored):
+    git_env = dict(world.env, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+    subprocess.run(["git", "init", "-q", str(world.project)], check=True, env=git_env)
+    (world.project / ".gitignore").write_text(ignored + "\n")
+
+
+def test_project_only_skips_user_layers_and_plugin_manifests(tmp_path):
+    """The user layer's missing tool would fail a full pass (see
+    test_run_exits_1_when_the_pass_reports_failures); a project-only pass
+    never reads that layer, nor the installed plugin's manifest."""
+    world = _world(tmp_path, user_layer=MISSING_TOOL, plugin_manifest={})
+    (world.project / ".claude" / "bootstrap.json").write_text("{}")
+    completed = _shim_run_project_only(world)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "bootstrap_run_missing_tool_xyz" not in completed.stdout
+    assert not (world.data_root / "kit" / "demo" / "last_version").exists()
+    for name in ("engine_ran_version", "last_version", "bootstrap.log",
+                 "cooldowns", "project_python"):
+        assert not (world.data_dir / name).exists(), name
+
+
+def test_project_only_applies_the_project_layer_and_its_links(tmp_path):
+    world = _world(tmp_path, user_layer={})
+    target = tmp_path / "link-target"
+    target.mkdir()
+    _git_project(world, "dev/tasks")
+    (world.project / ".claude" / "bootstrap.json").write_text(json.dumps(dict(
+        MISSING_TOOL, links=[{"path": "dev/tasks", "target": str(target)}])))
+    completed = _shim_run_project_only(world)
+    assert completed.returncode == 1, completed.stdout + completed.stderr
+    assert "bootstrap_run_missing_tool_xyz" in completed.stdout
+    assert "project-only" in completed.stdout
+    link = world.project / "dev" / "tasks"
+    assert link.is_symlink() or link.is_dir()
+    assert os.path.realpath(link) == os.path.realpath(target)
+
+
+def test_project_only_stand_down_leaves_the_session_cooldown_alone(tmp_path):
+    """A project-only run never consumed the SessionStart cooldown stamp, so
+    losing the lock must not roll it back -- unlike a full pass, which clears
+    the stamp it assumes the shell hook wrote for it."""
+    from bootstrap_lib.proc_lock import engine_lock
+    from bootstrap_lib.stamps import project_stamp
+
+    world = _world(tmp_path, user_layer={})
+    (world.data_dir / "engine_ran_version").write_text("0.130.0")
+    cooldown = project_stamp(str(world.data_dir), "last_run_epoch", str(world.project))
+    with engine_lock(str(world.data_dir)) as acquired:
+        assert acquired
+        cooldown.write("1")
+        refused = _engine(world, "--console", "--exit-status",
+                          "--project-key", "_global_", "--run-kind", "project")
+        assert refused.returncode == 2, refused.stdout + refused.stderr
+        assert "stand-down" in refused.stdout
+        assert cooldown.exists()
+        # Control: the full kind on the same lock does clear it.
+        _engine(world, "--console", "--exit-status", "--project-key", "_global_")
+        assert not cooldown.exists()
+
+
+def test_project_only_requires_console_mode(tmp_path):
+    """Only a console pass is defined for the project kind: it writes no log,
+    pending display file or lifecycle stamp. Refused, not degraded."""
+    world = _world(tmp_path, user_layer={})
+    refused = _engine(world, "--run-kind", "project")
+    assert refused.returncode == 2
+    # The specific refusal, not argparse's usage line (which names every flag).
+    assert "--run-kind project requires --console" in refused.stderr
+    fix_all = _engine(world, "--console", "--fix-all", "--run-kind", "project")
+    assert fix_all.returncode == 2
+    assert "--run-kind project does not support --fix-all" in fix_all.stderr
