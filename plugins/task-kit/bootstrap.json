@@ -20,6 +20,7 @@
     "check_imports": ["yaml", "psutil", "openai"]
   },
   "shared_lib_imports": ["skills_kit_lib", "bootstrap_lib"],
-  "sync_to_data": [{"src": "bin", "dst": "bin"}],
+  "sync_to_data": [{"src": "bin", "dst": "bin"}, {"src": "statusline", "dst": "statusline"}],
+  "script": {"path": "statusline/install_segment.py", "entry_point": "install"},
   "path_entries": ["~/.claude/plugins/data/plugins-kit/task-kit/bin"]
 }
