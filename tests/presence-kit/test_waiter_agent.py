@@ -92,3 +92,12 @@ def test_no_document_still_says_progress_every_twenty_minutes():
     flat = " ".join(PRESENCE_MD.read_text(encoding="ascii").split())
     assert "`progress_minutes` value, 0" in flat
     assert "off by default" in flat
+
+
+def test_waiting_rule_makes_a_subagent_wait_in_foreground_slices():
+    rule = " ".join(_section(PRESENCE_MD.read_text(encoding="ascii"), "Waiting rule").split())
+    assert "subagent that waits on a background job it started" in rule
+    assert "does not end its turn" in rule
+    assert "scripts/wait.py" in rule and "foreground" in rule
+    assert "timeout: 170000" in rule and "exit 4" in rule
+    assert "does not spawn a waiter" in rule
