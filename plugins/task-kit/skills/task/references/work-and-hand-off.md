@@ -24,6 +24,20 @@ It pushes only when the net upstream change is session files. It never
 force-pushes, rebases, stashes, or switches branches. The setting
 `sessions: {record: false}` in `~/.claude/task.local.yaml` disables recording.
 
+## Statusline cell
+
+When claude-ui-kit is installed, task-kit adds a cell at the far right of its status bar naming the task the session
+works: the task folder name plus its status, for example `better-statusbar [active]`. `task.py work` writes a pointer
+file `<task-kit data dir>/statusline/<session id>`; `sessions release` removes it. A bootstrap script copies
+`statusline/segment.sh` to claude-ui-kit's `segments/99-task.sh` (the `99-` prefix sorts it last). The segment needs
+`jq` (`BOOTSTRAP_BIN_JQ` overrides the probe; set but empty declares no jq) and shows nothing for a session with no
+pointer. Compaction keeps the cell, because the session still works the task. `/clear` drops it: the hook does not
+carry the pointer to the new session id, since the agent is no longer working the task. `/task work` again restores it.
+
+The setting `statusline: {cell: false}` in `~/.claude/task.local.yaml` turns the cell off (default true). On the next
+bootstrap pass the installer removes a `99-task.sh` it installed and logs the removal; a `99-task.sh` it did not
+install is left alone. An unknown key or a non-boolean value is a logged FAILED and changes nothing.
+
 Registration adds `session:` lines on stderr without changing stdout or exit
 status. Relay every line in one sentence. A `session: kept:` line names another
 session's release command; run it only when the user asks. Registration lasts
