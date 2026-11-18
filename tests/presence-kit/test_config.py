@@ -16,7 +16,7 @@ DEFAULT_VALUES = {
     "afk_quiet_minutes": 10,
     "departure_words": ["afk"],
     "waiter_model": "haiku",
-    "progress_minutes": 20,
+    "progress_minutes": 0,
 }
 
 
@@ -166,7 +166,8 @@ def test_scalars_replace(tmp_path, home, defaults):
 def test_to_json_shape(tmp_path, home, defaults):
     cfg = pc.resolve(None, env=env_for(tmp_path), defaults_path=defaults)
     obj = cfg.to_json()
-    assert list(obj) == ["behaviors", "values", "layers"]
+    assert list(obj) == ["behaviors", "values", "layers", "ignored"]
+    assert obj["ignored"] == []
     assert list(obj["behaviors"]) == list(BEHAVIOR_IDS)
     assert obj["values"] == DEFAULT_VALUES
     assert obj["layers"][0] == {"name": "defaults", "path": str(defaults), "present": True}
@@ -251,6 +252,7 @@ def test_comment_only_file_is_valid(tmp_path, home, defaults):
         ("departure_words", ["afk", "Leave_now", "quit2"]),
         ("waiter_model", "claude-haiku-5-5"),
         ("progress_minutes", 1),
+        ("progress_minutes", 0),
     ],
 )
 def test_valid_values_are_accepted(user_file, name, value):
@@ -324,13 +326,58 @@ def test_section_not_object(user_file, content, key, type_name):
     assert err.text == f"{user_file}: '{key}' must be an object, got {type_name}"
 
 
-def test_unknown_behavior_id(user_file):
-    err = _error_for_user(user_file, {"behaviors": {"nope": True}})
-    assert err.kind == "unknown-behavior"
-    assert err.key == "nope"
-    assert err.text == (
-        f"{user_file}: unknown behavior id 'nope'; valid ids: {', '.join(BEHAVIOR_IDS)}"
+def test_unknown_behavior_id_in_the_defaults_layer_is_still_an_error(tmp_path):
+    shipped = {bid: True for bid in BEHAVIOR_IDS}
+    shipped["nope"] = True
+    path = write(tmp_path / "shipped.json", full_defaults(behaviors=shipped))
+    with pytest.raises(ConfigError) as info:
+        pc.load_layer(path, "defaults")
+    assert info.value.kind == "unknown-behavior"
+    assert info.value.key == "nope"
+    assert info.value.text == (
+        f"{path}: unknown behavior id 'nope'; valid ids: {', '.join(BEHAVIOR_IDS)}"
     )
+
+
+@pytest.mark.parametrize("value", [True, False, "on", "garbage", 7, None, []])
+def test_unknown_behavior_id_in_a_user_layer_is_ignored_whatever_its_value(user_file, value):
+    write(user_file, {"behaviors": {"nope": value, "recap-on-return": False}})
+    layer = pc.load_layer(user_file, "user")
+    assert layer == {"behaviors": {"recap-on-return": False}, "values": {}, "ignored": ["nope"]}
+
+
+def test_unknown_behavior_ids_are_recorded_per_layer_and_never_applied(tmp_path, home, defaults):
+    user = write(tmp_path / "cfg" / "config" / "presence-kit.json", {"behaviors": {"nope": False}})
+    proj = tmp_path / "proj"
+    project = write(
+        proj / ".claude" / "presence-kit.json",
+        {"behaviors": {"also-nope": True, "waiting-guard": False}},
+    )
+    cfg = pc.resolve(proj, env=env_for(tmp_path), defaults_path=defaults)
+    assert cfg.ignored == (
+        pc.IgnoredKey("user", user, "nope"),
+        pc.IgnoredKey("project", project, "also-nope"),
+    )
+    assert cfg.behaviors == {**{bid: True for bid in BEHAVIOR_IDS}, "waiting-guard": False}
+    assert cfg.to_json()["ignored"] == [
+        {"layer": "user", "path": str(user), "id": "nope"},
+        {"layer": "project", "path": str(project), "id": "also-nope"},
+    ]
+
+
+def test_a_bad_value_for_a_known_id_is_still_an_error_beside_an_ignored_id(user_file):
+    err = _error_for_user(user_file, {"behaviors": {"nope": True, "recap-on-return": "maybe"}})
+    assert err.kind == "bad-behavior-value"
+    assert err.key == "recap-on-return"
+
+
+def test_ignored_notice_text_names_the_ids_the_files_and_the_valid_ids(tmp_path, home, defaults):
+    user = write(tmp_path / "cfg" / "config" / "presence-kit.json", {"behaviors": {"nope": False}})
+    cfg = pc.resolve(None, env=env_for(tmp_path), defaults_path=defaults)
+    assert pc.ignored_notice(cfg) == (
+        f"ignored unknown behavior id 'nope' in {user}; valid ids: {', '.join(BEHAVIOR_IDS)}."
+    )
+    assert pc.ignored_notice(pc.resolve(None, env=env_for(tmp_path / "x"), defaults_path=defaults)) is None
 
 
 @pytest.mark.parametrize("bad", [1, 0, "yes", "onn", "", None, [], {}, 1.0])
@@ -362,12 +409,13 @@ def test_afk_quiet_minutes_must_be_positive_int(user_file, bad):
     )
 
 
-@pytest.mark.parametrize("bad", [0, -1, 1.5, "20", True, None])
-def test_progress_minutes_must_be_positive_int(user_file, bad):
+@pytest.mark.parametrize("bad", [-1, 1.5, "20", True, False, None])
+def test_progress_minutes_must_be_a_non_negative_int(user_file, bad):
     err = _error_for_user(user_file, {"values": {"progress_minutes": bad}})
     assert err.kind == "bad-value-type"
     assert err.text == (
-        f"{user_file}: value 'progress_minutes' must be a positive integer; got {json.dumps(bad)}"
+        f"{user_file}: value 'progress_minutes' must be a non-negative integer "
+        f"(0 turns PROGRESS lines off); got {json.dumps(bad)}"
     )
 
 
@@ -401,7 +449,7 @@ def test_defaults_missing_a_behavior_is_loud(tmp_path):
 
 
 def test_defaults_missing_a_value_is_loud(tmp_path):
-    values = {"afk_quiet_minutes": 10, "departure_words": ["afk"], "progress_minutes": 20}
+    values = {"afk_quiet_minutes": 10, "departure_words": ["afk"], "progress_minutes": 0}
     path = write(tmp_path / "shipped.json", full_defaults(values=values))
     with pytest.raises(ConfigError) as info:
         pc.load_layer(path, "defaults")
@@ -427,7 +475,7 @@ def test_absent_defaults_file_is_loud(tmp_path):
 def test_partial_user_layer_is_fine(user_file):
     write(user_file, {"behaviors": {"recap-on-return": False}})
     layer = pc.load_layer(user_file, "user")
-    assert layer == {"behaviors": {"recap-on-return": False}, "values": {}}
+    assert layer == {"behaviors": {"recap-on-return": False}, "values": {}, "ignored": []}
 
 
 def test_absent_user_layer_is_empty(user_file):
@@ -568,8 +616,8 @@ def test_section_seven_texts_are_exact():
     )
     assert pc.R_RETURN.format(pid="p2") == "the user is back; invoke `presence-kit:recap return p2`."
     assert pc.E_AFK.format(pid="p3") == "invoke `presence-kit:recap afk-ending p3`."
-    assert pc.S6_UNRESOLVED.format(label=pc.S6_LABELS["W"]) == (
-        "unresolved after 3 nudges: turn did not end with `Waiting on <what>`."
+    assert pc.S6_UNRESOLVED.format(label=pc.S6_LABELS["C"]) == (
+        "unresolved after 3 nudges: no waiter agent covering the job."
     )
     assert pc.N5_CRONS_MALFORMED == (
         "skipped owned-work checks: the Stop payload's session_crons is not a list."

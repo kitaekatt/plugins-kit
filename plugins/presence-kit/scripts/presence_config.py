@@ -5,7 +5,10 @@ error): defaults (plugin defaults/presence-kit.json), user (<config dir>/config/
 presence-kit.json; <config dir> is $CLAUDE_CONFIG_DIR, else ~/.claude), project
 (<project>/.claude/presence-kit.json). Each file is validated alone, then merged:
 objects key by key, later wins; lists and scalars replace. Any error raises
-ConfigError; nothing falls back to defaults.
+ConfigError; nothing falls back to defaults. The one exception: an unknown behavior
+id in the user or project layer is ignored and recorded (`Config.ignored`), because
+a file written for another version of the plugin must not switch presence off; the
+shipped defaults layer stays strict.
 
 The section-7 message texts live here too. Templates keep their {placeholders};
 callers format them and wrap every emitted hook line with line().
@@ -49,7 +52,7 @@ _VALUE_EXPECT = {
     "afk_quiet_minutes": "a positive integer",
     "departure_words": "a non-empty list of words (letters, digits, underscore)",
     "waiter_model": "a non-empty model name without spaces",
-    "progress_minutes": "a positive integer",
+    "progress_minutes": "a non-negative integer (0 turns PROGRESS lines off)",
 }
 
 
@@ -72,10 +75,20 @@ class Layer:
 
 
 @dataclass(frozen=True)
+class IgnoredKey:
+    """A behavior id a user or project layer set that this plugin does not know."""
+
+    layer: str
+    path: Path
+    key: str
+
+
+@dataclass(frozen=True)
 class Config:
     behaviors: dict[str, bool]
     values: dict[str, Any]
     layers: tuple[Layer, ...]
+    ignored: tuple[IgnoredKey, ...] = ()
 
     def enabled(self, behavior_id: str) -> bool:
         if behavior_id not in self.behaviors:
@@ -89,6 +102,10 @@ class Config:
             "layers": [
                 {"name": layer.name, "path": str(layer.path), "present": layer.present}
                 for layer in self.layers
+            ],
+            "ignored": [
+                {"layer": item.layer, "path": str(item.path), "id": item.key}
+                for item in self.ignored
             ],
         }
 
@@ -130,13 +147,7 @@ def _json_type(value: Any) -> str:
 
 
 def _check_behavior(path: Path, key: str, value: Any) -> bool:
-    if key not in BEHAVIOR_IDS:
-        raise ConfigError(
-            "unknown-behavior",
-            path,
-            key,
-            f"unknown behavior id '{key}'; valid ids: {', '.join(BEHAVIOR_IDS)}",
-        )
+    """The on/off value of a KNOWN behavior id (the caller has screened unknown ids)."""
     if isinstance(value, bool):
         return value
     if isinstance(value, str) and value.strip().lower() in ("on", "off"):
@@ -158,7 +169,8 @@ def _check_value(path: Path, key: str, value: Any) -> Any:
             f"unknown value '{key}'; valid names: {', '.join(VALUE_NAMES)}",
         )
     if key in ("afk_quiet_minutes", "progress_minutes"):
-        ok = isinstance(value, int) and not isinstance(value, bool) and value > 0
+        floor = 0 if key == "progress_minutes" else 1
+        ok = isinstance(value, int) and not isinstance(value, bool) and value >= floor
     elif key == "departure_words":
         ok = (
             isinstance(value, list)
@@ -197,8 +209,10 @@ def _defaults_incomplete(path: Path, behaviors: dict, values: dict) -> None:
 
 
 def load_layer(path: Path, name: str) -> dict:
-    """Validate one layer file. Returns {"behaviors": {id: bool}, "values": {...}} with
-    only the keys the file sets; {} when the file is absent (the defaults layer must exist)."""
+    """Validate one layer file. Returns {"behaviors": {id: bool}, "values": {...},
+    "ignored": [id, ...]} with only the keys the file sets; {} when the file is absent
+    (the defaults layer must exist). An unknown behavior id is an error in the defaults
+    layer and is listed in "ignored" (its value unread) in any other layer."""
     path = Path(path)
     if not path.exists():
         if name == "defaults":
@@ -222,6 +236,7 @@ def load_layer(path: Path, name: str) -> dict:
 
     behaviors: dict[str, bool] = {}
     values: dict[str, Any] = {}
+    ignored: list[str] = []
     for key, section in data.items():
         if _is_comment(key):
             continue
@@ -243,13 +258,23 @@ def load_layer(path: Path, name: str) -> dict:
             if _is_comment(item_key):
                 continue
             if key == "behaviors":
+                if item_key not in BEHAVIOR_IDS:
+                    if name == "defaults":
+                        raise ConfigError(
+                            "unknown-behavior",
+                            path,
+                            item_key,
+                            f"unknown behavior id '{item_key}'; valid ids: {', '.join(BEHAVIOR_IDS)}",
+                        )
+                    ignored.append(item_key)
+                    continue
                 behaviors[item_key] = _check_behavior(path, item_key, item_value)
             else:
                 values[item_key] = _check_value(path, item_key, item_value)
 
     if name == "defaults":
         _defaults_incomplete(path, behaviors, values)
-    return {"behaviors": behaviors, "values": values}
+    return {"behaviors": behaviors, "values": values, "ignored": ignored}
 
 
 def resolve(
@@ -265,12 +290,16 @@ def resolve(
     behaviors: dict[str, bool] = {}
     values: dict[str, Any] = {}
     layers: list[Layer] = []
+    ignored: list[IgnoredKey] = []
     for name, path in paths:
         layer = load_layer(path, name)
         layers.append(Layer(name, path, path.exists()))
         behaviors.update(layer.get("behaviors", {}))
         values.update(layer.get("values", {}))
-    return Config(behaviors=behaviors, values=values, layers=tuple(layers))
+        ignored.extend(IgnoredKey(name, path, key) for key in layer.get("ignored", []))
+    return Config(
+        behaviors=behaviors, values=values, layers=tuple(layers), ignored=tuple(ignored)
+    )
 
 
 # A departure word is not adjacent to a word character, `-`, `:`, `/` or a backtick:
@@ -287,6 +316,16 @@ def departure_pattern(words: Sequence[str]) -> re.Pattern:
     return re.compile(
         rf"(?<![{_DEPARTURE_EDGE}])(?:{alternation})(?![{_DEPARTURE_EDGE}])", re.IGNORECASE
     )
+
+
+def ignored_notice(cfg: Config) -> str | None:
+    """The text of N6 (the ids the user and project layers set that this plugin does not
+    know), or None when nothing was ignored."""
+    if not cfg.ignored:
+        return None
+    items = "; ".join(f"'{item.key}' in {item.path}" for item in cfg.ignored)
+    noun = "id" if len(cfg.ignored) == 1 else "ids"
+    return N6_IGNORED.format(noun=noun, items=items, valid=", ".join(BEHAVIOR_IDS))
 
 
 def line(ids: str, pid: str, text: str) -> str:
@@ -346,13 +385,11 @@ C_IDS = "waiting-guard"
 # {counted}: the owned work the Stop hook counted, built by presence_stop.counted_work
 # (one `<id> (<type>, <status>): <description>` per task), so a false positive is visible.
 C_WAITER = "add a waiter agent; the terminal shows idle. Counted as running non-agent work: {counted}."
-W_IDS = "waiting-guard"
-W_WAITING = "end with `Waiting on <what>`. Counted as owned work: {counted}."
 M_IDS = "liveness-watch"
 # {gaps}: built by presence_stop.watch_gaps_text from the NOWATCH and REARM parts.
 M_WATCH = (
     "arm a liveness watch: a Monitor on `watch.py --task <id>` for each job you own "
-    "(it reports progress and a stall). {gaps}"
+    "(it reports a stall and the job's end). {gaps}"
 )
 M_NOWATCH = "No liveness watch on: {tasks}."
 M_REARM = "Liveness watch ended while the job still runs, re-arm it on: {tasks}."
@@ -383,11 +420,14 @@ N4_BACKGROUND_MALFORMED = (
 )
 N5_CRONS_ABSENT = "skipped owned-work checks: the Stop payload's session_crons is missing."
 N5_CRONS_MALFORMED = "skipped owned-work checks: the Stop payload's session_crons is not a list."
+# N6: said once per session, by whichever hook runs first. Its state notice key is
+# N6_CAUSE (the strict v3 state schema takes any notice string).
+N6_CAUSE = "ignored-behavior-ids"
+N6_IGNORED = "ignored unknown behavior {noun} {items}; valid ids: {valid}."
 S6_UNRESOLVED = "unresolved after 3 nudges: {label}."
 S6_LABELS = {
     "R": "return recap not run",
     "C": "no waiter agent covering the job",
-    "W": "turn did not end with `Waiting on <what>`",
     "M": "no running liveness watch on an owned job",
     "E": "no ending recap or goal check",
 }

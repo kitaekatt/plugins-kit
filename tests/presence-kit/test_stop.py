@@ -66,7 +66,6 @@ WAITING_LAST = "Waiting on the job"
 # L(...) texts
 R_TEXT = "the user is back; invoke `presence-kit:recap return {pid}`."
 C_TEXT = "add a waiter agent; the terminal shows idle. Counted as running non-agent work: {counted}."
-W_TEXT = "end with `Waiting on <what>`. Counted as owned work: {counted}."
 SHELL_COUNTED = "t1 (shell, running): job"
 AGENT_COUNTED = "t2 (subagent, running): agent"
 E_AFK_TEXT = "invoke `presence-kit:recap afk-ending {pid}`."
@@ -78,10 +77,6 @@ def line_R(pid=PID):
 
 def line_C(pid=PID, counted=SHELL_COUNTED):
     return L("waiting-guard", pid, C_TEXT.format(counted=counted))
-
-
-def line_W(pid=PID, counted=SHELL_COUNTED):
-    return L("waiting-guard", pid, W_TEXT.format(counted=counted))
 
 
 def line_E(pid=PID):
@@ -384,12 +379,12 @@ def test_newest_human_before_none_when_no_earlier_human(tmp_path):
 
 STOP_FIXTURES = {
     # name: (expected origin, expected held)
-    "a1-03": ("sdk", ("C", "W")),             # running shell, last message DONE
+    "a1-03": ("sdk", ("C",)),                 # running shell, last message DONE
     "a1-05": ("task_notification", ()),
     "b1-04": ("sdk", ()),
     "c1-04": ("sdk", ()),
     "d1-03": ("sdk", ()),
-    "e1-03": ("sdk", ("W",)),                 # running subagent, last message DONE
+    "e1-03": ("sdk", ()),                     # running subagent, last message DONE
     "f1-04": ("sdk", ()),                     # continuation: stop_hook_active true
     "g01-03": ("sdk", ()),
     "g21-05": ("task_notification", ()),
@@ -441,7 +436,7 @@ def test_stop_hook_active_does_not_change_the_nudge_budget(s):
 def test_row1_config_error_reports_allows_and_changes_nothing(tmp_path):
     bad = tmp_path / "cfg" / "config" / "presence-kit.json"
     bad.parent.mkdir(parents=True)
-    bad.write_text('{"behaviors": {"no-such-behavior": true}}', encoding="ascii")
+    bad.write_text('{"behaviors": {"waiting-guard": "maybe"}}', encoding="ascii")
     with pytest.raises(pc.ConfigError) as caught:
         pc.resolve(None, {"CLAUDE_CONFIG_DIR": str(tmp_path / "cfg")})
     decision = pstop.config_error_decision(caught.value, {"session_id": SID, "prompt_id": PID})
@@ -511,7 +506,7 @@ def test_row2_background_tasks_notices(s, value, expected):
     s.entry(PID, "sdk", NOW)
     decision = s.stop(tasks=value)
     assert decision.system_message == expected
-    assert decision.nudge is None and decision.held == ()  # rows 5-7 skipped: no C, W or E
+    assert decision.nudge is None and decision.held == ()  # rows 5-7 skipped: no C or E
     s.entry("prompt-2", "sdk", NOW)
     assert s.stop("prompt-2", tasks=value).system_message is None
 
@@ -524,7 +519,7 @@ def test_row2_session_crons_notices_skip_only_the_owned_rows(s, value, expected)
     s.entry(PID, "sdk", NOW)
     decision = s.stop(tasks=[SHELL], crons=value, last="DONE")
     assert decision.system_message == expected
-    assert decision.held == ("C",)  # row 5 still runs; W (owned) and E are skipped
+    assert decision.held == ("C",)  # row 5 still runs; E is skipped
     quiet = s.stop("prompt-2", tasks=[], crons=value)
     assert quiet.held == ()  # E needs "owned" known
 
@@ -744,48 +739,31 @@ def test_row5_crons_alone_hold_no_c(s):
     assert s.stop(tasks=[], crons=[{"id": "c"}], last=WAITING_LAST).held == ()
 
 
-def test_matrix_waiting_guard_off_no_c_or_w_on_c_and_w(make):
+def test_matrix_waiting_guard_off_no_c_on_c(make):
     outcomes = {}
     for enabled in (False, True):
         sess = make(behaviors={"waiting-guard": enabled}, name=f"guard-{enabled}")
         sess.entry(PID, "sdk", NOW)
         outcomes[enabled] = sess.stop(tasks=[SHELL], last="DONE").held
-    assert outcomes == {False: (), True: ("C", "W")}
+    assert outcomes == {False: (), True: ("C",)}
 
 
 # ======================================================================== row 6
 
-@pytest.mark.parametrize("last,holds", [
-    ("Waiting on the build", False),
-    ("Working...\nWaiting on the build", False),
-    ("Waiting on the build\n\n  \n", False),
-    ("  Waiting on x  ", False),
-    ("Waiting on", True),
-    ("Waiting on ", True),
-    ("waiting on x", True),
-    ("Waiting on x\nand then some", True),
-    ("I am Waiting on x", True),
-    ("", True),
-    ("\n\n", True),
-    ("DONE", True),
-    (ABSENT, True),
-    (None, True),
-    (42, True),
+@pytest.mark.parametrize("last", [
+    "Waiting on the build", "Waiting on", "waiting on x", "I am Waiting on x", "", "\n\n", "DONE", ABSENT, None, 42,
 ])
-def test_row6_last_nonempty_line_must_be_waiting_on_something(s, last, holds):
+def test_row6_the_last_line_is_not_checked_any_more(s, last):
     s.entry(PID, "sdk", NOW)
-    decision = s.stop(tasks=[AGENT], last=last)
-    assert decision.held == (("W",) if holds else ())
-    if holds:
-        assert decision.nudge == line_W(counted=AGENT_COUNTED)
+    assert s.stop(tasks=[AGENT], last=last).held == ()
 
 
 def test_row6_owned_through_session_crons_only(s):
     s.entry(PID, "sdk", NOW)
-    assert s.stop(tasks=[], crons=[{"id": "c"}], last="DONE").held == ("W",)
+    assert s.stop(tasks=[], crons=[{"id": "c"}], last="DONE").held == ()
 
 
-def test_row6_nothing_owned_no_w(s):
+def test_row6_nothing_owned_holds_nothing(s):
     s.entry(PID, "sdk", NOW)
     assert s.stop(tasks=[], crons=[], last="DONE").held == ()
 
@@ -840,11 +818,11 @@ def test_row7_an_ending_recap_for_another_prompt_does_not_close_e(s):
     assert s.stop().held == ("E",)
 
 
-def test_row7_e_never_coexists_with_r_c_or_w(s):
-    # E needs nothing owned and R not held; C and W need owned work; R needs presence present.
+def test_row7_e_never_coexists_with_r_or_c(s):
+    # E needs nothing owned and R not held; C needs owned work; R needs presence present.
     s.go_afk()
     s.entry(PID, "sdk", NOW)
-    assert s.stop(tasks=[SHELL], last="DONE").held == ("C", "W")
+    assert s.stop(tasks=[SHELL], last="DONE").held == ("C",)
     return_setup(s, pid="prompt-2")
     assert s.stop("prompt-2", tasks=[], crons=[]).held == ("R",)
 
@@ -876,11 +854,11 @@ def test_d8_return_row4_present_state_is_seen_by_the_rows_after_it(s):
     assert s.stop(tasks=[], crons=[]).held == ("R",)
 
 
-def test_r_c_w_hold_together_in_one_nudge_in_order(s):
+def test_r_c_hold_together_in_one_nudge_in_order(s):
     return_setup(s)
     decision = s.stop(tasks=[SHELL], last="DONE")
-    assert decision.held == ("R", "C", "W")
-    assert decision.nudge == "\n".join([line_R(), line_C(), line_W()])
+    assert decision.held == ("R", "C")
+    assert decision.nudge == "\n".join([line_R(), line_C()])
     assert s.state()["nudges"] == {PID: 1, GUARD_KEY: 1}  # one nudge, one count, guard marked
     assert decision.to_output() == {
         "hookSpecificOutput": {"hookEventName": "Stop", "additionalContext": decision.nudge}
@@ -945,11 +923,11 @@ def test_owner_a_shell_job_only_a_subagent_started_holds_nothing(s, how):
     assert decision.held == () and decision.nudge is None
 
 
-def test_owner_a_job_the_main_session_started_still_holds_c_and_w(s):
+def test_owner_a_job_the_main_session_started_still_holds_c(s):
     s.entry(PID, "sdk", NOW)
     s.add(started_record("tmain"))
     decision = s.stop(tasks=[job("tmain")], last="DONE")
-    assert decision.held == ("C", "W")
+    assert decision.held == ("C",)
 
 
 def test_owner_a_main_started_job_a_subagent_only_mentions_is_still_main_owned(s):
@@ -958,7 +936,7 @@ def test_owner_a_main_started_job_a_subagent_only_mentions_is_still_main_owned(s
     s.add(started_record("tmain"))
     sidechain(s, "w1", {"type": "user", "message": {"role": "user", "content": "wait on /x/tmain.output"}},
               started_record("tmain", "moved"))
-    assert s.stop(tasks=[job("tmain")], last="DONE").held == ("C", "W")
+    assert s.stop(tasks=[job("tmain")], last="DONE").held == ("C",)
 
 
 def test_owner_the_nudge_names_only_the_main_sessions_jobs(s):
@@ -966,24 +944,21 @@ def test_owner_the_nudge_names_only_the_main_sessions_jobs(s):
     s.add(started_record("tmain"))
     sidechain(s, "w1", started_record("tsub"))
     decision = s.stop(tasks=[job("tsub"), job("tmain")], last="DONE")
-    assert decision.nudge == "\n".join([
-        line_C(counted="tmain (shell, running): job"),
-        line_W(counted="tmain (shell, running): job"),
-    ])
+    assert decision.nudge == line_C(counted="tmain (shell, running): job")
 
 
 def test_owner_without_evidence_a_job_counts(s):
     """No subagents folder, or no announcement of the id anywhere: counted (a silent miss is worse)."""
     s.entry(PID, "sdk", NOW)
-    assert s.stop(tasks=[job("tunknown")], last="DONE").held == ("C", "W")
+    assert s.stop(tasks=[job("tunknown")], last="DONE").held == ("C",)
     sidechain(s, "w1", started_record("tother"))
-    assert s.stop(tasks=[job("tunknown")], last="DONE").held == ("C", "W")
+    assert s.stop(tasks=[job("tunknown")], last="DONE").held == ("C",)
 
 
 def test_owner_the_ids_are_matched_whole(s):
     s.entry(PID, "sdk", NOW)
     sidechain(s, "w1", started_record("tsub12"))
-    assert s.stop(tasks=[job("tsub")], last="DONE").held == ("C", "W")
+    assert s.stop(tasks=[job("tsub")], last="DONE").held == ("C",)
 
 
 def test_owner_subagent_owned_ids_reads_main_and_sidechain_files(tmp_path):
@@ -1006,7 +981,7 @@ def test_owner_subagent_owned_ids_reads_main_and_sidechain_files(tmp_path):
 # command names the job's id (its output path, or watch.py --task <id>), joined by
 # tool_use_id to the "Monitor started (task <monitor id>, ..." tool result.
 
-M_TEXT = "arm a liveness watch: a Monitor on `watch.py --task <id>` for each job you own (it reports progress and a stall). {gaps}"
+M_TEXT = "arm a liveness watch: a Monitor on `watch.py --task <id>` for each job you own (it reports a stall and the job's end). {gaps}"
 NOWATCH = "No liveness watch on: {tasks}."
 REARM = "Liveness watch ended while the job still runs, re-arm it on: {tasks}."
 
@@ -1131,15 +1106,15 @@ def test_watch_armed_monitors_reads_only_matching_calls(tmp_path):
 # ================================================================== rows 8 and 9
 
 def test_row8_budget_three_nudges_for_r_then_system_message_and_unresolved(s):
-    """R keeps its budget of three; the waiting guard (C, W) speaks once per prompt."""
+    """R keeps its budget of three; the waiting guard (C) speaks once per prompt."""
     return_setup(s)
     kwargs = dict(tasks=[SHELL], last="DONE")
     nudges = [s.stop(**kwargs).nudge for _ in range(3)]
-    assert nudges == ["\n".join([line_R(), line_C(), line_W()]), line_R(), line_R()]
+    assert nudges == ["\n".join([line_R(), line_C()]), line_R(), line_R()]
     assert s.state()["nudges"] == {PID: 3, GUARD_KEY: 1}
 
     fourth = s.stop(**kwargs)
-    assert fourth.nudge is None and fourth.held == ("R", "C", "W")
+    assert fourth.nudge is None and fourth.held == ("R", "C")
     assert fourth.system_message == L(
         "recap-on-return", PID, "unresolved after 3 nudges: return recap not run.")
     state = s.state()
@@ -1147,39 +1122,36 @@ def test_row8_budget_three_nudges_for_r_then_system_message_and_unresolved(s):
     assert state["pending_return"] is None
     assert state["unresolved"] == [
         f"waiting-guard: no waiter agent covering the job (prompt {PID})",
-        f"waiting-guard: turn did not end with `Waiting on <what>` (prompt {PID})",
         f"recap-on-return: return recap not run (prompt {PID})",
     ]
     assert fourth.to_output() == {"systemMessage": fourth.system_message}
 
-    fifth = s.stop(**kwargs)  # R was cleared by the exhaustion; C and W are repeats
-    assert fifth == pstop.StopDecision(None, None, ("C", "W"))
-    assert len(s.state()["unresolved"]) == 3  # deduplicated
+    fifth = s.stop(**kwargs)  # R was cleared by the exhaustion; C is a repeat
+    assert fifth == pstop.StopDecision(None, None, ("C",))
+    assert len(s.state()["unresolved"]) == 2  # deduplicated
 
 
 def test_guard_never_repeats_the_same_nudge_within_one_prompt(s):
     s.entry(PID, "sdk", NOW)
     first = s.stop(tasks=[SHELL], last="DONE")
-    assert first.nudge == "\n".join([line_C(), line_W()])
+    assert first.nudge == line_C()
     for _ in range(3):
         again = s.stop(tasks=[SHELL], last="DONE")
         assert again.nudge is None and again.system_message is None and again.to_output() is None
-        assert again.held == ("C", "W")  # still held, only no longer said
+        assert again.held == ("C",)  # still held, only no longer said
     state = s.state()
     assert state["nudges"] == {PID: 1, GUARD_KEY: 1}
     assert state["unresolved"] == [
         f"waiting-guard: no waiter agent covering the job (prompt {PID})",
-        f"waiting-guard: turn did not end with `Waiting on <what>` (prompt {PID})",
     ]
 
 
 def test_guard_speaks_once_for_each_prompt(s):
     s.entry(PID, "sdk", NOW)
     s.entry("prompt-2", "sdk", NOW)
-    assert s.stop(PID, tasks=[SHELL], last="DONE").nudge == "\n".join([line_C(), line_W()])
+    assert s.stop(PID, tasks=[SHELL], last="DONE").nudge == line_C()
     assert s.stop(PID, tasks=[SHELL], last="DONE").nudge is None
-    assert s.stop("prompt-2", tasks=[SHELL], last="DONE").nudge == "\n".join(
-        [line_C("prompt-2"), line_W("prompt-2")])
+    assert s.stop("prompt-2", tasks=[SHELL], last="DONE").nudge == line_C("prompt-2")
     assert s.stop("prompt-2", tasks=[SHELL], last="DONE").nudge is None
 
 
@@ -1311,7 +1283,7 @@ def test_unobserved_background_task_status_counts_as_running(s, status):
     s.entry(PID, "sdk", NOW)
     task = {"id": "t", "type": "shell", "status": status}
     decision = s.stop(tasks=[task], last="DONE")
-    assert decision.held == ("C", "W")  # owned: no E, and the job still needs a waiter
+    assert decision.held == ("C",)  # owned: no E, and the job still needs a waiter
 
 
 def test_status_key_missing_still_counts(s):
@@ -1347,20 +1319,20 @@ def test_artifact_monitor_alone_leaves_e_as_with_no_tasks(make):
     assert outcomes == {"none": ("E",), "monitor": ("E",)}
 
 
-def test_artifact_monitor_with_a_shell_task_still_holds_c_and_w(s):
+def test_artifact_monitor_with_a_shell_task_still_holds_c(s):
     s.entry(PID, "sdk", NOW)
     decision = s.stop(tasks=[ARTIFACT_MONITOR, SHELL], last="DONE")
-    assert decision.held == ("C", "W")
+    assert decision.held == ("C",)
 
 
-def test_artifact_monitor_with_a_session_cron_still_holds_w(s):
+def test_artifact_monitor_with_a_session_cron_holds_nothing(s):
     s.entry(PID, "sdk", NOW)
-    assert s.stop(tasks=[ARTIFACT_MONITOR], crons=[{"id": "c"}], last="DONE").held == ("W",)
+    assert s.stop(tasks=[ARTIFACT_MONITOR], crons=[{"id": "c"}], last="DONE").held == ()
 
 
 def test_a_user_armed_monitor_still_counts(s):
     s.entry(PID, "sdk", NOW)
-    assert s.stop(tasks=[USER_MONITOR], last="DONE").held == ("C", "W")
+    assert s.stop(tasks=[USER_MONITOR], last="DONE").held == ("C",)
 
 
 @pytest.mark.parametrize("task", [
@@ -1422,8 +1394,8 @@ def test_the_nudge_names_every_counted_task_and_not_the_finished_ones(s):
     other = {"id": "t5", "type": "monitor", "status": "paused", "description": "tail the log"}
     decision = s.stop(tasks=[SHELL, FINISHED_SHELL, other], last="DONE")
     counted = "t1 (shell, running): job; t5 (monitor, paused): tail the log"
-    assert decision.held == ("C", "W")
-    assert decision.nudge == "\n".join([line_C(counted=counted), line_W(counted=counted)])
+    assert decision.held == ("C",)
+    assert decision.nudge == line_C(counted=counted)
     assert "s9" not in decision.nudge
 
 
@@ -1450,11 +1422,11 @@ def test_the_description_is_cut_to_80_characters_one_line_and_ascii(s):
     assert decision.nudge.isascii() and "\n" not in decision.nudge
 
 
-def test_w_for_session_crons_counts_them(s):
+def test_session_crons_hold_no_waiting_nudge(s):
     s.entry(PID, "sdk", NOW)
     decision = s.stop(tasks=[FINISHED_SHELL], crons=[{"id": "c1"}, {"id": "c2"}], last="DONE")
-    assert decision.held == ("W",)
-    assert decision.nudge == line_W(counted="2 session crons")
+    assert decision.held == ()
+    assert decision.nudge is None
 
 
 # Every armed-via variant the harness appends to an Artifact live subscription.
@@ -1481,7 +1453,7 @@ def test_every_artifact_monitor_variant_is_exempt(s, armed_via):
 # ================================================================ output shapes
 
 def test_decision_output_shapes():
-    nudge = pstop.StopDecision("a\nb", None, ("C", "W"))
+    nudge = pstop.StopDecision("a\nb", None, ("C", "M"))
     note = pstop.StopDecision(None, "n1\nn2", ())
     both = pstop.StopDecision("a", "n", ("C",))
     none = pstop.StopDecision(None, None, ())
@@ -1734,3 +1706,60 @@ def test_m_nudge_states_no_progress_interval():
     import presence_config as pc
 
     assert not re.search(r"\d", pc.M_WATCH.replace("<id>", ""))
+
+
+# ============================================================ W nudge removed (0.7.0)
+
+def test_w_nudge_is_gone_from_texts_ids_and_labels():
+    assert not hasattr(pc, "W_IDS") and not hasattr(pc, "W_WAITING")
+    assert set(pc.S6_LABELS) == {"R", "C", "M", "E"}
+    assert pstop.GUARD_CODES == ("C", "M")
+    assert not hasattr(pstop, "_ends_with_waiting")
+
+
+def test_owned_agent_or_cron_holds_nothing_whatever_the_last_line_says(s):
+    """The `Waiting on <what>` last line is no longer required: nothing holds W."""
+    assert s.stop(tasks=[AGENT], last="DONE").held == ()
+    assert s.stop(tasks=[], crons=[{"id": "c"}], last="DONE").held == ()
+
+
+def test_shell_job_nudge_is_the_waiter_nudge_alone(s):
+    decision = s.stop(tasks=[SHELL], last="DONE")
+    assert decision.held == ("C",)
+    assert decision.nudge == line_C()
+    assert "Waiting on" not in decision.nudge
+
+
+# ============================ unknown behavior ids: ignored, one notice per session (0.7.0)
+
+def test_the_stop_hook_gives_the_ignored_id_notice_once_when_it_runs_first(tmp_path):
+    root = tmp_path / "n"
+    root.mkdir()
+    sess = Session(root, make_config(root, {"liveness-watch": False, "no-such-id": True}))
+    sess.entry(PID, "sdk", NOW)
+    sess.entry("prompt-2", "sdk", NOW)
+    first = sess.stop()
+    text = pc.ignored_notice(sess.cfg)
+    assert text and "no-such-id" in text
+    assert first.system_message == L("config", PID, text)
+    assert first.nudge is None
+    assert sess.state()["notices"] == [pc.N6_CAUSE]
+    again = sess.stop("prompt-2")
+    assert again.system_message is None
+
+
+def test_the_ignored_id_notice_sits_beside_the_row_2_notices(tmp_path):
+    root = tmp_path / "n2"
+    root.mkdir()
+    sess = Session(root, make_config(root, {"liveness-watch": False, "no-such-id": True}))
+    sess.entry(PID, "sdk", NOW)
+    decision = sess.stop(tasks=ABSENT)
+    lines = decision.system_message.splitlines()
+    assert len(lines) == 2 and "no-such-id" in lines[-1]
+    assert "background_tasks is missing" in lines[0]
+
+
+def test_no_ignored_ids_no_notice(s):
+    s.entry(PID, "sdk", NOW)
+    assert s.stop().system_message is None
+    assert s.state()["notices"] == []

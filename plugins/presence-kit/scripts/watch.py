@@ -35,8 +35,8 @@ Lines, each flushed as it is printed:
       watcher keeps running. The line reports; it prescribes no response.
   PROGRESS <elapsed>m: last change <age>m ago in <path>
       Every --progress-minutes (default: the progress_minutes value of the
-      presence-kit configuration, 20 unless changed), whether or not anything
-      changed. `no watched path exists yet` replaces the tail while no watched
+      presence-kit configuration, 0 unless changed; 0 means no PROGRESS lines),
+      whether or not anything changed. `no watched path exists yet` replaces the tail while no watched
       path exists; `last activity <age>m ago: process <pid> (<command>) using CPU`
       replaces it when the latest sign of work is a process.
   DONE: <line>
@@ -53,6 +53,7 @@ import argparse
 import ctypes
 import glob
 import json
+import math
 import os
 import re
 import struct
@@ -103,6 +104,17 @@ def _pid(text):
     return value
 
 
+def _non_negative(text):
+    """A --progress-minutes value: a positive number, or 0 for no PROGRESS lines."""
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number: {text!r}")
+    if not math.isfinite(value) or value < 0:
+        raise argparse.ArgumentTypeError(f"must be zero or a positive number: {text!r}")
+    return value
+
+
 def _build_parser():
     parser = _Parser(prog="watch.py", allow_abbrev=False)
     parser.add_argument("--task", dest="task", metavar="ID")
@@ -113,7 +125,7 @@ def _build_parser():
     parser.add_argument("--done-file", dest="file", metavar="PATH")
     parser.add_argument("--done-pattern", dest="pattern", metavar="REGEX")
     parser.add_argument("--stall-minutes", dest="stall_minutes", type=wait._positive, default=20.0)
-    parser.add_argument("--progress-minutes", dest="progress_minutes", type=wait._positive)
+    parser.add_argument("--progress-minutes", dest="progress_minutes", type=_non_negative)
     parser.add_argument("--poll-seconds", dest="poll_seconds", type=wait._positive, default=300.0)
     return parser
 
@@ -523,7 +535,7 @@ def main(argv=None, *, now=time.monotonic, sleep=time.sleep, wall=time.time,
         out.flush()
 
     stall_window = args.stall_minutes * 60.0
-    progress_every = progress_minutes * 60.0
+    progress_every = progress_minutes * 60.0  # 0: no PROGRESS lines
     start = now()
     start_wall = wall()
     next_progress = start + progress_every
@@ -583,7 +595,7 @@ def main(argv=None, *, now=time.monotonic, sleep=time.sleep, wall=time.time,
             stall_reported_at = baseline
             emit(f"STALL: no change in watched paths for {_minutes(age)}m")
 
-        if t >= next_progress:
+        if progress_every > 0 and t >= next_progress:
             if working:
                 command = last_work[2][:COMMAND_SHOWN]
                 tail = f"last activity {_minutes(age)}m ago: process {last_work[1]} ({command}) using CPU"

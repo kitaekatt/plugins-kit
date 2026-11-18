@@ -23,7 +23,8 @@ this plugin's two hooks (`hooks/hooks.json`): the UserPromptSubmit prompt hook
 (`scripts/presence.py prompt`) and the Stop hook (`scripts/presence.py stop`),
 and each line names the behavior ids that produced it. The prompt hook speaks
 before you answer: while the user is afk it says so (the away line, plus the
-instruction to give the return recap when `recap-on-return` is on), and when
+instruction to give the return recap when `recap-on-return` is on), except on an
+automatic prompt (an envelope or a cron firing, section Presence), and when
 the prompt contains a word from `departure_words` it sets the user afk itself
 and tells you so (section Presence). The Stop hook detects a return at the end
 of the turn and records it (section Return).
@@ -53,7 +54,9 @@ The user is `present` or `afk`.
   fired before any Stop is not recorded yet, and a user typing a cron's exact
   prompt is treated as automatic. Any other automatic prompt carries no marker
   the hook can read, so your correction is the safeguard there. A skip says
-  nothing about who sent the prompt.
+  nothing about who sent the prompt. The prompts the hook skips also get no
+  away line and no return-recap line while the user is afk: a wake is not the
+  user, so it carries no reminder.
 - Already afk, a prompt with a listed word keeps the user afk: the line begins
   "kept the user afk" and no return recap is asked for that prompt. If that is
   wrong, because the user is back and only mentions the word, undo it the same
@@ -110,8 +113,9 @@ job) needs a waiter agent (section Waiter agent) so the terminal shows work.
 
 `liveness-watch`, all modes. Every owned job, agent and workflow work
 included, needs a Monitor on the shipped watcher (section Watcher): it reports
-progress at most every `progress_minutes` and a stall after quiet minutes, which
-the job's own completion notice never does, because a stuck job never completes.
+a stall after quiet minutes (and progress every `progress_minutes`, which is off
+by default), which the job's own completion notice never does, because a stuck
+job never completes.
 Arm it with `watch.py --task <id>` right after the job starts. A Monitor lives
 for its `timeout_ms` (30 minutes unless you set more); when it ends while the
 job still runs, arm another. The Stop hook finds the Monitor you armed for a job
@@ -123,27 +127,23 @@ the job still runs, re-arm it on: <job>`. A Monitor, an Artifact monitor, a
 finished task and a subagent's own job need no watch. Like the waiting guard it
 speaks once per prompt. With `liveness-watch` off, none of this applies.
 
-While owned work runs
-or a session cron is pending, end the turn with the last line
-`Waiting on <what>`, where `<what>` names the work. Never hold the main session
-with a foreground wait. The Stop hook checks this and nudges once per prompt.
-A finished task (status `completed`, `failed` or `killed`),
-an Artifact live-updates monitor (description starts with
-`live updates for artifact `) and a shell job or monitor that a subagent started
-are not owned work: they need no waiter and no `Waiting on` line. A subagent's
-jobs are its own, and it reports to you when it ends. The hook tells them apart
-by the transcripts: a job announced in
+Never hold the main session with a foreground wait. The Stop hook checks for a
+waiter and nudges once per prompt. A finished task (status
+`completed`, `failed` or `killed`), an Artifact live-updates monitor
+(description starts with `live updates for artifact `) and a shell job or
+monitor that a subagent started are not owned work: they need no waiter and no
+watch. A subagent's jobs are its own, and it reports to you when it ends. The
+hook tells them apart by the transcripts: a job announced in
 `<session transcript without .jsonl>/subagents/agent-*.jsonl` and not in the
 main transcript is the subagent's; a job it cannot place counts as yours. The
 nudge lists the tasks it counted. With `waiting-guard` off, none of this applies.
 
-The guard speaks once per prompt: it never repeats the waiting nudge (waiter
-agent, `Waiting on` line) within a prompt, and a condition it left unsaid goes to
-the unresolved list for the recap. Only the recap nudges (return, ending) repeat,
-up to three times per prompt. When the user asks you to stop mentioning that you
-are waiting, set `waiting-guard` to `false` in the user config layer
-(`configuring.md`), tell the user once in one line, and stop the `Waiting on`
-lines; the guard then says nothing.
+The guard speaks once per prompt: it never repeats the waiting nudge within a
+prompt, and a condition it left unsaid goes to the unresolved list for the
+recap. Only the recap nudges (return, ending) repeat, up to three times per
+prompt. When the user asks you to stop hearing about waiting, set
+`waiting-guard` to `false` in the user config layer (`configuring.md`) and tell
+the user once in one line; the guard then says nothing.
 
 ## While away
 
@@ -161,11 +161,13 @@ running job.
 
 ## Waiter agent
 
-Covers one non-agent job. Start a background Agent whose model is the
-`waiter_model` value from `presence.py config`. Its brief names the job and the
-`--stall-minutes` you derive from it (the longest quiet period the job can
-show). The agent runs this until exit 0, 2 or 3, reports one line, and changes
-nothing; its completion wakes the main session:
+Covers one non-agent job. Start a background Agent with
+`subagent_type: presence-kit:waiter` (a Bash-only agent: it carries no other
+tools, so it costs far less context than a general-purpose agent) and the
+`waiter_model` value from `presence.py config` as its `model`. Its brief names
+the job's exact output file and the `--stall-minutes` you derive from it (the
+longest quiet period the job can show). The agent runs this until exit 0, 2 or
+3, reports one line, and changes nothing; its completion wakes the main session:
 
     "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${PRESENCE_KIT_ROOT:?presence-kit is not provisioned}/scripts/wait.py" --output <task output file> --stall-minutes <n>
 
@@ -196,8 +198,8 @@ the waiter never picks a file by recency, because it can then watch another job.
 
 `scripts/watch.py` is the Monitor's command for any owned job. Arm a Monitor
 on it instead of writing a watcher script of your own: its cadence is fixed, so
-the user is not flooded with progress lines. It prints one line per event and
-runs until its done condition holds or it is killed. For a background task, pass
+the user is not flooded with progress lines (PROGRESS is off unless you set
+`progress_minutes`). It prints one line per event and runs until its done condition holds or it is killed. For a background task, pass
 its id:
 
     "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${PRESENCE_KIT_ROOT:?presence-kit is not provisioned}/scripts/watch.py" --task <task id> [--path <extra dir> ...] [--stall-minutes <n>]
@@ -244,12 +246,12 @@ working directory; a process whose directory cannot be read (another user's) is
 skipped. A sampling error
 prints `process sampling failed: <reason>` to stderr and exits 1: it is never
 read as no activity. `--stall-minutes` (default 20) and
-`--progress-minutes` (default: the `progress_minutes` value, 20) change the
+`--progress-minutes` (default: the `progress_minutes` value, 0) change the
 cadence for one run. It never writes a file.
 
 | Line | Meaning |
 |---|---|
-| `PROGRESS <elapsed>m: last change <age>m ago in <path>` | every `--progress-minutes`, changed or not; `no watched path exists yet` replaces the tail while no watched path exists; `last activity <age>m ago: process <pid> (<command>) using CPU` replaces the tail when the latest sign of work is a process, not a file |
+| `PROGRESS <elapsed>m: last change <age>m ago in <path>` | every `--progress-minutes`, changed or not; off by default (`progress_minutes` 0, and `--progress-minutes 0`: no PROGRESS lines); `no watched path exists yet` replaces the tail while no watched path exists; `last activity <age>m ago: process <pid> (<command>) using CPU` replaces the tail when the latest sign of work is a process, not a file |
 | `STALL: no change in watched paths for <N>m` | no file change and no process using CPU for at least `--stall-minutes`; printed once per quiet episode, re-armed by any newer mtime or process activity; the watcher keeps running |
 | `DONE: <line>` | `--done-output`: the last non-empty line is `[exited with code N]`; `--done-file`: the pattern matches a line; `--task` on an agent: the agent handed back its report; the watcher then exits 0 |
 

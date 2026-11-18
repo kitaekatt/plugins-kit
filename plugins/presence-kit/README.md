@@ -20,13 +20,13 @@ opt-in by installation. Every behavior has an id and can be switched off.
   nothing running, and when an autonomous goal is done, you get a recap shaped
   for that trigger.
 - **Guards waiting.** While background work runs, non-agent jobs get a waiter
-  agent so the terminal shows work, a watcher (`scripts/watch.py`) reports
-  progress every 20 minutes and a stall after 20 quiet minutes (both by
-  default), and the turn ends with `Waiting on <what>`. It counts only jobs the
-  main session started, not a running subagent's, and says the waiting nudge once
+  agent (`presence-kit:waiter`) so the terminal shows work, and a watcher
+  (`scripts/watch.py`) reports a stall after 20 quiet minutes (progress lines
+  are off unless you set `progress_minutes`). It counts only jobs the main
+  session started, not a running subagent's, and says the waiting nudge once
   per prompt.
 - **Requires a liveness watch on every owned job.** Agent work included: a
-  Monitor on `watch.py --task <id>` reports progress and stalls, which a job's
+  Monitor on `watch.py --task <id>` reports a stall, which a job's
   completion notice cannot. The stop hook nudges once per prompt when a running
   job has no running Monitor, or when its Monitor ended while the job still
   runs (`liveness-watch`).

@@ -371,8 +371,7 @@ def test_a_cron_firing_while_afk_neither_keeps_afk_nor_moves_afk_prompt(w):
     record_crons(w, _CRON_BARE)
     out = w.evaluate(_CRON_BARE)
     assert w.state()["afk_prompt"] == "old-prompt"
-    assert "kept the user afk" not in context(out)
-    assert line_P1(SINCE) in context(out)
+    assert context(out) is None  # an automatic wake gets no away or recap line either
 
 
 def test_a_deleted_cron_stops_being_excluded(w):
@@ -427,10 +426,10 @@ def test_a_returning_user_who_only_mentions_afk_is_kept_afk_and_told_how_to_undo
 
 
 def test_no_p2_on_the_prompt_the_hook_set_afk_on(w):
-    """A mid-turn notification repeats the pid: the second call has P1 and no P2."""
+    """A mid-turn notification repeats the pid: the second call is automatic, so it has no line."""
     w.evaluate("going afk")
     again = w.evaluate("<task-notification>done</task-notification>")
-    assert context(again) == line_P1(ps.format_timestamp(NOW))
+    assert context(again) is None
     other = w.evaluate("hello", pid="prompt-2")
     assert context(other) == line_P1(ps.format_timestamp(NOW), "prompt-2") + "\n" + line_P2("prompt-2")
 
@@ -740,3 +739,96 @@ def test_subprocess_prompt_reads_utf8_bytes(tmp_path):
     )
     assert run.returncode == 0, run.stderr
     assert "afk-on-departure" in json.loads(run.stdout.decode("ascii"))["hookSpecificOutput"]["additionalContext"]
+
+
+# ============================== no away or recap line on an automatic prompt (0.7.0)
+
+_NOTIFICATION = "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n</task-notification>"
+
+
+@pytest.mark.parametrize("prompt", [
+    _NOTIFICATION,
+    "  \n" + _NOTIFICATION,
+    _HANDBACK,
+    "Another Claude session sent a message:\n" + _HANDBACK,
+    "/presence-kit:recap return p9",
+    _CRON_BARE,
+    _CRON_WAKEUP,
+])
+def test_an_automatic_prompt_while_afk_gets_neither_the_away_nor_the_recap_line(w, prompt):
+    w.go_afk(goal="finish the migration")
+    record_crons(w, _CRON_BARE, _CRON_WAKEUP)
+    path = w.state_path()
+    before = path.read_bytes()
+    out = w.evaluate(prompt)
+    assert out == pprompt.PromptOutput(None, None)
+    assert out.to_output() == {}
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("prompt", ["hello", "status?", "please check the build"])
+def test_a_human_prompt_while_afk_keeps_both_lines(w, prompt):
+    w.go_afk()
+    record_crons(w, _CRON_BARE, _CRON_WAKEUP)
+    assert context(w.evaluate(prompt)) == line_P1(SINCE) + "\n" + line_P2()
+
+
+def test_the_hook_object_for_an_automatic_prompt_while_afk_is_empty(w):
+    w.go_afk()
+    rc, obj, err = w.hook(payload(_NOTIFICATION))
+    assert (rc, obj, err) == (0, {}, "")
+
+
+# ============================ unknown behavior ids: ignored, one notice per session (0.7.0)
+
+def ignored_text(w, *ids):
+    items = "; ".join(f"'{i}' in {w.root / 'cfg' / 'config' / 'presence-kit.json'}" for i in ids)
+    noun = "id" if len(ids) == 1 else "ids"
+    return f"ignored unknown behavior {noun} {items}; valid ids: {', '.join(pc.BEHAVIOR_IDS)}."
+
+
+def test_an_ignored_behavior_id_is_noticed_once_per_session_to_the_user(w):
+    w.config(behaviors={"no-such-id": True})
+    first = w.evaluate("hello")
+    assert first.system_message == L("config", PID, ignored_text(w, "no-such-id"))
+    assert first.additional_context is None
+    assert first.to_output() == {"systemMessage": first.system_message}
+    assert w.state()["notices"] == [pc.N6_CAUSE]
+    second = w.evaluate("again", pid="prompt-2")
+    assert second == pprompt.PromptOutput(None, None)
+
+
+def test_the_notice_does_not_disturb_the_afk_lines(w):
+    w.config(behaviors={"no-such-id": True})
+    w.go_afk()
+    out = w.evaluate("hello")
+    assert context(out) == line_P1(SINCE) + "\n" + line_P2()
+    assert out.system_message is not None
+    assert w.evaluate("hello", pid="p2").system_message is None
+
+
+def test_no_ignored_ids_no_notice_and_no_state_write(w):
+    out = w.evaluate("hello")
+    assert out == pprompt.PromptOutput(None, None)
+    assert not w.state_path().exists()
+
+
+def test_the_stop_hook_does_not_repeat_a_notice_the_prompt_hook_gave(w):
+    import presence_stop as pstop
+
+    w.config(behaviors={"no-such-id": True})
+    w.evaluate("hello")
+    stop_payload = {
+        "session_id": SID, "transcript_path": "<none>", "cwd": "<SCRATCH>", "prompt_id": PID,
+        "hook_event_name": "Stop", "stop_hook_active": False, "last_assistant_message": "DONE",
+        "background_tasks": [], "session_crons": [],
+    }
+    decision = pstop.evaluate(stop_payload, w.cfg(), w.env, NOW)
+    assert "no-such-id" not in (decision.system_message or "")
+
+
+def test_a_bad_value_for_a_known_id_is_still_the_config_error_not_a_notice(w):
+    w.config(behaviors={"no-such-id": True, "recap-on-return": "maybe"})
+    rc, obj, err = w.hook(payload("hello"))
+    assert rc == 0 and "behavior 'recap-on-return' accepts only" in obj["systemMessage"]
+    assert w.state_path().exists() is False
