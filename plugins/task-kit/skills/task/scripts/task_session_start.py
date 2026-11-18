@@ -101,7 +101,7 @@ def run(raw: str, env: Mapping[str, str] | None = None, *, data_dir: Path | None
     ``data_dir``, ``machine``, ``identity``, ``publish``, ``log`` and ``project_root`` default to the real ones
     (the project is ``$CLAUDE_PROJECT_DIR``, else the input's ``cwd``); tests inject them.
     """
-    from task_system import datadir, harness, machine as machine_module, sessions, statusline_pointer
+    from task_system import datadir, harness, machine as machine_module, sessions
 
     env = os.environ if env is None else env
     data = parse_input(raw)
@@ -135,10 +135,9 @@ def run(raw: str, env: Mapping[str, str] | None = None, *, data_dir: Path | None
     else:
         result = sessions.rekey_after_clear(identity, machine, recorded, project_root=project_root,
                                               data_dir=data_dir)
-        moved = sum(statusline_pointer.move(data_dir, old, session_id) for old in result.previous_ids)
         outcome = (f"clear {session_id[:8]}: re-keyed {len(result.rekeyed)} from "
                    f"{', '.join(i[:8] for i in result.previous_ids) or 'no previous session'}, "
-                   f"dropped {len(result.dropped)}, pointer moved {moved}")
+                   f"dropped {len(result.dropped)}")
     for note in result.notes:
         log(f"note: {note}")
     if result.changed_files:

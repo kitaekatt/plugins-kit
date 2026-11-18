@@ -112,11 +112,7 @@ replace the derived host id. Registration works on macOS, Linux and Windows. The
 
 ## Statusline cell
 
-When claude-ui-kit is installed, task-kit adds a cell at the far right of its status bar naming the task the session
-works: the task folder name plus its status, for example `better-statusbar [active]`. `task.py work` writes a pointer
-file `<task-kit data dir>/statusline/<session id>`; `sessions release` removes it. A bootstrap script copies
-`statusline/segment.sh` to claude-ui-kit's `segments/99-task.sh` (the `99-` prefix sorts it last). The segment needs
-`jq` and shows nothing for a session with no pointer.
+With claude-ui-kit installed, the status bar shows the task a session works; details in the task skill's `work-and-hand-off.md`.
 
 ## Install
 
