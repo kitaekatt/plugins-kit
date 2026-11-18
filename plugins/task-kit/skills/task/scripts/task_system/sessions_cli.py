@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
-from . import datadir, discovery, harness, oslock, resolve, session_publish, sessions
+from . import datadir, discovery, harness, oslock, resolve, session_publish, sessions, statusline_pointer
 from . import machine as machine_module
 from .sessions_config import SessionsConfig, SessionsConfigError, load_sessions_config
 
@@ -246,6 +246,11 @@ def register_for_work(project_root: Path, canonical: str, *, env: Mapping[str, s
         return _not_registered(str(exc))
     fragment = _publish_fragment(physical, machine, base, resolved.location, config.record, verdict)
     record = result.record
+    pointer_error = None
+    try:
+        statusline_pointer.write(base, record.session_id, result.root / record.task)
+    except OSError as exc:
+        pointer_error = f"the statusline pointer was not written: {exc}"
     lines = [_line(f"{result.action} {machine.host} on {canonical} (session {short_id(record.session_id)}); {fragment}")]
     for taken in result.taken_over:
         lines.append(_line(f"took over {canonical} from session {short_id(taken.session_id)} (not running)"))
@@ -262,6 +267,8 @@ def register_for_work(project_root: Path, canonical: str, *, env: Mapping[str, s
             f"({dropped.task_state} task)"))
     for note in result.notes:
         lines.append(_line(f"note: {note}"))
+    if pointer_error:
+        lines.append(_line(f"note: {pointer_error}"))
     return lines
 
 
@@ -312,6 +319,8 @@ def release_command(project_root: Path, ref: str, *, all_local: bool, env: Mappi
     except (SessionsConfigError, machine_module.MachineError, datadir.DataDirError, sessions.SessionsError,
             oslock.LockTimeout, OSError) as exc:
         return _error(str(exc))
+    for gone in result.removed:
+        statusline_pointer.remove(base, gone.session_id, result.root / gone.task)
     location = _location_of_root(Path(project_root), result.root)
     label = ref
     try:

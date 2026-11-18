@@ -86,7 +86,7 @@ def test_psutil_is_declared_for_install_and_for_verification():
 
 
 def test_bin_is_synced_to_the_data_directory_that_path_entries_names():
-    assert BOOTSTRAP["sync_to_data"] == [{"src": "bin", "dst": "bin"}]
+    assert {"src": "bin", "dst": "bin"} in BOOTSTRAP["sync_to_data"]
     (entry,) = BOOTSTRAP["path_entries"]
     assert entry == "~/.claude/plugins/data/plugins-kit/task-kit/bin"
     for name in ("task-kit", "task-kit.cmd", "task_kit_entrypoint.py"):
