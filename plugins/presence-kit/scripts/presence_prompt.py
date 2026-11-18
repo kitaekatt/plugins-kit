@@ -6,9 +6,11 @@ prompt: it reads the stored presence, and WRITES only on a departure -- a prompt
 that contains a configured departure word while `afk-on-departure` is on sets the
 user afk itself (`enter_afk(..., prompt=pid)`) and says so in `additionalContext`,
 so Claude can undo a wrong match with `state set present`. The hook never infers a
-departure from anything but the word, and it never reads the transcript (the new
-prompt's entry is not written yet at this hook). Its one other write is the
-once-per-session notice of ignored behavior ids (N6), a `systemMessage` to the user.
+departure from anything but the word. Its other writes are the once-per-session notice
+of ignored behavior ids (N6), a `systemMessage` to the user, and the away-line marker
+(P1 is said once per afk episode, and again after a context compaction; it reads the
+transcript only to look for the compaction boundary record, never for the new prompt's
+entry, which is not written yet at this hook).
 
 Already afk, a departure word keeps the user afk (ruling 19, 2026-10-19): the
 hook records the prompt as `afk_prompt` (the Stop hook then does not count this
@@ -29,6 +31,7 @@ from typing import Any
 
 import presence_config as pc
 import presence_state as ps
+import presence_transcript as pt
 
 # A prompt that starts (after leading whitespace) with one of these is never read for a
 # departure word: the plugin's own slash commands (`/presence-kit:recap afk-ending <id>`),
@@ -114,6 +117,15 @@ def _away_line(doc: dict, pid: str) -> str:
     )
 
 
+def _away_due(doc: dict, transcript: str | None) -> bool:
+    """True when P1 has not been said for this afk episode, or has been but the context
+    was compacted after it (the line left the context with the compaction)."""
+    said = ps.parse_timestamp(ps.find_marker(doc, ps.AWAY_MARKER, doc["afk_since"]))
+    if said is None:
+        return True
+    return pt.compacted_since(transcript, said)
+
+
 def _departure_line(cfg: pc.Config, sid: str, pid: str, word: str, kept: bool) -> str:
     undo = pc.P3_UNDO.format(sid=sid)
     if not kept:
@@ -131,7 +143,8 @@ def evaluate(
 ) -> PromptOutput:
     """The additionalContext for one UserPromptSubmit payload, in one locked state update.
 
-    P3 (a departure was acted on) then P1 (the user counts as away); P2 (return recap)
+    P3 (a departure was acted on) then P1 (the user counts as away, once per afk episode
+    and again after a compaction); P2 (return recap)
     only when afk, `recap-on-return` is on and this prompt is not the one the hook
     itself set or kept afk on. P1 and P2 are withheld on an automatic prompt (an envelope
     or a cron firing: a wake, not the user). Present with no departure: nothing. `now`
@@ -142,6 +155,9 @@ def evaluate(
     prompt = payload.get("prompt")
     if not isinstance(prompt, str):
         prompt = ""
+    transcript = payload.get("transcript_path")
+    if not isinstance(transcript, str) or not transcript:
+        transcript = None
     state_file = str(ps.state_path(sid, env))
 
     out: list[PromptOutput] = []
@@ -162,7 +178,9 @@ def evaluate(
                     f"{state_file}: malformed state file -- presence is afk but afk_since is null",
                 )
             if not automatic:
-                lines.append(_away_line(doc, pid))
+                if _away_due(doc, transcript):
+                    lines.append(_away_line(doc, pid))
+                    ps.set_marker(doc, ps.AWAY_MARKER, doc["afk_since"], ps.format_timestamp(now))
                 if cfg.enabled("recap-on-return") and doc["afk_prompt"] != pid:
                     lines.append(pc.line(pc.P2_RECAP_IDS, pid, pc.P2_RECAP.format(pid=pid)))
         notice = None

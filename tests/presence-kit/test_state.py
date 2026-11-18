@@ -910,6 +910,7 @@ def test_recap_done_afk_ending_is_marker_only(base, env):
     )
     expected = json.loads(path.read_text(encoding="utf-8"))
     expected["recaps"] = {"p3": "afk-ending"}
+    expected["notices"] = [f"ending-recap|{S0}|{S1}|{S2}"]  # the once-per-episode marker
     out = ps.recap_done(SID, "afk-ending", "p3", env, T2)
     assert out["recorded"] == "afk-ending" and out["prompt_id"] == "p3"
     assert out["state"] == expected
@@ -927,6 +928,8 @@ def test_recap_done_autonomous_done_clears_goal_and_stays_afk(base, env):
     assert st["presence"] == "afk" and st["afk_since"] == S0
     assert st["greeted"] is True and st["unresolved"] == ["u"]
     assert st["pending_return"] == "p7"
+    # the marker is written for the goal being closed and for the episode without a goal
+    assert st["notices"] == [f"ending-recap|{S0}|{S1}|{S2}", f"ending-recap|{S0}|-|{S2}"]
 
 
 def test_recap_done_return_then_afk_ending_same_pid_last_write_wins(base, env):
@@ -1186,3 +1189,59 @@ def test_fake_config_matches_the_section_1_surface():
     cfg = FakeConfig(afk_on_departure=False)
     assert tuple(cfg.behaviors) == BEHAVIOR_IDS
     assert cfg.enabled("afk-on-departure") is False and cfg.enabled("waiting-guard") is True
+
+
+# ------------------------------------------------- once-per-episode markers (0.8.0)
+
+def test_markers_are_plain_strings_in_notices_and_leave_the_v3_shape(base, env):
+    afk_doc(base)
+    st = ps.recap_done(SID, "afk-ending", "p1", env, T2)["state"]
+    assert st["notices"] == [f"ending-recap|{S0}|-|{S2}"]
+    assert st["version"] == 3 and set(st) == set(ps.default_state())
+    assert ps._validate(st) is None
+    # an older build of the same schema reads the file back unchanged
+    assert ps.state_get(SID, env)["state"] == st
+
+
+def test_a_return_recap_writes_no_ending_marker(base, env):
+    afk_doc(base)
+    st = ps.recap_done(SID, "return", "p1", env, T2)["state"]
+    assert st["notices"] == []
+
+
+def test_an_ending_recap_without_an_afk_episode_writes_no_marker(env):
+    st = ps.recap_done(SID, "afk-ending", "p1", env, T2)["state"]
+    assert st["notices"] == []
+
+
+def test_set_marker_replaces_the_same_key_and_keeps_other_notices():
+    doc = ps.default_state()
+    doc["notices"] = ["entry-missing"]
+    ps.set_marker(doc, "away", S0, S1)
+    ps.set_marker(doc, "away", S0, S2)
+    assert doc["notices"] == ["entry-missing", f"away|{S0}|{S2}"]
+    assert ps.find_marker(doc, "away", S0) == S2
+    assert ps.find_marker(doc, "away", S1) is None
+    assert ps.find_marker(doc, "ending-recap", S0) is None
+
+
+def test_set_marker_drops_the_oldest_beyond_the_cap_for_its_kind_only():
+    doc = ps.default_state()
+    doc["notices"] = ["entry-missing", "ending-recap|x|-|y"]
+    for i in range(ps.MARKER_KEEP + 2):
+        ps.set_marker(doc, "away", f"k{i}", "v")
+    away = [n for n in doc["notices"] if n.startswith("away|")]
+    assert away == [f"away|k{i}|v" for i in range(2, ps.MARKER_KEEP + 2)]
+    assert "entry-missing" in doc["notices"] and "ending-recap|x|-|y" in doc["notices"]
+
+
+def test_ending_key_follows_the_episode_and_the_goal_generation():
+    doc = ps.default_state()
+    assert ps.ending_key(doc) is None
+    ps.enter_afk(doc, S0)
+    assert ps.ending_key(doc) == f"{S0}|-"
+    ps.enter_autonomous(doc, "g", S1)
+    assert ps.ending_key(doc) == f"{S0}|{S1}"
+    ps.set_normal(doc)
+    ps.enter_autonomous(doc, "g", S2)  # the same text, granted again: a new generation
+    assert ps.ending_key(doc) == f"{S0}|{S2}"

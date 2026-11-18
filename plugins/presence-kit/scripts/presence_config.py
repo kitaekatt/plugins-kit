@@ -41,6 +41,7 @@ VALUE_NAMES: tuple[str, ...] = (
     "departure_words",
     "waiter_model",
     "progress_minutes",
+    "watch_after_minutes",
 )
 
 _TOP_KEYS = ("behaviors", "values")
@@ -53,6 +54,7 @@ _VALUE_EXPECT = {
     "departure_words": "a non-empty list of words (letters, digits, underscore)",
     "waiter_model": "a non-empty model name without spaces",
     "progress_minutes": "a non-negative integer (0 turns PROGRESS lines off)",
+    "watch_after_minutes": "a non-negative integer (0 asks for a liveness watch on every job at once)",
 }
 
 
@@ -168,8 +170,8 @@ def _check_value(path: Path, key: str, value: Any) -> Any:
             key,
             f"unknown value '{key}'; valid names: {', '.join(VALUE_NAMES)}",
         )
-    if key in ("afk_quiet_minutes", "progress_minutes"):
-        floor = 0 if key == "progress_minutes" else 1
+    if key in ("afk_quiet_minutes", "progress_minutes", "watch_after_minutes"):
+        floor = 1 if key == "afk_quiet_minutes" else 0
         ok = isinstance(value, int) and not isinstance(value, bool) and value >= floor
     elif key == "departure_words":
         ok = (

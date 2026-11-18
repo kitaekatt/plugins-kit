@@ -45,15 +45,63 @@ def test_the_agent_is_a_bash_only_low_effort_haiku_named_waiter():
 def test_the_body_is_short_and_states_the_wait_py_rules():
     _, body = _split(AGENT.read_text(encoding="ascii"))
     lines = [line for line in body.splitlines() if line.strip()]
-    assert len(lines) <= 10
+    assert len(lines) <= 14
     text = " ".join(body.split())
     assert "foreground" in text and "timeout: 170000" in text
     assert "150" in text and "--slice-seconds" in text
     assert "exit 4" in text.lower() or "Exit 4" in text
-    for code in ("0", "2", "3"):
+    for code in ("0", "1", "2", "3"):
         assert re.search(rf"\b{code}\b", text)
     assert "one line" in text
-    assert "Change nothing" in text
+
+
+def test_the_agent_launches_the_job_itself_when_the_brief_gives_the_command():
+    """0.8.0 (option A): one agent starts the job, waits on it and reports once."""
+    meta, body = _split(AGENT.read_text(encoding="ascii"))
+    text = " ".join(body.split())
+    assert meta["tools"] == "Bash"  # still Bash only
+    assert "`run_in_background: true`" in text
+    assert "Output is being written to" in text  # where it reads the output path from
+    assert "--output <that path>" in text or "--output <output path>" in text
+    assert "--path" in text  # the job's directory, for the process-activity check
+    assert "20 lines" in text and "only on failure" in text
+    assert "exit code" in text
+    assert "no command" in text.lower() or "gives only" in text.lower()  # the fallback: wait on a running job
+
+
+def test_presence_md_documents_the_waiter_launched_job():
+    section = " ".join(_section(PRESENCE_MD.read_text(encoding="ascii"), "Waiter agent").split())
+    assert "starts the job" in section and "`run_in_background: true`" in section
+    assert "survives" in section  # the job outlives the waiter's turn (probed)
+    assert "TaskStop" in section and "hypothesis" in section.lower()
+    assert "not in the main session's task list" in section
+    assert "already running" in section  # the fallback: main launched it
+    assert "`waiter:`" in section  # the description prefix the Stop hook falls back on
+    assert "agent and workflow" in section.lower()  # those jobs get no waiter
+    assert "--path" in section
+
+
+def test_presence_md_documents_the_age_rule_and_the_waiter_exemption():
+    flat = " ".join(PRESENCE_MD.read_text(encoding="ascii").split())
+    assert "`watch_after_minutes`" in flat
+    assert "20 minutes" in flat
+    assert "treated as old" in flat or "counts as old" in flat
+    assert "running waiter agent" in flat and "needs no watch" in flat
+    assert "waiter that ended while the job still runs" in flat
+
+
+def test_presence_md_documents_the_once_per_episode_lines():
+    flat = " ".join(PRESENCE_MD.read_text(encoding="ascii").split())
+    assert "once per afk episode" in flat
+    assert "context compaction" in flat
+    assert "ending recap" in flat and "tool work" in flat
+
+
+def test_configuring_md_lists_watch_after_minutes_and_the_five_values():
+    flat = " ".join(CONFIGURING_MD.read_text(encoding="ascii").split())
+    assert "| `watch_after_minutes` | integer | `20` |" in flat
+    assert "change four values" not in flat and "change five values" in flat
+    assert "once per afk episode" in flat  # P1 and E rows
 
 
 def test_presence_md_launches_the_waiter_by_its_type_with_the_configured_model():
@@ -74,6 +122,7 @@ def test_the_afk_and_autonomous_procedures_launch_the_waiter_by_its_type():
         text = " ".join(path.read_text(encoding="ascii").split())
         assert "`subagent_type: presence-kit:waiter`" in text, path.name
         assert "values.waiter_model" in text, path.name
+        assert "starts the job itself" in text, path.name
 
 
 def test_no_document_still_asks_for_a_waiting_on_last_line():

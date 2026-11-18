@@ -199,3 +199,140 @@ def armed_monitors(path: str, ids: set[str]) -> dict[str, set[str]]:
             for task_id in named:
                 armed.setdefault(task_id, set()).add(monitor)
     return armed
+
+
+# ------------------------------------------------------------ job age and coverage
+
+# The waiter agent type, as the Agent tool names it (plugin-qualified) and bare.
+WAITER_TYPES = ("presence-kit:waiter", "waiter")
+# Where the main session learns a task id: the tool results above, and an Agent launch
+# ("Async agent launched successfully ... agentId: <id>").
+_ANNOUNCED_ID = re.compile(
+    r"(?:background with ID: |moved to the background \(ID: |Monitor started \(task |agentId: )([A-Za-z0-9]+)"
+)
+_AGENT_LAUNCHED = re.compile(r"agentId: ([A-Za-z0-9]+)")
+_AGENT_TOOLS = ("Agent", "Task")
+
+
+def _blocks(obj: dict) -> list[dict]:
+    message = obj.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    return [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
+
+
+def _whole_token(task_id: str) -> re.Pattern:
+    return re.compile(r"(?<![A-Za-z0-9])" + re.escape(task_id) + r"(?![A-Za-z0-9])")
+
+
+def job_starts(path: str | None, ids: set[str]) -> dict[str, datetime | None]:
+    """When the main session started (or last resumed) each task in `ids`.
+
+    A task starts at the transcript record whose tool result announces it (a
+    run_in_background Bash call, a call moved to the background, a Monitor, an Agent
+    launch), and an agent restarts at the newest SendMessage tool call addressed to its
+    id. The newest of those records wins. None means unknown: no record names the id,
+    or no such record has a parsable timestamp, or the transcript cannot be read (a
+    compacted transcript loses the announcement). The caller treats unknown as old.
+    """
+    known: dict[str, datetime | None] = {task_id: None for task_id in ids}
+    if not ids or not path:
+        return known
+    try:
+        records = _records(Path(path))
+    except FileNotFoundError:
+        return known
+    for _, obj in records:
+        stamp = presence_state.parse_timestamp(obj.get("timestamp"))
+        if stamp is None:
+            continue
+        named: set[str] = set()
+        for block in _blocks(obj):
+            kind = block.get("type")
+            if kind == "tool_result":
+                named |= {m for m in _ANNOUNCED_ID.findall(_result_text(block)) if m in ids}
+            elif kind == "tool_use" and block.get("name") == "SendMessage":
+                target = (block.get("input") or {}).get("to")
+                if isinstance(target, str) and target in ids:
+                    named.add(target)
+        for task_id in named:
+            current = known[task_id]
+            if current is None or stamp > current:
+                known[task_id] = stamp
+    return known
+
+
+def waiter_agents(path: str | None, ids: set[str]) -> dict[str, set[str]]:
+    """Which waiter agents the main transcript launched for each job id in `ids`.
+
+    An Agent tool call whose `subagent_type` is a waiter type and whose prompt names a
+    job id as a whole token (its `tasks/<id>.output` path, or the bare id) is joined by
+    tool_use_id to the launch result's `agentId`. Returns {job id: {agent ids}}; a job
+    no waiter was launched for is absent. A missing file raises FileNotFoundError.
+    """
+    if not ids or not path:
+        return {}
+    patterns = {i: _whole_token(i) for i in ids}
+    naming: dict[str, set[str]] = {}  # tool_use_id -> job ids its prompt names
+    launched: dict[str, str] = {}  # tool_use_id -> agent id
+    for _, obj in _records(Path(path)):
+        for block in _blocks(obj):
+            if block.get("type") == "tool_use" and block.get("name") in _AGENT_TOOLS:
+                spec = block.get("input") or {}
+                prompt = spec.get("prompt")
+                if spec.get("subagent_type") in WAITER_TYPES and isinstance(prompt, str) \
+                        and isinstance(block.get("id"), str):
+                    named = {i for i, rx in patterns.items() if rx.search(prompt)}
+                    if named:
+                        naming[block["id"]] = named
+            elif block.get("type") == "tool_result" and isinstance(block.get("tool_use_id"), str):
+                found = _AGENT_LAUNCHED.search(_result_text(block))
+                if found:
+                    launched[block["tool_use_id"]] = found.group(1)
+    covering: dict[str, set[str]] = {}
+    for tool_use_id, named in naming.items():
+        agent = launched.get(tool_use_id)
+        if agent is not None:
+            for job_id in named:
+                covering.setdefault(job_id, set()).add(agent)
+    return covering
+
+
+def compacted_since(path: str | None, since: datetime) -> bool:
+    """True when the transcript holds a context-compaction boundary record
+    (`type: "system"`, `subtype: "compact_boundary"`) stamped after `since`. A missing
+    or unreadable transcript says nothing, so it is False."""
+    if not path:
+        return False
+    try:
+        records = _records(Path(path))
+    except FileNotFoundError:
+        return False
+    for _, obj in records:
+        if obj.get("type") == "system" and obj.get("subtype") == "compact_boundary":
+            stamp = presence_state.parse_timestamp(obj.get("timestamp"))
+            if stamp is not None and stamp > since:
+                return True
+    return False
+
+
+def work_since(path: str | None, since: datetime) -> bool:
+    """True when an assistant tool call is stamped after `since`, not counting a
+    `recap-done` call (the recap's own bookkeeping). A missing transcript is False."""
+    if not path:
+        return False
+    try:
+        records = _records(Path(path))
+    except FileNotFoundError:
+        return False
+    for _, obj in records:
+        stamp = presence_state.parse_timestamp(obj.get("timestamp"))
+        if stamp is None or stamp <= since:
+            continue
+        for block in _blocks(obj):
+            if block.get("type") != "tool_use":
+                continue
+            command = (block.get("input") or {}).get("command")
+            if isinstance(command, str) and "recap-done" in command:
+                continue
+            return True
+    return False

@@ -301,3 +301,189 @@ def test_default_slice_ends_before_the_harness_backgrounds_a_foreground_command(
     assert code == 4
     assert out == f"slice over: {job} still live\n"
     assert clock.t < 170.0
+
+
+# ------------------------------------------------- process activity (0.8.0)
+#
+# A stall needs the output file quiet AND no process of the job using CPU, as in
+# watch.py (they share scripts/procwatch.py). Slices are separate processes, so the
+# last activity is carried across them in one small file in the temp directory.
+
+ME = os.getpid()
+Proc = wait.procwatch.Proc
+
+
+class World:
+    """Injected process table; `cpu` maps pid -> cumulative CPU seconds."""
+
+    def __init__(self, rows, cwds):
+        self.rows = rows  # pid -> (ppid, command)
+        self.cpu = {pid: 0.0 for pid in rows}
+        self.cwd = cwds
+
+    def procs(self):
+        return {pid: Proc(ppid, self.cpu[pid], cmd) for pid, (ppid, cmd) in self.rows.items()}
+
+    def cwds(self, pids):
+        return {pid: self.cwd[pid] for pid in pids if pid in self.cwd}
+
+
+def burn(world, pid, per_poll=60.0):
+    def hook(n):
+        world.cpu[pid] += per_poll
+    return hook
+
+
+def run_proc(argv, world, tmp_path, clock=None, wall=None):
+    clock = clock or FakeClock()
+    out, err = _Buf(), _Buf()
+    kwargs = {} if wall is None else {"wall": wall}
+    code = wait.main(
+        argv, now=clock.now, sleep=clock.sleep, stdout=out, stderr=err,
+        procs=world.procs, cwds=world.cwds, state_dir=str(tmp_path / "state"), **kwargs,
+    )
+    return code, out.text, err.text, clock
+
+
+def quiet_job(tmp_path, age_seconds=1200.0):
+    job = tmp_path / "job.out"
+    job.write_text("compiling\n", encoding="utf-8")
+    mtime = 1_000_000.0
+    os.utime(job, (mtime, mtime))
+    return job, (lambda: mtime + age_seconds)
+
+
+def test_a_quiet_file_with_a_cpu_burning_process_in_the_job_directory_is_not_a_stall(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    job, wall = quiet_job(tmp_path)  # quiet for 20 min, window 10
+    world = World({ME: (1, "pytest"), 900: (ME, "make")}, {900: str(work)})
+    clock = FakeClock(burn(world, 900))
+    code, out, _, _ = run_proc(
+        ["--output", str(job), "--stall-minutes", "10", "--path", str(work),
+         "--slice-seconds", "20", "--poll-seconds", "5"], world, tmp_path, clock, wall)
+    assert code == 4, out
+
+
+def test_a_quiet_file_and_an_idle_process_is_a_stall(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    job, wall = quiet_job(tmp_path)
+    world = World({ME: (1, "pytest"), 900: (ME, "make")}, {900: str(work)})
+    code, out, _, _ = run_proc(
+        ["--output", str(job), "--stall-minutes", "10", "--path", str(work),
+         "--slice-seconds", "20", "--poll-seconds", "5"], world, tmp_path, wall=wall)
+    assert code == 3
+    assert out == f"stalled: no change in {job} for 10 minutes\n"
+
+
+def test_the_first_poll_with_process_sampling_cannot_report_a_stall(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    job, wall = quiet_job(tmp_path)
+    world = World({ME: (1, "pytest")}, {})
+    code, _, _, clock = run_proc(
+        ["--output", str(job), "--stall-minutes", "10", "--path", str(work),
+         "--slice-seconds", "20", "--poll-seconds", "5"], world, tmp_path, wall=wall)
+    assert code == 3 and clock.sleeps == 1  # the baseline poll, then the stall
+    code, _, _, clock = run(
+        ["--output", str(job), "--stall-minutes", "10", "--slice-seconds", "20", "--poll-seconds", "5"],
+        wall=wall)
+    assert code == 3 and clock.sleeps == 0  # without sampling a quiet file stalls at once
+
+
+def test_a_process_working_elsewhere_does_not_count(tmp_path):
+    work = tmp_path / "work"
+    other = tmp_path / "other"
+    work.mkdir()
+    other.mkdir()
+    job, wall = quiet_job(tmp_path)
+    world = World({ME: (1, "pytest"), 900: (ME, "make")}, {900: str(other)})
+    clock = FakeClock(burn(world, 900))
+    code, _, _, _ = run_proc(
+        ["--output", str(job), "--stall-minutes", "10", "--path", str(work),
+         "--slice-seconds", "20", "--poll-seconds", "5"], world, tmp_path, clock, wall)
+    assert code == 3
+
+
+def test_a_descendant_of_a_given_pid_counts_wherever_it_runs(tmp_path):
+    job, wall = quiet_job(tmp_path)
+    world = World({ME: (1, "pytest"), 800: (ME, "sh"), 900: (800, "cc")}, {})
+    clock = FakeClock(burn(world, 900))
+    code, _, _, _ = run_proc(
+        ["--output", str(job), "--stall-minutes", "10", "--pid", "800",
+         "--slice-seconds", "20", "--poll-seconds", "5"], world, tmp_path, clock, wall)
+    assert code == 4
+
+
+def test_activity_seen_in_an_earlier_slice_still_counts_in_the_next(tmp_path):
+    """Slices are separate processes: the last CPU activity is carried in a temp file."""
+    work = tmp_path / "work"
+    work.mkdir()
+    job, _ = quiet_job(tmp_path)
+    args = ["--output", str(job), "--stall-minutes", "10", "--path", str(work),
+            "--slice-seconds", "20", "--poll-seconds", "5"]
+    world = World({ME: (1, "pytest"), 900: (ME, "make")}, {900: str(work)})
+    now = [1_000_000.0 + 1200.0]
+    code, _, _, _ = run_proc(args, world, tmp_path, FakeClock(burn(world, 900)), lambda: now[0])
+    assert code == 4  # the process worked: not a stall
+    now[0] += 60.0  # next slice, a minute later; the process is idle in this one
+    code, out, _, _ = run_proc(args, world, tmp_path, wall=lambda: now[0])
+    assert code == 4, "the activity a minute ago must keep the job alive: " + out
+    now[0] += 11 * 60.0  # ten quiet minutes later it is a stall
+    code, _, _, _ = run_proc(args, world, tmp_path, wall=lambda: now[0])
+    assert code == 3
+
+
+def test_the_activity_file_is_removed_when_the_job_ends(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    job, wall = quiet_job(tmp_path)
+    args = ["--output", str(job), "--stall-minutes", "10", "--path", str(work),
+            "--slice-seconds", "20", "--poll-seconds", "5"]
+    world = World({ME: (1, "pytest"), 900: (ME, "make")}, {900: str(work)})
+    run_proc(args, world, tmp_path, FakeClock(burn(world, 900)), wall)
+    state = tmp_path / "state"
+    assert len(list(state.iterdir())) == 1
+    with job.open("a", encoding="utf-8") as fh:
+        fh.write(TRAILER + "\n")
+    code, _, _, _ = run_proc(args, world, tmp_path, wall=wall)
+    assert code == 0
+    assert list(state.iterdir()) == []
+
+
+def test_without_a_path_or_pid_nothing_is_sampled_and_nothing_is_written(tmp_path):
+    job, wall = quiet_job(tmp_path)
+
+    def boom():
+        raise AssertionError("sampled")
+
+    out, err = _Buf(), _Buf()
+    code = wait.main(
+        ["--output", str(job), "--stall-minutes", "10"], now=FakeClock().now, sleep=lambda s: None,
+        stdout=out, stderr=err, wall=wall, procs=boom, state_dir=str(tmp_path / "state"))
+    assert code == 3
+    assert not (tmp_path / "state").exists()
+
+
+def test_a_process_sampling_failure_is_loud(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    job, wall = quiet_job(tmp_path)
+
+    def broken():
+        raise wait.procwatch.ProcessSampleError("ps exited 3 boom")
+
+    out, err = _Buf(), _Buf()
+    code = wait.main(
+        ["--output", str(job), "--stall-minutes", "10", "--path", str(work)], now=FakeClock().now,
+        sleep=lambda s: None, stdout=out, stderr=err, wall=wall, procs=broken,
+        state_dir=str(tmp_path / "state"))
+    assert code == 1
+    assert "process sampling failed: ps exited 3 boom" in err.text
+
+
+def test_the_new_options_are_validated(tmp_path):
+    job, _ = quiet_job(tmp_path)
+    code, _, err, _ = run(["--output", str(job), "--stall-minutes", "1", "--pid", "0"])
+    assert code == 2 and "pid" in err

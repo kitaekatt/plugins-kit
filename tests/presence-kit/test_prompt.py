@@ -431,7 +431,7 @@ def test_no_p2_on_the_prompt_the_hook_set_afk_on(w):
     again = w.evaluate("<task-notification>done</task-notification>")
     assert context(again) is None
     other = w.evaluate("hello", pid="prompt-2")
-    assert context(other) == line_P1(ps.format_timestamp(NOW), "prompt-2") + "\n" + line_P2("prompt-2")
+    assert context(other) == line_P2("prompt-2")  # P1 was said on the departure prompt
 
 
 def test_departure_is_idempotent_for_the_afk_skills_own_write(w):
@@ -457,13 +457,18 @@ def test_away_line_with_goal(w):
     assert context(out).split("\n")[0] == line_P1(SINCE, goal="finish the migration")
 
 
-def test_away_lines_are_read_only_and_ordered_p1_then_p2(w):
+def test_away_lines_are_ordered_p1_then_p2_and_only_the_first_writes_its_marker(w):
     w.go_afk()
     path = w.state_path()
-    before = path.read_bytes()
+    before = w.state()
     out = w.evaluate("hello")
     assert context(out) == line_P1(SINCE) + "\n" + line_P2()
-    assert path.read_bytes() == before
+    after = w.state()
+    assert after["notices"] == [f"away|{SINCE}|{ps.format_timestamp(NOW)}"]
+    assert {k: v for k, v in after.items() if k != "notices"} == {k: v for k, v in before.items() if k != "notices"}
+    saved = path.read_bytes()
+    w.evaluate("hello again", pid="prompt-2")  # P2 only: nothing more to record
+    assert path.read_bytes() == saved
 
 
 def test_recap_clause_off_gives_only_the_away_line(w):
@@ -832,3 +837,82 @@ def test_a_bad_value_for_a_known_id_is_still_the_config_error_not_a_notice(w):
     rc, obj, err = w.hook(payload("hello"))
     assert rc == 0 and "behavior 'recap-on-return' accepts only" in obj["systemMessage"]
     assert w.state_path().exists() is False
+
+
+# ------------------------------------------- the away line once per afk episode (0.8.0)
+
+def boundary(when):
+    return {"type": "system", "subtype": "compact_boundary", "content": "Conversation compacted",
+            "timestamp": ps.format_timestamp(when)}
+
+
+def write_transcript(w, *records):
+    path = w.root / "transcript.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="ascii")
+    return str(path)
+
+
+def test_the_away_line_is_said_once_per_afk_episode(w):
+    w.go_afk()
+    first = w.evaluate("what is the status?", pid="p1")
+    second = w.evaluate("and the other thing?", pid="p2")
+    assert context(first) == line_P1(SINCE, "p1") + "\n" + line_P2("p1")
+    assert context(second) == line_P2("p2")  # P2 stays: the user's own message is a return
+
+
+def test_the_away_marker_is_a_string_in_notices_keyed_on_afk_since(w):
+    w.go_afk()
+    w.evaluate("status?", pid="p1")
+    doc = w.state()
+    assert f"away|{SINCE}|{ps.format_timestamp(NOW)}" in doc["notices"]
+    assert doc["version"] == 3 and set(doc) == set(ps.default_state())
+    assert ps._validate(doc) is None
+
+
+def test_an_automatic_prompt_neither_gets_the_away_line_nor_uses_it_up(w):
+    w.go_afk()
+    assert context(w.evaluate(_HANDBACK, pid="p1")) is None
+    assert w.state()["notices"] == []
+    assert line_P1(SINCE, "p2") in context(w.evaluate("status?", pid="p2"))
+
+
+def test_a_new_afk_episode_gets_the_away_line_again(w):
+    w.go_afk()
+    w.evaluate("status?", pid="p1")
+    ps.update(SID, lambda doc: ps.set_present(doc), w.env)
+    later = NOW + timedelta(hours=2)
+    ps.update(SID, lambda doc: ps.enter_afk(doc, ps.format_timestamp(later)), w.env)
+    out = w.evaluate("status?", pid="p3", now=later + timedelta(minutes=1))
+    assert line_P1(ps.format_timestamp(later), "p3") in context(out)
+
+
+def test_a_compaction_after_the_away_line_brings_it_back(w):
+    w.go_afk()
+    transcript = write_transcript(w, boundary(NOW - timedelta(minutes=5)))  # before the marker
+    w.evaluate("status?", pid="p1", transcript_path=transcript)
+    assert line_P1(SINCE, "p2") not in (context(w.evaluate("more", pid="p2", transcript_path=transcript)) or "")
+    transcript = write_transcript(w, boundary(NOW - timedelta(minutes=5)), boundary(NOW + timedelta(minutes=3)))
+    again = w.evaluate("later", pid="p3", now=NOW + timedelta(minutes=4), transcript_path=transcript)
+    assert line_P1(SINCE, "p3") in context(again)
+    # said again, it is quiet until the next compaction
+    quiet = w.evaluate("later still", pid="p4", now=NOW + timedelta(minutes=5), transcript_path=transcript)
+    assert line_P1(SINCE, "p4") not in (context(quiet) or "")
+
+
+def test_an_unreadable_transcript_path_never_brings_the_line_back(w):
+    w.go_afk()
+    w.evaluate("status?", pid="p1")
+    out = w.evaluate("more", pid="p2", transcript_path=str(w.root / "missing.jsonl"))
+    assert context(out) == line_P2("p2")
+
+
+def test_a_departure_prompt_gets_the_away_line_once_and_a_repeat_does_not(w):
+    first = w.evaluate("going afk", pid="p1")
+    assert context(first) == line_P3("afk", "p1") + "\n" + line_P1(ps.format_timestamp(NOW), "p1")
+    repeat = w.evaluate("afk again", pid="p2", now=NOW + timedelta(minutes=1))
+    assert context(repeat) == line_P3_kept("afk", "p2")  # no P1 again; no P2 on the prompt the hook kept afk
+
+
+def test_a_present_user_gets_no_away_line_and_no_marker(w):
+    w.evaluate("status?", pid="p1")
+    assert not w.state_path().exists()

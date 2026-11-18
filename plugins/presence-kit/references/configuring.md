@@ -1,7 +1,7 @@
 # Configuring presence-kit
 
 Every presence-kit behavior has an id and is on by default. You can switch any
-behavior off, and change four values, in a small JSON file. Nothing else is
+behavior off, and change five values, in a small JSON file. Nothing else is
 configurable. The model these settings control is in `presence.md` (same
 directory).
 
@@ -65,9 +65,9 @@ All default to `true`. Off means the behavior does not apply.
 | `afk-on-quiet` | Stop hook | No message of your own for `afk_quiet_minutes` enters afk | You stay present however long you are quiet |
 | `autonomous-on-handover` | `presence-kit:autonomous` | An explicit hand-over enters autonomous | Claude does not enter autonomous on its own; your own `/presence-kit:autonomous` still works |
 | `recap-on-return` | prompt hook, Stop hook, `presence.md` | Your first message after afk gets the return recap | You become present with no return recap and no nudge |
-| `waiting-guard` | Stop hook, `presence.md` | While owned work runs, non-agent jobs get a waiter agent (`presence-kit:waiter`) so the terminal shows work; a task the harness armed itself, and a job a subagent started, are not owned work; the waiting nudge is said once per prompt | No waiting check; the way to stop the waiting talk |
-| `liveness-watch` | Stop hook, `presence.md` | A running owned job (agent work included) with no running Monitor gets one nudge: arm `watch.py --task <id>`, or re-arm it when the Monitor ended while the job still runs; the nudge is said once per prompt | No watch check |
-| `ending-recap` | Stop hook | An away turn with nothing running ends with one recap (in autonomy: or keeps working until the goal is done) | No ending recap is demanded |
+| `waiting-guard` | Stop hook, `presence.md` | While owned work runs, non-agent jobs get a waiter agent (`presence-kit:waiter`), which starts the job itself, so the terminal shows work; a task the harness armed itself, and a job a subagent started, are not owned work; a job whose waiter ended while it still runs is nudged again even beside an unrelated agent; the waiting nudge is said once per prompt | No waiting check; the way to stop the waiting talk |
+| `liveness-watch` | Stop hook, `presence.md` | A running owned job (agent work included) that is at least `watch_after_minutes` old, that no running waiter covers, and that has no running Monitor gets one nudge: arm `watch.py --task <id>`, or re-arm it when the Monitor ended while the job still runs; a running waiter agent needs none; the nudge is said once per prompt | No watch check |
+| `ending-recap` | Stop hook | An away turn with nothing running ends with one recap per afk episode and granted goal (in autonomy: or keeps working until the goal is done); it asks again only after tool work, a new episode or a new goal | No ending recap is demanded |
 | `terse-while-away` | `presence.md` | Interim messages are short while you are away | Messages keep normal length |
 | `park-questions` | `presence.md` | Questions wait for the recap while independent work continues | Claude asks as it would when you are present |
 | `notify-for-input` | `presence.md` | A push notification goes out only when your input is needed | The rule does not apply |
@@ -80,6 +80,7 @@ All default to `true`. Off means the behavior does not apply.
 | `departure_words` | list of strings | `["afk"]` | a non-empty list; each entry letters, digits or underscore only; read by the prompt hook, which matches an entry on its own in any case: "AFK." and "(afk)" match; a longer name such as `afk-on-departure` or `afk_since`, `presence-kit:afk`, a backticked `afk`, and a message starting with `/presence-kit:` or `<task-notification>` do not |
 | `waiter_model` | string | `"haiku"` | a non-empty model name without spaces, passed to the Agent tool; not checked against a list |
 | `progress_minutes` | integer | `0` | zero or a positive integer (not a boolean); the interval of the watcher's `PROGRESS` lines (`presence.md`, section Watcher), where `0` means no `PROGRESS` lines; the watcher's `--progress-minutes` flag overrides it |
+| `watch_after_minutes` | integer | `20` | zero or a positive integer (not a boolean); the age a job must reach before the Stop hook asks for a liveness watch on it, measured from the transcript record that announced the job (a job whose start is not shown counts as old); `0` asks at once. Set it only in a layer that every running copy of the plugin reads: a version that predates this value rejects the name |
 
 `departure_words` replaces the whole list: `["afk", "brb"]` keeps `afk`;
 `["brb"]` drops it.
@@ -122,7 +123,7 @@ A value name not in the Values table. Detail: `unknown value '<key>'; valid name
 ### bad-value-type
 A value that fails its check. Detail: `value '<key>' must be <expected>; got <value>`, where
 expected is `a positive integer` (`afk_quiet_minutes`), `a non-negative integer (0 turns
-PROGRESS lines off)` (`progress_minutes`), `a non-empty list of
+PROGRESS lines off)` (`progress_minutes`), `a non-negative integer (0 asks for a liveness watch on every job at once)` (`watch_after_minutes`), `a non-empty list of
 words (letters, digits, underscore)` (`departure_words`) or `a non-empty model
 name without spaces` (`waiter_model`).
 
@@ -139,12 +140,13 @@ and where to switch them off. `config` is not a behavior: it marks a
 configuration error. Both hooks act only in an attended session. The
 UserPromptSubmit prompt hook (`presence.py prompt`) sends P1-P5 below; the Stop
 hook (`presence.py stop`) sends S1, R, C, M, E, N1-N6 and S6. The prompt hook writes state only
-when a departure word sets you afk (P3) or when it records the N6 notice; everything else it says
+when a departure word sets you afk (P3), when it records the N6 notice, or when it records the
+P1 marker (`away|<afk_since>|<time>` in the state's notices list); everything else it says
 is read-only.
 
 | Code | Reaches | Ids | Text |
 |---|---|---|---|
-| P1 | Claude, while afk (including right after P3), not on an automatic prompt | `terse-while-away,park-questions,notify-for-input` | the user counts as away since `<afk_since>`, with ` [goal: <goal>]` when autonomous. Apply the away behaviors in references/presence.md that are on. |
+| P1 | Claude, once per afk episode (including right after P3), on the first prompt of the user's own while afk, and again after a context compaction; not on an automatic prompt | `terse-while-away,park-questions,notify-for-input` | the user counts as away since `<afk_since>`, with ` [goal: <goal>]` when autonomous. Apply the away behaviors in references/presence.md that are on. |
 | P2 | Claude, while afk, except on the prompt P3 acted on and on an automatic prompt | `recap-on-return` | if this prompt is the user's own message, not a scheduled task, agent report, task notification or another session's message, invoke `presence-kit:recap return <prompt id>` before answering. |
 | P3 | Claude, when the hook acted on a departure word | `afk-on-departure` | set the user afk because the prompt contains the departure word "`<word>`". If that is wrong (the word is quoted or discussed, or the prompt is not the user's own message), run `<state set present command>` and tell the user once in one line; otherwise invoke `presence-kit:afk` to cover running work. When you were already afk the text begins "kept the user afk" instead, and with `recap-on-return` on adds that, if the wrong match was your own message, the return recap is due. P3 comes first, then P1. |
 | P4 | you | `config` | the error text, then: Presence behavior is unavailable until the file is fixed. |
@@ -152,9 +154,9 @@ is read-only.
 | S1 | you (Stop hook) | `config` | same as P4 |
 | R | Claude, Stop nudge | `recap-on-return` | the user is back; invoke `presence-kit:recap return <prompt id>`. |
 | C | Claude, Stop nudge | `waiting-guard` | add a waiter agent; the terminal shows idle. Counted as running non-agent work: `<id> (<type>, <status>): <description>` per task. |
-| M | Claude, Stop nudge | `liveness-watch` | arm a liveness watch: a Monitor on `watch.py --task <id>` for each job you own (it reports a stall and the job's end). Then `No liveness watch on: <id (type, status): description per job>.` and/or `Liveness watch ended while the job still runs, re-arm it on: <jobs>.` |
-| E (autonomous) | Claude, Stop nudge | `ending-recap` | autonomous: if `<goal>` is done, invoke `presence-kit:recap autonomous-done <prompt id>`, else keep working. |
-| E (afk) | Claude, Stop nudge | `ending-recap` | invoke `presence-kit:recap afk-ending <prompt id>`. |
+| M | Claude, Stop nudge, only for a job at least `watch_after_minutes` old | `liveness-watch` | arm a liveness watch: a Monitor on `watch.py --task <id>` for each job you own (it reports a stall and the job's end). Then `No liveness watch on: <id (type, status): description per job>.` and/or `Liveness watch ended while the job still runs, re-arm it on: <jobs>.` |
+| E (autonomous) | Claude, Stop nudge, once per afk episode and goal until the recap runs, then again after tool work | `ending-recap` | autonomous: if `<goal>` is done, invoke `presence-kit:recap autonomous-done <prompt id>`, else keep working. |
+| E (afk) | Claude, Stop nudge, once per afk episode until the recap runs, then again after tool work | `ending-recap` | invoke `presence-kit:recap afk-ending <prompt id>`. |
 | N1 | you, once per session | `afk-on-quiet,recap-on-return` | skipped quiet-afk and return detection: the transcript has no user entry for this prompt yet. |
 | N2 | you, once per session | `afk-on-quiet,recap-on-return` | skipped quiet-afk and return detection: the prompt's transcript entry has no valid timestamp or turnOrigin. |
 | N3 | you, once per session | `afk-on-quiet,recap-on-return` | skipped quiet-afk and return detection: the prompt's turnOrigin is not a known value. |

@@ -10,7 +10,7 @@ catalog, defaults and file format are in `configuring.md` (same directory).
 
 Run this first, in the same turn. It prints the resolved configuration as JSON
 (`behaviors`: id to bool; `values`: `afk_quiet_minutes`, `departure_words`,
-`waiter_model`, `progress_minutes`):
+`waiter_model`, `progress_minutes`, `watch_after_minutes`):
 
     "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${PRESENCE_KIT_ROOT:?presence-kit is not provisioned}/scripts/presence.py" config
 
@@ -22,9 +22,11 @@ Hook lines read `presence-kit [<ids>] prompt <prompt id>: ...`. They come from
 this plugin's two hooks (`hooks/hooks.json`): the UserPromptSubmit prompt hook
 (`scripts/presence.py prompt`) and the Stop hook (`scripts/presence.py stop`),
 and each line names the behavior ids that produced it. The prompt hook speaks
-before you answer: while the user is afk it says so (the away line, plus the
-instruction to give the return recap when `recap-on-return` is on), except on an
-automatic prompt (an envelope or a cron firing, section Presence), and when
+before you answer: while the user is afk it says so once per afk episode (the
+away line, said again after a context compaction, which drops it from the
+context) and, on every prompt of the user's own, gives the instruction to give the
+return recap when `recap-on-return` is on. It says neither on an
+automatic prompt (an envelope or a cron firing, section Presence). When
 the prompt contains a word from `departure_words` it sets the user afk itself
 and tells you so (section Presence). The Stop hook detects a return at the end
 of the turn and records it (section Return).
@@ -56,7 +58,12 @@ The user is `present` or `afk`.
   the hook can read, so your correction is the safeguard there. A skip says
   nothing about who sent the prompt. The prompts the hook skips also get no
   away line and no return-recap line while the user is afk: a wake is not the
-  user, so it carries no reminder.
+  user, so it carries no reminder. The away line is said once per afk episode
+  on the first prompt of the user's own; the hook records that in the state's
+  `notices` list (`away|<afk_since>|<time>`) and says it again only after a
+  context compaction (a `compact_boundary` record in the transcript after that
+  time). The configuration is not in that line: run `presence.py config` (section
+  Before applying anything) before you apply a rule.
 - Already afk, a prompt with a listed word keeps the user afk: the line begins
   "kept the user afk" and no return recap is asked for that prompt. If that is
   wrong, because the user is back and only mentions the word, undo it the same
@@ -92,6 +99,19 @@ Stop hook finds no return recap for the prompt, its nudge asks for one. With no
 id in view, invoke `presence-kit:recap` bare; it reads state. With `recap-on-return` off, the user is present again and
 no return recap runs. The prompt that set (or kept) the user afk is not a return.
 
+## Ending recap
+
+With `ending-recap` on, an away turn that ends with nothing owned running gets
+one ending recap per afk episode: the Stop hook nudges for
+`presence-kit:recap afk-ending <prompt id>` (in autonomy, `autonomous-done` when
+the goal is done, else keep working). `recap-done` records the recap in the
+state's `notices` list for that episode and that granted goal
+(`ending-recap|<afk_since>|<goal_since or ->|<time>`), so a later quiet Stop in
+the same episode nudges no more. The nudge returns when tool work happened after
+the recap (a job finished and was handled, new work started), when a new afk
+episode begins, and when a new autonomous goal is granted. A recap-done call is
+not tool work.
+
 ## Modes
 
 | Mode | You decide | You ask the user |
@@ -108,44 +128,66 @@ seat routing for a load-bearing call; this plugin does not change that policy.
 ## Waiting rule
 
 `waiting-guard`, all modes. Agent and workflow work keeps the terminal on
-"working" by itself. Non-agent work (a shell job, a Codex CLI job, an external
-job) needs a waiter agent (section Waiter agent) so the terminal shows work.
+"working" by itself and gets no waiter. Non-agent work (a shell job, a Codex CLI
+job, an external job) needs a waiter agent (section Waiter agent) so the
+terminal shows work.
 
-`liveness-watch`, all modes. Every owned job, agent and workflow work
-included, needs a Monitor on the shipped watcher (section Watcher): it reports
-a stall after quiet minutes (and progress every `progress_minutes`, which is off
-by default), which the job's own completion notice never does, because a stuck
-job never completes.
-Arm it with `watch.py --task <id>` right after the job starts. A Monitor lives
-for its `timeout_ms` (30 minutes unless you set more); when it ends while the
-job still runs, arm another. The Stop hook finds the Monitor you armed for a job
-in the main transcript (a Monitor call whose command names the job's id, joined
-to its "Monitor started (task <id>" result) and checks the payload for it still
-running. A running owned job with none gets one nudge: `No liveness watch on:
-<job>`; a job whose Monitor is no longer running gets `Liveness watch ended while
-the job still runs, re-arm it on: <job>`. A Monitor, an Artifact monitor, a
-finished task and a subagent's own job need no watch. Like the waiting guard it
-speaks once per prompt. With `liveness-watch` off, none of this applies.
+`liveness-watch`, all modes. A Monitor on the shipped watcher (section Watcher)
+reports a stall after quiet minutes (and progress every `progress_minutes`,
+which is off by default), which the job's own completion notice never does,
+because a stuck job never completes. Arm one for a job you expect to run longer
+than `watch_after_minutes` (20 minutes by default) that no waiter covers: arm it
+with `watch.py --task <id>` right after the job starts. A job a waiter covers
+needs none, because the waiter's wait.py reports the stall. A Monitor lives for
+its `timeout_ms` (30 minutes unless you set more); when it ends while the job
+still runs, arm another. The Stop hook finds the Monitor you armed for a job in
+the main transcript (a Monitor call whose command names the job's id, joined to
+its "Monitor started (task <id>" result) and checks the payload for it still
+running. A running owned job at least `watch_after_minutes` old with none gets
+one nudge: `No liveness watch on: <job>`; a job whose Monitor is no longer
+running gets `Liveness watch ended while the job still runs, re-arm it on:
+<job>`. A job's age runs from the transcript record that announced it (a
+background Bash result, a Monitor start, an Agent launch result; for an agent
+resumed with SendMessage, from that call). A job whose start the transcript does
+not show (no record, no timestamp, or a compacted transcript) counts as old, so
+it is nudged. `watch_after_minutes` 0 nudges at once. A Monitor, an Artifact
+monitor, a finished task, a running waiter agent and a subagent's own job need
+no watch. Like the waiting guard it speaks once per prompt. With `liveness-watch`
+off, none of this applies.
 
 Never hold the main session with a foreground wait. The Stop hook checks for a
 waiter and nudges once per prompt. A finished task (status
 `completed`, `failed` or `killed`), an Artifact live-updates monitor
 (description starts with `live updates for artifact `) and a shell job or
 monitor that a subagent started are not owned work: they need no waiter and no
-watch. A subagent's jobs are its own, and it reports to you when it ends. A
-subagent that waits on a background job it started (not an agent) does not end
+watch. A subagent's jobs are its own, and it reports to you when it ends. The
+hook tells them apart by the transcripts: a job announced in
+`<session transcript without .jsonl>/subagents/agent-*.jsonl` and not in the
+main transcript is the subagent's; a job it cannot place counts as yours. A job
+the waiter launched is announced only in the waiter's transcript, so it is the
+waiter's own.
+
+A waiter you launched for a job you started covers that job while it runs (the
+fallback in section Waiter agent): the hook reads the main transcript for an
+Agent call with `subagent_type: presence-kit:waiter` whose prompt names the job's
+id or its `tasks/<id>.output` path, joined to the launch result's `agentId`,
+and the payload for that agent still running. A running waiter agent (its task's
+`agent_type` is `presence-kit:waiter` or `waiter`, or its description starts
+with `waiter:`) needs no watch itself. A waiter that ended while the job still
+runs leaves the job uncovered: C fires for it even when an unrelated agent runs
+(that agent keeps the terminal working, but nothing waits on this job), and M
+follows once the job is old. The nudge lists the tasks it counted. With
+`waiting-guard` off, none of this applies.
+
+A subagent that waits on a background job it started (not an agent) does not end
 its turn while the job runs, because an idle subagent leaves the terminal
 showing idle. It runs wait.py itself in foreground Bash calls, the loop
 `agents/waiter.md` runs: `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}"
 "${PRESENCE_KIT_ROOT:?presence-kit is not provisioned}/scripts/wait.py" --output
 <task output file> --stall-minutes <n>` with `timeout: 170000` (slices of 150 s,
-never above 160), rerun on exit 4, stop on exit 0, 2 or 3. It
-does not spawn a waiter. (Hypothesis, untested: whether a waiter spawned by a subagent keeps the
-main terminal working.)
-hook tells them apart by the transcripts: a job announced in
-`<session transcript without .jsonl>/subagents/agent-*.jsonl` and not in the
-main transcript is the subagent's; a job it cannot place counts as yours. The
-nudge lists the tasks it counted. With `waiting-guard` off, none of this applies.
+never above 160), rerun on exit 4, stop on exit 0, 1, 2 or 3. It
+does not spawn a waiter. (Hypothesis, untested: whether a waiter spawned by a
+subagent keeps the main terminal working.)
 
 The guard speaks once per prompt: it never repeats the waiting nudge within a
 prompt, and a condition it left unsaid goes to the unresolved list for the
@@ -170,15 +212,37 @@ running job.
 
 ## Waiter agent
 
-Covers one non-agent job. Start a background Agent with
+Covers one non-agent job, and starts it. Start a background Agent with
 `subagent_type: presence-kit:waiter` (a Bash-only agent: it carries no other
-tools, so it costs far less context than a general-purpose agent) and the
-`waiter_model` value from `presence.py config` as its `model`. Its brief names
-the job's exact output file and the `--stall-minutes` you derive from it (the
-longest quiet period the job can show). The agent runs this until exit 0, 2 or
-3, reports one line, and changes nothing; its completion wakes the main session:
+tools, so it costs far less context than a general-purpose agent), the
+`waiter_model` value from `presence.py config` as its `model`, and a
+`description` that starts with `waiter:` (the Stop hook recognizes a waiter task
+by its agent type, and by that prefix when the type is not shown). Its brief
+names the job's exact command and working directory and the `--stall-minutes`
+you derive from it (the longest quiet period the job can show). The agent starts
+the job with Bash `run_in_background: true`, takes the output path from the tool
+result ("Output is being written to: <path>"), runs this until exit 0, 1, 2 or
+3, and reports one line: the job's exit code, the output path and, only on
+failure, a tail of at most 20 lines. Its completion wakes the main session; you
+never see the job's task id, so you arm no Monitor and the hook asks for none:
 
-    "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${PRESENCE_KIT_ROOT:?presence-kit is not provisioned}/scripts/wait.py" --output <task output file> --stall-minutes <n>
+    "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${PRESENCE_KIT_ROOT:?presence-kit is not provisioned}/scripts/wait.py" --output <output path> --stall-minutes <n> --path <the job's directory>
+
+A background job a subagent starts survives that subagent ending its turn
+(measured on 2026-11-18). The job is not in the main session's task list, so
+TaskStop on its id finds nothing: to stop a waiter-launched job, TaskStop the
+waiter. (Hypothesis, untested: stopping the waiter stops the job it started.)
+Agent and workflow jobs get no waiter: they keep the terminal working by
+themselves.
+
+Fallback, when you start the job yourself and the waiter waits on it: use it for
+a job that is already running, a job that needs state only the main session has
+(an environment, a login), a job that is not one command, or when the waiter's
+own launch is denied (a background subagent cannot ask the user for
+permission). The brief then names the job's output file (its task output path)
+instead of a command, and the agent runs the same wait.py command on that file
+and reports the same line, which costs two wakes in all. The hook then treats
+the job as covered while that waiter runs (section Waiting rule).
 
 Use `--file <path> --pattern <regex>` instead of `--output` to wait for a
 pattern in a file. `--slice-seconds <s>` defaults to 150; leave it alone. The
@@ -196,12 +260,23 @@ waiter writes (for example a `sleep 5` loop checking the done condition) under
 160 s per call. The waiter runs it again on exit 4. The brief names the job's exact output file (its task output path);
 the waiter never picks a file by recency, because it can then watch another job.
 
+A quiet file alone is not a stall when `--path <dir>` (repeatable) or `--pid
+<pid>` (repeatable) is given: wait.py then samples processes as the watcher does
+(section Watcher, the same `scripts/procwatch.py`), and a process whose working
+directory is inside a `--path` directory, or a `--pid` process or its descendant,
+that used CPU keeps the job alive. The first poll of a slice only baselines, so it
+cannot report a stall. Slices are separate processes, so the time of the last
+activity seen is kept in one small file in the temp directory
+(`presence-kit-wait-<hash of the output path>.json`), removed on exit 0 and 3.
+Without those options wait.py samples nothing and writes nothing.
+
 | Exit | Meaning |
 |---|---|
 | 0 | done: prints the `[exited with code N]` trailer or the match |
-| 3 | stalled: no size or mtime change for n minutes |
+| 3 | stalled: no size or mtime change for n minutes, and no process of the job using CPU when `--path` or `--pid` is given |
 | 4 | slice over, job still live: run the command again |
 | 2 | bad arguments, or no file within the stall window |
+| 1 | process sampling failed (only with `--path` or `--pid`): the reason is on stderr |
 
 ## Watcher
 
@@ -247,8 +322,8 @@ at a poll is only a baseline, so the first poll of a directory watch cannot
 report a stall. The watcher's own process and its ancestors (the Monitor shell,
 the session) never count. A `--task` shell job whose command runs in some other
 directory is covered by naming that directory with `--path` or the job's pid
-with `--pid`. Sampling uses `ps` plus `/proc/<pid>/cwd` (Linux) or `lsof`
-(macOS), and `lsof` runs only for the processes that used CPU. On Windows
+with `--pid`. Sampling (`scripts/procwatch.py`, shared with wait.py) uses `ps`
+plus `/proc/<pid>/cwd` (Linux) or `lsof` (macOS), and `lsof` runs only for the processes that used CPU. On Windows
 (native Python, including under Git Bash, whose `ps` has no `-A`) it calls the Win32
 API instead: a Toolhelp snapshot, `GetProcessTimes` and each process's own
 working directory; a process whose directory cannot be read (another user's) is

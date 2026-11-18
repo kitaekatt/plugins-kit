@@ -137,6 +137,7 @@ def test_config_defaults(world):
         "departure_words": ["afk"],
         "waiter_model": "haiku",
         "progress_minutes": 0,
+        "watch_after_minutes": 20,
     }
     assert [layer["name"] for layer in obj["layers"]] == ["defaults", "user", "project"]
     assert [layer["present"] for layer in obj["layers"]] == [True, False, False]
@@ -537,10 +538,26 @@ M_LINE = (
 
 
 def test_stop_nudge_end_to_end(world):
-    """a1-03: a running shell, an sdk entry, a last line that is not `Waiting on`: the waiter nudge (C) and the watch nudge (M); no W."""
+    """a1-03: a running shell announced seconds before the stop, an sdk entry: the waiter nudge (C) alone.
+    The job is far younger than watch_after_minutes, so no watch nudge (M); no W."""
     payload = load_fixture("a1-03-Stop", world.root)
     res = run_stop(world, payload)
     assert res.rc == 0 and res.err == ""
+    pid = payload["prompt_id"]
+    assert res.out == json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "Stop",
+            "additionalContext": L("waiting-guard", pid, C_LINE),
+        }
+    }) + "\n"
+    assert world.state(payload["session_id"])["nudges"] == {pid: 1, f"{pid}/waiting-guard": 1}
+
+
+def test_stop_nudge_end_to_end_with_the_watch_asked_for_at_once(world):
+    """The same payload with watch_after_minutes 0: the waiter nudge and the watch nudge (M)."""
+    world.config(values={"watch_after_minutes": 0})
+    payload = load_fixture("a1-03-Stop", world.root)
+    res = run_stop(world, payload)
     pid = payload["prompt_id"]
     assert res.out == json.dumps({
         "hookSpecificOutput": {
@@ -551,7 +568,6 @@ def test_stop_nudge_end_to_end(world):
             ]),
         }
     }) + "\n"
-    assert world.state(payload["session_id"])["nudges"] == {pid: 1, f"{pid}/waiting-guard": 1}
 
 
 def test_stop_silent_allow_prints_nothing(world):
