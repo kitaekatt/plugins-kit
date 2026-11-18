@@ -42,7 +42,7 @@ install is left alone. An unknown key or a non-boolean value is a logged FAILED 
 Registration adds `session:` lines on stderr without changing stdout or exit
 status. Relay every line in one sentence. A `session: kept:` line names another
 session's release command; run it only when the user asks. Registration lasts
-until hand-off releases it. Harness exit or crash does not end it; it appears
+until hand-off or a /clear releases it. Harness exit or crash does not end it; it appears
 `not running` locally and `unverified` elsewhere.
 
 ### Step 2: invoke and dispatch immediately

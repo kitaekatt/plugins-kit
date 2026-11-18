@@ -83,8 +83,8 @@ Operation signatures:
 - `task.py sessions release <ref> [--all-local] [--root PATH]`
 - `task.py sessions publish [--root PATH]`
 
-Work creates a registration, and only release ends it. Harness exit, resume and
-compaction do not; `/clear` does, because the cleared session no longer works the
+Work creates a registration; release or a `/clear` ends it. Harness exit, resume
+and compaction do not; `/clear` does, because the cleared session no longer works the
 task (the SessionStart `clear` hook releases every registration of that process). The record lives at `<task root>/.sessions/<host id>.yaml`, one file
 per machine, committed and pushed with the task repository.
 

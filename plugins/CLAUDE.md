@@ -301,9 +301,9 @@ unconfigurable opinion whose test passes is a finding.
   in the dashboard I think that's the easiest thing to do" (the task view was task-kit's
   dashboard when ruled; databench now provides it).
 
-- **task-kit's working-session registration lasts until hand-off; exiting the harness does
-  not release it.** `/task work` registers the Claude Code session as working a task and
-  `/task hand-off` releases it. Exit, crash and resume leave the record in place, so a user who
+- **task-kit's working-session registration lasts until hand-off or /clear; exiting the
+  harness does not release it.** `/task work` registers the Claude Code session as working a
+  task; `/task hand-off` or a `/clear` releases it. Exit, crash, resume and compaction leave the record in place, so a user who
   ends sessions without a hand-off accumulates registrations that show as `not running` on
   this machine and `unverified` on others. A user will reasonably want a record to end with
   its process; we decline a flag because a record that disappears when a process dies would
@@ -315,7 +315,8 @@ unconfigurable opinion whose test passes is a finding.
   2026-10-21: "the /task hand-off procedure should include unregistering that you are
   working on a task. The /task work procedure should include registering that you are
   working on a task. If a human interrupts this, that is on the human. If you exit a harness
-  I don't think that should count as interrupting working on a task."
+  I don't think that should count as interrupting working on a task." User ruling
+  2026-11-18: "clear should release task registration".
 
 - **task-kit commits and publishes working-session registrations to the task root's
   upstream.** A registration (and a release) is committed on the checked-out
