@@ -48,3 +48,33 @@ def remove(data_dir: Path, session_id: str, task_dir: Path) -> bool:
     except FileNotFoundError:
         return False
     return True
+
+
+def move(data_dir: Path, old_id: str, new_id: str) -> bool:
+    """Re-key the pointer of ``old_id`` to ``new_id`` (after ``/clear``): write the new, then remove the old.
+
+    Returns whether a pointer moved. A missing old pointer is not an error; a re-run finds nothing to move.
+    """
+    source = pointer_path(data_dir, old_id)
+    try:
+        text = source.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return False
+    target = pointer_path(data_dir, new_id)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=".ptr-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+        os.replace(tmp, target)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    try:
+        source.unlink()
+    except FileNotFoundError:
+        pass
+    return True

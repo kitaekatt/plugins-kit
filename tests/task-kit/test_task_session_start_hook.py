@@ -379,6 +379,30 @@ def test_clear_rekeys_every_registration_of_the_process_then_publishes(world):
     assert world.publishes == [(world.root / ".sessions" / "testhost.yaml",)]
 
 
+def test_clear_moves_the_statusline_pointer_to_the_new_session_id(world):
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
+    world.procs.append(proc)
+    world.register(world.ident("sess-one", proc), "alpha")
+    pointers = world.data / "statusline"
+    pointers.mkdir(parents=True)
+    (pointers / "sess-one").write_text("/some/task\n", encoding="utf-8")
+
+    outcome = world.run("clear", "sess-two", world.ident("sess-two", proc))
+
+    assert (pointers / "sess-two").read_text(encoding="utf-8") == "/some/task\n"
+    assert not (pointers / "sess-one").exists()
+    assert "pointer moved 1" in outcome
+
+
+def test_clear_with_no_pointer_moves_none_and_names_it(world):
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
+    world.procs.append(proc)
+    world.register(world.ident("sess-one", proc), "alpha")
+    outcome = world.run("clear", "sess-two", world.ident("sess-two", proc))
+    assert "pointer moved 0" in outcome
+    assert not (world.data / "statusline" / "sess-two").exists()
+
+
 def test_the_project_is_found_through_claude_project_dir_before_the_inputs_cwd(world):
     old = world.ident("sess-one")
     world.register(old)
