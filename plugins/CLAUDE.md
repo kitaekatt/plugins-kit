@@ -626,7 +626,9 @@ shared machinery would otherwise drag a transport dependency down into a layer t
 does not need one.
 
 Codex command construction (launcher resolution, the argv builder, the
-cmd-metacharacter refusal) is owned by `llm_kit.adapters.codex_command` in the
+cmd-metacharacter refusal; from katsoft-llm-kit 1.38.0 that refusal covers
+`&`, `|`, `^`, `<`, `>`, `%`, `!`, carriage return and line feed on a Windows
+`.cmd` or `.bat` launcher, for Codex as well as Claude) is owned by `llm_kit.adapters.codex_command` in the
 `katsoft-llm-kit` package, which is stdlib-only and imports no plugin.
 `bootstrap_lib/codex.py` is an exact alias of it (module identity, no copy, no
 fallback), so it is not part of the standalone interpreter's import closure;

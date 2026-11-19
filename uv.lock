@@ -472,13 +472,13 @@ wheels = [
 
 [[package]]
 name = "katsoft-llm-kit"
-version = "1.37.0"
+version = "1.38.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "katsoft-contracts" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/20/3b/7a40e37120af57ec777b779484d3b4df3e7e8e396e42495290e3a98121e2/katsoft_llm_kit-1.37.0-py3-none-any.whl", hash = "sha256:59674ebe4ad1ef14c469327eca2e14fc9960326cd89297375c6056df5285568a", size = 1497961, upload-time = "2026-11-19T00:29:05.709Z" },
+    { url = "https://files.pythonhosted.org/packages/f2/7a/175058b30b2142e61995486610ea4f3b311b11ca82289bf3ed7673d6ec7a/katsoft_llm_kit-1.38.0-py3-none-any.whl", hash = "sha256:67fd327639cd1f268dccb7d2bc5ed513ce5f8ba3038d70b927801c2f7678ba11", size = 1506440, upload-time = "2026-11-19T18:34:33.235Z" },
 ]
 
 [package.optional-dependencies]
