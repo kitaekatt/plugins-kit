@@ -73,9 +73,9 @@ belong to the [katsoft-libs source tree](https://github.com/kitaekatt/katsoft-li
 Change library behavior there. This plugin holds no library source and publishes no shared lib. A consumer
 venv installs the package with the extras it reaches (`katsoft-llm-kit[<extras>]>=A.B,<N` in
 its `pyproject.toml`). The plugin's own venv does the same: its `pyproject.toml` is a
-non-package project that requires the released `katsoft-llm-kit[<every extra>]>=1.24,<2` and
+non-package project that requires the released `katsoft-llm-kit[<every extra>]>=1.37,<2` and
 `katsoft-contracts>=1.0,<2`, so the extras flow from that distribution and `bootstrap.json`
-names none. The floor is 1.24 for the Windows fixes (SIGBREAK stop, private mailbox ACL, fast Codex lock probe, graph path and store fixes) first shipped in 1.24.0; the floor was 1.23 because the `/direct` `continue` verb (`llm-kit relay client continue`, the relay's `continue_session`, relay protocol amendment 3) and the `common.json` vendored in `channel/schemas` with `continue_session` in its verb enums first shipped in 1.23.0; the floor was 1.22 for the front door's sized names (`frontdoor_group`, `routing.size_only`), first loaded in 1.22.0; the floor was 1.21 for the channel schemas vendored in `channel/schemas` (the `on_behalf_of` request field and `forwarded_by` on a delivered message, relay protocol amendment 2) track the 1.21.0 library; the floor was 1.20 for the Windows access-control copy in `hooks/winacl.py` and `llm-kit relay codex`, first shipped in 1.20.0; before that, 1.17 because the transport adapter is named `openai-compat` (class `OpenAICompatBackend`, listed in `contract/public-surface.json`; `openrouter` and `OpenRouterBackend` remain as deprecated aliases through 1.19.0) from 1.17.0; before that, 1.16 because the relay and hub first refuse to start unless this machine's `relay.yaml` opts in (`enabled: true`) in 1.16.0; a hub `answer_question` (answering any question from claude.ai) is first accepted by the relay in 1.15.0; the `/direct` skill's default session listing (`sessions --state live|all` of the `llm-kit relay` client) first shipped in 1.14.0; the `relay` extra and the `llm-kit relay` command group (which the `/direct` skill and the channel server call from the plugin venv) first shipped in 1.11.0; a consent scope overrides the global defaults from 1.10.0; the per-model output-cap surface
+names none. The floor is 1.37 for the security fixes first shipped in 1.37.0 (a project model file's key-sending connection is refused until `llm-kit consent connection on` approves it, the front door's Host, Content-Type and optional token checks, tool-less Claude completions, and the refusal of tracked Codex extras; see "Connection approvals and the front door guard"); the floor was 1.24 for the Windows fixes (SIGBREAK stop, private mailbox ACL, fast Codex lock probe, graph path and store fixes) first shipped in 1.24.0; the floor was 1.23 because the `/direct` `continue` verb (`llm-kit relay client continue`, the relay's `continue_session`, relay protocol amendment 3) and the `common.json` vendored in `channel/schemas` with `continue_session` in its verb enums first shipped in 1.23.0; the floor was 1.22 for the front door's sized names (`frontdoor_group`, `routing.size_only`), first loaded in 1.22.0; the floor was 1.21 for the channel schemas vendored in `channel/schemas` (the `on_behalf_of` request field and `forwarded_by` on a delivered message, relay protocol amendment 2) track the 1.21.0 library; the floor was 1.20 for the Windows access-control copy in `hooks/winacl.py` and `llm-kit relay codex`, first shipped in 1.20.0; before that, 1.17 because the transport adapter is named `openai-compat` (class `OpenAICompatBackend`, listed in `contract/public-surface.json`; `openrouter` and `OpenRouterBackend` remain as deprecated aliases through 1.19.0) from 1.17.0; before that, 1.16 because the relay and hub first refuse to start unless this machine's `relay.yaml` opts in (`enabled: true`) in 1.16.0; a hub `answer_question` (answering any question from claude.ai) is first accepted by the relay in 1.15.0; the `/direct` skill's default session listing (`sessions --state live|all` of the `llm-kit relay` client) first shipped in 1.14.0; the `relay` extra and the `llm-kit relay` command group (which the `/direct` skill and the channel server call from the plugin venv) first shipped in 1.11.0; a consent scope overrides the global defaults from 1.10.0; the per-model output-cap surface
 first shipped in 1.7.0 and the job supervisor in 1.6.0. Codex in package mode, the project model file, `models catalog`, protocol 2 of
 `completion complete`, local selection overrides and the neutral user paths shipped in 1.3.0;
 `custom_bootstrap.py` reads `llm-kit account status --json`, which first shipped in 1.2.0;
@@ -822,6 +822,10 @@ in-flight requests; a bounded local model server queues or 503s whoever arrives
 fifth, so the arbitration has to sit where all the requests pass through. The seam
 stays run-once; the front door owns the run-of-many across processes.
 
+The front door also guards every request (Host 421, JSON content type 415, optional
+`FRONTDOOR_TOKEN` 401, `--allowed-hosts` / `FRONTDOOR_ALLOWED_HOSTS`); see "Connection approvals and
+the front door guard".
+
 What it reads: `routing:` on a transport entry in the user's model-endpoints registry
 -- `group` (the model name callers send), `order` (tier; lower fills first),
 `max_parallel` (cap; omitted = uncapped, only sensible on the last tier),
@@ -1214,7 +1218,9 @@ inherits, and a scope `on` over a global `off` allows that class for that scope 
 scope-less policy and other scopes keep the global value). A global change preserves every
 scope entry. With no file the policy is `local` on, `subscription`
 on, `metered` off, with provenance `default`, and nothing is created; a file that is unreadable or
-malformed raises `ConsentConfigError` when a caller opts in, and is never read otherwise.
+malformed raises `ConsentConfigError` when a caller opts in, and is never read otherwise. The same
+file also holds `connections`, the approvals of project connections that send a key; those apply
+whether or not a caller opts in (see "Connection approvals and the front door guard").
 
 - API: `llm_kit.registry.consent.policy(scope=None)` returns the effective `Policy` (`allowed`,
   `allows(cls)`, `refusal(cls)`, `remedy(cls)`, `to_json()`); `load_config`, `save_config` and
@@ -1257,10 +1263,73 @@ the scope and the `consent set` command that would allow the class.
 A protocol 2 request that sends no `consent` field does not opt in: it is never refused for its cost
 class and never reads the consent file. Only an opted-in request is checked.
 
+## Connection approvals and the front door guard
+
+katsoft-llm-kit 1.37.0 closed two ways for text the machine's owner did not write to reach a
+provider key. Both change what a working setup must do, so the plugin floor is 1.37.
+
+**A project model file's connection needs an approval.** A tracked `.llm-kit/models.yaml` can
+declare `endpoints.<name>: {base_url, key_env}` for an endpoint the machine does not know. The
+library uses it only after the machine owner approves that exact endpoint name, host and key
+variable; otherwise `llm_kit.registry.project_models.endpoint_connection` raises
+`ProjectModelsError` with code `unapproved`, and a protocol 2 call (so `llm-kit runs compare`
+too) refuses with `unapproved: ...` before it builds a backend or reads a key.
+
+- The command, once for each connection (the refusal message prints it with the values filled
+  in): `llm-kit consent connection on --endpoint NAME --host HOST --key-env VAR`. `off` with the
+  same three values revokes it. Both are idempotent. `llm-kit consent show` lists the approvals
+  (`connections` in its `--json` output).
+- It is needed only for a connection that names a key variable (`key_env` is not null) on an
+  endpoint that the machine's own config layers, shipped defaults and endpoint registry do not
+  already define. A keyless connection and a machine-known endpoint need none.
+- Some connections cannot be approved: plain http to a host that is not a literal loopback
+  address, a `base_url` that names no plain host, and a key variable that a machine endpoint
+  already sends to another host. An approval is read only from the user-level consent file
+  (`consent.json`, format `llm-kit.consent/v2`), never from a file in the project tree. On
+  Windows, key variables compare without regard to case.
+- Order of work: approve a connection only after every venv that reads that consent file runs
+  katsoft-llm-kit 1.37 or later. An older library refuses a consent file that holds approvals
+  (unknown key `connections`), so one early approval breaks the consent layer in each venv that
+  still runs an older release. The plugin's own venv is at 1.37 or later from this floor on;
+  check every other venv (a project's own, a maintainer checkout) first.
+
+**The front door checks every request.** `llm-kit frontdoor` attaches the owner's provider keys to
+each completion it forwards, so a web page that reaches its socket could spend them. The guard
+(`llm_kit.frontdoor._guard`, applied by `create_app` and `main`) runs these checks in this order:
+
+1. Host. An app given its bind answers 421 unless the Host names the bind. A loopback bind accepts
+   `127.0.0.1`, `localhost` and `[::1]` with its own port, plus every name in `--allowed-hosts`
+   (or `FRONTDOOR_ALLOWED_HOSTS`, a comma-separated list). An entry without a port matches that
+   name on any port; an entry with a port matches that port only.
+2. Token. When `FRONTDOOR_TOKEN` is set, every route, the health routes included, answers 401
+   unless the request carries `Authorization: Bearer <token>`. An empty value is refused at
+   startup (exit 2); unset it to turn the token off.
+3. Content type. A POST under `/v1/` whose Content-Type is not `application/json` answers 415, on
+   every app, including one built with `create_app` and no bind.
+
+Operational facts, each measured on 1.37.0:
+
+- A non-loopback bind with no allow-list and no token accepts any Host and writes one warning to
+  stderr at startup. Set `--allowed-hosts` or `FRONTDOOR_TOKEN` to close it.
+- An allow-list on a non-loopback bind does not include `127.0.0.1` or `localhost`. List them
+  when a client on the machine itself (a health probe, `curl`, acceptance) must still get in.
+- An entry with no port matches any port, so list a name once and both the forwarded port and the
+  bind port pass.
+- A bearer token sent to a server that has no token is ignored; it does not fail.
+- `create_app` called with no `bind_host` leaves the Host unchecked, for an embedder that fronts
+  the app; `main` always passes its bind. The plugin launches `llm-kit frontdoor` and
+  `scripts/frontdoor.sh` and never calls `create_app`.
+
+Other front door options: `--host` and `--port` (defaults `FRONTDOOR_HOST` and `FRONTDOOR_PORT`,
+else `127.0.0.1` and 4000), `--access-log FILE`, and `--print-config`, which prints the effective
+host, port, spill, registry, access log and allow-list as JSON, and whether a token is set (never
+the token). Reference for users: `references/llm-access.md`, "Front door guard" and
+"Approving a project connection".
+
 ## `llm_kit.cli`, launchers and bootstrap
 
 The console script is `llm-kit = llm_kit.cli:main`, with the groups `account`, `completion`,
-`models`, `jobs`, `pipeline`, `frontdoor`, `local`, `consent` and `graph`. `llm_kit.cli.LEGACY_VERBS` maps each
+`models`, `jobs`, `pipeline`, `frontdoor`, `local`, `consent`, `graph`, `relay` and `runs`. `llm_kit.cli.LEGACY_VERBS` maps each
 verb the consolidated commands carried to its group; a bare old verb prints the migration
 hint. Each carried verb keeps its arguments, output and exit codes; the exit-code tables
 differ by group because the commands differed (the scripting groups use 2 usage, 3 halt, 4
@@ -1302,6 +1371,20 @@ each group's module documents its own.
   a name from the project's `.llm-kit/graphs.yaml` or a graph file path. The file format, project
   config and static checks are in
   [the katsoft-libs graph reference](https://github.com/kitaekatt/katsoft-libs/blob/dev/docs/reference/llm-kit-graph.md).
+- **`llm-kit runs`.** The group keeps model runs and comparisons in a run store
+  (`llm_kit.runs`; format `llm-kit.run-record/v1`, one attempt of one case on one model
+  selection). Its verbs are `init` (`--store DIR --accepts synthetic,internal`), `import` (a
+  `llm-kit.run-import/v1` JSON Lines file; `--check` writes nothing), `list` (index rows,
+  filtered by `--flow`, `--group`, `--model`, `--status`, `--case`, `--since`, `--until`,
+  `--limit N`), `show` (one record; `--with-blobs` prints an import line), `reindex` (rebuild the
+  derived index) and `compare` (run cases on two or more selections of the project model file and
+  record every attempt; `--prompt`, `--cases`, `--select`, `--flow`, `--content`, `--max-usd`,
+  `--pricing`, `--dry-run`, `--scorer`). The store is `--store DIR`, else `LLM_KIT_RUN_STORE`.
+  Exit 0 success, 1 a refusal or a stopped comparison (a JSON `error` object on stderr), 2 usage.
+  `compare` makes a protocol 2 call per attempt, so a connection that sends a key needs its
+  approval first (see "Connection approvals and the front door guard"). The store layout, write
+  contract and index are in
+  [the katsoft-libs run records reference](https://github.com/kitaekatt/katsoft-libs/blob/dev/docs/reference/llm-kit-runs.md).
 - **Consumer contract.** `contract/public-surface.json` lists the public names of the pipeline
   products and `scripts/check_consumer_contract.py` reports deprecated and removed names in a
   consumer's source (invocation: `README.md`).

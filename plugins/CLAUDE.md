@@ -636,8 +636,8 @@ module at exactly one seam: the thing that LAUNCHES codex (`scripts/dispatch.py`
 imports `llm_kit.adapters.codex_command` directly behind the re-exec guard,
 because launcher resolution (`codex.cmd` via `cmd /c`) and the cmd-metacharacter
 refusal are the injection-and-Windows protections and must not be
-re-implemented; awesome-kit's `pyproject.toml` carries the matching
-`katsoft-llm-kit>=1.3,<2` floor. The
+re-implemented; awesome-kit's `pyproject.toml` requires
+`katsoft-llm-kit>=1.37,<2`, which covers that `>=1.3,<2` floor. The
 POLICY RENDERER does not: `orchestration_guidance.py`'s `detect_backend` stays
 stdlib-only and generic over every backend, duplicating `resolve_cli` (three
 lines, trusted config argv, no caller-supplied path) rather than coupling a

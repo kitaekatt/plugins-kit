@@ -237,10 +237,10 @@ class TestOwnerDependenciesAreDeclared:
         )["project"]
         assert project["requires-python"].startswith(">=3.12")
         assert "pyyaml" in project["dependencies"]
-        assert "katsoft-llm-kit[config]>=1.1,<2" in project["dependencies"]
+        assert "katsoft-llm-kit[config]>=1.37,<2" in project["dependencies"]
         assert "katsoft-contracts>=1.0,<2" in project["dependencies"]
         assert project["optional-dependencies"]["endpoint-dispatch"] == [
-            "katsoft-llm-kit[sdk]>=1.1,<2"
+            "katsoft-llm-kit[sdk]>=1.37,<2"
         ]
         manifest = json.loads((plugin / "bootstrap.json").read_text(encoding="utf-8"))
         assert manifest["shared_lib_imports"] == ["bootstrap_lib"]

@@ -1,6 +1,6 @@
 [project]
 name = "p4-kit"
-version = "0.72.3"
+version = "0.72.4"
 description = "Host-side dependencies for p4-kit plugin (importable package: p4kit_vcs)"
 requires-python = ">=3.12,!=3.14.*"
 
@@ -28,7 +28,7 @@ dependencies = [
     "pyyaml",
     "markdown-it-py",
     "regex",
-    "katsoft-llm-kit[config]>=1.1,<2",
+    "katsoft-llm-kit[config]>=1.37,<2",
     "katsoft-contracts>=1.0,<2",
 ]
 
@@ -40,7 +40,7 @@ dependencies = [
 # The group names the sdk extra of the same package, so the SDK pin comes from
 # katsoft-llm-kit and not from a second declaration here.
 [project.optional-dependencies]
-endpoint-dispatch = ["katsoft-llm-kit[sdk]>=1.1,<2"]
+endpoint-dispatch = ["katsoft-llm-kit[sdk]>=1.37,<2"]
 
 [build-system]
 requires = ["setuptools>=68"]

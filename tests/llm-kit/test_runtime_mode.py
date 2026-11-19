@@ -63,9 +63,9 @@ def test_package_mode_fleet_uses_layered_registry(site, tmp_path):
         "result = [config.get('default_endpoint'), 'fleet-chosen' in config['endpoints'],\n"
         "          config == models.DEFAULT_MODEL_CONFIG]"
     )
-    fleet = package(site, body, fleet=True, env={"HOME": str(home)})
+    fleet = package(site, body, fleet=True, env={"HOME": str(home), "USERPROFILE": str(home)})
     assert fleet["ok"] == ["fleet-chosen", True, False], fleet
-    off = package(site, body, env={"HOME": str(home)})
+    off = package(site, body, env={"HOME": str(home), "USERPROFILE": str(home)})
     # shipped defaults, layers ignored; the shipped baseline names no default_endpoint (no shipped default)
     assert off["ok"] == [None, False, True], off
     assert off["modules"] == []

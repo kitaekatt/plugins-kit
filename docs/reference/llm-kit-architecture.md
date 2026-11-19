@@ -6,6 +6,8 @@ Addition 2026-10-30, approved by the user: `llm_kit.graph` (added in katsoft-llm
 
 Addition 2026-11-03, approved by the owner: `llm_kit.relay` (added in katsoft-llm-kit 1.11) joins the graph as the 18th component at Layer 6, and `cli` adds `relay` to its set. The other signed decisions are unchanged.
 
+Addition 2026-11-14, approved by the owner (recorded in the katsoft-libs copy of this document: "Sign off (Recommended)"): `llm_kit.runs` (run records and run stores, added in katsoft-llm-kit 1.26) joins the graph as the 19th component at Layer 7 with the edges `runs -> {schema, graph, pipeline.artifacts}`, and `cli` moves to Layer 8 and adds `runs` to its set. The other signed decisions are unchanged.
+
 Source ownership: the library tree and source tests described below now live in
 [katsoft-libs](https://github.com/kitaekatt/katsoft-libs). Paths under
 `packages/katsoft-llm-kit/` refer to that repository. This marketplace retains
@@ -18,7 +20,7 @@ Legacy deletion: the llm-scripting-kit, content-pipeline-kit and job-kit plugins
 
 - Create one published plugin, llm-kit, with one release version and one library, llm_kit.
 - Consolidate under the final namespace privately, prove differential parity, then restructure one boundary at a time before consumer migration.
-- Use 18 import components (16 at the first sign-off, plus `graph` and `relay` by the additions above) with the exact acyclic edge set below; namespace initializers re-export nothing.
+- Use 19 import components (16 at the first sign-off, plus `graph`, `relay` and `runs` by the additions above) with the exact acyclic edge set below; namespace initializers re-export nothing.
 - Keep completion contracts and capability types below concrete adapters, capability tables, factories, and account probes.
 - Route pipeline backend construction through dispatch while preserving every constructor option and injection seam.
 - Keep flat jobs and leased pipeline execution separate above shared execution and storage mechanics.
@@ -106,6 +108,7 @@ Public symbols are exported from their owning component, never the root.
 | llm_kit.pipeline.analysis | Audit reports, reasoning chains, provenance, call audits, snapshots, replay, impact-per-cost views. | Traceability, replay, audit, or reporting requirements change. | The reporting CLI needs no worker controller. |
 | llm_kit.frontdoor | FastAPI routes, translation, group routing, server lifecycle, swapper acceptance. | HTTP compatibility or server lifecycle changes. | Other paths avoid FastAPI, Uvicorn, and httpx. |
 | llm_kit.relay | The per-machine loopback relay and its hub: the relay-protocol/1 messaging contract, configuration, mailbox, discovery, HTTP service, hub and the `llm-kit relay` command group's service side. Its package initializer re-exports nothing. Message validation uses `llm_kit.schema`; model calls go through `llm_kit.dispatch`. | The relay wire contract, mailbox state machine, grant rules or relay service change. | Relay consumers need it; nothing else in llm_kit imports it except the CLI. Its third-party packages sit behind the `relay` extra. |
+| llm_kit.runs | Run records (`llm-kit.run-record/v1`), the run store with its content-class policy, the derived SQLite index, and comparisons of model selections. Standard library only; it never runs git and makes no model call itself: a comparison takes the model caller as an argument, and the CLI composes it with `llm_kit.dispatch` and `llm_kit.registry`. Format ids, schemas and validation come from `llm_kit.schema`; run ids, record-path checks, the blob store and prompt filling from `llm_kit.graph`; content hashing from `llm_kit.pipeline.artifacts`. | The run-record, run-import, run-store or compare-case format, the write contract, the index or the comparison rules change. | Run consumers need it; nothing else in llm_kit imports it except the CLI. |
 | llm_kit.cli | argv parsing, subcommand routing, formatting, bootstrap guard, lazy composition. | User-facing syntax or application composition changes. | Executable entry points only. |
 
 ## Execution-overlap ruling
@@ -119,9 +122,10 @@ Shared bootstrap execution contracts live in execution; SQLite and ownership mec
 A -> {B} is the complete inter-component import set. Same-package imports are unrestricted; an omitted edge is forbidden.
 
 ~~~text
-Layer 7  cli                -> {schema, completion, registry, adapters, dispatch, jobs,
+Layer 8  cli                -> {schema, completion, registry, adapters, dispatch, jobs,
                                 pipeline.runtime, pipeline.execution, pipeline.analysis,
-                                frontdoor, scaffold, graph, relay}
+                                frontdoor, scaffold, graph, relay, runs}
+Layer 7  runs               -> {schema, graph, pipeline.artifacts}
 Layer 6  graph              -> {completion, dispatch, registry, schema,
                                 pipeline.artifacts, pipeline.execution,
                                 pipeline.runtime}
@@ -146,7 +150,7 @@ Layer 0  schema             -> {}
          scaffold           -> {}
 ~~~
 
-Deployment-mode support sits outside the 18 components, like `bootstrap_guard`: `llm_kit._runtime` (`mode()`, the routed-contract `load()`, `fleet()`, `require_fleet()`) may be imported by any component, imports no llm_kit module except `llm_kit._deployment`, and `llm_kit._deployment` (the marker the `katsoft-llm-kit` wheel replaces) is imported by `_runtime` alone. The guard `tests/llm-kit/test_import_graph.py` enforces all three. The package deployment, its contracts routing and the features it refuses are in `docs/planning/shared-lib-packaging/implementation-spec.md`, section C.
+Deployment-mode support sits outside the 19 components, like `bootstrap_guard`: `llm_kit._runtime` (`mode()`, the routed-contract `load()`, `fleet()`, `require_fleet()`) may be imported by any component, imports no llm_kit module except `llm_kit._deployment`, and `llm_kit._deployment` (the marker the `katsoft-llm-kit` wheel replaces) is imported by `_runtime` alone. The guard `tests/llm-kit/test_import_graph.py` enforces all three. The package deployment, its contracts routing and the features it refuses are in `docs/planning/shared-lib-packaging/implementation-spec.md`, section C.
 
 ### Required moves and composition seams
 

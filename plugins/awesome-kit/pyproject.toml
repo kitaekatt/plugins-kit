@@ -1,6 +1,6 @@
 [project]
 name = "awesome-kit"
-version = "0.80.1"
+version = "0.80.2"
 description = "Runtime dependencies for awesome-kit skills, including YAML support."
 requires-python = ">=3.12"
 dependencies = [
@@ -13,7 +13,7 @@ dependencies = [
     # the renderer applies (first shipped in 1.4.0; a scope overrides the global
     # defaults from 1.10.0). The config extra brings
     # the pyyaml its registry loader imports.
-    "katsoft-llm-kit[config]>=1.10,<2",
+    "katsoft-llm-kit[config]>=1.37,<2",
     "katsoft-contracts>=1.0,<2",
 ]
 
