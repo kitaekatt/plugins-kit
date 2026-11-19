@@ -164,8 +164,11 @@ like a leftover is a deliberate compatibility choice
 - **Configuration layers** keep the historical files: the fleet file
   `~/.claude/config/llm-scripting-kit.yaml`, the user
   `~/.claude/plugins/data/plugins-kit/llm-scripting-kit/config.yaml`, and the
-  project `config.yaml`. llm-kit seeds no competing layer of its own, and its
-  `custom_bootstrap.py` migrates no legacy file. The one exception is
+  project `config.yaml`. A project-tree layer may not set an endpoint's connection
+  (`base_url`, `key_env`, `key_file`) or cost class (`billing`, `frontdoor`,
+  `endpoint`): the loader drops those keys with a stderr note, so declare them in
+  the user layer (from katsoft-llm-kit 1.37.0). llm-kit seeds no competing layer
+  of its own, and its `custom_bootstrap.py` migrates no legacy file. The one exception is
   `llm_kit.registry.constants.CLI_COMMAND`, which names the llm-kit venv and executable.
 - **Environment variables** keep their spelling (`LLM_SCRIPTING_KIT_USAGE_SESSION`, `CONTENT_PIPELINE_LLM_MODELS`,
   `CONTENT_PIPELINE_SPEND_LEDGER`, `JOB_KIT_BACKPRESSURE_CAP_S`, the `JOB_KIT_*`

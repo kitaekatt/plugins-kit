@@ -412,7 +412,10 @@ client = make_openai_client(endpoint="local") # OpenAI client for that endpoint
 get_api_key(endpoint="local")                 # resolve that endpoint's key_env
 ```
 
-Adding an endpoint (user or project `config.yaml` override):
+Adding an endpoint (user-level `config.yaml`; a project-tree `config.yaml` layer
+cannot set an endpoint's `base_url`, `key_env`, `key_file`, `billing`,
+`frontdoor` or `endpoint`, and the loader drops them with a stderr note, from
+katsoft-llm-kit 1.37.0):
 
 ```yaml
 endpoints:
@@ -612,12 +615,16 @@ A harness entry can run with no file-writing, shell or subagent tool. Ask for
 it with the requirement, not a flag: `describe()` and `declaration.run()` with
 `{"guarantees": ["filesystem-write", "shell-exec", "subagent-spawn"]}` (or any
 subset) admit `claude-cli` and `codex-cli` through their `text-only-mode`
-controls, and `run()` dispatches them in that mode. A caller that requires no
-guarantee gets the unchanged argv.
+controls, and `run()` dispatches them in that mode. On codex, a caller that
+requires no guarantee gets the unchanged argv. On claude, a call with no tool
+grant (`allowed_tools` None or empty) already carries the text-only argv, from
+katsoft-llm-kit 1.37.0; earlier releases gave it every tool under
+`--permission-mode bypassPermissions`. Grant tools with `allowed_tools`, or
+pass `ALL_TOOLS` (`"*"`) for the agent-worker argv.
 
 | Adapter | Text-only argv | Guarantee declared |
 | --- | --- | --- |
-| `claude-cli` | `--tools "" --strict-mcp-config --mcp-config {"mcpServers":{}} --disable-slash-commands --setting-sources "" --permission-mode dontAsk`, in place of `--permission-mode bypassPermissions --allowedTools` | all three |
+| `claude-cli` | `--tools "" --strict-mcp-config --mcp-config {"mcpServers":{}} --disable-slash-commands --setting-sources "" --permission-mode dontAsk`, the same argv as a call with no tool grant; the `ALL_TOOLS` agent-worker argv is `--permission-mode bypassPermissions --allowedTools ""` | all three |
 | `codex-cli` | `exec --ignore-user-config -s read-only`, no network flag, `-c` pairs that turn off the shell, unified exec, multi-agent, apps, plugins, image, browser, computer-use, code-mode host, web search and MCP servers, and `-c model_catalog_json='<file>'` | all three |
 
 Codex needs the catalog file because the MODEL CATALOG, not the config, gives a
