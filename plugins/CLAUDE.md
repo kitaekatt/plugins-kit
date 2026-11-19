@@ -626,7 +626,9 @@ shared machinery would otherwise drag a transport dependency down into a layer t
 does not need one.
 
 Codex command construction (launcher resolution, the argv builder, the
-cmd-metacharacter refusal) is owned by `llm_kit.adapters.codex_command` in the
+cmd-metacharacter refusal; from katsoft-llm-kit 1.38.0 that refusal covers
+`&`, `|`, `^`, `<`, `>`, `%`, `!`, carriage return and line feed on a Windows
+`.cmd` or `.bat` launcher, for Codex as well as Claude) is owned by `llm_kit.adapters.codex_command` in the
 `katsoft-llm-kit` package, which is stdlib-only and imports no plugin.
 `bootstrap_lib/codex.py` is an exact alias of it (module identity, no copy, no
 fallback), so it is not part of the standalone interpreter's import closure;
@@ -636,8 +638,8 @@ module at exactly one seam: the thing that LAUNCHES codex (`scripts/dispatch.py`
 imports `llm_kit.adapters.codex_command` directly behind the re-exec guard,
 because launcher resolution (`codex.cmd` via `cmd /c`) and the cmd-metacharacter
 refusal are the injection-and-Windows protections and must not be
-re-implemented; awesome-kit's `pyproject.toml` carries the matching
-`katsoft-llm-kit>=1.3,<2` floor. The
+re-implemented; awesome-kit's `pyproject.toml` requires
+`katsoft-llm-kit>=1.37,<2`, which covers that `>=1.3,<2` floor. The
 POLICY RENDERER does not: `orchestration_guidance.py`'s `detect_backend` stays
 stdlib-only and generic over every backend, duplicating `resolve_cli` (three
 lines, trusted config argv, no caller-supplied path) rather than coupling a

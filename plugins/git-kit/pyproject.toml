@@ -1,6 +1,6 @@
 [project]
 name = "git-kit"
-version = "0.56.2"
+version = "0.56.3"
 description = "Host-side dependencies for git-kit plugin"
 requires-python = ">=3.12,!=3.14.*"
 
@@ -28,7 +28,7 @@ dependencies = [
     "pyyaml",
     "markdown-it-py",
     "regex",
-    "katsoft-llm-kit[config]>=1.1,<2",
+    "katsoft-llm-kit[config]>=1.37,<2",
     "katsoft-contracts>=1.0,<2",
 ]
 
@@ -40,4 +40,4 @@ dependencies = [
 # The group names the sdk extra of the same package, so the SDK pin comes from
 # katsoft-llm-kit and not from a second declaration here.
 [project.optional-dependencies]
-endpoint-dispatch = ["katsoft-llm-kit[sdk]>=1.1,<2"]
+endpoint-dispatch = ["katsoft-llm-kit[sdk]>=1.37,<2"]

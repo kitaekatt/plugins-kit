@@ -553,10 +553,66 @@ def test_provenance_entries_are_not_stale() -> None:
         assert any(anchor in line for line in text.splitlines()), (rel_path, anchor)
 
 
+def doc_corpus() -> str:
+    return "\n".join(p.read_text(encoding="utf-8") for p in doc_files())
+
+
 def test_every_cli_group_is_documented_somewhere() -> None:
-    corpus = "\n".join(p.read_text(encoding="utf-8") for p in doc_files())
+    corpus = doc_corpus()
     for group in cli_groups():
         assert f"llm-kit {group}" in corpus, group
+
+
+# Groups whose every subcommand and option the guidance must name: each one changes what a
+# call may do or who may reach a key, so a user who hits its refusal has only this text.
+SECURITY_GROUPS = ("consent",)
+
+
+def _option_strings(parser) -> list[str]:
+    return [o for action in parser._actions for o in action.option_strings if o not in ("-h", "--help")]
+
+
+def cli_terms_required(parsers=None) -> list[str]:
+    """Every `llm-kit <group> <subcommand>` and each option of a security group's subcommands."""
+    parsers = cli_groups() if parsers is None else parsers
+    terms = []
+    for group in SECURITY_GROUPS:
+        for name, sub in (_subchoices(parsers[group]) or {}).items():
+            terms.append(f"llm-kit {group} {name}")
+            terms.extend(_option_strings(sub))
+    return terms
+
+
+def frontdoor_terms_required() -> list[str]:
+    """Each option and each FRONTDOOR_* environment name of the front door, read from the library."""
+    import inspect
+
+    server = importlib.import_module("llm_kit.frontdoor.server")
+    reads = r"""(?:environ(?:\.get)?|getenv)\s*[(\[]\s*["'](FRONTDOOR_[A-Z_]+)["']"""
+    names = set(re.findall(reads, inspect.getsource(server)))
+    return sorted(names) + _option_strings(server._parser())
+
+
+def missing_terms(corpus: str, terms) -> list[str]:
+    return sorted({term for term in terms if term not in corpus})
+
+
+def test_every_security_cli_subcommand_and_option_is_documented() -> None:
+    missing = missing_terms(doc_corpus(), cli_terms_required())
+    assert not missing, f"the plugin docs do not name: {missing}"
+
+
+def test_every_front_door_option_and_environment_name_is_documented() -> None:
+    missing = missing_terms(doc_corpus(), frontdoor_terms_required())
+    assert not missing, f"the plugin docs do not name: {missing}"
+
+
+def test_the_required_terms_cover_the_new_security_surface() -> None:
+    """The derivation reads the library, so it must reach the names this guard exists for."""
+    assert "llm-kit consent connection" in cli_terms_required()
+    assert {"--endpoint", "--host", "--key-env"} <= set(cli_terms_required())
+    required = frontdoor_terms_required()
+    assert {"--allowed-hosts", "FRONTDOOR_ALLOWED_HOSTS", "FRONTDOOR_TOKEN"} <= set(required)
 
 
 # --- every checker, shown to fail ----------------------------------------------------------------
@@ -579,6 +635,13 @@ class TestCheckersCanFail:
         assert module_problems("```python\nimport llm_kit.no_such\n```")
         assert not module_problems("`llm_kit.completion.halt.Backpressure.retry_after_s` and `llm_kit.pipeline.*`")
         assert not module_problems("```python\nfrom llm_kit.completion.halt import HaltError\n```")
+
+    def test_an_undocumented_subcommand_or_front_door_name_is_reported(self) -> None:
+        bare = "llm-kit consent show llm-kit consent set --scope --json --local --subscription --metered"
+        assert "llm-kit consent connection" in missing_terms(bare, cli_terms_required())
+        assert not missing_terms(bare + " llm-kit consent connection --endpoint --host --key-env",
+                                 cli_terms_required())
+        assert "FRONTDOOR_TOKEN" in missing_terms("--host --port FRONTDOOR_ALLOWED_HOSTS", frontdoor_terms_required())
 
     def test_a_missing_cli_verb_is_reported(self) -> None:
         assert cli_problems("run `llm-kit status`")

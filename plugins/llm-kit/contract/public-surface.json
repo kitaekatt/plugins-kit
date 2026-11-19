@@ -51,6 +51,94 @@
       "status": "public"
     },
     {
+      "name": "llm_kit.pipeline.analysis.mining.Batch",
+      "status": "public"
+    },
+    {
+      "name": "llm_kit.pipeline.analysis.mining.Family",
+      "status": "public"
+    },
+    {
+      "name": "llm_kit.pipeline.analysis.mining.LabelCount",
+      "status": "public"
+    },
+    {
+      "name": "llm_kit.pipeline.analysis.mining.OTHER",
+      "status": "public"
+    },
+    {
+      "name": "llm_kit.pipeline.analysis.mining.Taxonomy",
+      "status": "public"
+    },
+    {
+      "name": "llm_kit.pipeline.analysis.mining.TaxonomyError",
+      "status": "public"
+    },
+    {
+      "name": "llm_kit.pipeline.analysis.mining.batches.Batch",
+      "status": "public"
+    },
+    {
+      "name": "llm_kit.pipeline.analysis.mining.batches.KEY_CHARS",
+      "status": "public"
+    },
+    {
+      "name": "llm_kit.pipeline.analysis.mining.batches.batch_key",
+      "status": "public"
+    },
+    {
+      "name": "llm_kit.pipeline.analysis.mining.batches.stable_batches",
+      "status": "public"
+    },
+    {
+      "name": "llm_kit.pipeline.analysis.mining.families.family_stats",
+      "status": "public"
+    },
+    {
+      "name": "llm_kit.pipeline.analysis.mining.family_stats",
+      "status": "public"
+    },
+    {
+      "name": "llm_kit.pipeline.analysis.mining.label_inventory",
+      "status": "public"
+    },
+    {
+      "name": "llm_kit.pipeline.analysis.mining.labels.LabelCount",
+      "status": "public"
+    },
+    {
+      "name": "llm_kit.pipeline.analysis.mining.labels.label_inventory",
+      "status": "public"
+    },
+    {
+      "name": "llm_kit.pipeline.analysis.mining.labels.normalize_label",
+      "status": "public"
+    },
+    {
+      "name": "llm_kit.pipeline.analysis.mining.normalize_label",
+      "status": "public"
+    },
+    {
+      "name": "llm_kit.pipeline.analysis.mining.stable_batches",
+      "status": "public"
+    },
+    {
+      "name": "llm_kit.pipeline.analysis.mining.taxonomy.Family",
+      "status": "public"
+    },
+    {
+      "name": "llm_kit.pipeline.analysis.mining.taxonomy.OTHER",
+      "status": "public"
+    },
+    {
+      "name": "llm_kit.pipeline.analysis.mining.taxonomy.Taxonomy",
+      "status": "public"
+    },
+    {
+      "name": "llm_kit.pipeline.analysis.mining.taxonomy.TaxonomyError",
+      "status": "public"
+    },
+    {
       "name": "llm_kit.pipeline.runtime.backends.BACKEND_ENV",
       "status": "removed",
       "since": "content-pipeline-kit 0.25.0",

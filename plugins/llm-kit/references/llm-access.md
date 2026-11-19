@@ -63,9 +63,11 @@ version-keyed plugin cache directory, so a bare name works there and fails in
 PowerShell, Codex, and other shells. In the examples below, `llm-kit` stands for
 the contract path; an agent or script that runs the command uses that path.
 
-The CLI has eight groups: `account`, `completion`, `models`, `jobs`, `pipeline`,
-`frontdoor`, `local` and `consent`. This document covers all of them except `jobs`
-(see `jobs.md`) and `pipeline` (see `pipeline-library.md`).
+The CLI has eleven groups: `account`, `completion`, `models`, `jobs`, `pipeline`,
+`frontdoor`, `local`, `consent`, `graph`, `relay` and `runs`. This document covers
+`account`, `completion`, `models`, `frontdoor`, `local` and `consent`; `jobs` is in
+`jobs.md`, `pipeline` in `pipeline-library.md`, and `graph`, `relay` and `runs` in
+`CLAUDE.md` ("`llm_kit.cli`, launchers and bootstrap").
 
 ```bash
 llm-kit models endpoints
@@ -834,7 +836,7 @@ read. None of them names a harness.
 |---|---|---|
 | `.env` | user API keys, one `KEY=VALUE` per line | `LLM_KIT_ENV_FILE` |
 | `model-endpoints.yaml` | the endpoint registry | `MODEL_ENDPOINTS_REGISTRY` |
-| `consent.json` | the optional consent layer's policy for the `local`, `subscription` and `metered` cost classes, with per-scope overrides of the global defaults | `LLM_KIT_CONSENT_FILE` |
+| `consent.json` | the optional consent layer's policy for the `local`, `subscription` and `metered` cost classes, with per-scope overrides of the global defaults, and the approvals of project connections that send a key (`llm-kit consent connection`) | `LLM_KIT_CONSENT_FILE` |
 
 An override names one explicit file and replaces the location. For the registry,
 a missing override file is an error; a missing neutral file is the normal
@@ -894,6 +896,39 @@ keys, refusal kinds, exit codes and result document are in
 [completion-seam-contract.md](completion-seam-contract.md) ("Protocol 2 selects
 from the project model file").
 
+### Approving a project connection
+
+A tracked project file can declare `endpoints.<name>: {base_url, key_env}` for an
+endpoint this machine does not know. `key_env` names the environment variable that
+holds the key (never the key). Since 1.37.0 the library uses such a connection
+only after the machine owner approves that exact endpoint name, host and key
+variable. A call on a row that depends on an unapproved connection is refused
+with `unapproved: ...` (`ProjectModelsError`, code `unapproved`) before the library
+builds a backend or reads a key. Protocol 2 calls and `llm-kit runs compare`
+refuse the same way.
+
+Approve it once, with the command that the refusal message prints filled in:
+
+```bash
+llm-kit consent connection on --endpoint NAME --host HOST --key-env VAR
+llm-kit consent connection off --endpoint NAME --host HOST --key-env VAR   # revoke
+llm-kit consent show                                                       # lists each approval
+```
+
+- You need it only when the connection names a key variable and no endpoint of
+  this machine (config layers, shipped defaults, the endpoint registry) already
+  defines `NAME`. A keyless connection (`key_env: null`) and a machine-known
+  endpoint need no approval.
+- `HOST` is the host of the `base_url`. It must be a plain host over https, or
+  plain http to a literal loopback address. Plain http to any other host, a
+  `base_url` with no plain host, and a key variable that a machine endpoint
+  already sends to another host cannot be approved.
+- The approval lives in the user-level `consent.json` only. A file in the project
+  tree is never read for it, so a repository cannot approve itself.
+- Approve a connection only after every venv that reads that `consent.json` runs
+  katsoft-llm-kit 1.37 or later. An older library refuses a consent file that
+  holds approvals, because `connections` is an unknown key to it.
+
 ## Install and first move
 
 Enable the `llm-kit` plugin; bootstrap provisions its venv and console script
@@ -919,6 +954,44 @@ to the next tier. Run it with `llm-kit frontdoor ...` (the contract path from
 `--print-command`. Use one uvicorn worker because concurrency counts are held in
 one process's memory. `--check` prints tiers and lists transport entries that
 are not tagged.
+
+#### Front door guard
+
+Every request passes three checks, in this order, before routing:
+
+| Check | Refusal | Applies when |
+|---|---|---|
+| Host | 421 | the front door was started with its bind (`llm-kit frontdoor` always is) |
+| Bearer token | 401 | `FRONTDOOR_TOKEN` is set; it guards every route, the health routes included |
+| JSON content type | 415 | a POST under `/v1/` whose Content-Type is not `application/json` (any app, including `create_app` with no bind) |
+
+A loopback bind (`--host 127.0.0.1`, `localhost` or `::1`) accepts `127.0.0.1`,
+`localhost` and `[::1]` with its own port, plus the names you list. List extra
+names with `--allowed-hosts` or the `FRONTDOOR_ALLOWED_HOSTS` environment
+variable (comma separated; the flag wins when both are set). A name alone matches
+any port; `name:port` matches that port only. Set `FRONTDOOR_TOKEN` to make every
+route require `Authorization: Bearer <token>`; an empty value is refused at
+startup, so unset the variable to turn the token off.
+
+```bash
+FRONTDOOR_ALLOWED_HOSTS=127.0.0.1,localhost,llm.lan FRONTDOOR_TOKEN=... \
+  llm-kit frontdoor --host 0.0.0.0 --port 4000
+llm-kit frontdoor --print-config      # host, port, spill, registry, allow-list, token set or not
+```
+
+Measured on 1.37.0:
+
+- A non-loopback bind with neither an allow-list nor a token accepts any Host
+  and prints one warning to stderr at startup.
+- An allow-list on a non-loopback bind does not include `127.0.0.1` or
+  `localhost`. List them if a client on the machine itself must reach the server.
+- A name without a port matches any port, so one entry covers both a forwarded
+  port and the bind port.
+- A bearer token sent to a server that has no token is ignored.
+
+The other options are `--host`, `--port` (defaults `FRONTDOOR_HOST` and
+`FRONTDOOR_PORT`, else `127.0.0.1` and 4000), `--spill-after`, `--registry`,
+`--access-log`, `--check` and `--print-config`.
 
 #### Marking a front door and declaring billing
 

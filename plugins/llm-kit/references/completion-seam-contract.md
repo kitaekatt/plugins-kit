@@ -157,6 +157,17 @@ tools and does not restrict them):
   `permission-bypass`. Completion jobs that name no grant pass `ALL_TOOLS`;
   agent-loop review lanes grant only Read, Grep and Glob.
 
+These three modes belong to the completion backend (`ClaudeCliBackend`). An
+agent session (`ClaudeAgentSession`) grants differently, from katsoft-llm-kit
+1.38.0: `allowed_tools` becomes `--tools <names>`, because the session always
+runs under `--permission-mode bypassPermissions`, where `--allowedTools`
+restricts nothing (1.37.0 sent it, so a grant confined nothing). `""` leaves the
+session no built-in tool; `None` and `ALL_TOOLS` keep every tool. A grant naming
+a scoped rule, `default`, an `mcp__` tool or `Agent`, `Task` or `Skill` is
+refused before the spawn. The record of an agent session reports the
+`tool-grant` control and lists no `allowed-tools` control. No Claude child, in
+either path, inherits `CLAUDECODE`.
+
 The deny control is the adapter's one CONDITIONAL control, and the asymmetry
 with the tool-grant controls beside it is deliberate. Which of them is
 reported follows the mode actually emitted. An empty DENY-list restricts
