@@ -167,7 +167,7 @@ like a leftover is a deliberate compatibility choice
   project `config.yaml`. A project-tree layer may not set an endpoint's connection
   (`base_url`, `key_env`, `key_file`) or cost class (`billing`, `frontdoor`,
   `endpoint`): the loader drops those keys with a stderr note, so declare them in
-  the user layer (from the release after 1.36.0). llm-kit seeds no competing layer
+  the user layer (from katsoft-llm-kit 1.37.0). llm-kit seeds no competing layer
   of its own, and its `custom_bootstrap.py` migrates no legacy file. The one exception is
   `llm_kit.registry.constants.CLI_COMMAND`, which names the llm-kit venv and executable.
 - **Environment variables** keep their spelling (`LLM_SCRIPTING_KIT_USAGE_SESSION`, `CONTENT_PIPELINE_LLM_MODELS`,

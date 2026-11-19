@@ -128,7 +128,7 @@ established `llm-scripting-kit` config directory names):
 - per-project override: `<project_root>/.local-data/plugins-kit/llm-scripting-kit/config.yaml`
   (it may not set an endpoint's `base_url`, `key_env`, `key_file`, `billing`,
   `frontdoor` or `endpoint`; llm-kit drops those keys with a stderr note, so
-  declare them in the user file; from the release after 1.36.0)
+  declare them in the user file; from katsoft-llm-kit 1.37.0)
 
 Use it for model diversity (a non-Claude judge in a panel) or a cheaper/faster
 model for bulk work. Cost shape: you pay haiku tokens for the executor shim PLUS

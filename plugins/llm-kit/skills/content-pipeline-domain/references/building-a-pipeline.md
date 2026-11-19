@@ -246,7 +246,7 @@ of this.
 - **`ClaudeCliBackend`** -- a `claude -p` transport. A call with no `options.allowed_tools`
   is tool-less and loads no settings, CLAUDE.md, hooks, skills or MCP servers; name
   tools to grant them, or pass `ALL_TOOLS` (`"*"`, from `llm_kit.completion.types`) for
-  the agent-worker mode (from the release after 1.36.0; earlier releases gave every
+  the agent-worker mode (from katsoft-llm-kit 1.37.0; earlier releases gave every
   tool by default).
 - **`CodexCliBackend`** -- an agent-loop transport over `codex exec`.
 - **`OpencodeCliBackend`** -- an agent-loop transport over `opencode run`; its

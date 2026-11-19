@@ -135,8 +135,7 @@ tools available. An explicitly text-only backend stays text-only. Broad write
 or shell guarantees retain text-only selection. The mode-only compatibility
 helper `arm_requirements` is unchanged; dispatching callers use `arm_call`.
 
-**`allowed_tools` selects one of three tool modes** (from the release after
-1.36.0; earlier releases sent `--permission-mode bypassPermissions
+**`allowed_tools` selects one of three tool modes** (from katsoft-llm-kit 1.37.0; earlier releases sent `--permission-mode bypassPermissions
 --allowedTools ""` for a call with no grant, which the record called "no tools"
 but left every tool available, because the CLI's `--allowedTools` approves
 tools and does not restrict them):

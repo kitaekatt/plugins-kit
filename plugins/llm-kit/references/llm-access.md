@@ -415,7 +415,7 @@ get_api_key(endpoint="local")                 # resolve that endpoint's key_env
 Adding an endpoint (user-level `config.yaml`; a project-tree `config.yaml` layer
 cannot set an endpoint's `base_url`, `key_env`, `key_file`, `billing`,
 `frontdoor` or `endpoint`, and the loader drops them with a stderr note, from
-the release after 1.36.0):
+katsoft-llm-kit 1.37.0):
 
 ```yaml
 endpoints:
@@ -618,7 +618,7 @@ subset) admit `claude-cli` and `codex-cli` through their `text-only-mode`
 controls, and `run()` dispatches them in that mode. On codex, a caller that
 requires no guarantee gets the unchanged argv. On claude, a call with no tool
 grant (`allowed_tools` None or empty) already carries the text-only argv, from
-the release after 1.36.0; earlier releases gave it every tool under
+katsoft-llm-kit 1.37.0; earlier releases gave it every tool under
 `--permission-mode bypassPermissions`. Grant tools with `allowed_tools`, or
 pass `ALL_TOOLS` (`"*"`) for the agent-worker argv.
 
