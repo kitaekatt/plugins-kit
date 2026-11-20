@@ -57,6 +57,12 @@ def resolve_settings(project_dir: Path | None) -> WorktreeSettings:
     return WorktreeSettings(enabled, root.resolve())
 
 
+def _expand_entry(entry: str, home: Path) -> Path:
+    """An additionalDirectories entry as an absolute path ("~/" means home)."""
+    path = home / entry[2:] if entry.startswith("~/") else Path(entry)
+    return path.resolve() if path.is_absolute() else path
+
+
 def ensure_permissions(root: Path) -> bool:
     """Append one absolute directory without replacing permissions or entries."""
     home = Path(os.environ.get("HOME") or Path.home())
@@ -72,7 +78,8 @@ def ensure_permissions(root: Path) -> bool:
         raise ValueError(f"{target}: permissions.additionalDirectories must be a string array")
     root_created = not root.exists()
     root.mkdir(parents=True, exist_ok=True)
-    if str(root) in entries:
+    # Claude Code expands a "~/" entry, so one naming the same directory covers root.
+    if any(_expand_entry(entry, home) == root for entry in entries):
         return root_created
     entries.append(str(root))
     target.parent.mkdir(parents=True, exist_ok=True)
