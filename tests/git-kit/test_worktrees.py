@@ -113,6 +113,17 @@ def test_permission_merge_idempotent_preserves_entries(wt):
     assert root.is_dir()
 
 
+@pytest.mark.parametrize("entry", ["~/.worktrees", "~/.worktrees/"])
+def test_permission_merge_accepts_tilde_entry_for_root(wt, entry):
+    target = Path.home() / ".claude/settings.json"
+    target.parent.mkdir()
+    target.write_text(json.dumps({"permissions": {"additionalDirectories": [entry]}}), encoding="utf-8")
+    unchanged = target.read_bytes()
+    root = Path.home() / ".worktrees"
+    assert wt.ensure_permissions(root) is True  # root directory created
+    assert target.read_bytes() == unchanged
+
+
 def test_off_bootstrap_changes_nothing(wt, monkeypatch):
     import git_kit_bootstrap as gb
     from test_bootstrap import FakeCtx
