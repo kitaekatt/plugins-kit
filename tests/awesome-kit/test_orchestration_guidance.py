@@ -2873,6 +2873,20 @@ class TestOneOrchestrationContract:
         assert "one coherent delegated implementation unit" in rendered
         assert "sequential delegated units on an eligible backend" in rendered
         assert "main-thread implementation" in rendered
+        for rule in (
+            "send a follow-up request to the existing agent with sendmessage",
+            "interference",
+            "availability",
+            "location",
+            "work in one worktree ships in commit order",
+            "separately from, or before, work already waiting there",
+            "mid-task and the request does not depend on that task",
+            "queue it to the same agent with sendmessage, even if that is slower",
+            "two agents never share a worktree",
+            "take a worktree from the pool and release it back",
+            "context survives across worktrees",
+        ):
+            assert rule in rendered
         for old in (
             "no -- write it inline",
             "handle them inline",

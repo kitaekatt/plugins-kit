@@ -232,6 +232,8 @@ technique_skill:
         - n: 5
           action: Launch every delegated unit -- each prompt a standalone brief (goal, paths, constraints, premises, return shape).
           detail: |
+            Apply the rendered `agent-reuse-razor` first: consider the existing agent before
+            launching another.
             Use the launch mechanics the rendered policy gives for the chosen backend; they
             differ materially between backends (a CLI backend has no built-in isolation or
             completion report). If the razor does not admit a parallel split, launch one coherent
