@@ -234,7 +234,7 @@ def test_single_flight_recycle_refill(lifecycle, monkeypatch):
     from worktree_pool import _file_lock
     obj = lifecycle
     obj.initialize()
-    with _file_lock(obj.namespace / ".state/maintenance.lock", blocking=False):
+    with _file_lock(obj.state / "maintenance.lock", blocking=False):
         assert obj.maintain()["outcome"] == "already active"
     obj.maintain()
     result = obj.take("recycle", "s", process=holder())
@@ -518,4 +518,193 @@ def test_linux_runtime_arguments_block_retirement(tmp_path, monkeypatch):
     path_class = Path
     monkeypatch.setattr(safety, "Path", lambda value: tmp_path / "proc" if value == "/proc" else path_class(value))
     monkeypatch.setattr(safety.sys, "platform", "linux")
+    monkeypatch.setattr(safety.os, "getuid", lambda: process.stat().st_uid, raising=False)
     assert any("runtime" in blocker for blocker in safety.path_processes(candidate))
+
+
+@pytest.mark.parametrize("case", ["outside", "no_remote", "ambiguous_remote", "unconfigured", "disabled", "disabled_invalid"])
+def test_quiet_hook_ignores_repositories_without_lifecycle(lifecycle, tmp_path, capsys, case):
+    from worktree_cli import main
+
+    repo = lifecycle.repo
+    if case == "outside":
+        repo = tmp_path
+    elif case == "no_remote":
+        git(repo, "remote", "remove", "origin")
+    elif case == "ambiguous_remote":
+        git(repo, "remote", "rename", "origin", "first")
+        git(repo, "remote", "add", "second", "https://example.test/other.git")
+    elif case == "unconfigured":
+        (repo / ".claude/bootstrap.json").unlink()
+    else:
+        config = {"enabled": False}
+        if case == "disabled_invalid":
+            config["pool"] = "invalid"
+            write_json(Path.home() / ".claude/bootstrap.json", {"git_kit": {"worktrees": {"disk_floor_percent": "invalid"}}})
+        write_json(repo / ".claude/bootstrap.json", {"git_kit": {"worktrees": config}})
+    assert main(["--repo", str(repo), "pool", "refill", "--background", "--quiet-if-off"]) == 0
+    assert capsys.readouterr() == ("", "")
+    assert not lifecycle.requests
+
+
+@pytest.mark.parametrize("invalid", [False, True])
+def test_quiet_hook_checks_enabled_repositories(lifecycle, capsys, invalid):
+    from worktree_cli import main
+
+    if invalid:
+        write_json(lifecycle.repo / ".claude/bootstrap.json", {"git_kit": {"worktrees": {"enabled": True, "pool": "invalid"}}})
+    code = main(["pool", "refill", "--repo", str(lifecycle.repo), "--background", "--quiet-if-off"])
+    out, err = capsys.readouterr()
+    if invalid:
+        assert code == 2 and "git-kit worktrees:" in err and not out
+    else:
+        assert code == 0 and json.loads(out)["outcome"] == "requested" and not err
+
+
+@pytest.mark.parametrize("same_owner", [False, True])
+def test_linux_inaccessible_fds_only_block_same_uid(tmp_path, monkeypatch, same_owner):
+    from types import SimpleNamespace
+    import worktree_safety as safety
+
+    process = tmp_path / "proc/1234"
+    (process / "fd").mkdir(parents=True)
+    (process / "cmdline").write_bytes(b"other-process\0")
+    original_iterdir, original_stat = Path.iterdir, Path.stat
+
+    def iterdir(path):
+        if path == process / "fd":
+            raise PermissionError("fd access denied")
+        return original_iterdir(path)
+
+    def stat(path, *args, **kwargs):
+        if path == process:
+            return SimpleNamespace(st_uid=1000 if same_owner else 2000)
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "iterdir", iterdir)
+    monkeypatch.setattr(Path, "stat", stat)
+    monkeypatch.setattr(safety, "Path", lambda value: tmp_path / "proc" if value == "/proc" else Path(value))
+    monkeypatch.setattr(safety.sys, "platform", "linux")
+    monkeypatch.setattr(safety.os, "getuid", lambda: 1000, raising=False)
+    blockers = safety.path_processes(tmp_path / "candidate")
+    if same_owner:
+        assert len(blockers) == 1 and "uncertain process 1234" in blockers[0]
+    else:
+        assert blockers == []
+
+
+@pytest.mark.parametrize("layer", ["user", "user-local", "project", "project-local"])
+def test_lifecycle_root_uses_base_layered_settings(lifecycle, layer):
+    import worktree_lifecycle as lc
+
+    obj = lifecycle
+    directory = Path.home() / ".claude" if layer.startswith("user") else obj.repo / ".claude"
+    target = directory / ("bootstrap.local.json" if layer.endswith("local") else "bootstrap.json")
+    payload = json.loads(target.read_text()) if target.exists() else {}
+    payload.setdefault("git_kit", {}).setdefault("worktrees", {})["root"] = "~/custom-worktrees"
+    write_json(target, payload)
+    configured = lc.Lifecycle(obj.repo)
+    assert configured.namespace == Path.home() / "custom-worktrees/remote"
+    configured.maintain()
+    assert Path(configured.read_records()[0]["path"]).is_relative_to(configured.namespace)
+
+
+@pytest.mark.parametrize("redirect", [False, True])
+def test_lifecycle_state_uses_plugin_data_home(lifecycle, tmp_path, monkeypatch, redirect):
+    import worktree_lifecycle as lc
+
+    base = Path.home() / ".claude/plugins/data"
+    if redirect:
+        base = tmp_path / "redirected-data"
+        monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(base))
+    obj = lc.Lifecycle(lifecycle.repo)
+    assert obj.state == base / "plugins-kit/git-kit/worktrees/remote"
+    obj.maintain()
+    assert (obj.state / "namespace.json").is_file()
+    record = obj.read_records()[0]
+    assert (obj.state / "records" / f"{record['id']}.json").is_file()
+    assert (obj.state / "logs" / f"{record['id']}.log").is_file()
+    assert (obj.state / "claim.lock").is_file()
+    assert not (obj.namespace / ".state").exists()
+    clone = obj.repo.parent / "other-clone"
+    git(obj.repo, "clone", "-b", "main", str(obj.repo.parent / "remote.git"), str(clone))
+    assert lc.Lifecycle(clone).state == obj.state
+
+
+@pytest.mark.parametrize("missing", ["absent", "old_module", "old_symbol"])
+def test_install_inventory_import_failure_is_diagnosed(lifecycle, capsys, monkeypatch, missing):
+    import builtins
+    from types import ModuleType
+    from worktree_config import require_install
+
+    real_import = builtins.__import__
+
+    def importing(name, *args, **kwargs):
+        if name == "bootstrap_lib.marketplace_lifecycle":
+            if missing == "old_symbol":
+                module = ModuleType(name)
+                module.InventoryError = RuntimeError
+                return module
+            exc = ModuleNotFoundError("test missing inventory")
+            exc.name = "bootstrap_lib" if missing == "absent" else name
+            raise exc
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", importing)
+    with pytest.raises(SystemExit) as error:
+        require_install(lifecycle.repo)
+    assert error.value.code == 3
+    out, err = capsys.readouterr()
+    assert not out and "Traceback" not in err
+    if missing == "absent":
+        assert "not provisioned" in err and "too old" not in err
+    else:
+        assert "too old" in err and "plugin_installs" in err and "claude plugin update bootstrap@plugins-kit" in err
+
+
+def test_proposal_covers_each_tracked_npm_lockfile(lifecycle):
+    obj = lifecycle
+    lockfiles = ["package-lock.json", "tools/package-lock.json", "apps/client/package-lock.json", "apps-client/package-lock.json"]
+    for name in lockfiles:
+        path = obj.repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}")
+        git(obj.repo, "add", name)
+    git(obj.repo, "commit", "-qm", "npm lockfiles")
+    (obj.repo / "relay").mkdir()
+    (obj.repo / "relay/package-lock.json").write_text("{}")  # Untracked files cannot become rerun inputs.
+    proposal = obj.configure()["proposal"]
+    setup = {step["id"]: step for step in proposal["pool"]["setup"]}
+    reruns = proposal["pool"]["rerun_files"]
+    assert set(reruns) == set(lockfiles)
+    assert len(setup) == len(lockfiles) + 1
+    for name in lockfiles:
+        assert len(reruns[name]) == 1
+        step = setup[reruns[name][0]]
+        prefix = Path(name).parent.as_posix()
+        assert step["argv"] == ["npm", "ci", *(["--prefix", prefix] if prefix != "." else [])]
+        assert step["recreate"] == [(Path(name).parent / "node_modules").as_posix()]
+    from worktree_config import validate_config
+    validate_config(proposal, obj.repo)
+
+
+@pytest.mark.parametrize("scope", ["user", "project", "absent"])
+def test_lifecycle_user_install_scenarios(lifecycle, scope):
+    from worktree_config import require_install
+
+    registry = Path.home() / ".claude/plugins/installed_plugins.json"
+    payload = json.loads(registry.read_text())
+    if scope == "absent":
+        payload["plugins"] = {}
+        write_json(Path.home() / ".claude/settings.json", {})
+    elif scope == "project":
+        record = payload["plugins"]["git-kit@plugins-kit"][0]
+        record.update(scope="project", projectPath=str(lifecycle.repo))
+        write_json(Path.home() / ".claude/settings.json", {})
+        write_json(lifecycle.repo / ".claude/settings.json", {"enabledPlugins": {"git-kit@plugins-kit": True}})
+    write_json(registry, payload)
+    if scope == "user":
+        require_install(lifecycle.repo)
+    else:
+        with pytest.raises(ValueError, match="install git-kit at user level"):
+            require_install(lifecycle.repo)

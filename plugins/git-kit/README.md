@@ -89,13 +89,22 @@ pool through approved settings in its tracked `.claude/bootstrap.json`.
 The lifecycle requires a usable git-kit installation enabled at user scope.
 Installation alone does not enable repository worktree management.
 
+| Installation scenario | Lifecycle result |
+|---|---|
+| Usable, enabled user scope | Works after repository approval. |
+| Project scope only | Refuses with "install git-kit at user level" and the install command. |
+| Not installed | Not applicable: no git-kit lifecycle commands or hooks. |
+
 `worktrees.py configure --propose` shows defaults and a project-fit proposal.
 `configure --apply <approved.json>` writes the approved repository settings.
 The proposal command does not write settings. The disk floor comes exclusively
 from user settings and defaults to 10 percent.
 
 For an enabled repository, `take --agent <id> --session <id> [--task <id>]`
-claims a ready worktree at `~/.worktrees/<repo>/<agent-id>`.
+claims a ready worktree at `<root>/<repo>/<agent-id>`.
+`git_kit.worktrees.root` uses bootstrap's layered settings and defaults to
+`~/.worktrees`. Lifecycle records, journals, logs, and locks live under
+`~/.claude/plugins/data/plugins-kit/git-kit/worktrees/<repo>/`.
 A take completes mapped setup and path-bound setup before it returns success.
 An empty pool blocks the take with exit 4 and requests maintenance.
 A failed take keeps its claim, files, and error log.

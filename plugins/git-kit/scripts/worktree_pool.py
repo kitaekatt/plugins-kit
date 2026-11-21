@@ -1,6 +1,6 @@
 """Shared remote identity, OS locks, and guarded legacy pool entry points.
 
-worktree_lifecycle owns mutation and durable records under <repo>/.state/.
+worktree_lifecycle owns mutation and records in git-kit's user-scoped data home.
 Legacy namespace readers remain available for inventory during migration.
 """
 

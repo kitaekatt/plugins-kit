@@ -15,7 +15,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 import worktrees as wt
-from worktree_config import Step, home_config, load, read_object, require_install, validate_config
+from bootstrap_guard import data_dir
+from worktree_config import Step, home_config, inventory_api, load, read_object, require_install, validate_config
 from worktree_pool import _file_lock, remote_url, repo_identity
 import worktree_safety as safety
 
@@ -53,9 +54,10 @@ class Lifecycle:
     def __init__(self, repo: Path) -> None:
         self.repo = wt.project_root(repo)
         self.url = remote_url(self.repo)
-        self.namespace = Path.home() / ".worktrees" / repo_identity(self.url)
-        self.state = self.namespace / ".state"
+        inventory_api()
         self.settings = load(self.repo)
+        self.namespace = wt.resolve_settings(self.repo).root / repo_identity(self.url)
+        self.state = data_dir("git-kit") / "worktrees" / repo_identity(self.url)
 
     def gate(self, *, namespace: bool = True) -> None:
         require_install(self.repo)
@@ -76,9 +78,8 @@ class Lifecycle:
             data = read_object(identity)
             if data.get("version") != 1 or data.get("remote") != self.url:
                 raise ValueError(f"Namespace remote identity collision: {identity}")
-        elif self.namespace.exists() and any(self.namespace.iterdir()):
-            # A lock directory can be created by an in-flight first initializer.
-            entries = set(self.namespace.iterdir()) - {self.state}
+        else:
+            entries = set(self.namespace.iterdir()) if self.namespace.exists() else set()
             state_entries = set(self.state.iterdir()) if self.state.exists() else set()
             if entries or any(p.name != "claim.lock" for p in state_entries):
                 raise ValueError(f"Legacy namespace requires migration before lifecycle mutation: {self.namespace}")
@@ -98,6 +99,7 @@ class Lifecycle:
             self.check_namespace()
             identity = self.state / "namespace.json"
             if not identity.exists():
+                self.namespace.mkdir(parents=True, exist_ok=True)
                 atomic_json(identity, {"version": 1, "remote": self.url, "source_clone": str(self.repo),
                                        "common_dir": wt.git(self.repo, "rev-parse", "--path-format=absolute", "--git-common-dir")})
 
@@ -212,16 +214,19 @@ class Lifecycle:
         if approved is None:
             steps = []
             reruns: dict[str, list[str]] = {}
-            for prefix, identifier in (("", "root"), ("relay/", "relay")):
-                if (self.repo / f"{prefix}package-lock.json").is_file():
-                    steps.append({"id": identifier, "argv": ["npm", "ci", *(["--prefix", "relay"] if prefix else [])],
-                                  "recreate": [f"{prefix}node_modules"]})
-                    reruns[f"{prefix}package-lock.json"] = [identifier]
-            if steps and (self.repo / ".nvmrc").is_file():
+            tracked = {p for p in wt.git(self.repo, "ls-files", "-z").split("\0") if p}
+            lockfiles = sorted(p for p in tracked if Path(p).name == "package-lock.json")
+            for index, lockfile in enumerate(lockfiles):
+                directory = Path(lockfile).parent
+                identifier = "root" if directory == Path(".") else f"npm-{index}"
+                steps.append({"id": identifier, "argv": ["npm", "ci", *(["--prefix", directory.as_posix()] if directory != Path(".") else [])],
+                              "recreate": [(directory / "node_modules").as_posix()]})
+                reruns[lockfile] = [identifier]
+            if steps and ".nvmrc" in tracked:
                 reruns[".nvmrc"] = [step["id"] for step in steps]
             steps.append({"id": "bootstrap", "argv": ["bootstrap", "run", "--project-only"],
                           "path_bound": True, "recreate": [".venv"]})
-            if (self.repo / "uv.lock").is_file():
+            if "uv.lock" in tracked:
                 reruns["uv.lock"] = ["bootstrap"]
             return {"defaults": {"enabled": False, "pool_size": 2, "disk_floor_percent": 10},
                     "proposal": {"enabled": True, "pool": {"size": 2, "setup": steps, "rerun_files": reruns}},

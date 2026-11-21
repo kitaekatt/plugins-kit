@@ -59,6 +59,8 @@ def path_processes(path: Path) -> list[str]:
             if not process.name.isdigit():
                 continue
             try:
+                if process.stat().st_uid != os.getuid():
+                    continue  # Other users' processes are outside our inspection scope.
                 commandline = (process / "cmdline").read_bytes().decode("utf-8", errors="replace")
                 if str(path) in commandline:
                     blockers.append(f"live process runtime {process.name}: {commandline.replace(chr(0), ' ')}")

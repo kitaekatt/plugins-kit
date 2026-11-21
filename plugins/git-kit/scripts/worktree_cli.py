@@ -11,7 +11,20 @@ from pathlib import Path
 
 from worktree_config import read_object
 from worktree_lifecycle import Lifecycle
+from worktree_pool import remote_url
 from worktree_safety import process_identity
+import worktrees as wt
+
+
+def lifecycle_off(repo: Path) -> bool:
+    """Check hook applicability before validating enabled lifecycle settings."""
+    try:
+        repo = wt.project_root(repo)
+        remote_url(repo)
+    except (ValueError, subprocess.CalledProcessError):
+        return True
+    raw = read_object(repo / ".claude/bootstrap.json").get("git_kit", {}).get("worktrees")
+    return raw is None or (isinstance(raw, dict) and raw.get("enabled", False) is False)
 
 
 def main(argv: list[str]) -> int:
@@ -47,6 +60,8 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     obj = None
     try:
+        if args.command == "pool" and args.quiet_if_off and lifecycle_off(args.repo):
+            return 0
         obj = Lifecycle(args.repo)
         if args.command in {"new", "remove"}:
             raise ValueError("Raw lifecycle mutation is unavailable; configure --propose, then take --agent --session or release --claim; legacy worktrees require migration")
@@ -59,8 +74,6 @@ def main(argv: list[str]) -> int:
         elif args.command in {"status", "list", "config"}:
             result = obj.status()
         elif args.command == "pool":
-            if args.quiet_if_off and (not obj.settings.config or not obj.settings.config.enabled):
-                return 0
             if args.pool_command == "status":
                 result = obj.status()
             elif args.background:

@@ -35,6 +35,13 @@ sections. Commit this file through the repository's normal procedure.
 User disk settings remain separate.
 
 A usable git-kit installation must be enabled at user scope.
+
+| Installation scenario | Lifecycle result |
+|---|---|
+| Usable, enabled user scope | Works after repository approval. |
+| Project scope only | Refuses with "install git-kit at user level" and the install command. |
+| Not installed | Not applicable: git-kit provides no lifecycle commands or hooks. |
+
 An unconfigured repository directs the caller to configure.
 A disabled repository creates no lifecycle state or worktrees.
 An existing legacy namespace blocks mutation until migration.
@@ -73,6 +80,7 @@ Remove inputs that the repository does not use.
 | Field | Rule |
 |---|---|
 | `enabled` | Boolean, default false. Explicit repository approval enables the lifecycle. |
+| `root` | Absolute or `~/` path, default `~/.worktrees`. The namespace is `<root>/<repo>`. |
 | `pool.size` | Positive integer, default 2. Ready spares and active builds count toward capacity. |
 | `setup[].id` | Unique stable ID: letters, digits, underscore, or hyphen, starting with a letter. |
 | `setup[].argv` | Nonempty argument array. Commands run in declaration order without a shell. |
@@ -84,6 +92,13 @@ Changed inputs select mapped steps once, in declaration order.
 A definition change selects every step. Path-bound steps repeat after relocation.
 The record stores input object IDs and a definition hash.
 The upstream branch comes from the source checkout's tracking settings.
+The root uses bootstrap's effective layered settings, including user, project,
+local overrides, and profiles. Repository enablement and setup approval still
+come only from tracked repository settings.
+
+The proposal includes one `npm ci` step per tracked `package-lock.json`
+directory, including the root. Each lockfile maps to its own step.
+Untracked lockfiles are excluded.
 
 User `~/.claude/bootstrap.json` and `bootstrap.local.json` can set
 `git_kit.worktrees.disk_floor_percent`. The default is 10 percent.
@@ -95,7 +110,7 @@ Setup can still fail for lack of space.
 
 Take reserves a holder under the claim lock before it renames a spare.
 The journal records both paths before the rename.
-The destination is `~/.worktrees/<repo>/<agent-id>`.
+The destination is `<root>/<repo>/<agent-id>`.
 The optional task is record metadata.
 
 Take repairs registration, fetches the source upstream, and proves a fast-forward.
@@ -162,23 +177,25 @@ A setup or Git error stops the pass and retains its evidence.
 Detached stdout and stderr go to a log. Status shows launcher and worker errors.
 
 On macOS, process inspection requires `ps` and `lsof` with sufficient visibility.
-On Linux it reads `/proc`. Unreadable process evidence blocks retirement.
+On Linux it reads `/proc` for processes owned by the current UID.
+Other users' processes are skipped. Unreadable same-user evidence blocks retirement.
 On Windows, directory-use inspection reports uncertain evidence and blocks
 automatic retirement. Claims and new builds remain available.
 
 ## Shared state and record schema
 
-The namespace is `~/.worktrees/<remote-basename>/`.
+The checkout namespace is `<root>/<remote-basename>/`.
 The remote URL and source common directory must agree across clones.
 A basename collision fails with an identity error.
 
-`~/.worktrees/<repo>/.state/` is the stated exception to the project-data
-placement policy in `plugins/CLAUDE.md`.
-The confirmed *Worktree Lifecycle / Design*, section 07, *Record and concurrency*,
-specifies this shared location so all clones use the same records and locks.
-The path derives from the user's home and repository identity, never plugin code.
+All lifecycle state belongs in git-kit's user-scoped plugin data home:
+`~/.claude/plugins/data/plugins-kit/git-kit/worktrees/<repo>/`.
+The repo key uses the same remote basename as the checkout namespace.
+The path resolves through `bootstrap_guard.data_dir("git-kit")`, so
+`CLAUDE_BOOTSTRAP_DATA_ROOT` redirects the plugin data tree for test sessions.
+Worktree checkouts remain under the configured root.
 
-| Path under `.state/` | Purpose |
+| Path under the lifecycle state directory | Purpose |
 |---|---|
 | `namespace.json` | Version, remote URL, source clone, common Git directory. |
 | `records/<stable-id>.json` | Durable record and current transition journal. |

@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_validator, model_validator
+
+from bootstrap_guard import EXIT_BOOTSTRAP_MISSING, require_bootstrap
 
 import worktrees as wt
 
@@ -77,7 +80,15 @@ class Pool(BaseModel):
 class RepositoryConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     enabled: StrictBool = False
+    root: str = "~/.worktrees"
     pool: Pool | None = None
+
+    @field_validator("root")
+    @classmethod
+    def check_root(cls, value: str) -> str:
+        if not value.strip() or not (value.startswith("~/") or Path(value).is_absolute()):
+            raise ValueError("git_kit.worktrees.root must be absolute or start with ~/")
+        return value
 
     @model_validator(mode="after")
     def check_enablement(self) -> RepositoryConfig:
@@ -123,12 +134,30 @@ def load(repo: Path) -> Settings:
     return Settings(raw, config, float(floor))
 
 
+def inventory_api() -> tuple[type[Exception], Any]:
+    """Probe the newest lifecycle API before calling bootstrap shared libraries."""
+    try:
+        from bootstrap_lib.marketplace_lifecycle import InventoryError, plugin_installs
+    except ImportError as exc:
+        if isinstance(exc, ModuleNotFoundError) and exc.name == "bootstrap_lib":
+            require_bootstrap("git-kit", feature="worktree lifecycle", missing="bootstrap_lib", force=True)
+        print(
+            "[git-kit] the installed 'plugins-kit:bootstrap' plugin is too old or stale "
+            "for the worktree lifecycle (requires bootstrap >= 0.154.1; missing: "
+            "bootstrap_lib.marketplace_lifecycle.plugin_installs). Run "
+            "`claude plugin update bootstrap@plugins-kit`. Then start a new session and retry.",
+            file=sys.stderr,
+        )
+        raise SystemExit(EXIT_BOOTSTRAP_MISSING) from None
+    return InventoryError, plugin_installs
+
+
 def require_install(repo: Path) -> None:
-    from bootstrap_lib.marketplace_lifecycle import InventoryError, plugin_installs
+    InventoryError, plugin_installs = inventory_api()
 
     try:
         installs = plugin_installs("plugins-kit:git-kit", str(repo))
     except InventoryError as exc:
         raise ValueError(f"Cannot verify user-level git-kit installation: {exc}") from exc
     if not any(install.scope == "user" for install in installs):
-        raise ValueError("Lifecycle requires a usable, enabled user-level git-kit installation; install git-kit@plugins-kit at user scope")
+        raise ValueError("Lifecycle requires a usable, enabled user-level git-kit installation; install git-kit at user level: claude plugin install git-kit@plugins-kit --scope user")
