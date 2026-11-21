@@ -115,6 +115,7 @@ from .relocate import (
 from .discovery import log_timestamp
 from .state_ops import (
     StateOpError,
+    _check_pre_close,
     _read_task_yaml,
     _resolve,
     _write_task_yaml,
@@ -693,6 +694,7 @@ def archive_task(ref: str, project_root: Path) -> ArchiveResult:
     holds SOME of the folder and ignores the rest -> record the final state
     and KEEP the folder in place (``vcs_ignored`` with no ``archived_to``:
     moving it would take tracked files off their tracked paths)."""
+    _check_pre_close(_resolve(ref, project_root), project_root)
     split = _split_state_first(ref, project_root)
     if split is not None:
         return split

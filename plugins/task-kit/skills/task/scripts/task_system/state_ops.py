@@ -84,6 +84,7 @@ from .relocate import (
 )
 from .discovery import log_timestamp, read_task_block
 from .init import InitError, derive_stub_and_title, init_task
+from .pre_close import PreCloseError, check_pre_close
 from .validate import ValidationResult, validate_ref
 
 
@@ -101,6 +102,13 @@ class StateOpError(Exception):
         super().__init__(message)
         self.errors = list(errors)
         self.warnings = list(warnings)
+
+
+def _check_pre_close(resolved: resolve.ResolvedRef, project_root: Path) -> None:
+    try:
+        check_pre_close(project_root, resolved.canonical, resolved.stub)
+    except PreCloseError as exc:
+        raise StateOpError(str(exc)) from exc
 
 
 #: Skills every worked task needs, regardless of what it declares. Merged
@@ -403,6 +411,7 @@ def close(ref: str, project_root: Path) -> str:
             f"close acts on an active task; {resolved.canonical} has "
             f"status {stored_status!r}"
         )
+    _check_pre_close(resolved, project_root)
     data["task"]["status"] = "closed"
     _write_task_yaml(folder, data)
     return resolved.canonical

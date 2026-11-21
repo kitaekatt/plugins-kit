@@ -74,6 +74,38 @@ invocation; finish the turn normally.
 Requires an existing folder whose stored status is active. Sets
 `status: closed`, keeps the folder, and prints `closed: <id>`.
 
+### Optional pre-close command
+
+The repository's `.claude/bootstrap.json` can configure `task_kit.pre_close`
+as a nonempty argv string list or an object with `argv` and `required_paths`.
+Both close and archive run this command before they change files.
+Archive also runs it before repair of an interrupted archive. The default is no command.
+
+The command runs in the absolute project root, without a shell. Whole arguments
+`{task}`, `{task_id}`, and `{repo}` become the canonical task ref, the folder slug,
+and the absolute project root. Other arguments stay literal. Environment-variable
+and shell expansion do not occur.
+
+For git-kit's checker, the command arguments after its interpreter and script are
+`check-task-close --repo {repo} --task {task_id} --json`. The script and interpreter
+entries name the installed absolute paths. The `{task_id}` form matches a take
+whose `--task` names the folder slug. Use `{task}` when takes store canonical refs.
+The object form can name the git-kit script in `required_paths`.
+This optional list contains absolute literal paths. Tokens and environment
+variables do not expand there. Unknown object keys are errors.
+
+Exit 0 requires a JSON object with `allowed` (boolean) and `parked` (object list).
+Only `allowed: true` with an empty `parked` list permits the operation. A refusal
+shows the returned object. Invalid JSON, an invalid response shape, nonzero exit,
+and a timeout after 120 seconds block the operation. Task files stay unchanged.
+
+If the command is absent, task-kit uses its normal close and archive behavior.
+If a configured executable is missing, task-kit reports `check omitted` on stderr
+and uses that same behavior. A missing `required_paths` entry has the same outcome.
+This guard covers an absent plugin script when its interpreter still exists.
+Unreadable required paths block the operation. The hook adds no git-kit import
+or installation requirement. A configured checker error remains an error.
+
 ## reopen
 
 `task.py reopen <ref> [--root PATH]`
@@ -92,6 +124,7 @@ archived folders reopen the same way.
 `task.py archive <ref> [--root PATH]`
 
 Acts on an ACTIVE task; closed or deferred tasks get a reopen-first error.
+The optional pre-close command also applies to archive.
 For tmp, it sets archived and parks the folder under `tmp/archived-tasks/`.
 For dev/tasks in git, it commits final state, deletes the folder, and commits
 the removal -- two commits scoped to the task folder, with final state safely
