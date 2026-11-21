@@ -82,6 +82,15 @@ class RepositoryConfig(BaseModel):
     enabled: StrictBool = False
     root: str = "~/.worktrees"
     pool: Pool | None = None
+    after_take: list[list[str]] = Field(default_factory=list)
+    before_release: list[list[str]] = Field(default_factory=list)
+
+    @field_validator("after_take", "before_release")
+    @classmethod
+    def check_commands(cls, commands: list[list[str]]) -> list[list[str]]:
+        if any(not argv or any(not arg or "\0" in arg for arg in argv) for argv in commands):
+            raise ValueError("Lifecycle commands require nonempty argv arrays without NUL")
+        return commands
 
     @field_validator("root")
     @classmethod

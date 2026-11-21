@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import worktrees as wt
+from worktree_extensions import pending_blockers
 from worktree_config import relative_path
 
 
@@ -126,6 +127,15 @@ def remove_outputs(path: Path, declared: list[str]) -> None:
             shutil.rmtree(target)
 
 
+def declared_process_blockers(record: dict[str, Any]) -> list[str]:
+    blockers = []
+    for process in record.get("processes", []):
+        state = process_state(process)
+        if state != "dead":
+            blockers.append(f"{state} declared process: {process}")
+    return [*blockers, *pending_blockers(record)]
+
+
 def inspect(record: dict[str, Any], upstream: str, declared: list[str]) -> dict[str, Any]:
     path = Path(record["path"])
     blockers = []
@@ -147,10 +157,7 @@ def inspect(record: dict[str, Any], upstream: str, declared: list[str]) -> dict[
     reproducible, unique = outputs(path, declared)
     if unique:
         blockers.append(f"unique ignored data must be preserved: {unique}")
-    for process in record.get("processes", []):
-        state = process_state(process)
-        if state != "dead":
-            blockers.append(f"{state} declared process: {process}")
+    blockers.extend(declared_process_blockers(record))
     blockers.extend(path_processes(path))
     return {"safe": not blockers, "at": time.time(), "upstream": upstream,
             "head": wt.git(path, "rev-parse", "HEAD"), "blockers": blockers,

@@ -19,6 +19,8 @@ from bootstrap_guard import data_dir
 from worktree_config import Step, home_config, inventory_api, load, read_object, require_install, validate_config
 from worktree_pool import _file_lock, remote_url, repo_identity
 import worktree_safety as safety
+import worktree_extensions as extensions
+import worktree_discard as discard_work
 
 ERRORS = (OSError, ValueError, subprocess.SubprocessError)
 
@@ -170,7 +172,8 @@ class Lifecycle:
     def fail(self, record: dict[str, Any], exc: BaseException) -> None:
         detail = exc.stderr if isinstance(exc, subprocess.CalledProcessError) else str(exc)
         record["error"] = {"step": record["operation"]["phase"], "reason": detail,
-                           "exit": getattr(exc, "returncode", None), "log": str(self.state / "logs" / f"{record['id']}.log")}
+                           "exit": getattr(exc, "returncode", None),
+                           "log": getattr(exc, "log", str(self.state / "logs" / f"{record['id']}.log"))}
         self.save(record)
 
     def setup(self, record: dict[str, Any], selected: list[Step]) -> None:
@@ -207,6 +210,137 @@ class Lifecycle:
         wt.git(destination, "worktree", "repair")
         record["path"] = str(destination)
         self.transition(record, name, "relocated")
+
+    def unheld_path(self, record: dict[str, Any]) -> Path:
+        """Require an unambiguous managed target with no owner or process use."""
+        if record.get("holder"):
+            raise ValueError(f"Worktree has a holder claim: {record['holder']}")
+        path = self.record_path(record)
+        if not path.is_dir() or path.resolve() == wt.project_root(path):
+            raise ValueError(f"Missing target or main checkout: {path}")
+        matches = [r for r in self.read_records() if r["state"] != "removed"
+                   and Path(r["path"]).resolve() == path.resolve()]
+        registrations = [r for r in wt.records(path) if Path(r["worktree"]).resolve() == path.resolve()]
+        if len(matches) != 1 or len(registrations) != 1 or "locked" in registrations[0]:
+            raise ValueError(f"Ambiguous or locked worktree scope: {record['id']} at {path}")
+        blockers = safety.declared_process_blockers(record)
+        if record.get("worker") and safety.process_state(record["worker"]) != "dead":
+            blockers.append(f"{safety.process_state(record['worker'])} worker process: {record['worker']}")
+        blockers.extend(safety.path_processes(path))
+        if blockers:
+            raise ValueError(f"Live or uncertain process blocks operation: {blockers}")
+        return path
+
+    def parked_rows(self) -> list[dict[str, Any]]:
+        rows = [r for r in self.snapshot()["records"] if r["state"] == "parked"]
+        for record in rows:
+            record["session"] = (record.get("last_holder") or {}).get("session")
+        return rows
+
+    @operation
+    def parked(self, *, session: str | None = None, task: str | None = None) -> dict[str, Any]:
+        self.check_namespace()
+        if session is not None and task is not None:
+            raise ValueError("parked accepts either --session or --task")
+        return {"parked": [r for r in self.parked_rows()
+                           if (session is None or r["session"] == session)
+                           and (task is None or r.get("task") == task)]}
+
+    @operation
+    def check_task_close(self, task: str) -> dict[str, Any]:
+        self.check_namespace()
+        rows = [r for r in self.parked_rows() if r.get("task") == task]
+        return {"allowed": not rows, "parked": rows}
+
+    @operation
+    def discard(self, identifier: str, *, approved: dict[str, Any] | None = None, force: bool = False) -> dict[str, Any]:
+        """A force flag grants nothing; only targeted user direction applies a proposal."""
+        self.initialize()
+        with _file_lock(self.state / "claim.lock", blocking=True):
+            record = self.get(identifier)
+            if record["state"] != "parked":
+                raise ValueError("Discard requires a parked target without a holder claim")
+            path = self.unheld_path(record)
+            _, upstream = self.fresh()
+            lost = discard_work.inventory(record, upstream, self.declared_outputs())
+            scope = {"id": identifier, "path": str(path), "repo": record["repo"], "lost_work": lost}
+            fingerprint = hashlib.sha256(json.dumps(scope, sort_keys=True).encode()).hexdigest()
+            if approved is None:
+                if force:
+                    raise ValueError("Discard requires targeted user direction; --force gives no authority")
+                proposal = {**scope, "fingerprint": fingerprint, "token": f"d-{uuid.uuid4().hex}", "at": time.time()}
+                record["discard"] = {"proposal": proposal, "user_direction": None, "outcome": "proposed"}
+                self.save(record)
+                return {"proposal": proposal}
+            direction = approved.get("user_direction")
+            if (not isinstance(direction, dict) or direction.get("actor") != "user" or direction.get("id") != identifier
+                    or not isinstance(direction.get("text"), str) or not direction["text"].strip()):
+                raise ValueError("Discard requires explicit targeted user direction (actor=user, id, text)")
+            proposal = (record.get("discard") or {}).get("proposal")
+            supplied = {key: value for key, value in approved.items() if key != "user_direction"}
+            if not proposal or supplied != proposal or proposal.get("fingerprint") != fingerprint:
+                raise ValueError("Discard proposal or target inventory changed; propose again and obtain targeted user direction")
+            record["discard"].update(user_direction=direction, outcome="applying", at=time.time())
+            self.transition(record, "discard", "remove")
+            try:
+                # Repeat ownership/process checks immediately before the approved removal.
+                self.unheld_path(record)
+                wt.git(Path(record["repo"]["source_clone"]), "worktree", "remove", "--force", str(path))
+                record.update(state="removed", worker=None, error=None)
+                record["discard"].update(outcome="removed", finished=time.time())
+                self.transition(record, "discard", "complete")
+            except ERRORS as exc:
+                record["discard"].update(outcome="incomplete", reason=str(exc), finished=time.time())
+                self.fail(record, exc)
+                raise ValueError(f"Discard incomplete for {identifier}; record retained: {exc}") from exc
+            return {"id": identifier, "state": record["state"], "discard": record["discard"]}
+
+    @operation
+    def adopt(self, identifier: str, agent: str, session: str, *, process: dict[str, Any] | None = None) -> dict[str, Any]:
+        self.initialize()
+        wt.validate_task(self.repo, agent)
+        if agent in {".state", ".staging"} or not session.strip():
+            raise ValueError("adopt requires a portable agent ID and a nonempty session")
+        identity = process or safety.process_identity(os.getppid())
+        if safety.process_state(identity) != "live":
+            raise ValueError("Holder process identity must be live and certain")
+        with _file_lock(self.state / "claim.lock", blocking=True):
+            record = self.get(identifier)
+            if record["state"] != "parked" or record.get("holder"):
+                raise ValueError(f"Adopt requires parked unheld work; winner/holder: {record.get('holder')}")
+            if any((r.get("holder") or {}).get("agent") == agent for r in self.read_records()):
+                raise ValueError(f"Agent {agent} already holds a claim")
+            path = self.unheld_path(record)
+            destination = self.namespace / agent
+            if destination != path and (destination.exists() or destination.is_symlink()):
+                raise ValueError(f"Claim destination already exists: {destination}")
+            record.update(holder={"agent": agent, "session": session, "claim": f"c-{uuid.uuid4().hex}",
+                                  "since": time.time(), **identity}, worker=safety.process_identity(os.getpid()),
+                          state="taken", last_waiting=record.get("waiting"), waiting=None)
+            self.transition(record, "adopt", "reserved")
+            try:
+                if destination != path:
+                    self.relocate(record, destination, "adopt")
+                else:
+                    wt.git(path, "worktree", "repair")
+            except ERRORS as exc:
+                record["worker"] = None
+                self.fail(record, exc)
+                raise ValueError(f"adopt kept claim {record['holder']['claim']}: {exc}") from exc
+        try:
+            # Adoption never fetches, resets, checks out a branch, or replaces files.
+            self.setup(record, [step for step in self.settings.config.pool.setup if step.path_bound])
+            extensions.run(record, "after_take", self.settings.config.after_take, self.state, self.save)
+            path = self.record_path(record)
+            record.update(branch=wt.git(path, "branch", "--show-current"), head=wt.git(path, "rev-parse", "HEAD"),
+                          worker=None, error=None)
+            self.transition(record, "adopt", "complete")
+            return {"id": identifier, "path": record["path"], "branch": record["branch"],
+                    "head": record["head"], "claim": record["holder"]["claim"], "setup": record["setup"]}
+        except ERRORS as exc:
+            record["worker"] = None
+            self.fail(record, exc)
+            raise ValueError(f"adopt kept claim {record['holder']['claim']} at {record['path']}: {exc}; log: {record['error']['log']}") from exc
 
     @operation
     def configure(self, approved: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -251,6 +385,8 @@ class Lifecycle:
         if safety.process_state(identity) != "live":
             raise ValueError("Holder process identity must be live and certain")
         record = None
+        parked = self.parked_rows()
+        own_parked = [r for r in parked if r["session"] == session or (task is not None and r.get("task") == task)]
         with _file_lock(self.state / "claim.lock", blocking=True):
             rows = self.read_records()
             if any(r.get("holder", {}).get("agent") == agent for r in rows if r.get("holder")):
@@ -260,7 +396,11 @@ class Lifecycle:
                 raise ValueError(f"Claim destination already exists: {destination}")
             ready = [r for r in rows if r["state"] == "ready" and not r["holder"]]
             if not ready:
-                raise ValueError(f"READY_POOL_EMPTY: {json.dumps(self.snapshot())}")
+                summary = self.snapshot()
+                summary["records"] = [r for r in summary["records"] if r["state"] != "parked"]
+                summary.update(parked=own_parked, other_parked_count=len(parked) - len(own_parked))
+                summary["failures"] = [r["error"] for r in [*summary["records"], *own_parked] if r.get("error")]
+                raise ValueError(f"READY_POOL_EMPTY: {json.dumps(summary)}")
             record = ready[0]
             record["holder"] = {"agent": agent, "session": session, "claim": f"c-{uuid.uuid4().hex}", "since": time.time(), **identity}
             record["worker"] = safety.process_identity(os.getpid())
@@ -294,11 +434,13 @@ class Lifecycle:
             selected_ids = {step for p in changed for step in config.rerun_files[p]}
             selected = [step for step in config.setup if step.path_bound or step.id in selected_ids or record["setup"].get("definition_hash") != definition]
             self.setup(record, selected)
+            extensions.run(record, "after_take", self.settings.config.after_take, self.state, self.save)
             record["worker"] = None
             record["error"] = None
             self.transition(record, "take", "complete")
             return {"id": record["id"], "path": record["path"], "claim": record["holder"]["claim"],
-                    "branch": branch, "head": oid, "disk": self.disk(), "setup": record["setup"]}
+                    "branch": branch, "head": oid, "disk": self.disk(), "setup": record["setup"],
+                    "parked": own_parked, "other_parked_count": len(parked) - len(own_parked)}
         except ERRORS as exc:
             record["worker"] = None
             self.fail(record, exc)
@@ -322,19 +464,32 @@ class Lifecycle:
             if Path.cwd().resolve().is_relative_to(path.resolve()):
                 raise ValueError("Run release outside the candidate directory")
             saved = record["holder"]
-            self.transition(record, "release", "safety")
-            record["holder"] = None  # Clear only in memory until safety is proven.
-            try:
+            worker = safety.process_identity(os.getpid())
+            record["worker"] = worker
+            self.transition(record, "release", "before_release")
+        try:
+            # Project callbacks can inspect lifecycle state without re-entering a
+            # lock held by their caller. The durable reservation retains ownership.
+            extensions.run(record, "before_release", self.settings.config.before_release, self.state, self.save)
+            with _file_lock(self.state / "claim.lock", blocking=True):
+                record = self.get(record["id"])
+                if record.get("holder") != saved or record.get("worker") != worker:
+                    raise ValueError("Release holder or worker reservation changed; preserving current ownership")
+                self.transition(record, "release", "safety")
+                record["holder"] = None  # Clear only in memory until safety is proven.
                 evidence = self.safety(record, persist=False)
                 if not evidence["safe"]:
                     raise ValueError(f"Release safety failed: {evidence['blockers']}")
                 record.update(state="released", last_claim=claim, error=None, worker=None, head=evidence["head"])
                 self.transition(record, "release", "complete")
-            except ERRORS as exc:
-                record["holder"] = saved
-                self.fail(record, exc)
-                raise ValueError(f"release failed; claim {claim} retained; push outcome belongs to caller: {exc}") from exc
-            return {"id": record["id"], "state": "released"}
+        except ERRORS as exc:
+            with _file_lock(self.state / "claim.lock", blocking=True):
+                current = self.get(record["id"])
+                if current.get("holder") == saved and current.get("worker") == worker:
+                    current["worker"] = None
+                    self.fail(current, exc)
+            raise ValueError(f"release failed; current ownership preserved for claim {claim}; push outcome belongs to caller: {exc}") from exc
+        return {"id": record["id"], "state": "released"}
 
     def snapshot(self) -> dict[str, Any]:
         rows = self.read_records()
@@ -347,7 +502,7 @@ class Lifecycle:
                     "branch": wt.git(path, "branch", "--show-current"),
                     "dirty": bool(wt.git(path, "status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none")),
                     "holder_process": safety.process_state(record["holder"]) if record["holder"] else None,
-                    "process_blockers": safety.path_processes(path), "at": time.time()}
+                    "process_blockers": [*safety.path_processes(path), *safety.declared_process_blockers(record)], "at": time.time()}
                 record["safety_is_historical"] = record.get("safety") is not None
         return {"namespace": str(self.namespace), "enabled": bool(self.settings.config and self.settings.config.enabled),
                 "configured": self.settings.config is not None, "records": rows, "disk": self.disk(),
@@ -382,6 +537,8 @@ class Lifecycle:
                              for r in wt.records(Path(record["repo"]["source_clone"])))
             if not path.exists() and not registered:
                 record.update(state="removed", holder=None, worker=None)
+                if op.get("name") == "discard" and (record.get("discard") or {}).get("outcome") == "applying":
+                    record["discard"].update(outcome="removed", reconciled=True, finished=time.time())
                 self.transition(record, "reconcile", "never-created or already removed")
                 continue
             if record.get("holder"):
@@ -394,7 +551,7 @@ class Lifecycle:
                     record["waiting"] = "Holder ended; inspect preserved work before adoption"
                     self.fail(record, ValueError("Interrupted claim or dead holder; files preserved"))
                 elif worker:
-                    self.fail(record, ValueError("Interrupted take; holder claim and files preserved"))
+                    self.fail(record, ValueError(f"Interrupted {op['name']}; holder claim and files preserved"))
             elif worker:
                 record["state"] = "failed"
                 self.fail(record, ValueError("Interrupted build/recycle; unavailable until safety reconciliation"))

@@ -40,6 +40,24 @@ def main(argv: list[str]) -> int:
     take.add_argument("--session", required=True)
     take.add_argument("--task")
     take.add_argument("--holder-pid", type=int, default=os.getppid(), help="Long-lived holder process (default: invoking parent)")
+    adopt = commands.add_parser("adopt")
+    adopt.add_argument("--id", required=True)
+    adopt.add_argument("--agent", required=True)
+    adopt.add_argument("--session", required=True)
+    adopt.add_argument("--holder-pid", type=int, default=os.getppid())
+    parked = commands.add_parser("parked")
+    scope = parked.add_mutually_exclusive_group()
+    scope.add_argument("--session")
+    scope.add_argument("--task")
+    close = commands.add_parser("check-task-close")
+    close.add_argument("--task", required=True)
+    close.add_argument("--json", action="store_true")
+    discard = commands.add_parser("discard")
+    discard.add_argument("--id", required=True)
+    discard_mode = discard.add_mutually_exclusive_group(required=True)
+    discard_mode.add_argument("--propose", action="store_true")
+    discard_mode.add_argument("--apply", type=Path, metavar="APPROVED_JSON")
+    discard.add_argument("--force", action="store_true", help="Grants no discard authority")
     release = commands.add_parser("release")
     release.add_argument("--claim", required=True)
     status = commands.add_parser("status")
@@ -62,6 +80,9 @@ def main(argv: list[str]) -> int:
     try:
         if args.command == "pool" and args.quiet_if_off and lifecycle_off(args.repo):
             return 0
+        if args.command == "check-task-close" and lifecycle_off(args.repo):
+            print(json.dumps({"allowed": True, "parked": []}))
+            return 0
         obj = Lifecycle(args.repo)
         if args.command in {"new", "remove"}:
             raise ValueError("Raw lifecycle mutation is unavailable; configure --propose, then take --agent --session or release --claim; legacy worktrees require migration")
@@ -69,6 +90,15 @@ def main(argv: list[str]) -> int:
             result = obj.configure(read_object(args.apply) if args.apply else None)
         elif args.command == "take":
             result = obj.take(args.agent, args.session, args.task, process=process_identity(args.holder_pid))
+        elif args.command == "adopt":
+            result = obj.adopt(args.id, args.agent, args.session, process=process_identity(args.holder_pid))
+        elif args.command == "parked":
+            result = obj.parked(session=args.session, task=args.task)
+        elif args.command == "check-task-close":
+            result = obj.check_task_close(args.task)
+            result = {"allowed": result["allowed"], "parked": result["parked"]}
+        elif args.command == "discard":
+            result = obj.discard(args.id, approved=read_object(args.apply) if args.apply else None, force=args.force)
         elif args.command == "release":
             result = obj.release(args.claim)
         elif args.command in {"status", "list", "config"}:

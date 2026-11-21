@@ -93,7 +93,7 @@ def resolve_settings(project_dir: Path | None) -> WorktreeSettings:
     config = section.get("worktrees", {})
     if not isinstance(config, dict):
         raise ValueError("git_kit.worktrees must be an object")
-    unknown = set(config) - {"enabled", "root", "pool", "disk_floor_percent"}
+    unknown = set(config) - {"enabled", "root", "pool", "disk_floor_percent", "after_take", "before_release"}
     if unknown:
         raise ValueError(f"Unknown git_kit.worktrees keys: {sorted(unknown)}")
     enabled = config.get("enabled", False)

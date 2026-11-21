@@ -37,7 +37,12 @@ def lifecycle(tmp_path, monkeypatch, git_repo):
     for name in ("HOME", "USERPROFILE"):
         monkeypatch.setenv(name, str(home))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / ".claude"))
-    monkeypatch.delenv("CLAUDE_BOOTSTRAP_DATA_ROOT", raising=False)
+    monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(home / "plugin-data"))
+    # CLI tests opt out of re-exec, but the redirected-root guard first requires
+    # an interpreter candidate. Keep that candidate inside the isolated home.
+    interpreter = home / "plugin-data/plugins-kit/git-kit/.venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    interpreter.parent.mkdir(parents=True)
+    interpreter.write_text("test-only candidate; _BOOTSTRAP_GUARD_SKIP_REEXEC=1", encoding="utf-8")
     monkeypatch.setenv("PYTHONPATH", str(Path(__file__).parents[2] / "plugins/bootstrap"))
     git_repo.commit_file(".gitignore", "output/\ndeps-output/\nlocal.secret\n.claude/bootstrap.local.json\n")
     git_repo.commit_file("lock.txt", "one")
@@ -626,6 +631,8 @@ def test_lifecycle_state_uses_plugin_data_home(lifecycle, tmp_path, monkeypatch,
     if redirect:
         base = tmp_path / "redirected-data"
         monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(base))
+    else:
+        monkeypatch.delenv("CLAUDE_BOOTSTRAP_DATA_ROOT", raising=False)
     obj = lc.Lifecycle(lifecycle.repo)
     assert obj.state == base / "plugins-kit/git-kit/worktrees/remote"
     obj.maintain()
