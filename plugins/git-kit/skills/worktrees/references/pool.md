@@ -1,14 +1,48 @@
-# Shared pool of ready worktrees
+# Opt-in worktree lifecycle
 
-The pool keeps task worktrees ready before a task starts. A ready worktree is
-on the latest upstream commit, and every setup step of the repository passed in
-it. A take moves one ready worktree to the task path at once. Code:
-`scripts/worktree_pool.py`. Tests: `tests/git-kit/test_worktree_pool.py`.
+This reference describes repositories that explicitly enable the lifecycle.
+Installation alone imposes no worktree policy. Settings default to disabled.
 
-## Configuration
+## CLI and approval
 
-The repository declares the pool in `git_kit.worktrees` of its
-`.claude/bootstrap.json`. The pool works only when `enabled` is `true`.
+Launch the CLI through the provisioned plugin:
+
+```bash
+"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${GIT_KIT_ROOT:?requires git-kit provisioning}/scripts/worktrees.py" configure --propose --repo /path/to/repo
+```
+
+The following arguments use that same CLI. Every command accepts `--repo`
+before or after its name.
+
+| Arguments | Result |
+|---|---|
+| `configure --propose` | Show defaults and a project-fit proposal without changing settings. |
+| `configure --apply approved.json` | Validate and write the approved repository settings. |
+| `take --agent a1 --session s1 [--task task-id]` | Claim a spare and complete setup at its final path. |
+| `release --claim c-...` | Release the exact claim after full delivery and successful safety checks. |
+| `status [--json]` | Show records, current Git observations, process blockers, disk, and maintenance. |
+| `maintenance` | Run the internal maintenance pass in the foreground. |
+
+Status always emits JSON. `config` and `list` are status aliases.
+`pool status` and `pool refill` delegate to status and maintenance.
+`pool refill --background` requests a detached pass.
+Raw `new`, task-named `take`, and raw `remove` refuse mutation.
+
+Review the proposal with the user before applying it. Save the approved
+`proposal` object as JSON, then pass its file path to `--apply`.
+Apply changes only repository `.claude/bootstrap.json`, preserving unrelated
+sections. Commit this file through the repository's normal procedure.
+User disk settings remain separate.
+
+A usable git-kit installation must be enabled at user scope.
+An unconfigured repository directs the caller to configure.
+A disabled repository creates no lifecycle state or worktrees.
+An existing legacy namespace blocks mutation until migration.
+
+## Settings
+
+Repository settings live under `git_kit.worktrees` in tracked
+`.claude/bootstrap.json`. User and local opt-ins cannot enable a repository.
 
 ```json
 {
@@ -17,134 +51,151 @@ The repository declares the pool in `git_kit.worktrees` of its
       "enabled": true,
       "pool": {
         "size": 2,
-        "setup": [["npm", "ci"], ["bootstrap", "run", "--project-only"]],
-        "rebuild_when_changed": ["package-lock.json", "uv.lock"],
-        "after_take": {"remove": [".venv"], "steps": [["bootstrap", "run", "--project-only"]]}
+        "setup": [
+          {"id": "root", "argv": ["npm", "ci"], "recreate": ["node_modules"]},
+          {"id": "bootstrap", "argv": ["bootstrap", "run", "--project-only"],
+           "path_bound": true, "recreate": [".venv"]}
+        ],
+        "rerun_files": {
+          "package-lock.json": ["root"],
+          ".nvmrc": ["root"],
+          "uv.lock": ["bootstrap"]
+        }
       }
     }
   }
 }
 ```
 
-| Key | Default | Meaning |
-|-----|---------|---------|
-| `size` | `2` | The number of ready worktrees that a refill keeps. |
-| `setup` | `[["bootstrap", "run"]]` | Commands, as argument arrays, that run in order in the worktree. No shell. |
-| `rebuild_when_changed` | `[]` | Paths. When the upstream changed one of them after a spare was built, the take runs `setup` again. |
-| `after_take.remove` | `[]` | Ignored paths inside the worktree that the take deletes after the move. |
-| `after_take.steps` | `[]` | Commands that the take runs at the task path after the move. |
+The example requires every listed input to be tracked.
+Remove inputs that the repository does not use.
 
-Use `after_take` for setup output that records its own absolute path. A Python
-venv does: its console scripts and `activate` name the venv path, so a moved
-venv is broken. Remove it and make it again at the task path. `node_modules`
-links are relative and survive the move. The take refuses to delete a path that
-Git does not ignore.
+| Field | Rule |
+|---|---|
+| `enabled` | Boolean, default false. Explicit repository approval enables the lifecycle. |
+| `pool.size` | Positive integer, default 2. Ready spares and active builds count toward capacity. |
+| `setup[].id` | Unique stable ID: letters, digits, underscore, or hyphen, starting with a letter. |
+| `setup[].argv` | Nonempty argument array. Commands run in declaration order without a shell. |
+| `setup[].path_bound` | Boolean, default false. Repeat this step after each relocation. |
+| `setup[].recreate` | Relative reproducible outputs. Paths cannot overlap or contain tracked data. |
+| `rerun_files` | Map from tracked inputs to known setup IDs. Default: empty map. |
 
-## Where the pool is
+Changed inputs select mapped steps once, in declaration order.
+A definition change selects every step. Path-bound steps repeat after relocation.
+The record stores input object IDs and a definition hash.
+The upstream branch comes from the source checkout's tracking settings.
 
-- All clones of one remote share one pool. The pool folder is
-  `<root>/<repo>/ready/`, where `<repo>` is the last path part of the remote
-  URL (`origin`, or the only remote) without `.git`.
-- A taken worktree moves to `<root>/<repo>/<task>`. This is the same
-  filesystem, so the move is one rename.
-- `pool.json` records the remote URL and the source clone. When the URL does
-  not agree, the pool stops with an error: two remotes share the folder name.
-- The task name `ready` is reserved.
-- The pool records, logs and locks stay in the pool folder, not in the plugin
-  data folder. Every clone must use the same locks and records, and they
-  describe the worktrees beside them: when the root moves, they move too.
+User `~/.claude/bootstrap.json` and `bootstrap.local.json` can set
+`git_kit.worktrees.disk_floor_percent`. The default is 10 percent.
+Project layers cannot change it. At or below the floor, only new builds block.
+Takes, release, reconciliation, reuse, and removal remain available.
+Setup can still fail for lack of space.
 
-## Source clone
+## Claims and push integration
 
-The first clone that runs a refill records itself as the source clone. Every
-spare is a worktree of that clone, so:
+Take reserves a holder under the claim lock before it renames a spare.
+The journal records both paths before the rename.
+The destination is `~/.worktrees/<repo>/<agent-id>`.
+The optional task is record metadata.
 
-- No extra clone uses disk space; the source clone has the objects already.
-- `git worktree list` in the source clone shows the full pool.
-- Every task branch from the pool is in one repository, so a branch name is
-  checked in one place. The take refuses a branch name that exists there.
+Take repairs registration, fetches the source upstream, and proves a fast-forward.
+It creates a separate branch and completes selected setup.
+An empty pool blocks take with exit 4 and requests maintenance.
+A failed take retains its claim, files, failed step, and log.
+Incomplete claims never become available spares.
 
-When the source clone moves, set `source` in `pool.json` to another clone of the
-same remote.
+`--holder-pid` names the long-lived holder process. Its default is the CLI parent.
+Callers with short-lived shell parents must supply the actual holder PID.
+Records include PID and process start identity.
 
-## Refill
+Agents use plain `git commit`. After a full push, the caller runs release
+from outside the claimed directory:
 
-`worktrees.py pool refill` builds spares one at a time until the pool has
-`size` spares.
+```bash
+"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${GIT_KIT_ROOT:?requires git-kit provisioning}/scripts/worktrees.py" release --repo /path/to/source --claim c-...
+```
 
-1. Only one refill runs. It holds `ready/.refill.lock`. A second refill exits at
-   once with `"skipped": "another refill is running"`.
-2. A build starts in `ready/.staging/<id>/` from the fresh upstream commit, with
-   checkout hooks off: the declared `setup` steps replace them.
-3. Each `setup` step runs in the staging folder. Its output goes to
-   `ready/.state/<id>.log`, and `ready/.state/<id>.json` shows the current step.
-4. When every step passed, the build is renamed to `ready/<id>/`. Thus a
-   half-built worktree is never in the pool.
-5. When a step fails, the refill removes the staging worktree, keeps the record
-   with its reason (step, command, exit code) and the log, and exits non-zero.
-   The pool keeps the last 5 failed records.
-6. A `building` record without a running refill is from a build that stopped.
-   The next refill records it as failed (`abandoned`) and removes its staging
-   worktree. It refuses to remove one that has unpublished commits.
+The library seam is `worktree_lifecycle.release(repo: Path, claim: str)`.
+The caller imports it from git-kit's provisioned `scripts` directory.
+It returns the release result and maintenance outcome, or raises `ValueError`.
+For a Python caller in the provisioned environment:
 
-Triggers:
+```python
+import os
+import sys
+from pathlib import Path
 
-- Each take starts a detached refill.
-- Each Claude Code session start: git-kit's SessionStart hook
-  (`hooks/sessionstart/pool-refill.sh`) starts a detached refill and returns at
-  once. It does nothing outside a Git checkout or when no pool is configured.
-  When it finds no Python interpreter at all, it prints one warning and exits 0.
-  The hook is used, not the bootstrap pass, because the bootstrap pass runs at
-  most once an hour for each project.
-- Setup steps run with `GIT_KIT_POOL_BUILD=1`. Under it, a refill does not
-  start, so a build cannot start another build.
+sys.path.insert(0, str(Path(os.environ["GIT_KIT_ROOT"]) / "scripts"))
+from worktree_lifecycle import release
 
-A detached refill writes to `ready/.refill.log`.
+result = release(Path(source_checkout), claim_id)
+```
 
-## Take
+The caller reports push success separately from a release error.
+Partial delivery keeps the claim. Later commits outside upstream also block release.
+An old token cannot release a subsequent holder.
 
-`worktrees.py take <task>`:
+## Retirement and maintenance
 
-1. Renames the oldest spare to `<root>/<repo>/<task>`. The rename is the claim.
-   When two agents take at the same time, only one rename of a spare can
-   succeed; the other agent tries the next spare. The take also holds
-   `ready/.claim.lock` for the rename, because Windows does not promise an
-   atomic directory rename.
-2. Repairs the Git worktree links after the move.
-3. Fetches the source clone (one fetch at a time, under `ready/.fetch.lock`)
-   and creates the branch `<task>` on the fresh upstream commit. A spare that is
-   behind the upstream moves forward; a spare has no commits of its own.
-4. When the upstream changed a `rebuild_when_changed` path since the spare was
-   built, it runs `setup` again in the task worktree. A failure keeps the
-   worktree, names the step and the log, and exits with the step's exit code.
-5. Deletes the `after_take.remove` paths and runs `after_take.steps` at the
-   task path. A failure keeps the worktree, names the step and the log, and
-   exits with the step's exit code.
-6. Starts a detached refill (before steps 2-5, so a slow take does not delay it).
+Release proves safety before it atomically persists the cleared holder.
+A live or uncertain builder blocks release.
+Retirement requires clean tracked files, no untracked files, no holder,
+and no live or uncertain process with a candidate directory or runtime path.
+It also requires no `+` in `git cherry <fresh-upstream> HEAD`,
+no unique ignored data, and no locked Git registration.
+The main checkout never enters retirement. A remote task branch cannot prove delivery.
 
-The JSON result has `path`, `branch`, `spare`, `base`, `head`, `rebased` and
-`setup: {ran, exit, changed}` and `after_take: {removed, exit}`.
+Only declared, ignored reproducible outputs qualify for removal.
+Unique ignored data remains in place. Removal uses no blanket `--force`.
+The lifecycle never removes branches.
 
-## Empty pool: a hard block
+Each completed or blocked public operation requests background maintenance.
+Disabled and unconfigured repositories perform no pass.
+One OS lock coordinates all clones of a remote.
+Internal steps continue the same pass. No timers or idle-age cleanup exist.
 
-When no spare is ready, the take stops with exit code 4. It does not make a
-fresh worktree and does not run a setup. The message names:
+Maintenance resolves interrupted journals and dead holders first.
+Unfinished work becomes parked. Safe candidates enter reuse before new builds.
+Reuse completes full setup before ready publication.
+Surplus safe candidates enter removal. Removed records remain available.
+A setup or Git error stops the pass and retains its evidence.
+Detached stdout and stderr go to a log. Status shows launcher and worker errors.
 
-- the builds in progress, with their current step and log;
-- builds that stopped (abandoned);
-- the failed builds, with their reasons and logs;
-- the taken worktrees that still exist.
+On macOS, process inspection requires `ps` and `lsof` with sufficient visibility.
+On Linux it reads `/proc`. Unreadable process evidence blocks retirement.
+On Windows, directory-use inspection reports uncertain evidence and blocks
+automatic retirement. Claims and new builds remain available.
 
-The take also starts a refill. Report the details to the user and stop the task. To build one
-now in the foreground: `worktrees.py pool refill`.
+## Shared state and record schema
 
-## Status
+The namespace is `~/.worktrees/<remote-basename>/`.
+The remote URL and source common directory must agree across clones.
+A basename collision fails with an identity error.
 
-`worktrees.py pool status` prints JSON: `spares`, `building`, `abandoned`,
-`failed` and `taken`.
+`~/.worktrees/<repo>/.state/` is the stated exception to the project-data
+placement policy in `plugins/CLAUDE.md`.
+The confirmed *Worktree Lifecycle / Design*, section 07, *Record and concurrency*,
+specifies this shared location so all clones use the same records and locks.
+The path derives from the user's home and repository identity, never plugin code.
 
-## Safety
+| Path under `.state/` | Purpose |
+|---|---|
+| `namespace.json` | Version, remote URL, source clone, common Git directory. |
+| `records/<stable-id>.json` | Durable record and current transition journal. |
+| `logs/<stable-id>.log` | Setup command output and errors. |
+| `claim.lock` | Holder reservation, rename journal, and retirement exclusion. |
+| `fetch.lock` | Serialized source fetches. |
+| `maintenance.lock` | One maintenance worker across clones. |
+| `launch.lock` | Launcher/worker acceptance handshake. |
+| `maintenance.json`, `maintenance.log` | Worker identity, outcome, and output. |
+| `launcher-error.json` | Failed launcher operation and reason. |
 
-- Spares and taken worktrees are only under the configured root.
-- `list` does not report the pool folder. Remove a taken worktree with
-  `remove`, as for any task worktree: it refuses unpublished work.
+Record version 1 contains `id`, `repo`, `path`, `state`, `operation`, `holder`,
+`task`, `branch`, `head`, `upstream`, `boundary`, `waiting`, `setup`,
+`processes`, `extension`, `safety`, `worker`, and `error`.
+Operation stores name, phase, previous state, time, and rename paths.
+Holder stores agent, session, claim, claim time, PID, and start identity.
+Setup stores built OID, definition hash, input OIDs, selected steps, and
+the final-path result. Errors store step, reason, exit code, and log.
+Release retains `last_claim`. Dead-holder recovery retains `last_holder`.
+Status adds live `observed` fields and marks stored safety as historical.

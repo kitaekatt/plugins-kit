@@ -3,97 +3,42 @@ _schema_version: 1
 name: worktrees
 author: christina
 skill-type: technique-skill
-description: Use when starting Git task work or managing task worktrees. Do NOT use for code review.
+description: Use when inspecting or operating a repository's opt-in worktree lifecycle. Do NOT use for code review.
 ---
 
-# Task worktrees
+# Opt-in worktree lifecycle
 
-This workflow applies only when the effective `git_kit.worktrees.enabled`
-setting is `true`. Configuration and helper details: [git-kit README](../../README.md#task-worktrees).
+This skill describes repositories that enable `git_kit.worktrees` through
+approved repository settings. Installation alone imposes no checkout policy.
 
-```yaml
-technique_skill:
-  _schema_version: "1"
-  trigger_model: auto
-  identity: Manage task checkouts under the root selected through bootstrap manifests.
-  scope:
-    covers:
-      - checking the effective opt-in before starting Git task work
-      - creating, inspecting and retiring task checkouts when enabled
-    excludes:
-      - code review
-      - enabling the setting or changing permissions without the user's request
-  techniques:
-    - id: task_worktree
-      name: Opt-in task worktree lifecycle
-      keywords: [task, worktree, cleanup]
-      goal: Carry out the configured task checkout lifecycle without losing unpublished work.
-      preconditions:
-        - The current directory is inside a Git checkout.
-      gotchas:
-        - A pushed task branch is published but can still be unmerged into the main upstream.
-      steps:
-        - n: 1
-          action: |
-            Run "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/worktrees.py" config.
-            Read enabled and root from the JSON output. If enabled is false, stop this
-            technique; it imposes no checkout policy and changes no files.
-        - n: 2
-          action: |
-            When enabled, task worktrees belong at <root>/<repo>/<task>, where repo is
-            the main checkout's folder name and task is one portable path component.
-            Create the task with "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/worktrees.py" new <task>.
-            The default source is the main checkout's fresh upstream. --from <ref>
-            accepts a remote-tracking branch, local branch, tag or commit. The helper
-            fetches for remote-tracking sources; local sources need no network.
-            A failed fetch stops creation with the Git error.
-            After creation, new runs bootstrap run in the new worktree and streams
-            its output to stderr. This sets up the worktree's own venv and packages.
-            Never link package folders from the main checkout.
-            --no-setup skips setup for a quick read-only look or a repo without a
-            bootstrap manifest. User layers apply even without a project manifest.
-            A bootstrap failure, including lock exit 2, keeps the worktree and
-            reports its path and exit code, then exits non-zero without retry.
-            The JSON result includes setup: {ran: bool, exit: int|null}.
-            Work in the returned path. Never create a task
-            checkout elsewhere. Existing unpublished work needs preservation before
-            moving it; creation does not move edits from the original checkout.
-        - n: 3
-          action: |
-            When the effective setting has a pool (git_kit.worktrees.pool), take a
-            ready worktree instead of step 2:
-            "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/worktrees.py" take <task>.
-            Work in the returned path. Exit 4 is a hard block: the pool is empty.
-            Report its message (builds in progress, failed builds, taken worktrees)
-            and stop the task; never fall back to new on your own.
-            Take, refill and block behavior: references/pool.md.
-        - n: 4
-          action: |
-            Inspect leftovers with "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/worktrees.py" list.
-            The helper refreshes remotes and reports all root/repo/task entries.
-            no_unpublished_commits means every commit is reachable from a remote;
-            merged means HEAD is contained in the main checkout's upstream;
-            gone means the configured tracking branch disappeared. dirty reports
-            tracked changes and untracked files; ignored reports ignored files
-            separately. Dirty entries
-            and unpublished commits require preservation, even when merged or gone.
-        - n: 5
-          action: |
-            After the task is pushed or merged, run outside its directory:
-            "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/worktrees.py" remove <path>.
-            The helper refuses unpublished commits, modified tracked files and
-            untracked files. Git also refuses locked entries.
-            For a clean, unlocked worktree, remove deletes the worktree together
-            with its ignored files (.venv, node_modules, build output).
-            This also deletes an ignored hand-made file whose only copy is in
-            the worktree, such as .env or a local database.
-            Copy such files outside the worktree before removal.
-            Cleanup then runs
-            git worktree remove and git worktree prune. A failure
-            stops cleanup; report it. Branch deletion is a separate user decision.
-      checklist:
-        - Effective opt-in checked before applying the lifecycle
-        - Task created under the configured root from the default fresh upstream or selected ref
-        - With a pool, the task worktree taken from it; an empty pool reported as a block
-        - Published or merged task removed and pruned with unpublished work preserved
-```
+1. Run the status command for the repository:
+
+   ```bash
+   "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/worktrees.py" status --json
+   ```
+
+   If `enabled` is false, the lifecycle applies no worktree policy.
+   If the user requests enablement, read
+   [settings and approval](references/pool.md#cli-and-approval).
+   Show the proposal and obtain approval before `configure --apply`.
+
+2. For an enabled repository, take a ready spare with
+   `take --agent <agent-id> --session <session-id> [--task <task-id>]`.
+   Return success only when the command completes setup.
+   Exit 4 reports an empty pool and a maintenance request.
+   Report its builds, failures, holders, and disk evidence.
+   A failed take preserves its claim and files.
+
+3. Work in the returned path. Commit with plain `git commit`.
+   The repository's review and delivery rules still apply.
+   For a full push, invoke `release --claim <claim-id>` from outside that path.
+   A partial push keeps the claim.
+   Report push success separately from a release error.
+
+4. Use `status --json` to inspect current Git observations, holders, errors,
+   and maintenance. The record retains removed outcomes and parked work.
+   Existing legacy namespaces require migration before lifecycle mutation.
+
+Commands use the interpreter and script path from step 1.
+For holder PID selection, push integration, safety evidence, record fields,
+and shared locks, read [the lifecycle reference](references/pool.md).
