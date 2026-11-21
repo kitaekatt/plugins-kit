@@ -60,6 +60,15 @@ technique_skill:
             moving it; creation does not move edits from the original checkout.
         - n: 3
           action: |
+            When the effective setting has a pool (git_kit.worktrees.pool), take a
+            ready worktree instead of step 2:
+            "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/worktrees.py" take <task>.
+            Work in the returned path. Exit 4 is a hard block: the pool is empty.
+            Report its message (builds in progress, failed builds, taken worktrees)
+            and stop the task; never fall back to new on your own.
+            Take, refill and block behavior: references/pool.md.
+        - n: 4
+          action: |
             Inspect leftovers with "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/worktrees.py" list.
             The helper refreshes remotes and reports all root/repo/task entries.
             no_unpublished_commits means every commit is reachable from a remote;
@@ -68,7 +77,7 @@ technique_skill:
             tracked changes and untracked files; ignored reports ignored files
             separately. Dirty entries
             and unpublished commits require preservation, even when merged or gone.
-        - n: 4
+        - n: 5
           action: |
             After the task is pushed or merged, run outside its directory:
             "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/worktrees.py" remove <path>.
@@ -85,5 +94,6 @@ technique_skill:
       checklist:
         - Effective opt-in checked before applying the lifecycle
         - Task created under the configured root from the default fresh upstream or selected ref
+        - With a pool, the task worktree taken from it; an empty pool reported as a block
         - Published or merged task removed and pruned with unpublished work preserved
 ```

@@ -182,6 +182,11 @@ removal. It does not delete branches.
 The script uses Python and Git argument arrays without shell commands and is
 intended for macOS, Linux and Windows Git Bash.
 
+A repository can also declare a shared pool of ready worktrees in
+`git_kit.worktrees.pool`: `take <task>` claims one at once, refills run in the
+background, and an empty pool is a hard block (exit 4).
+Configuration and behavior: [skills/worktrees/references/pool.md](skills/worktrees/references/pool.md).
+
 ## Background review
 
 By default a review runs in the background on a frozen snapshot, so the

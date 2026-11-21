@@ -10,15 +10,64 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+
+POOL_FOLDER = "ready"  # <root>/<repo>/ready holds the shared pool (worktree_pool.py).
+
+
+@dataclass(frozen=True)
+class PoolSettings:
+    size: int
+    setup: list[list[str]]
+    rebuild_when_changed: list[str]
+    after_take_remove: list[str] = ()
+    after_take: list[list[str]] = ()
 
 
 @dataclass(frozen=True)
 class WorktreeSettings:
     enabled: bool
     root: Path
+    pool: PoolSettings | None = None
+
+
+def parse_pool(raw: Any) -> PoolSettings | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("git_kit.worktrees.pool must be an object")
+    unknown = set(raw) - {"size", "setup", "rebuild_when_changed", "after_take"}
+    if unknown:
+        raise ValueError(f"Unknown git_kit.worktrees.pool keys: {sorted(unknown)}")
+    size = raw.get("size", 2)
+    if not isinstance(size, int) or isinstance(size, bool) or size < 1:
+        raise ValueError("git_kit.worktrees.pool.size must be an integer of 1 or more")
+    setup = raw.get("setup", [["bootstrap", "run"]])
+    if not setup or not _is_steps(setup):
+        raise ValueError("git_kit.worktrees.pool.setup must be a nonempty list of command arrays")
+    after = raw.get("after_take", {})
+    if not isinstance(after, dict) or set(after) - {"remove", "steps"}:
+        raise ValueError("git_kit.worktrees.pool.after_take must be an object with remove and steps")
+    remove = after.get("remove", [])
+    if not isinstance(remove, list) or not all(
+            isinstance(p, str) and p and not Path(p).is_absolute() and ".." not in Path(p).parts for p in remove):
+        raise ValueError("git_kit.worktrees.pool.after_take.remove must be a list of paths inside the worktree")
+    after_steps = after.get("steps", [])
+    if not _is_steps(after_steps):
+        raise ValueError("git_kit.worktrees.pool.after_take.steps must be a list of command arrays")
+    rebuild = raw.get("rebuild_when_changed", [])
+    if not isinstance(rebuild, list) or not all(isinstance(p, str) and p for p in rebuild):
+        raise ValueError("git_kit.worktrees.pool.rebuild_when_changed must be a list of paths")
+    return PoolSettings(size, setup, rebuild, remove, after_steps)
+
+
+def _is_steps(value: Any) -> bool:
+    return isinstance(value, list) and all(
+        isinstance(step, list) and step and all(isinstance(a, str) and a for a in step) for step in value)
 
 
 def resolve_settings(project_dir: Path | None) -> WorktreeSettings:
@@ -40,7 +89,7 @@ def resolve_settings(project_dir: Path | None) -> WorktreeSettings:
     config = section.get("worktrees", {})
     if not isinstance(config, dict):
         raise ValueError("git_kit.worktrees must be an object")
-    unknown = set(config) - {"enabled", "root"}
+    unknown = set(config) - {"enabled", "root", "pool"}
     if unknown:
         raise ValueError(f"Unknown git_kit.worktrees keys: {sorted(unknown)}")
     enabled = config.get("enabled", False)
@@ -54,7 +103,7 @@ def resolve_settings(project_dir: Path | None) -> WorktreeSettings:
     root = home / raw_root[2:] if raw_root.startswith("~/") else Path(raw_root)
     if not root.is_absolute():
         raise ValueError("git_kit.worktrees.root must be absolute or start with ~/")
-    return WorktreeSettings(enabled, root.resolve())
+    return WorktreeSettings(enabled, root.resolve(), parse_pool(config.get("pool")))
 
 
 def _expand_entry(entry: str, home: Path) -> Path:
@@ -180,15 +229,21 @@ def contained_task(root: Path, path: Path) -> Path:
     return resolved
 
 
-def new(
-    repo: Path, settings: WorktreeSettings, task: str, source: str | None,
-    *, no_setup: bool = False,
-) -> dict[str, Any]:
+def validate_task(repo: Path, task: str) -> None:
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", task) or task.endswith("."):
         raise ValueError("task must be one portable path component: letters, digits, _, . or -")
     if task.split(".")[0].upper() in {"CON", "PRN", "AUX", "NUL", *[f"COM{i}" for i in range(1, 10)], *[f"LPT{i}" for i in range(1, 10)]}:
         raise ValueError("task uses a reserved Windows filename")
+    if task == POOL_FOLDER:
+        raise ValueError(f"task name {POOL_FOLDER} is reserved for the worktree pool")
     git(repo, "check-ref-format", "--branch", task)
+
+
+def new(
+    repo: Path, settings: WorktreeSettings, task: str, source: str | None,
+    *, no_setup: bool = False,
+) -> dict[str, Any]:
+    validate_task(repo, task)
     main = project_root(repo)
     destination = contained_task(settings.root, settings.root / main.name / task)
     if source is None:
@@ -243,6 +298,8 @@ def list_worktrees(settings: WorktreeSettings) -> list[dict[str, Any]]:
         if not repo_dir.is_dir() or repo_dir.is_symlink():
             raise ValueError(f"Unexpected entry under worktree root: {repo_dir}")
         for path in sorted(repo_dir.iterdir()):
+            if path.name == POOL_FOLDER:
+                continue  # Pool spares are not task worktrees; see "pool status".
             task = contained_task(settings.root, path)
             if not (task / ".git").is_file():
                 raise ValueError(f"Unregistered leftover under worktree root: {task}")
@@ -301,7 +358,19 @@ def main() -> int:
     commands.add_parser("config", help="Read effective settings without changing files")
     delete = commands.add_parser("remove")
     delete.add_argument("path", type=Path)
+    claim = commands.add_parser("take", help="Take a ready worktree from the shared pool")
+    claim.add_argument("task")
+    pool = commands.add_parser("pool", help="Shared pool of ready worktrees")
+    pool_commands = pool.add_subparsers(dest="pool_command", required=True)
+    refill = pool_commands.add_parser("refill", help="Build spares up to the pool size")
+    refill.add_argument("--log", action="store_true", help="Write output to the pool's .refill.log")
+    refill.add_argument("--background", action="store_true", help="Start a detached refill and return")
+    refill.add_argument("--quiet-if-off", action="store_true",
+                        help="Exit 0 without output when not in a Git checkout or no pool is configured")
+    pool_commands.add_parser("status")
     args = parser.parse_args()
+    if args.command in {"take", "pool"}:
+        return pool_main(args)
     try:
         repo = Path.cwd()
         if args.command == "remove":
@@ -326,6 +395,60 @@ def main() -> int:
         if args.command == "new" and output["setup"]["exit"]:
             return output["setup"]["exit"] if output["setup"]["exit"] > 0 else 1
         return 0
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        detail = exc.stderr if isinstance(exc, subprocess.CalledProcessError) else str(exc)
+        print(f"git-kit worktrees: {detail}", file=sys.stderr)
+        return 2
+
+
+def pool_main(args: argparse.Namespace) -> int:
+    import worktree_pool
+
+    script = Path(__file__).resolve()
+    repo = Path.cwd()
+    quiet = getattr(args, "quiet_if_off", False)
+    if args.command == "pool" and args.pool_command == "refill" and os.environ.get(worktree_pool.BUILD_ENV):
+        return 0  # A pool build's own setup never starts another refill.
+    try:
+        if quiet:
+            try:
+                project = project_root(repo)
+            except subprocess.CalledProcessError:
+                return 0
+            settings = resolve_settings(project)
+            if not settings.enabled or settings.pool is None:
+                return 0
+        if args.command == "pool" and args.pool_command == "refill" and args.background:
+            worktree_pool.start_refill(repo, script)
+            return 0
+        settings = resolve_settings(project_root(repo))
+        if args.command == "take":
+            output = worktree_pool.take(repo, settings, args.task, script)
+        elif args.pool_command == "status":
+            output = worktree_pool.status(repo, settings)
+        elif args.log:
+            pool = worktree_pool.pool_dir(settings, worktree_pool.remote_url(repo))
+            pool.mkdir(parents=True, exist_ok=True)
+            with open(pool / ".refill.log", "a", encoding="utf-8") as log:
+                print(f"--- refill {time.strftime('%Y-%m-%d %H:%M:%S')} pid {os.getpid()}", file=log, flush=True)
+                try:
+                    print(json.dumps(worktree_pool.refill(repo, settings)), file=log)
+                    return 0
+                except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                    detail = exc.stderr if isinstance(exc, subprocess.CalledProcessError) else str(exc)
+                    print(f"git-kit worktrees: {detail}", file=log)
+                    return 2
+        else:
+            output = worktree_pool.refill(repo, settings)
+        print(json.dumps(output, indent=2))
+        if args.command == "take":
+            failed = output["setup"]["exit"] or output["after_take"]["exit"]
+            if failed:
+                return failed
+        return 0
+    except worktree_pool.PoolEmpty as exc:
+        print(str(exc), file=sys.stderr)
+        return worktree_pool.EXIT_EMPTY
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         detail = exc.stderr if isinstance(exc, subprocess.CalledProcessError) else str(exc)
         print(f"git-kit worktrees: {detail}", file=sys.stderr)
