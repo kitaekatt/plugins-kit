@@ -52,7 +52,7 @@
     }
   ],
   "venv": {
-    "check_imports": ["yaml"]
+    "check_imports": ["yaml", "pydantic"]
   },
   "shared_lib_imports": ["bootstrap_lib"],
   "script": {
