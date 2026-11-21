@@ -2883,7 +2883,7 @@ class TestOneOrchestrationContract:
             "mid-task and the request does not depend on that task",
             "queue it to the same agent with sendmessage, even if that is slower",
             "location: the work belongs in another repository or checkout",
-            "two agents never write in one checkout at the same time",
+            "two agents may share one checkout only when each owns separate files and the orchestrator records which agent writes where",
             "where a split needs a checkout, it comes from the user's own configuration",
         ):
             assert rule in rendered

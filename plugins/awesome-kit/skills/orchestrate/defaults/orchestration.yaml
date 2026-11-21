@@ -306,7 +306,7 @@ shape:
       mid-task and the request does not depend on that task; use another agent.
       If the request depends on the running task, queue it to the same agent with
       SendMessage, even if that is slower. Location: the work belongs in another repository
-      or checkout. Two agents never write in one checkout at the same time.
+      or checkout. Two agents may share one checkout only when each owns separate files and the orchestrator records which agent writes where.
       Where a split needs a checkout, it comes from the user's own configuration.
   - id: plan-is-a-unit
     principle: P0.6
