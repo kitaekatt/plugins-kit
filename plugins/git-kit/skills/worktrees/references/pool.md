@@ -19,6 +19,11 @@ before or after its name.
 | `configure --propose` | Show defaults and a project-fit proposal without changing settings. |
 | `configure --apply approved.json` | Validate and write the approved repository settings. |
 | `take --agent a1 --session s1 [--task task-id]` | Claim a spare and complete setup at its final path. |
+| `adopt --id w-... --agent a1 --session s1` | Claim a parked worktree and complete setup while preserving its branch and files. |
+| `parked [--session s1 | --task task-id]` | Show all parked entries, or entries for one session or task. |
+| `check-task-close --task task-id --json` | Return `{allowed, parked:[...]}` for a task-close check. |
+| `discard --id w-... --propose` | Identify the target and the work that discard will remove. |
+| `discard --id w-... --apply approved.json` | Apply targeted user direction for an unchanged proposal. |
 | `release --claim c-...` | Release the exact claim after full delivery and successful safety checks. |
 | `status [--json]` | Show records, current Git observations, process blockers, disk, and maintenance. |
 | `maintenance` | Run the internal maintenance pass in the foreground. |
@@ -26,7 +31,9 @@ before or after its name.
 Status always emits JSON. `config` and `list` are status aliases.
 `pool status` and `pool refill` delegate to status and maintenance.
 `pool refill --background` requests a detached pass.
-Raw `new`, task-named `take`, and raw `remove` refuse mutation.
+Raw `new`, positional `take <task-name>`, and raw `remove` refuse mutation.
+The supported `take --agent a1 --session s1 --task task-id` form accepts task
+metadata. The positional legacy form refuses mutation.
 
 Review the proposal with the user before applying it. Save the approved
 `proposal` object as JSON, then pass its file path to `--apply`.
@@ -56,6 +63,8 @@ Repository settings live under `git_kit.worktrees` in tracked
   "git_kit": {
     "worktrees": {
       "enabled": true,
+      "after_take": [],
+      "before_release": [],
       "pool": {
         "size": 2,
         "setup": [
@@ -81,6 +90,7 @@ Remove inputs that the repository does not use.
 |---|---|
 | `enabled` | Boolean, default false. Explicit repository approval enables the lifecycle. |
 | `root` | Absolute or `~/` path, default `~/.worktrees`. The namespace is `<root>/<repo>`. |
+| `after_take`, `before_release` | Lists of nonempty argument arrays. Default: empty lists. See [Project extensions](#project-extensions). |
 | `pool.size` | Positive integer, default 2. Ready spares and active builds count toward capacity. |
 | `setup[].id` | Unique stable ID: letters, digits, underscore, or hyphen, starting with a letter. |
 | `setup[].argv` | Nonempty argument array. Commands run in declaration order without a shell. |
@@ -106,7 +116,7 @@ Project layers cannot change it. At or below the floor, only new builds block.
 Takes, release, reconciliation, reuse, and removal remain available.
 Setup can still fail for lack of space.
 
-## Claims and push integration
+## Claims
 
 Take reserves a holder under the claim lock before it renames a spare.
 The journal records both paths before the rename.
@@ -122,6 +132,150 @@ Incomplete claims never become available spares.
 `--holder-pid` names the long-lived holder process. Its default is the CLI parent.
 Callers with short-lived shell parents must supply the actual holder PID.
 Records include PID and process start identity.
+
+## Parked work and adoption
+
+`parked` includes taskless entries. Its optional filters select the last
+holder's session or the recorded task. A full entry includes path, branch,
+task, session, last holder, waiting work, approved boundary, and process blockers.
+Take shows entries for its session or task in full and counts the other entries.
+
+`adopt` reserves a parked worktree under the same claim lock as take.
+The caller names one stable worktree ID. The adopting agent must have no claim.
+A holder or live or uncertain process evidence blocks adoption.
+A competing adopter receives the winning holder's details.
+
+Adoption moves the worktree to the agent path and repairs Git registration.
+It preserves the existing branch, commits, and files. It repeats path-bound
+setup after relocation. A setup error retains the adopting holder and files.
+Adoption consumes no ready spare.
+
+`check-task-close --task task-id --json` returns an `allowed` boolean and a
+`parked` array. Parked work for that task makes `allowed` false.
+Taskless work remains visible in project status and the unfiltered parked list.
+Disabled or unconfigured repositories return `allowed: true` with an empty array.
+An enabled repository's evidence error exits 2 and does not permit closure.
+
+## Task-close hook
+
+A task-kit pre-close command can call `check-task-close` before close or archive.
+The command returns `{ "allowed": true, "parked": [] }` when the task has no
+parked work. A nonempty `parked` array makes `allowed` false.
+
+The repository's `.claude/bootstrap.json` can set `task_kit.pre_close` to a
+nonempty argument array or an object with `argv` and optional `required_paths`.
+For an interpreter command, guard the git-kit script's existence:
+
+```json
+{
+  "task_kit": {
+    "pre_close": {
+      "argv": ["/resolved/bootstrap-python", "/resolved/git-kit/scripts/worktrees.py", "check-task-close", "--task", "{task_id}", "--json", "--repo", "{repo}"],
+      "required_paths": ["/resolved/git-kit/scripts/worktrees.py"]
+    }
+  }
+}
+```
+
+Replace the example paths with resolved values from `BOOTSTRAP_PYTHON` and
+`GIT_KIT_ROOT`. This setting does not expand shell variables.
+`required_paths` contains absolute literal paths. Whole arguments `{task}`, `{task_id}`,
+and `{repo}` expand to the canonical task ref, folder slug, and absolute
+project root. Other arguments remain literal. The command runs without a
+shell, from the project root, with a 120-second timeout.
+Task matching uses the exact string stored by take's `--task` argument.
+Use `{task_id}` for stored slugs or `{task}` for stored canonical task refs.
+
+Exit 0 with `allowed: true` and `parked: []` permits close or archive.
+Other responses, nonzero exits, invalid JSON, and timeouts block before mutation.
+An absent setting preserves ordinary task-kit behavior. An absent configured
+executable or required path also preserves that behavior and prints an omitted-check diagnosis.
+Task-kit imports no git-kit code and enables no hook automatically.
+
+## User-directed discard
+
+Only explicit user direction for identified work authorizes discard.
+`discard --id w-... --propose` shows the target and work at risk without removal.
+Save its returned `proposal` field as JSON, including the token and inventory fingerprint.
+After the user directs that loss, add this field to the approved JSON file:
+
+```json
+{
+  "user_direction": {
+    "actor": "user",
+    "id": "w-...",
+    "text": "The user's explicit direction about this target and its identified work"
+  }
+}
+```
+
+This example shows the added field, not a complete proposal.
+Pass the complete file to `discard --id w-... --apply approved.json`.
+The target ID and inventory must still match the proposal.
+A changed inventory requires another proposal and user direction.
+
+A holder, live or uncertain process evidence, or ambiguous scope blocks discard.
+Submodules and tracked files marked assume-unchanged or skip-worktree make the
+loss scope ambiguous and block discard.
+`--force` supplies no authority and bypasses no guard.
+The record retains the identified lost work, user direction, and outcome.
+Ordinary retirement continues to require the full safety proof.
+
+## Project extensions
+
+Repository `after_take` and `before_release` settings contain lists of argument arrays:
+
+```json
+{
+  "after_take": [["node", "tools/worktree-after-take.mjs"]],
+  "before_release": [["node", "tools/worktree-before-release.mjs"]]
+}
+```
+
+These settings belong under `git_kit.worktrees` in tracked `.claude/bootstrap.json`.
+Commands run sequentially in the worktree directory, without a shell.
+After-take commands run after setup at the final path, including adoption.
+Before-release commands run while the holder still owns the claim.
+A script error retains ownership and records the script and log.
+Release errors remain separate from any successful push.
+
+Each command receives these environment variables:
+
+| Variable | Value |
+|---|---|
+| `GIT_KIT_WORKTREE_ID` | Stable worktree ID. |
+| `GIT_KIT_WORKTREE_PATH` | Current absolute worktree path. |
+| `GIT_KIT_WORKTREE_CLAIM` | Current holder claim. |
+| `GIT_KIT_EXTENSION_PHASE` | `after_take` or `before_release`. |
+| `GIT_KIT_EXTENSION_RESULT` | Absolute path for an optional JSON result file. |
+
+A command can write this result object:
+
+```json
+{
+  "processes": [{"pid": 123, "start": "platform process start identity", "runtime_paths": ["/absolute/runtime/path"]}],
+  "resources": [{"project_resource": "opaque claim"}],
+  "result": {"project_status": "ready"}
+}
+```
+
+Git-kit retains stdout, stderr, result JSON, process identities, and opaque resources.
+The record's `extension` object stores command history under each phase name.
+Each run records its arguments, path, times, exit, outcome, result, and log paths.
+Logs live under `logs/`; optional result files live under `extensions/` in the
+lifecycle state directory. An empty result cannot erase earlier process evidence.
+Live or uncertain declared processes block retirement, even after the holder exits.
+An interrupted command or unreadable or invalid resource report leaves uncertain evidence.
+That evidence blocks adoption, discard, and retirement until inspection resolves it.
+The lifecycle retains the command logs and result file for inspection.
+Project scripts own server startup, port allocation, routing, and public-slot claims.
+Git-kit stores their evidence without interpreting those project resources.
+
+Path-bound setup repeats after relocation. Project-only setup, such as
+`bootstrap run --project-only`, keeps global launcher links unchanged.
+Project extension scripts must preserve those links too.
+
+## Push integration
 
 Agents use plain `git commit`. After a full push, the caller runs release
 from outside the claimed directory:
@@ -200,6 +354,8 @@ Worktree checkouts remain under the configured root.
 | `namespace.json` | Version, remote URL, source clone, common Git directory. |
 | `records/<stable-id>.json` | Durable record and current transition journal. |
 | `logs/<stable-id>.log` | Setup command output and errors. |
+| `logs/<stable-id>-<phase>-<token>.log` | Extension command output and errors. |
+| `extensions/<stable-id>-<phase>-<token>.json` | Optional result written by an extension command. |
 | `claim.lock` | Holder reservation, rename journal, and retirement exclusion. |
 | `fetch.lock` | Serialized source fetches. |
 | `maintenance.lock` | One maintenance worker across clones. |
@@ -215,4 +371,7 @@ Holder stores agent, session, claim, claim time, PID, and start identity.
 Setup stores built OID, definition hash, input OIDs, selected steps, and
 the final-path result. Errors store step, reason, exit code, and log.
 Release retains `last_claim`. Dead-holder recovery retains `last_holder`.
+Adoption retains the prior waiting details in `last_waiting`.
+Optional `discard` stores the inventory-bound proposal, `user_direction`, and outcome,
+including a reconciled removal outcome after an interrupted discard.
 Status adds live `observed` fields and marks stored safety as historical.

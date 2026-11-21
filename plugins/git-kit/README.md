@@ -109,6 +109,29 @@ A take completes mapped setup and path-bound setup before it returns success.
 An empty pool blocks the take with exit 4 and requests maintenance.
 A failed take keeps its claim, files, and error log.
 
+`parked [--session <id> | --task <id>]` lists waiting work, including taskless
+entries. Take shows this session's and task's parked entries in full and counts
+the rest. `adopt --id <worktree-id> --agent <id> --session <id>` atomically
+claims a parked entry, preserves its branch and files, and completes setup at
+the agent path. A lost adoption reports the winning holder. Live or uncertain
+process evidence blocks adoption. Failed setup keeps the adopting claim.
+
+`check-task-close --task <id> --json` returns `allowed` and `parked` fields.
+A configured task-kit pre-close command can use this result to block close
+and archive while the task has parked work.
+
+`discard --id <worktree-id> --propose` identifies the target and work at risk.
+`discard --id <worktree-id> --apply <approved.json>` applies explicit user
+direction for that proposal. Changed evidence, a holder, or a live or uncertain
+process blocks discard. `--force` supplies no authority. The record retains
+the identified work, user direction, and outcome.
+
+Repository `after_take` and `before_release` settings contain command lists.
+Git-kit records their results, logs, process identities, and opaque resource
+claims. A script error keeps the holder. Project scripts own servers, ports,
+and public routes. The [lifecycle reference](skills/worktrees/references/pool.md#project-extensions)
+defines the script protocol.
+
 Agents commit with plain `git commit`. After a full push, the caller can run
 `release --claim <id>` from outside the claimed directory. A partial push keeps
 the claim. A release error reports separately from the successful push.
@@ -118,7 +141,8 @@ worktrees before it builds a deficit. It preserves branches and unique ignored d
 
 Commands, settings, records, safety evidence, and the library call for push
 integration: [Lifecycle reference](skills/worktrees/references/pool.md).
-The legacy `new`, task-named `take`, and raw `remove` paths refuse mutation.
+The legacy `new`, positional `take <task-name>`, and raw `remove` paths refuse mutation.
+The supported `take --agent ... --session ... --task ...` form accepts task metadata.
 Existing namespaces require migration before lifecycle mutation.
 
 ## Background review
