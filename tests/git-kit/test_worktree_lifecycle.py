@@ -609,6 +609,15 @@ def test_lifecycle_root_uses_base_layered_settings(lifecycle, layer):
     assert Path(configured.read_records()[0]["path"]).is_relative_to(configured.namespace)
 
 
+def test_configure_apply_uses_approved_root_immediately(lifecycle):
+    obj = lifecycle
+    config = {**obj.settings.raw, "root": "~/approved-worktrees"}
+    obj.configure(config)
+    assert obj.namespace == Path.home() / "approved-worktrees/remote"
+    obj.maintain()
+    assert Path(obj.read_records()[0]["path"]).is_relative_to(obj.namespace)
+
+
 @pytest.mark.parametrize("redirect", [False, True])
 def test_lifecycle_state_uses_plugin_data_home(lifecycle, tmp_path, monkeypatch, redirect):
     import worktree_lifecycle as lc

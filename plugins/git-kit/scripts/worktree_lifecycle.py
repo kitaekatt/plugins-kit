@@ -238,6 +238,7 @@ class Lifecycle:
         payload.setdefault("git_kit", {})["worktrees"] = approved
         atomic_json(target, payload)
         self.settings = load(self.repo)
+        self.namespace = wt.resolve_settings(self.repo).root / repo_identity(self.url)
         return {"applied": str(target), "settings": approved}
 
     @operation

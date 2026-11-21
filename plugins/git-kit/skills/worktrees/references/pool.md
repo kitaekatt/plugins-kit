@@ -155,7 +155,7 @@ An old token cannot release a subsequent holder.
 Release proves safety before it atomically persists the cleared holder.
 A live or uncertain builder blocks release.
 Retirement requires clean tracked files, no untracked files, no holder,
-and no live or uncertain process with a candidate directory or runtime path.
+and no live or uncertain process found by the platform inspection described below.
 It also requires no `+` in `git cherry <fresh-upstream> HEAD`,
 no unique ignored data, and no locked Git registration.
 The main checkout never enters retirement. A remote task branch cannot prove delivery.
