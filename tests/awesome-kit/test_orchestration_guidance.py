@@ -2878,13 +2878,13 @@ class TestOneOrchestrationContract:
             "interference",
             "availability",
             "location",
-            "work in one worktree ships in commit order",
+            "work in one checkout ships in commit order",
             "separately from, or before, work already waiting there",
             "mid-task and the request does not depend on that task",
             "queue it to the same agent with sendmessage, even if that is slower",
-            "two agents never share a worktree",
-            "take a worktree from the pool and release it back",
-            "context survives across worktrees",
+            "location: the work belongs in another repository or checkout",
+            "two agents never write in one checkout at the same time",
+            "where a split needs a checkout, it comes from the user's own configuration",
         ):
             assert rule in rendered
         for old in (
@@ -2892,6 +2892,12 @@ class TestOneOrchestrationContract:
             "handle them inline",
             "rarely needs delegating at all",
             "author the draft and delegate plan review",
+            "and keep its worktree",
+            "another agent and another worktree",
+            "each agent holds its own worktree",
+            "two agents never share a worktree",
+            "take a worktree from the pool and release it back",
+            "context survives across worktrees",
         ):
             assert old not in rendered
 
