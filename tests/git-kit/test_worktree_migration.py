@@ -1,7 +1,7 @@
 """Cutover contracts.
 
 Run: uv run --extra dev pytest tests/git-kit/test_worktree_migration.py -q.
-Triggers: legacy pool/Agent paths, interrupted removal, live Claude processes.
+Triggers: install scope, legacy pool/Agent paths, interrupted removal, live Claude processes.
 """
 
 from __future__ import annotations
@@ -31,6 +31,25 @@ def legacy(obj, name: str, *, source: Path | None = None, agent: bool = False) -
     path.parent.mkdir(parents=True, exist_ok=True)
     git(source, "worktree", "add", "-b", name, str(path), "origin/main")
     return path
+
+
+@pytest.mark.parametrize("apply", [False, True], ids=["inventory", "apply"])
+def test_migration_requires_user_install(migration, apply: bool) -> None:
+    obj = migration
+    registry = Path.home() / ".claude/plugins/installed_plugins.json"
+    payload = json.loads(registry.read_text())
+    record = payload["plugins"]["git-kit@plugins-kit"][0]
+    record.update(scope="project", projectPath=str(obj.repo))
+    write_json(registry, payload)
+    write_json(Path.home() / ".claude/settings.json", {})
+    write_json(obj.repo / ".claude/settings.json", {"enabledPlugins": {"git-kit@plugins-kit": True}})
+
+    with pytest.raises(ValueError, match="install git-kit at user level"):
+        obj.migrate(apply=apply)
+
+    assert not obj.state.exists()
+    assert not obj.namespace.exists()
+    assert not obj.requests
 
 
 def test_migration_resumes_idempotently(migration, monkeypatch) -> None:
