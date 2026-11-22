@@ -104,6 +104,39 @@ def test_apply_replaces_legacy_settings(legacy_repo: Path, tmp_path: Path, capsy
     assert json.loads(manifest.read_text()) == {"other": {"preserved": True}, "git_kit": {"worktrees": approved}}
 
 
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
+@pytest.mark.parametrize("present", [True, False], ids=["replace", "insert"])
+def test_apply_preserves_manifest_text(legacy_repo: Path, tmp_path: Path, newline: str, present: bool) -> None:
+    """Trigger: configure --apply must change only the top-level git_kit value/member."""
+    manifest = legacy_repo / ".claude/bootstrap.json"
+    old_value = '{"note": "escaped \\\" } ,", "worktrees": {"enabled": true}}'
+    member = '  "git\\u005fkit" : ' + old_value + ',\n' if present else ""
+    before = ('{\n  "tools": [{"argv": ["one",  "two"]}],\n' + member
+              + '  "profiles": {"git_kit": {"keep": true}},\n'
+              + '  "last": {"keep": [1,  2]}\n}\n').replace("\n", newline)
+    manifest.write_bytes(before.encode())
+    approved = {"enabled": True, "pool": {"setup": [{"id": "setup", "argv": ["bootstrap", "run"]}]}}
+    approval = tmp_path / "approved.json"
+    write_json(approval, approved)
+
+    assert main(["configure", "--apply", str(approval), "--repo", str(legacy_repo)]) == 0
+
+    after = manifest.read_bytes().decode()
+    expected = json.loads(before)
+    expected["git_kit"] = {"note": 'escaped " } ,', "worktrees": approved} if present else {"worktrees": approved}
+    assert json.loads(after) == expected
+    if present:
+        prefix, suffix = before.split(old_value)
+        assert after.startswith(prefix) and after.endswith(suffix)
+    else:
+        prefix, suffix = before.split('  "last"', 1)
+        assert after.startswith(prefix) and after.endswith('  "last"' + suffix)
+        inserted = after[len(prefix):-len('  "last"' + suffix)]
+        assert list(json.loads("{" + inserted.rstrip().removesuffix(",") + "}")) == ["git_kit"]
+    assert main(["configure", "--apply", str(approval), "--repo", str(legacy_repo)]) == 0
+    assert manifest.read_bytes().decode() == after
+
+
 def test_legacy_enabled_creation_is_denied(legacy_repo: Path) -> None:
     for tool, arguments in [("Bash", {"command": "git worktree add ../raw"}),
                             ("Agent", {"isolation": "worktree"})]:
