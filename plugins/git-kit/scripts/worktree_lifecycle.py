@@ -52,16 +52,30 @@ def operation(method: Callable) -> Callable:
     return run
 
 
+def read_manifest(target: Path) -> dict[str, Any]:
+    """Read the repository manifest; a file configure --apply cannot update raises ValueError."""
+    try:
+        return read_object(target)
+    except ValueError as exc:
+        raise ValueError(f"{target} is not valid JSON object content ({exc}); "
+                         "repair or remove it before configure --apply") from exc
+
+
 def current_settings(repo: Path) -> dict[str, str]:
     """Diagnose existing settings without making them a prerequisite for recovery."""
     try:
-        manifest = read_object(repo / ".claude/bootstrap.json")
-        section = manifest.get("git_kit", {})
-        if not isinstance(section, dict):
-            raise ValueError("git_kit must be an object")
-        raw = section.get("worktrees")
-        if raw is None:
-            return {"status": "unconfigured"}
+        manifest = read_manifest(repo / ".claude/bootstrap.json")
+    except ValueError as exc:
+        return {"status": "invalid", "message": f"Current settings are invalid; configure --apply cannot run until the file is repaired: {exc}"}
+    section = manifest.get("git_kit", {})
+    if not isinstance(section, dict):
+        return {"status": "invalid", "message":
+                "Current settings are invalid: git_kit is not an object; configure --apply replaces it "
+                "with an object holding only the approved worktrees"}
+    raw = section.get("worktrees")
+    if raw is None:
+        return {"status": "unconfigured"}
+    try:
         validate_config(raw, repo)
     except ValueError as exc:
         return {"status": "invalid", "message":
@@ -103,8 +117,9 @@ def configure_repository(repo: Path, approved: dict[str, Any] | None = None) -> 
     if identity and (identity.get("version") != 1 or identity.get("remote") != url):
         raise ValueError("Namespace remote identity collision")
     target = repo / ".claude/bootstrap.json"
-    payload = read_object(target)
-    payload.setdefault("git_kit", {})["worktrees"] = approved
+    payload = read_manifest(target)
+    section = payload.get("git_kit")
+    payload["git_kit"] = {**section, "worktrees": approved} if isinstance(section, dict) else {"worktrees": approved}
     atomic_json(target, payload)
     return {"applied": str(target), "settings": approved}
 
