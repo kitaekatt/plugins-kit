@@ -582,6 +582,8 @@ class Lifecycle:
                 self.validate_path(path)
                 path.parent.mkdir(parents=True, exist_ok=True)
                 self.transition(record, "build", "git worktree add")
+                from worktree_enforcement import require_managed_build
+                require_managed_build(self, record)
                 wt.git(self.source(), "worktree", "add", "--detach", str(path), oid)
             record["upstream"] = {"ref": ref, "oid": oid}
             self.setup(record, self.settings.config.pool.setup)
@@ -600,7 +602,8 @@ class Lifecycle:
 
     def maintain(self) -> dict[str, Any]:
         self.initialize()
-        with _file_lock(self.state / "maintenance.lock", blocking=False) as held:
+        from worktree_enforcement import maintenance_lock
+        with maintenance_lock(self) as held:
             if not held:
                 return {"outcome": "already active", "built": []}
             worker = {"outcome": "running", **safety.process_identity(os.getpid()), "at": time.time()}

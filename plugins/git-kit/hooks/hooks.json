@@ -1,11 +1,12 @@
 {
   "hooks": {
-    "SessionStart": [
+    "PreToolUse": [
       {
+        "matcher": "Agent|Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/sessionstart/pool-refill.sh\""
+            "command": "\"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}\" \"${CLAUDE_PLUGIN_ROOT}/scripts/worktree_enforcement.py\""
           }
         ]
       }
