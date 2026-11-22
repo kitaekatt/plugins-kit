@@ -23,7 +23,7 @@ technique_skill:
       - inspecting parked work and task-close blockers
       - applying discard only for explicit user direction about identified work
       - proposing settings when the user requests enablement
-      - inventorying and migrating legacy worktrees after Claude sessions exit
+      - inventorying and migrating legacy worktrees after Claude sessions using candidate paths exit
     excludes:
       - code review
       - enabling a repository without approval
@@ -39,7 +39,7 @@ technique_skill:
         - A failed take preserves its claim and files. An empty pool exits 4 and requests maintenance.
         - Adoption preserves the branch and files. Live or uncertain process evidence blocks adoption.
         - A discard proposal is not authority. Only targeted user direction authorizes its application.
-        - Migration requires exited Claude sessions. A restart or compaction does not prove that waiting work is complete.
+        - Migration blocks Claude processes whose cwd or open files are inside candidate worktrees, and uncertain process evidence. Sessions elsewhere are reported as ignored_claude_processes. A restart or compaction does not prove that waiting work is complete.
       steps:
         - n: 1
           action: |
@@ -49,7 +49,8 @@ technique_skill:
             Show the proposal and obtain approval before configure --apply.
             Use the same interpreter and script for the commands below.
             If a legacy namespace blocks status or mutation, read references/migration.md.
-            Run migration from a terminal after all Claude sessions exit.
+            Exit Claude sessions whose cwd or open files are inside migration candidate worktrees, then run migration.
+            Sessions elsewhere, including the caller, can remain open. Uncertain process evidence blocks migration.
         - n: 2
           action: |
             Inspect parked [--session <session-id> | --task <task-id>] for waiting work.

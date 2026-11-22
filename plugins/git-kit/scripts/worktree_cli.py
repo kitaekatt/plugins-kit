@@ -73,7 +73,10 @@ def main(argv: list[str]) -> int:
     pool.add_argument("--log", action="store_true")
     pool.add_argument("--quiet-if-off", action="store_true")
     commands.add_parser("maintenance", help=argparse.SUPPRESS)
-    migrate = commands.add_parser("migrate", help="Inventory or apply legacy worktree cutover after exiting Claude sessions")
+    migration_help = ("Inventory or apply legacy worktree cutover; exit Claude sessions whose cwd or open files "
+                      "are inside candidate worktrees. Sessions elsewhere are reported as ignored_claude_processes; "
+                      "uncertain process evidence blocks migration.")
+    migrate = commands.add_parser("migrate", help=migration_help, description=migration_help)
     migration_mode = migrate.add_mutually_exclusive_group(required=True)
     migration_mode.add_argument("--inventory", action="store_true")
     migration_mode.add_argument("--apply", action="store_true")
