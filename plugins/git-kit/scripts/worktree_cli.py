@@ -73,6 +73,11 @@ def main(argv: list[str]) -> int:
     pool.add_argument("--log", action="store_true")
     pool.add_argument("--quiet-if-off", action="store_true")
     commands.add_parser("maintenance", help=argparse.SUPPRESS)
+    migrate = commands.add_parser("migrate", help="Inventory or apply legacy worktree cutover after exiting Claude sessions")
+    migration_mode = migrate.add_mutually_exclusive_group(required=True)
+    migration_mode.add_argument("--inventory", action="store_true")
+    migration_mode.add_argument("--apply", action="store_true")
+    migrate.add_argument("--clone", action="append", type=Path, default=[], help="Include another source clone outside discovered locations")
     for child in commands.choices.values():
         child.add_argument("--repo", type=Path, default=argparse.SUPPRESS)
     args = parser.parse_args(argv)
@@ -101,6 +106,8 @@ def main(argv: list[str]) -> int:
             result = obj.discard(args.id, approved=read_object(args.apply) if args.apply else None, force=args.force)
         elif args.command == "release":
             result = obj.release(args.claim)
+        elif args.command == "migrate":
+            result = obj.migrate(apply=args.apply, clones=args.clone)
         elif args.command in {"status", "list", "config"}:
             result = obj.status()
         elif args.command == "pool":

@@ -75,6 +75,9 @@ class Lifecycle:
             raise ValueError(f"Refusing symlinked lifecycle namespace: {self.namespace}")
         for name in ("ready", ".staging"):
             self.validate_path(self.namespace / name)
+        migration = read_object(self.state / "migration.json")
+        if migration and migration.get("phase") != "complete":
+            raise ValueError("Legacy migration is incomplete; resume worktrees.py migrate --apply before lifecycle mutation")
         identity = self.state / "namespace.json"
         if identity.exists():
             data = read_object(identity)
@@ -157,13 +160,23 @@ class Lifecycle:
 
     def record_path(self, record: dict[str, Any]) -> Path:
         path = Path(record["path"])
-        self.validate_path(path)
+        from worktree_migration import legacy_path
+        migrated = legacy_path(self, record)
+        if migrated:
+            if not path.is_absolute() or path.is_symlink() or any(parent.is_symlink() for parent in path.parents):
+                raise ValueError(f"Unsafe migrated worktree path: {path}")
+        else:
+            self.validate_path(path)
         source = Path(record["repo"]["source_clone"])
         if remote_url(source) != self.url or wt.git(source, "rev-parse", "--path-format=absolute", "--git-common-dir") != record["repo"]["common_dir"]:
             raise ValueError(f"Record repository identity changed: {record['id']}")
-        if path.exists() and wt.git(path, "rev-parse", "--path-format=absolute", "--git-common-dir") != record["repo"]["common_dir"]:
+        if path.exists() and (not migrated or (path / ".git").exists()) and wt.git(path, "rev-parse", "--path-format=absolute", "--git-common-dir") != record["repo"]["common_dir"]:
             raise ValueError(f"Worktree common directory disagrees with record: {path}")
         return path
+
+    def migrate(self, *, apply: bool = False, clones: list[Path] | None = None) -> dict[str, Any]:
+        from worktree_migration import run
+        return run(self, apply=apply, clones=clones)
 
     def transition(self, record: dict[str, Any], name: str, phase: str, **extra: Any) -> None:
         record["operation"] = {"name": name, "phase": phase, "previous": record["state"], "at": time.time(), **extra}
@@ -366,7 +379,11 @@ class Lifecycle:
                     "proposal": {"enabled": True, "pool": {"size": 2, "setup": steps, "rerun_files": reruns}},
                     "approval": "Review and approve the proposal, then pass that JSON file to configure --apply"}
         validate_config(approved, self.repo)
-        self.check_namespace()
+        # Configuration writes approved settings, not worktrees. Legacy trees
+        # remain blocked until migrate --apply establishes their records.
+        identity = read_object(self.state / "namespace.json")
+        if identity and (identity.get("version") != 1 or identity.get("remote") != self.url):
+            raise ValueError("Namespace remote identity collision")
         target = self.repo / ".claude/bootstrap.json"
         payload = read_object(target)
         payload.setdefault("git_kit", {})["worktrees"] = approved
@@ -492,9 +509,14 @@ class Lifecycle:
         return {"id": record["id"], "state": "released"}
 
     def snapshot(self) -> dict[str, Any]:
+        from worktree_migration import legacy_problem
         rows = self.read_records()
         for record in rows:
             if record["state"] == "removed":
+                continue
+            problem = legacy_problem(self, record)
+            if problem:
+                record["observed"] = {"git_blockers": [problem], "at": time.time()}
                 continue
             path = self.record_path(record)
             if path.exists():
@@ -516,6 +538,7 @@ class Lifecycle:
         return self.snapshot()
 
     def reconcile(self) -> None:
+        from worktree_migration import legacy_path, legacy_problem
         for record in self.read_records():
             if record["state"] == "removed":
                 continue
@@ -525,13 +548,19 @@ class Lifecycle:
             op = record["operation"]
             if op.get("phase") == "rename":
                 before, after = Path(op["from"]), Path(op["to"])
-                self.validate_path(before)
+                if legacy_path(self, {**record, "path": str(before)}):
+                    if not before.is_absolute() or before.is_symlink() or any(parent.is_symlink() for parent in before.parents):
+                        raise ValueError(f"Unsafe migrated rename source: {before}")
+                else:
+                    self.validate_path(before)
                 self.validate_path(after)
                 if before != after and before.exists() == after.exists():
                     raise ValueError(f"Ambiguous interrupted rename: {record['id']}")
                 path = after if after.exists() else before
                 wt.git(path, "worktree", "repair")
                 record["path"] = str(path)
+            if legacy_problem(self, record):
+                continue  # Orphaned files remain parked until explicit repair.
             path = self.record_path(record)
             registered = any(Path(r["worktree"]).resolve() == path.resolve()
                              for r in wt.records(Path(record["repo"]["source_clone"])))
@@ -602,6 +631,7 @@ class Lifecycle:
 
     def maintain(self) -> dict[str, Any]:
         self.initialize()
+        from worktree_migration import legacy_problem
         from worktree_enforcement import maintenance_lock
         with maintenance_lock(self) as held:
             if not held:
@@ -621,6 +651,8 @@ class Lifecycle:
                     with _file_lock(self.state / "claim.lock", blocking=True):
                         record = self.get(record["id"])
                         if record["holder"]:
+                            continue
+                        if legacy_problem(self, record):
                             continue
                         if not self.safety(record)["safe"]:
                             continue
