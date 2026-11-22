@@ -33,7 +33,7 @@ def evidence(obj: Lifecycle, record: dict[str, Any], *, recover_removed: bool = 
     return migration.evidence(obj, record) if record.get("migration") else obj.safety(record, persist=False)
 
 
-def recheck_parked(obj: Lifecycle) -> dict[str, Any]:
+def recheck_parked(obj: Lifecycle, *, exclude: set[str] | None = None) -> dict[str, Any]:
     """Caller holds maintenance.lock and claim.lock through reservation/removal."""
     from worktree_lifecycle import atomic_json
 
@@ -45,7 +45,9 @@ def recheck_parked(obj: Lifecycle) -> dict[str, Any]:
             continue
         blockers = []
         worker = record.get("worker")
-        if record.get("holder"):
+        if record["id"] in (exclude or set()):
+            blockers = record["safety"]["blockers"]
+        elif record.get("holder"):
             blockers = ["holder claim remains"]
         elif worker and safety.process_state(worker) != "dead":
             blockers = ["live or uncertain worker"]
@@ -74,8 +76,7 @@ def recheck_parked(obj: Lifecycle) -> dict[str, Any]:
                         wt.git(Path(record["repo"]["source_clone"]), "worktree", "remove", str(path))
                         record.update(state="removed", waiting=None, error=None)
             except (OSError, ValueError, subprocess.SubprocessError) as exc:
-                detail = exc.stderr if isinstance(exc, subprocess.CalledProcessError) else str(exc)
-                record["safety"] = {"safe": False, "at": time.time(), "blockers": [f"safety evidence unavailable: {detail}"]}
+                obj.park_removal(record, exc)
             blockers = record["safety"]["blockers"]
             if record["state"] == "removed":
                 result["removed"] += 1

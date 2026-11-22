@@ -130,26 +130,79 @@ def outputs(path: Path, declared: list[str], rebuildable: Sequence[str] = ()) ->
     return reproducible, unique
 
 
+def output_path(root: Path, name: Path) -> Path:
+    """Resolve containment and refuse links in every output's parent chain."""
+    target = root / name
+    if any(parent.is_symlink() or parent.is_junction() for parent in target.parents if parent.is_relative_to(root)):
+        raise ValueError(f"Output path traverses a symlink or junction: {target}")
+    resolved = target.resolve()
+    if resolved == root or not resolved.is_relative_to(root):
+        raise ValueError(f"Output path escapes the worktree: {target}")
+    return target
+
+
+def remove_directory(target: Path) -> None:
+    """One native recursive delete per directory; propagate every failure."""
+    if sys.platform == "win32":
+        # Expand a quoted environment value, never interpolate a path as CMD code.
+        argv = 'cmd.exe /d /v:off /c rmdir /s /q "%GIT_KIT_OUTPUT_PATH%"'
+        env = {**os.environ, "GIT_KIT_OUTPUT_PATH": str(target)}
+    else:
+        argv, env = ["rm", "-rf", "--", str(target)], None
+    subprocess.run(argv, env=env, capture_output=True, text=True, check=True)
+
+
 def remove_outputs(path: Path, declared: list[str]) -> None:
-    """Delete only explicitly classified ignored output. Never use Git --force."""
-    for name in declared:
-        relative_path(name)
-        target = path / name
-        if not target.exists() and not target.is_symlink():
-            continue
-        if any(parent.is_symlink() for parent in target.relative_to(path).parents if str(parent) != "."
-               for parent in [path / parent]):
-            raise ValueError(f"Output path traverses a symlink: {target}")
-        tracked = wt.git(path, "ls-files", "-z", "--", name)
-        if tracked:
-            raise ValueError(f"Reproducible output contains tracked data: {target}")
-        result = subprocess.run(["git", "-C", str(path), "check-ignore", "-q", "--", name], capture_output=True, check=False)
-        if result.returncode != 0:
+    """Collapse fully approved ignored directories, then delete remaining files."""
+    if not declared:
+        return
+    if any(parent.is_symlink() or parent.is_junction() for parent in (path, *path.parents)):
+        raise ValueError(f"Worktree path traverses a symlink or junction: {path}")
+    root = path.resolve(strict=True)
+    approved = {Path(relative_path(name)) for name in declared}
+
+    def covered(name: Path) -> bool:
+        return any(parent in approved for parent in (name, *name.parents))
+
+    candidates: set[Path] = set()
+    for name in approved:
+        output_path(root, name)
+        candidates.update(parent for parent in (name, *name.parents) if parent != Path("."))
+    # Three batched Git queries replace two subprocesses per output file.
+    protected = wt.git(root, "ls-files", "--cached", "--others", "--exclude-standard", "-z")
+    blocked: set[Path] = set()
+    for name in filter(None, protected.split("\0")):
+        relative = Path(name)
+        if covered(relative):
+            raise ValueError(f"Reproducible output contains tracked or unignored data: {root / relative}")
+        blocked.update((relative, *relative.parents))
+    ignored = wt.git(root, "ls-files", "--others", "--ignored", "--exclude-standard", "-z")
+    for name in filter(None, ignored.split("\0")):
+        relative = Path(name)
+        if not covered(relative):
+            blocked.update((relative, *relative.parents))
+    result = subprocess.run(["git", "-C", str(root), "check-ignore", "--stdin", "-z"],
+                            input="\0".join(p.as_posix() for p in candidates) + "\0",
+                            capture_output=True, text=True, check=False)
+    if result.returncode not in (0, 1):
+        raise subprocess.CalledProcessError(result.returncode, result.args, result.stdout, result.stderr)
+    matched = {Path(name) for name in result.stdout.split("\0") if name}
+    for name in approved:
+        target = root / name
+        if (target.exists() or target.is_symlink()) and name not in matched:
             raise ValueError(f"Reproducible output is not ignored: {target}")
+    selected: set[Path] = set()
+    for name in sorted(matched - blocked, key=lambda p: (len(p.parts), p.as_posix())):
+        if not any(parent in selected for parent in name.parents):
+            selected.add(name)
+    # Validate again at deletion, after collapsing; directories precede single files.
+    targets = [output_path(root, name) for name in selected]
+    for target in sorted(targets, key=lambda p: (not p.is_dir(), str(p))):
+        output_path(root, target.relative_to(root))
         if target.is_symlink() or target.is_file():
             target.unlink()
-        else:
-            shutil.rmtree(target)
+        elif target.exists():
+            remove_directory(target)
 
 
 def declared_process_blockers(record: dict[str, Any]) -> list[str]:

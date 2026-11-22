@@ -333,6 +333,14 @@ class Lifecycle:
                            "log": getattr(exc, "log", str(self.state / "logs" / f"{record['id']}.log"))}
         self.save(record)
 
+    def park_removal(self, record: dict[str, Any], exc: BaseException) -> None:
+        detail = exc.stderr if isinstance(exc, subprocess.CalledProcessError) else str(exc)
+        reason = f"removal failed: {exc}; {detail}"
+        record["safety"] = {**(record.get("safety") or {}), "safe": False, "at": time.time(), "blockers": [reason]}
+        record.update(state="parked", worker=None, waiting=reason)
+        record["operation"]["phase"] = "failed"
+        self.fail(record, exc)
+
     def setup(self, record: dict[str, Any], selected: list[Step]) -> None:
         path = self.record_path(record)
         log = self.state / "logs" / f"{record['id']}.log"
@@ -797,9 +805,19 @@ class Lifecycle:
                             self.save(record)
                             recycle = True
                         else:
-                            path = self.record_path(record)
-                            safety.remove_outputs(path, record["safety"]["reproducible"])
-                            wt.git(Path(record["repo"]["source_clone"]), "worktree", "remove", str(path))
+                            try:
+                                # Reservation is durable before the final safety observation.
+                                if not self.safety(record)["safe"]:
+                                    record.update(state="parked", worker=None)
+                                    self.save(record)
+                                    continue
+                                path = self.record_path(record)
+                                safety.remove_outputs(path, record["safety"]["reproducible"])
+                                wt.git(Path(record["repo"]["source_clone"]), "worktree", "remove", str(path))
+                            except ERRORS as exc:
+                                self.park_removal(record, exc)
+                                result.setdefault("failures", []).append({"id": record["id"], **record["error"]})
+                                continue
                             record.update(state="removed", worker=None)
                             self.transition(record, "remove", "complete")
                             result["removed"].append(record["id"])

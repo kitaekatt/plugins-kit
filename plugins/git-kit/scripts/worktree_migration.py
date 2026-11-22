@@ -451,6 +451,7 @@ def run(obj: Lifecycle, *, apply: bool = False, clones: list[Path] | None = None
     previous = read_object(obj.state / "migration.json")
     _, candidates, _ = discover(obj, clones or [], previous)
     check = process_check([*previous.get("candidates", []), *candidates])
+    failed_removals: set[str] = set()
     with ExitStack() as stack:
         for lock in (obj.state / "migration.lock", obj.state / "maintenance.lock", obj.state / "claim.lock"):
             if not stack.enter_context(_file_lock(lock, blocking=False)):
@@ -505,12 +506,16 @@ def run(obj: Lifecycle, *, apply: bool = False, clones: list[Path] | None = None
                     record["safety"] = evidence(obj, record)
                 check = process_check([row])
                 if record["safety"]["safe"]:
-                    safety.remove_outputs(path, record["safety"]["reproducible"])
-                    wt.git(source, "worktree", "remove", str(path))
-                    record["state"] = "removed"
-                    row["phase"] = "removed"
+                    try:
+                        safety.remove_outputs(path, record["safety"]["reproducible"])
+                        wt.git(source, "worktree", "remove", str(path))
+                        record["state"] = "removed"
+                        row["phase"] = "removed"
+                    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                        obj.park_removal(record, exc)
+                        failed_removals.add(record["id"])
                 if record["state"] != "removed":
-                    record.update(state="parked", waiting="Legacy work preserved during migration; inspect blockers before adoption")
+                    record.update(state="parked", waiting=record.get("waiting") or "Legacy work preserved during migration; inspect blockers before adoption")
                     row["phase"] = "parked"
                 record["operation"]["phase"] = "complete"
                 obj.save(record)
@@ -554,7 +559,7 @@ def run(obj: Lifecycle, *, apply: bool = False, clones: list[Path] | None = None
             result = journal
         if apply:
             from worktree_retirement import recheck_parked
-            summary = recheck_parked(obj)
+            summary = recheck_parked(obj, exclude=failed_removals)
             result = {**read_object(journal_path), "parked_recheck": summary}
     if apply:
         result = {**result, "maintenance": obj.request_maintenance()}
