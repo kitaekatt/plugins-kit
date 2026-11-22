@@ -417,7 +417,7 @@ def test_migration_resumes_parked_and_pending_rows(migration, monkeypatch, claud
     assert visited[2:] == [[row["path"]] for row in before["candidates"][1:]]
 
 
-@pytest.mark.parametrize("location", ["open-file", "cwd", "sibling", "symlink", "case-alias"])
+@pytest.mark.parametrize("location", ["open-file", "cwd", "sibling", "symlink", "symlink-real", "case-alias"])
 def test_migration_batched_path_prefixes(tmp_path, monkeypatch, claude_lsof, location: str) -> None:
     import worktree_migration as module
 
@@ -426,26 +426,51 @@ def test_migration_batched_path_prefixes(tmp_path, monkeypatch, claude_lsof, loc
     candidate.mkdir()
     runtime = candidate / "runtime.log"
     runtime.write_text("in use")
-    if location == "cwd":
+    if location == "open-file":
+        runtime = candidate / "missing/../runtime.log"
+    elif location == "cwd":
         runtime = tmp_path / "outside.log"
     elif location == "sibling":
         runtime = tmp_path / "candidate-other/runtime.log"
-    elif location == "symlink":
+    elif location in {"symlink", "symlink-real"}:
         alias = tmp_path / "alias"
         alias.symlink_to(candidate, target_is_directory=True)
-        runtime = alias / "runtime.log"
+        if location == "symlink":
+            runtime = alias / "runtime.log"
+        candidate = alias
     elif location == "case-alias":
         # Emulate a case-insensitive filesystem even on case-sensitive CI hosts.
         runtime = candidate.with_name("CANDIDATE") / "runtime.log"
         real_samefile = Path.samefile
 
         def samefile(path: Path, other: Path) -> bool:
-            if {str(path), str(other)} == {str(candidate), str(runtime.parent)}:
+            if {str(path), str(other)} == {str(candidate), str(candidate.with_name("CANDIDATE"))}:
                 return True
             return real_samefile(path, other)
 
         monkeypatch.setattr(Path, "samefile", samefile)
     evidence[4242] = [("cwd", str(candidate if location == "cwd" else tmp_path)), ("3", str(runtime))]
+    real_stat, real_lstat = os.stat, os.lstat
+    accesses = []
+
+    def no_process_path_access(function):
+        def guarded(path, *args, **kwargs):
+            if os.fspath(path) == str(runtime):
+                accesses.append(path)
+                raise PermissionError(f"Process path must not be inspected: {path}")
+            return function(path, *args, **kwargs)
+        return guarded
+
+    monkeypatch.setattr(os, "stat", no_process_path_access(real_stat))
+    monkeypatch.setattr(os, "lstat", no_process_path_access(real_lstat))
+    real_resolve = Path.resolve
+
+    def resolve(path: Path, *args, **kwargs) -> Path:
+        if path == runtime:
+            path.stat()  # Simulate an unreadable process path during resolution.
+        return real_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
     if location == "sibling":
         result = module.process_check([{"path": str(candidate)}])
         assert result["blockers"] == []
@@ -454,6 +479,36 @@ def test_migration_batched_path_prefixes(tmp_path, monkeypatch, claude_lsof, loc
         with pytest.raises(ValueError, match="Claude.*candidate.*live process/runtime"):
             module.process_check([{"path": str(candidate)}])
     assert len(calls) == 1
+    assert accesses == []
+
+
+def test_migration_unreadable_process_path_outside_candidates(tmp_path, monkeypatch, claude_lsof) -> None:
+    """An unrelated system file must never be accessed or block migration."""
+    import worktree_migration as module
+
+    calls, evidence = claude_lsof
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    unreadable = "/private/var/db/analyticsd/events.allowlist"
+    evidence[4242].append(("4", unreadable))
+    real_stat, real_lstat = os.stat, os.lstat
+    accesses = []
+
+    def no_system_path_access(function):
+        def guarded(path, *args, **kwargs):
+            if os.fspath(path) == unreadable:
+                accesses.append(path)
+                raise PermissionError(13, "Permission denied", unreadable)
+            return function(path, *args, **kwargs)
+        return guarded
+
+    monkeypatch.setattr(os, "stat", no_system_path_access(real_stat))
+    monkeypatch.setattr(os, "lstat", no_system_path_access(real_lstat))
+    result = module.process_check([{"path": str(candidate)}])
+    assert result["blockers"] == []
+    assert len(result["ignored_claude_processes"]) == len(evidence)
+    assert len(calls) == 1
+    assert accesses == []
 
 
 def test_candidate_claude_from_other_uid_is_not_ignored(tmp_path, monkeypatch) -> None:

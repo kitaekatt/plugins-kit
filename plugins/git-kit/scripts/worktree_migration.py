@@ -100,19 +100,23 @@ def claude_file_evidence(pids: set[int]) -> tuple[dict[int, list[Path]], dict[in
 
 
 def candidate_contains(candidate: Path, opened: Path) -> bool:
-    """Compare resolved path components, including filesystem case aliases."""
-    root = Path(os.path.normcase(str(candidate.resolve())))
-    target = Path(os.path.normcase(str(opened.resolve())))
-    if target.is_relative_to(root):
-        return True
-    if safety.sys.platform == "darwin" and len(target.parts) >= len(root.parts):
-        # normcase alone does not fold case on macOS. Ask the filesystem about
-        # the ancestor at the candidate boundary; a sibling prefix never matches.
+    """Compare text only for process paths; filesystem probes belong to our root."""
+    root = candidate.resolve()
+    insensitive = False
+    if root.name and root.name.swapcase() != root.name:
+        # Probe an alias of our own directory, never an lsof-reported ancestor.
+        alias = root.with_name(root.name.swapcase())
         try:
-            return root.samefile(Path(*target.parts[:len(root.parts)]))
+            insensitive = root.samefile(alias)
         except FileNotFoundError:
-            return False
-    return False
+            pass  # The case alias is absent on a case-sensitive filesystem.
+
+    def normalized(path: Path) -> Path:
+        text = os.path.normpath(str(path))
+        return Path(text.casefold() if insensitive else text)
+
+    target = normalized(opened)
+    return any(target.is_relative_to(normalized(form)) for form in (candidate.absolute(), root))
 
 
 def process_check(candidates: list[dict[str, Any]]) -> dict[str, Any]:
@@ -121,12 +125,13 @@ def process_check(candidates: list[dict[str, Any]]) -> dict[str, Any]:
     paths, cwds, uncertain = claude_file_evidence(pids) if pids and safety.sys.platform == "darwin" else ({}, {}, [])
     blockers = []
     for row in candidates:
-        path = Path(row["path"]).resolve()
+        candidate = Path(row["path"])
+        path = candidate.resolve()
         if pids and path.exists():
             if safety.sys.platform == "darwin":
                 blockers.extend(f"{path}: {detail}" for detail in uncertain)
                 for pid, opened in paths.items():
-                    matching = [target for target in opened if candidate_contains(path, target)]
+                    matching = [target for target in opened if candidate_contains(candidate, target)]
                     if matching:
                         blockers.append(f"{path}: live process/runtime: p{pid}\n" + "\n".join(f"n{target}" for target in matching))
             else:
