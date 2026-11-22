@@ -217,7 +217,17 @@ def upstream_ref(repo: Path, branch: str) -> str | None:
 
 
 def main_upstream(main: Path) -> str:
-    """Use the project's remote default, independently of the checkout's HEAD."""
+    """Use the approved upstream, or the remote default when none is configured."""
+    from worktree_config import load
+
+    config = load(main).config
+    if config is not None and config.pool is not None and config.pool.upstream is not None:
+        return f"refs/remotes/{config.pool.upstream}"
+    return default_upstream(main)
+
+
+def default_upstream(main: Path) -> str:
+    """Resolve the remote default independently of lifecycle configuration."""
     remotes = git(main, "remote").splitlines()
     remote = "origin" if "origin" in remotes else (remotes[0] if len(remotes) == 1 else None)
     if remote is None:

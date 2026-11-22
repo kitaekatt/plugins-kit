@@ -79,11 +79,14 @@ def test_non_object_git_kit_is_replaced_by_apply(legacy_repo: Path, tmp_path: Pa
     assert json.loads(manifest.read_text()) == {"other": {"preserved": True}, "git_kit": {"worktrees": approved}}
 
 
-def test_propose_needs_no_remote_or_user_disk_policy(legacy_repo: Path, capsys: Any) -> None:
-    git(legacy_repo, "remote", "remove", "origin")
+def test_propose_needs_remote_default_but_not_user_disk_policy(legacy_repo: Path, capsys: Any) -> None:
     write_json(Path.home() / ".claude/bootstrap.json", {"git_kit": {"worktrees": {"disk_floor_percent": "old"}}})
     assert main(["--repo", str(legacy_repo), "configure", "--propose"]) == 0
-    assert json.loads(capsys.readouterr().out)["proposal"]["enabled"] is True
+    assert json.loads(capsys.readouterr().out)["proposal"]["pool"]["upstream"] == "origin/main"
+    git(legacy_repo, "remote", "remove", "origin")
+    assert main(["--repo", str(legacy_repo), "configure", "--propose"]) == 2
+    out, err = capsys.readouterr()
+    assert not out and "default branch" in err
 
 
 def test_propose_still_requires_user_install(legacy_repo: Path, capsys: Any) -> None:

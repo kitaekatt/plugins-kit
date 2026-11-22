@@ -58,9 +58,19 @@ class Step(BaseModel):
 class Pool(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     size: StrictInt = Field(default=2, ge=1)
+    upstream: str | None = None
     setup: list[Step] = Field(min_length=1)
     rerun_files: dict[str, list[str]] = Field(default_factory=dict)
     rebuildable: list[str] = Field(default_factory=list)
+
+    @field_validator("upstream")
+    @classmethod
+    def check_upstream(cls, value: str | None) -> str | None:
+        if value is not None:
+            remote, separator, branch = value.partition("/")
+            if not remote or not separator or not branch or ".." in value:
+                raise ValueError("pool.upstream must have the form remote/branch without '..'")
+        return value
 
     @field_validator("rebuildable")
     @classmethod
@@ -130,6 +140,11 @@ def validate_config(raw: dict[str, Any], repo: Path) -> RepositoryConfig:
     config = RepositoryConfig.model_validate(raw)
     if config.pool is None:
         return config
+    if config.pool.upstream is not None:
+        remote = config.pool.upstream.partition("/")[0]
+        if remote not in wt.git(repo, "remote").splitlines():
+            raise ValueError(f"pool.upstream remote is not configured: {remote}")
+        wt.git(repo, "check-ref-format", f"refs/remotes/{config.pool.upstream}")
     matched = rebuildable_matches(repo, config.pool.rebuildable, tracked=True)
     if matched:
         raise ValueError(f"rebuildable glob matches tracked data: {sorted(matched)}")

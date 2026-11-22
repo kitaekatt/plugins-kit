@@ -93,6 +93,7 @@ def test_configure_and_install_gates(lifecycle, monkeypatch):
     before = set(obj.repo.rglob("*"))
     proposal = lc.Lifecycle(obj.repo).configure()
     assert proposal["proposal"]["pool"]["size"] == 2
+    assert proposal["proposal"]["pool"]["upstream"] == "origin/main"
     assert set(obj.repo.rglob("*")) == before
     bad = {"enabled": True, "pool": {"setup": [{"id": "x", "argv": ["true"]}], "rerun_files": {"missing": ["x"]}}}
     with pytest.raises(ValueError, match="tracked"):
@@ -108,6 +109,49 @@ def test_configure_and_install_gates(lifecycle, monkeypatch):
     with pytest.raises(ValueError, match="user"):
         lc.Lifecycle(obj.repo).maintain()
     assert not obj.namespace.exists()
+
+
+def test_configured_upstream_controls_spares_freshness_and_safety(lifecycle):
+    """Trigger: fork integration differs from HEAD. Run this file with pytest."""
+    import worktree_lifecycle as lc
+
+    obj = lifecycle
+    git(obj.repo, "remote", "add", "upstream", obj.url)
+    git(obj.repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+    git(obj.repo, "checkout", "-b", "develop")
+    config = obj.settings.raw
+    config["pool"]["upstream"] = "upstream/develop"
+    obj.configure(config)
+    git(obj.repo, "add", ".claude/bootstrap.json")
+    git(obj.repo, "commit", "-qm", "approve develop")
+    git(obj.repo, "push", "upstream", "develop")
+    obj = lc.Lifecycle(obj.repo)
+    obj.maintain()
+    record = obj.read_records()[0]
+    path = Path(record["path"])
+    assert git(path, "rev-parse", "HEAD") == git(obj.repo, "rev-parse", "develop")
+    evidence = obj.safety(record)
+    assert evidence["safe"] and evidence["upstream_ref"] == "refs/remotes/upstream/develop"
+    (path / "only-on-default").write_text("not delivered to develop")
+    git(path, "add", "only-on-default")
+    git(path, "commit", "-qm", "default only")
+    git(path, "push", "origin", "HEAD:main")
+    assert not obj.safety(record)["safe"]
+    git(path, "push", "upstream", "HEAD:develop")
+    assert obj.fresh() == ("refs/remotes/upstream/develop", git(path, "rev-parse", "HEAD"))
+    assert obj.safety(record)["safe"]
+
+
+@pytest.mark.parametrize("upstream", ["missing/develop", "origin", "origin/", "/main", "origin/../main", "origin/a..b"])
+def test_invalid_pool_upstream_is_rejected(lifecycle, upstream):
+    """Trigger: approved upstream is malformed or unknown. Run this file with pytest."""
+    from worktree_config import validate_config
+
+    config = lifecycle.settings.raw
+    config["pool"]["upstream"] = upstream
+    match = "remote.*not configured" if upstream.startswith("missing/") else "remote/branch"
+    with pytest.raises(ValueError, match=match):
+        validate_config(config, lifecycle.repo)
 
 
 def test_claim_races_and_crash_recovery(lifecycle, monkeypatch):

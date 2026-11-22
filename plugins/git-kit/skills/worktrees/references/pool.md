@@ -119,6 +119,7 @@ Remove inputs that the repository does not use.
 | `root` | Absolute or `~/` path, default `~/.worktrees`. The namespace is `<root>/<repo>`. |
 | `after_take`, `before_release` | Lists of nonempty argument arrays. Default: empty lists. See [Project extensions](#project-extensions). |
 | `pool.size` | Positive integer, default 2. Ready spares and active builds count toward capacity. |
+| `pool.upstream` | Optional remote-tracking branch, such as `origin/dev` or `upstream/develop`. The remote must exist, the name must have the form `<remote>/<branch>`, and `..` is invalid. Default: the remote default branch resolved below. |
 | `pool.rebuildable` | Optional list of relative gitignore-style globs for reproducible ignored outputs. Default: empty list. No glob can match tracked files. |
 | `setup[].id` | Unique stable ID: letters, digits, underscore, or hyphen, starting with a letter. |
 | `setup[].argv` | Nonempty argument array. Commands run in declaration order without a shell. |
@@ -129,11 +130,16 @@ Remove inputs that the repository does not use.
 Changed inputs select mapped steps once, in declaration order.
 A definition change selects every step. Path-bound steps repeat after relocation.
 The record stores input object IDs and a definition hash.
-The upstream branch is the project's remote default branch, named by the
-remote's HEAD. Git-kit uses `origin`, or the sole remote when `origin` is absent.
+`pool.upstream` selects the upstream for spare creation, freshness, and safety checks.
+Set it when integration uses a branch such as `dev` or `develop`, or a fork's
+canonical `upstream` remote.
+When the setting is absent, the upstream is the remote default branch, named by
+the remote's HEAD. Git-kit uses `origin`, or the sole remote when `origin` is absent.
 It reads the local remote HEAD symbolic ref, then queries the remote if absent.
 An undetermined default branch blocks the operation. The source checkout's
 current branch and its tracking settings do not select the upstream.
+`configure --propose` includes `pool.upstream` with the resolved remote default.
+Review and change that value as needed before approving the proposal.
 The root uses bootstrap's effective layered settings, including user, project,
 local overrides, and profiles. Repository enablement and setup approval still
 come only from tracked repository settings.

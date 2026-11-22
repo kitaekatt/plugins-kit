@@ -90,6 +90,21 @@ def test_main_upstream_refuses_unknown_remote_head(wt, git_repo, tmp_path):
         wt.main_upstream(git_repo.path)
 
 
+@pytest.mark.parametrize("remote", ["origin", "upstream"])
+def test_main_upstream_uses_repository_override(wt, git_repo, tmp_path, remote):
+    """Trigger: integration differs from origin HEAD. Run this file with pytest."""
+    git_repo.commit_file("tracked", "base")
+    bare = tmp_path / "remote.git"
+    wt.git(git_repo.path, "clone", "--bare", str(git_repo.path), str(bare))
+    wt.git(git_repo.path, "remote", "add", "origin", str(bare))
+    if remote != "origin":
+        wt.git(git_repo.path, "remote", "add", remote, str(bare))
+    wt.git(git_repo.path, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+    manifest(git_repo.path, {"git_kit": {"worktrees": {"enabled": True, "pool": {
+        "upstream": f"{remote}/team/develop", "setup": [{"id": "deps", "argv": ["true"]}]}}}})
+    assert wt.main_upstream(git_repo.path) == f"refs/remotes/{remote}/team/develop"
+
+
 def test_setting_layers_and_validation(wt, tmp_path):
     home = Path.home()
     project = tmp_path / "project"

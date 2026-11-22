@@ -151,7 +151,9 @@ def configure_repository(repo: Path, approved: dict[str, Any] | None = None) -> 
             reruns["uv.lock"] = ["bootstrap"]
         return {"current_settings": current_settings(repo),
                 "defaults": {"enabled": False, "pool_size": 2, "disk_floor_percent": 10},
-                "proposal": {"enabled": True, "pool": {"size": 2, "setup": steps, "rerun_files": reruns}},
+                "proposal": {"enabled": True, "pool": {"size": 2,
+                    "upstream": wt.default_upstream(repo).removeprefix("refs/remotes/"),
+                    "setup": steps, "rerun_files": reruns}},
                 "approval": "Review and approve the proposal, then pass that JSON file to configure --apply"}
     validate_config(approved, repo)
     # Configuration replaces approved settings without touching legacy worktrees.
