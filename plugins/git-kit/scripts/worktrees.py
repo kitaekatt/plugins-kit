@@ -74,7 +74,7 @@ def _is_steps(value: Any) -> bool:
         isinstance(step, list) and step and all(isinstance(a, str) and a for a in step) for step in value)
 
 
-def resolve_settings(project_dir: Path | None) -> WorktreeSettings:
+def resolve_settings(project_dir: Path | None, *, include_pool: bool = True) -> WorktreeSettings:
     """Reuse bootstrap's profile-aware loader, including both local layers."""
     from bootstrap_lib.engine import _load_layered_manifests_ex
 
@@ -107,7 +107,7 @@ def resolve_settings(project_dir: Path | None) -> WorktreeSettings:
     root = home / raw_root[2:] if raw_root.startswith("~/") else Path(raw_root)
     if not root.is_absolute():
         raise ValueError("git_kit.worktrees.root must be absolute or start with ~/")
-    return WorktreeSettings(enabled, root.resolve(), parse_pool(config.get("pool")))
+    return WorktreeSettings(enabled, root.resolve(), parse_pool(config.get("pool")) if include_pool else None)
 
 
 def _expand_entry(entry: str, home: Path) -> Path:
