@@ -57,6 +57,39 @@ def manifest(base, value, local=False):
     )
 
 
+@pytest.mark.parametrize("local_head", [True, False], ids=["cached-head", "remote-head"])
+@pytest.mark.parametrize("checkout", ["untracked-branch", "other-upstream", "detached"])
+def test_main_upstream_uses_remote_default(wt, git_repo, tmp_path, local_head, checkout):
+    """Trigger: source checkout leaves main. Run this file with pytest."""
+    git_repo.commit_file("tracked", "base")
+    remote = tmp_path / "remote.git"
+    wt.git(git_repo.path, "clone", "--bare", str(git_repo.path), str(remote))
+    wt.git(git_repo.path, "remote", "add", "origin", str(remote))
+    wt.refresh(git_repo.path)
+    if local_head:
+        wt.git(git_repo.path, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+    if checkout == "detached":
+        wt.git(git_repo.path, "checkout", "--detach")
+    else:
+        wt.git(git_repo.path, "checkout", "-b", "ref-test")
+        if checkout == "other-upstream":
+            wt.git(git_repo.path, "config", "branch.ref-test.remote", "origin")
+            wt.git(git_repo.path, "config", "branch.ref-test.merge", "refs/heads/task")
+    before = wt.git(git_repo.path, "rev-parse", "HEAD")
+    assert wt.main_upstream(git_repo.path) == "refs/remotes/origin/main"
+    assert wt.git(git_repo.path, "rev-parse", "HEAD") == before
+
+
+def test_main_upstream_refuses_unknown_remote_head(wt, git_repo, tmp_path):
+    """Trigger: remote HEAD is unborn. Never guess main/master."""
+    git_repo.commit_file("tracked", "base")
+    remote = tmp_path / "empty.git"
+    wt.git(git_repo.path, "init", "--bare", str(remote))
+    wt.git(git_repo.path, "remote", "add", "origin", str(remote))
+    with pytest.raises(ValueError, match="default branch"):
+        wt.main_upstream(git_repo.path)
+
+
 def test_setting_layers_and_validation(wt, tmp_path):
     home = Path.home()
     project = tmp_path / "project"

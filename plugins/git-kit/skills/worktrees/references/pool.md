@@ -128,7 +128,11 @@ Remove inputs that the repository does not use.
 Changed inputs select mapped steps once, in declaration order.
 A definition change selects every step. Path-bound steps repeat after relocation.
 The record stores input object IDs and a definition hash.
-The upstream branch comes from the source checkout's tracking settings.
+The upstream branch is the project's remote default branch, named by the
+remote's HEAD. Git-kit uses `origin`, or the sole remote when `origin` is absent.
+It reads the local remote HEAD symbolic ref, then queries the remote if absent.
+An undetermined default branch blocks the operation. The source checkout's
+current branch and its tracking settings do not select the upstream.
 The root uses bootstrap's effective layered settings, including user, project,
 local overrides, and profiles. Repository enablement and setup approval still
 come only from tracked repository settings.

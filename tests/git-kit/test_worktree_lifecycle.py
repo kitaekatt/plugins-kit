@@ -47,7 +47,7 @@ def lifecycle(tmp_path, monkeypatch, git_repo):
     git_repo.commit_file(".gitignore", "output/\ndeps-output/\nlocal.secret\n.claude/bootstrap.local.json\n")
     git_repo.commit_file("lock.txt", "one")
     remote = tmp_path / "remote.git"
-    git(git_repo.path, "init", "--bare", str(remote))
+    git(git_repo.path, "init", "--bare", "-b", "main", str(remote))
     git(git_repo.path, "remote", "add", "origin", str(remote))
     git(git_repo.path, "push", "-u", "origin", "main")
     cache = home / ".claude/plugins/cache/plugins-kit/git-kit/0.58.0"

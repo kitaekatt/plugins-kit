@@ -64,6 +64,9 @@ def test_migration_resumes_idempotently(migration, monkeypatch) -> None:
     assert journal_path.exists() and not journal_path.is_relative_to(obj.namespace)
     before = json.loads(journal_path.read_text())
     assert before["candidates"][0]["path"] == str(path)
+    # Resuming cutover must not depend on the main checkout's current branch.
+    git(obj.repo, "switch", "-c", "ref-test")
+    branches = git(obj.repo, "for-each-ref", "--format=%(refname)", "refs/heads")
     save = obj.save
     interrupted = False
 

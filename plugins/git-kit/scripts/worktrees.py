@@ -217,10 +217,27 @@ def upstream_ref(repo: Path, branch: str) -> str | None:
 
 
 def main_upstream(main: Path) -> str:
-    branch = git(main, "symbolic-ref", "--short", "HEAD")
-    ref = upstream_ref(main, branch)
-    if ref is None:
-        raise ValueError(f"{main}: main checkout branch {branch} has no remote upstream")
+    """Use the project's remote default, independently of the checkout's HEAD."""
+    remotes = git(main, "remote").splitlines()
+    remote = "origin" if "origin" in remotes else (remotes[0] if len(remotes) == 1 else None)
+    if remote is None:
+        raise ValueError(f"{main}: default branch needs origin or exactly one remote")
+    prefix = f"refs/remotes/{remote}/"
+    try:
+        ref = git(main, "symbolic-ref", "--quiet", prefix + "HEAD")
+    except subprocess.CalledProcessError as exc:
+        if exc.returncode != 1:
+            raise
+        # Fetching a remote does not necessarily create its local HEAD symref.
+        advertised = git(main, "ls-remote", "--symref", "--", remote, "HEAD")
+        heads = [line.removeprefix("ref: ").split("\t")[0]
+                 for line in advertised.splitlines() if line.startswith("ref: ") and line.endswith("\tHEAD")]
+        if len(heads) != 1 or not heads[0].startswith("refs/heads/"):
+            raise ValueError(f"{main}: cannot determine remote {remote}'s default branch")
+        ref = prefix + heads[0].removeprefix("refs/heads/")
+    if not ref.startswith(prefix) or ref == prefix + "HEAD":
+        raise ValueError(f"{main}: invalid remote {remote} default branch: {ref}")
+    git(main, "check-ref-format", ref)
     return ref
 
 
