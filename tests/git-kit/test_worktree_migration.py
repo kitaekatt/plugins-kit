@@ -176,6 +176,34 @@ def test_migration_discovers_clones_and_legacy_records(migration, tmp_path) -> N
     assert any(r.get("migration", {}).get("legacy", {}).get("id") == "old-build" for r in obj.read_records())
 
 
+@pytest.mark.parametrize("changed_remote", [False, True])
+def test_multiclone_journal_mapping_overrides_configured_record(migration, tmp_path, changed_remote: bool) -> None:
+    """Trigger: a prior record names the configured clone rather than its row's clone.
+
+    Run: uv run --extra dev pytest tests/git-kit/test_worktree_migration.py -k multiclone
+    """
+    import worktree_migration as module
+
+    obj = migration
+    clone = tmp_path / "separate/clone"
+    clone.parent.mkdir()
+    git(obj.repo, "clone", "--branch", "main", obj.url, str(clone))
+    path = legacy(obj, "other-source", source=clone)
+    row = next(r for r in obj.migrate(clones=[clone])["candidates"] if r["path"] == str(path))
+    record = module.migrated_record(obj, row)
+    record["repo"] = {"remote": obj.url, "source_clone": str(obj.repo),
+                      "common_dir": git(obj.repo, "rev-parse", "--path-format=absolute", "--git-common-dir")}
+    obj.save(record)
+    restored = module.migrated_record(obj, row)
+    assert restored["repo"]["source_clone"] == str(clone)
+    assert restored["repo"]["common_dir"] == row["common_dir"]
+    if changed_remote:
+        git(clone, "remote", "set-url", "origin", str(tmp_path / "unrelated.git"))
+    evidence = module.evidence(obj, restored)
+    assert evidence["safe"] is (not changed_remote)
+    assert path.exists()  # Evidence never mutates the worktree.
+
+
 def test_migration_legacy_adoption_uses_verified_mapping(migration) -> None:
     from test_worktree_lifecycle import holder
 

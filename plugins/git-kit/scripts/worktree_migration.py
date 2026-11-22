@@ -331,7 +331,10 @@ def legacy_problem(obj: Lifecycle, record: dict[str, Any]) -> str | None:
         if exc.returncode != 128:
             raise
         return f"Legacy Git metadata cannot be verified (git exit 128: {exc.stderr.strip()}); files and registration preserved"
-    if common != record["repo"]["common_dir"] or remote_url(path) != obj.url:
+    source = Path(record["repo"]["source_clone"])
+    source_common = wt.git(source, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    if (common != record["repo"]["common_dir"] or source_common != common
+            or record["repo"]["remote"] != obj.url or remote_url(source) != obj.url or remote_url(path) != obj.url):
         return "Legacy Git identity disagrees with the journal mapping; files preserved"
     return None
 
@@ -373,7 +376,8 @@ def migrated_record(obj: Lifecycle, row: dict[str, Any]) -> dict[str, Any]:
         identity = {"pid": old["pid"], "start": old.get("start")}
         if safety.process_state(identity) != "dead":
             record["processes"].append(identity)
-    record.update(holder=None, worker=None, state="parked", migration={"legacy": old, "origins": row["origins"]})
+    record.update(repo={"remote": obj.url, "source_clone": row["source_clone"], "common_dir": row["common_dir"]},
+                  holder=None, worker=None, state="parked", migration={"legacy": old, "origins": row["origins"]})
     return record
 
 
