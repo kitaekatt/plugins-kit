@@ -131,13 +131,14 @@ def outputs(path: Path, declared: list[str], rebuildable: Sequence[str] = ()) ->
 
 
 def output_path(root: Path, name: Path, *, resolve_target: bool = True) -> Path:
-    """Refuse linked parents; check target containment for selected deletions."""
+    """Refuse linked parents; contain selected links by their parent for unlink."""
     target = root / name
     if any(parent.is_symlink() or parent.is_junction() for parent in target.parents if parent.is_relative_to(root)):
         raise ValueError(f"Output path traverses a symlink or junction: {target}")
     if resolve_target:
-        resolved = target.resolve()
-        if resolved == root or not resolved.is_relative_to(root):
+        linked = target.is_symlink()
+        resolved = target.parent.resolve() if linked else target.resolve()
+        if (not linked and resolved == root) or not resolved.is_relative_to(root):
             raise ValueError(f"Output path escapes the worktree: {target}")
     return target
 
@@ -192,7 +193,7 @@ def remove_outputs(path: Path, declared: list[str]) -> None:
     matched = {Path(name) for name in result.stdout.split("\0") if name}
     for name in approved:
         target = root / name
-        if (target.exists() or target.is_symlink()) and name not in matched:
+        if (target.is_symlink() or target.exists()) and name not in matched:
             raise ValueError(f"Reproducible output is not ignored: {target}")
     selected: set[Path] = set()
     for name in sorted(matched - blocked, key=lambda p: (len(p.parts), p.as_posix())):
@@ -200,7 +201,7 @@ def remove_outputs(path: Path, declared: list[str]) -> None:
             selected.add(name)
     # Validate again at deletion, after collapsing; directories precede single files.
     targets = [output_path(root, name) for name in selected]
-    for target in sorted(targets, key=lambda p: (not p.is_dir(), str(p))):
+    for target in sorted(targets, key=lambda p: (p.is_symlink() or not p.is_dir(), str(p))):
         output_path(root, target.relative_to(root))
         if target.is_symlink() or target.is_file():
             target.unlink()

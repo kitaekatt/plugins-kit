@@ -92,6 +92,39 @@ def test_output_symlink_to_internal_directory_preserves_target(symlink_worktree:
     assert git(path, "diff", "HEAD", "--", "packages/pkg") == ""
 
 
+def test_output_removal_unlinks_standalone_outside_file_symlink(git_repo, tmp_path: Path) -> None:
+    git_repo.commit_file(".gitignore", "bin/tool\n")
+    (git_repo.path / "bin").mkdir()
+    git_repo.commit_file("bin/keep.txt", "tracked sibling\n")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    kept = outside / "keep.txt"
+    kept.write_text("outside data\n")
+    link = git_repo.path / "bin/tool"
+    symlink(kept, link)
+
+    safety.remove_outputs(git_repo.path, ["bin/tool"])
+
+    assert not link.is_symlink() and not link.exists()
+    assert kept.read_text() == "outside data\n"
+    assert (git_repo.path / "bin/keep.txt").read_text() == "tracked sibling\n"
+    assert git(git_repo.path, "diff", "HEAD", "--", "bin/keep.txt") == ""
+
+
+def test_output_removal_unlinks_top_level_outside_directory_symlink(symlink_worktree: Path, tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    kept = outside / "keep.txt"
+    kept.write_text("outside data\n")
+    link = symlink_worktree / "node_modules"
+    symlink(outside, link, directory=True)
+
+    safety.remove_outputs(symlink_worktree, ["node_modules/"])
+
+    assert not link.is_symlink() and not link.exists()
+    assert outside.is_dir() and kept.read_text() == "outside data\n"
+
+
 @pytest.fixture
 def retiring_symlink_worktree(lifecycle) -> tuple:
     obj = lifecycle
@@ -114,7 +147,7 @@ def retiring_symlink_worktree(lifecycle) -> tuple:
     return obj, record, Path(record["path"])
 
 
-def test_output_symlink_to_outside_parks_record(retiring_symlink_worktree: tuple, tmp_path: Path) -> None:
+def test_output_symlink_to_outside_removes_record(retiring_symlink_worktree: tuple, tmp_path: Path) -> None:
     obj, record, path = retiring_symlink_worktree
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -123,13 +156,12 @@ def test_output_symlink_to_outside_parks_record(retiring_symlink_worktree: tuple
     link = path / "node_modules"
     symlink(outside, link, directory=True)
 
-    obj.maintain()
+    result = obj.maintain()
 
-    parked = obj.get(record["id"])
-    assert parked["state"] == "parked" and parked["worker"] is None
-    assert str(link) in str(parked["safety"]["blockers"])
-    assert "escapes the worktree" in str(parked["safety"]["blockers"])
-    assert path.is_dir() and link.is_symlink()
+    assert record["id"] in result["removed"]
+    assert obj.get(record["id"])["state"] == "removed"
+    assert not link.is_symlink() and not path.exists()
+    assert str(path) not in git(obj.repo, "worktree", "list", "--porcelain")
     assert outside.is_dir() and kept.read_text() == "outside data\n"
 
 
