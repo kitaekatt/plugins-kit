@@ -2,6 +2,9 @@
 
 import json
 import subprocess
+import sys
+import textwrap
+from pathlib import Path
 from unittest.mock import patch
 
 import git_kit_bootstrap as gb
@@ -209,6 +212,71 @@ class TestProjectOrgConfig:
 
 
 class TestBootstrap:
+    @pytest.mark.parametrize("enabled", [False, True], ids=["lifecycle-off", "lifecycle-on"])
+    def test_spec_import_from_foreign_cwd(self, git_repo, tmp_path: Path, enabled: bool) -> None:
+        """Engine-style imports must work without pytest's scripts path injection.
+
+        Run: uv run --extra dev pytest tests/git-kit/test_bootstrap.py -k spec_import
+        Trigger: bootstrap imports a sibling while resolving lifecycle settings.
+        """
+        script = Path(gb.__file__).resolve()
+        root = tmp_path / "worktrees"
+        config_dir = git_repo.path / ".claude"
+        config_dir.mkdir()
+        (config_dir / "bootstrap.json").write_text(json.dumps({"git_kit": {
+            "required_organization": "WidgetCo",
+            "worktrees": {"enabled": enabled, "root": str(root), "pool": {
+                "size": 1, "setup": [{"id": "setup", "argv": [sys.executable, "-c", "pass"]}],
+            }},
+        }}), encoding="utf-8")
+        foreign_cwd = tmp_path / "elsewhere"
+        foreign_cwd.mkdir()
+        child = textwrap.dedent("""\
+            import importlib.util
+            import json
+            import sys
+            from pathlib import Path
+            from types import SimpleNamespace
+
+            script, repo, bootstrap_root = map(Path, sys.argv[1:])
+            assert str(script.parent) not in sys.path
+            # The engine provides bootstrap_lib, but never the plugin's scripts path.
+            sys.path.insert(0, str(bootstrap_root))
+            spec = importlib.util.spec_from_file_location("engine_git_bootstrap", script)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            logs, oks, failures, probes = [], [], [], []
+            ctx = SimpleNamespace(project_dir=repo, log=logs.append, log_ok=oks.append,
+                                  add_failure=lambda *args, **kwargs: failures.append([args, kwargs]))
+            module._resolve_gh = lambda: "gh"
+            module._check_auth = lambda gh: (probes.append("auth") or (True, "tester"))
+            module._check_org_membership = lambda gh, org: (probes.append(org) or (True, [org]))
+            module.bootstrap(ctx)
+            module.bootstrap(ctx)
+            print(json.dumps(dict(logs=logs, oks=oks, failures=failures, probes=probes)))
+        """)
+        result = subprocess.run(
+            [sys.executable, "-I", "-c", child, str(script), str(git_repo.path),
+             str(script.parents[2] / "bootstrap")],
+            cwd=foreign_cwd, capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+        output = json.loads(result.stdout)
+        assert output["failures"] == []
+        assert output["probes"] == ["auth", "WidgetCo", "auth", "WidgetCo"]
+        worktree_logs = [msg for msg in output["logs"] + output["oks"] if msg.startswith("worktrees:")]
+        settings_path = Path.home() / ".claude/settings.json"
+        if enabled:
+            assert root.is_dir()
+            assert len(worktree_logs) == 2
+            assert any("provisioned" in msg for msg in worktree_logs)
+            assert any("ready" in msg for msg in worktree_logs)
+            assert json.loads(settings_path.read_text(encoding="utf-8"))["permissions"]["additionalDirectories"] == [str(root)]
+        else:
+            assert not root.exists()
+            assert not settings_path.exists()
+            assert worktree_logs == []
+
     def test_gh_missing_logs_and_skips(self):
         ctx = FakeCtx()
         with patch.object(gb, "_resolve_gh", return_value=None):
