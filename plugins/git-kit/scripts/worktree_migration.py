@@ -70,20 +70,73 @@ def claude_processes() -> list[dict[str, Any]]:
     return found
 
 
+def claude_file_evidence(pids: set[int]) -> tuple[dict[int, list[Path]], dict[int, str | None], list[str]]:
+    """Read all selected macOS processes once, including cwd in the same query."""
+    paths: dict[int, list[Path]] = {pid: [] for pid in pids}
+    cwds: dict[int, str | None] = {pid: None for pid in pids}
+    executable = safety.shutil.which("lsof")
+    if not executable:
+        return paths, cwds, ["uncertain process evidence: lsof is unavailable"]
+    try:
+        # f identifies cwd without a second, per-pid `lsof -d cwd` query.
+        result = subprocess.run([executable, "-nP", "-Fpnf", "-a", "-p", ",".join(str(pid) for pid in sorted(pids))],
+                                capture_output=True, text=True, check=False, timeout=30)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return paths, cwds, [f"uncertain process evidence: {exc}"]
+    if result.returncode != 0 or result.stderr.strip():
+        return paths, cwds, [f"uncertain process evidence: {result.stderr.strip() or result.returncode}"]
+    pid, descriptor = None, None
+    for line in result.stdout.splitlines():
+        if line.startswith("p"):
+            pid, descriptor = int(line[1:]), None
+        elif line.startswith("f"):
+            descriptor = line[1:]
+        elif line.startswith("n") and pid in paths and Path(line[1:]).is_absolute():
+            paths[pid].append(Path(line[1:]))
+            if descriptor == "cwd":
+                cwds[pid] = line[1:]
+    uncertain = [f"uncertain process evidence: lsof returned no cwd for pid {pid}" for pid in sorted(pids) if cwds[pid] is None]
+    return paths, cwds, uncertain
+
+
+def candidate_contains(candidate: Path, opened: Path) -> bool:
+    """Compare resolved path components, including filesystem case aliases."""
+    root = Path(os.path.normcase(str(candidate.resolve())))
+    target = Path(os.path.normcase(str(opened.resolve())))
+    if target.is_relative_to(root):
+        return True
+    if safety.sys.platform == "darwin" and len(target.parts) >= len(root.parts):
+        # normcase alone does not fold case on macOS. Ask the filesystem about
+        # the ancestor at the candidate boundary; a sibling prefix never matches.
+        try:
+            return root.samefile(Path(*target.parts[:len(root.parts)]))
+        except FileNotFoundError:
+            return False
+    return False
+
+
 def process_check(candidates: list[dict[str, Any]]) -> dict[str, Any]:
     processes = claude_processes()
     pids = {row["pid"] for row in processes}
+    paths, cwds, uncertain = claude_file_evidence(pids) if pids and safety.sys.platform == "darwin" else ({}, {}, [])
     blockers = []
     for row in candidates:
         path = Path(row["path"]).resolve()
         if pids and path.exists():
-            blockers.extend(f"{path}: {detail}" for detail in safety.path_processes(path, pids=pids))
+            if safety.sys.platform == "darwin":
+                blockers.extend(f"{path}: {detail}" for detail in uncertain)
+                for pid, opened in paths.items():
+                    matching = [target for target in opened if candidate_contains(path, target)]
+                    if matching:
+                        blockers.append(f"{path}: live process/runtime: p{pid}\n" + "\n".join(f"n{target}" for target in matching))
+            else:
+                blockers.extend(f"{path}: {detail}" for detail in safety.path_processes(path, pids=pids))
     result = {"checked": True, "description": "Claude cwd and open files checked against migration candidates; uncertain evidence blocks migration",
               "running": processes, "blockers": blockers, "at": time.time()}
     if blockers:
         raise ValueError("Claude processes may be using migration candidates; exit Claude sessions using candidate worktrees "
                          f"or resolve uncertain process evidence. Process check: {json.dumps(result)}")
-    result["ignored_claude_processes"] = [{"pid": row["pid"], "cwd": safety.process_cwd(row["pid"])} for row in processes]
+    result["ignored_claude_processes"] = [{"pid": row["pid"], "cwd": cwds[row["pid"]] if row["pid"] in cwds else safety.process_cwd(row["pid"])} for row in processes]
     return result
 
 
@@ -416,7 +469,6 @@ def run(obj: Lifecycle, *, apply: bool = False, clones: list[Path] | None = None
             for row in journal["candidates"]:
                 if row["phase"] in {"removed", "parked"}:
                     continue
-                check = process_check(journal["candidates"])
                 path, source = Path(row["path"]), Path(row["source_clone"])
                 if remote_url(source) != obj.url or wt.git(source, "rev-parse", "--path-format=absolute", "--git-common-dir") != row["common_dir"]:
                     raise ValueError(f"Migration source identity changed: {source}")
@@ -425,6 +477,7 @@ def run(obj: Lifecycle, *, apply: bool = False, clones: list[Path] | None = None
                 record = migrated_record(obj, row)
                 registered = any(Path(r["worktree"]).absolute() == path for r in wt.records(source)[1:])
                 if not path.exists() and not path.is_symlink() and not registered:
+                    check = process_check([row])
                     record.update(state="removed", safety={"safe": True, "at": time.time(), "blockers": [], "reason": "directory and registration absent"})
                     record["operation"] = {"name": "migrate", "phase": "complete", "previous": "legacy", "at": time.time()}
                     obj.save(record)
@@ -438,12 +491,12 @@ def run(obj: Lifecycle, *, apply: bool = False, clones: list[Path] | None = None
                     atomic_json(journal_path, journal)
                     obj.save(record)  # Durable reservation precedes destructive work.
                     record["safety"] = evidence(obj, record)
-                    if record["safety"]["safe"]:
-                        check = process_check(journal["candidates"])
-                        safety.remove_outputs(path, obj.declared_outputs())
-                        wt.git(source, "worktree", "remove", str(path))
-                        record["state"] = "removed"
-                        row["phase"] = "removed"
+                check = process_check([row])
+                if record["safety"]["safe"]:
+                    safety.remove_outputs(path, obj.declared_outputs())
+                    wt.git(source, "worktree", "remove", str(path))
+                    record["state"] = "removed"
+                    row["phase"] = "removed"
                 if record["state"] != "removed":
                     record.update(state="parked", waiting="Legacy work preserved during migration; inspect blockers before adoption")
                     row["phase"] = "parked"
