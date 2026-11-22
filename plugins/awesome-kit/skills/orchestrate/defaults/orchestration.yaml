@@ -296,6 +296,18 @@ shape:
       design and cross-cutting implementation go to one strong eligible worker. If the split
       fails, dispatch one coherent delegated implementation unit. Coordination decisions,
       final integration checks, and conflict resolution stay with the orchestrator.
+  - id: agent-reuse-razor
+    text: >-
+      By default, send a follow-up request to the existing agent with SendMessage.
+      Split to another agent only for interference, availability, or location.
+      Interference uses the ship-order test for the agent's checkout: work in one checkout
+      ships in commit order, so split when the request might need to ship separately from,
+      or before, work already waiting there. Availability: the agent is busy if it is
+      mid-task and the request does not depend on that task; use another agent.
+      If the request depends on the running task, queue it to the same agent with
+      SendMessage, even if that is slower. Location: the work belongs in another repository
+      or checkout. Two agents may share one checkout only when each owns separate files and the orchestrator records which agent writes where.
+      Where a split needs a checkout, it comes from the user's own configuration.
   - id: plan-is-a-unit
     principle: P0.6
     text: >-

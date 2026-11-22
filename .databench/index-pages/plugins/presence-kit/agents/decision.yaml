@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/presence-kit/agents",
+  "decision": "none",
+  "source_sha": "add20a5ef035cc2db69a6cbf1de28efb62ff00ec",
+  "input_sha256": "b6569a163ac602bf2eb93185986dc7102a7aedff58c774de4e65b1bca9f641d4",
+  "input_shape_sha256": "9392310fbe328ea0c3a58666543f3e98b904e8aa2913e95ebcb1c62c2c79e04b",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

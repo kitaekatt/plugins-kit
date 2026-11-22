@@ -1,6 +1,6 @@
 # git-kit
 
-A pre-push review gate that defends every finding and remembers what you declined.
+Git-kit reviews local changes before delivery and manages worktrees in repositories that explicitly enable its lifecycle.
 
 ## What it does
 
@@ -82,105 +82,90 @@ explicit range (`<a>..<b>`, `--staged`, `--working`) if it guessed wrong.
 - `gh` is provisioned by bootstrap for the GitHub-side features (auth,
   optional org membership); the review itself only needs git.
 
-## Task worktrees
+## Opt-in worktree lifecycle
 
-Task checkout management is **off by default**. To enable it for your user,
-merge this into `~/.claude/bootstrap.json`:
+Worktree management is off by default. A repository can enable a shared ready
+pool through approved settings in its tracked `.claude/bootstrap.json`.
+The lifecycle requires a usable git-kit installation enabled at user scope.
+Installation alone does not enable repository worktree management.
 
-```json
-{
-  "git_kit": {
-    "worktrees": {"enabled": true}
-  }
-}
-```
+| Installation scenario | Lifecycle result |
+|---|---|
+| Usable, enabled user scope | Works after repository approval. |
+| Project scope only | Refuses with "install git-kit at user level" and the install command. |
+| Not installed | Not applicable: no git-kit lifecycle commands or hooks. |
 
-For a project that requires git-kit, merge this into
-`<project>/.claude/bootstrap.json`:
+`worktrees.py configure --propose` shows defaults and a project-fit proposal.
+`configure --apply <approved.json>` writes the approved repository settings.
+The proposal command does not write settings. The disk floor comes exclusively
+from user settings and defaults to 10 percent.
 
-```json
-{
-  "plugins": [{"ref": "plugins-kit:git-kit", "install": "auto", "enabled": true}],
-  "git_kit": {
-    "worktrees": {"enabled": true}
-  }
-}
-```
+For an enabled repository, `take --agent <id> --session <id> [--task <id>]`
+claims a ready worktree at `<root>/<repo>/<agent-id>`.
+`git_kit.worktrees.root` uses bootstrap's layered settings and defaults to
+`~/.worktrees`. Lifecycle records, journals, logs, and locks live under
+`~/.claude/plugins/data/plugins-kit/git-kit/worktrees/<repo>/`.
+A take completes mapped setup and path-bound setup before it returns success.
+An empty pool blocks the take with exit 4 and requests maintenance.
+A failed take keeps its claim, files, and error log.
 
-`git_kit.worktrees.root` defaults to `~/.worktrees`. It accepts an absolute
-path or a path starting with `~/`. Bootstrap's ordinary manifest precedence
-applies, including user-local, project-local and selected profiles. An
-explicit `enabled: false` in a higher layer disables the workflow.
+`parked [--session <id> | --task <id>]` lists waiting work, including taskless
+entries. Take shows this session's and task's parked entries in full and counts
+the rest. `adopt --id <worktree-id> --agent <id> --session <id>` atomically
+claims a parked entry, preserves its branch and files, and completes setup at
+the agent path. A lost adoption reports the winning holder. Live or uncertain
+process evidence blocks adoption. Failed setup keeps the adopting claim.
 
-An enabled bootstrap pass creates the root and appends its expanded absolute
-path to `permissions.additionalDirectories` in `~/.claude/settings.json`.
-It preserves existing settings and entries. This grants Claude Code file
-access to the whole root, including other repositories' task checkouts.
-Enabling the option opts into this permission edit. Disabling it changes
-nothing and does not revoke access or delete existing checkouts.
-[Claude Code documents additionalDirectories as persistent file access](https://code.claude.com/docs/en/settings-reference#permissionsadditionaldirectories).
-The helper writes an absolute path because that setting's documentation does
-not establish tilde expansion. Existing sessions may need to reload settings
-or restart before the permission takes effect.
+`check-task-close --task <id> --json` returns `allowed` and `parked` fields.
+A configured task-kit pre-close command can use this result to block close
+and archive while the task has parked work.
 
-The `/worktrees` skill checks the effective opt-in before applying the
-lifecycle. It is discoverable before task work, so guidance also reaches
-sessions that do not invoke code review. The helper resolves project layers
-from the main checkout, including when invoked inside a linked checkout:
+`discard --id <worktree-id> --propose` identifies the target and work at risk.
+`discard --id <worktree-id> --apply <approved.json>` applies explicit user
+direction for that proposal. Changed evidence, a holder, or a live or uncertain
+process blocks discard. `--force` supplies no authority. The record retains
+the identified work, user direction, and outcome.
 
-```bash
-"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${GIT_KIT_ROOT:?git-kit is not provisioned}/scripts/worktrees.py" new my-task
-"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${GIT_KIT_ROOT:?git-kit is not provisioned}/scripts/worktrees.py" list
-"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${GIT_KIT_ROOT:?git-kit is not provisioned}/scripts/worktrees.py" remove /absolute/root/repo/my-task
-```
+Repository `after_take` and `before_release` settings contain command lists.
+Git-kit records their results, logs, process identities, and opaque resource
+claims. A script error keeps the holder. Project scripts own servers, ports,
+and public routes. The [lifecycle reference](skills/worktrees/references/pool.md#project-extensions)
+defines the script protocol.
 
-`new` creates `<root>/<main-checkout-folder>/<task>` and a branch named
-`<task>`. By default it fetches remotes with pruning and starts from the main
-checkout's fresh upstream. `--from <ref>` accepts a remote-tracking branch,
-local branch, tag or commit that Git resolves to a commit. Remote-tracking
-sources such as `origin/main` trigger a fetch; local sources need no network.
-A missing default upstream, invalid source or failed fetch is an error.
-Fetches explicitly refresh and prune every remote branch head, including heads
-outside a remote's configured fetch subset. Remote configuration is unchanged.
-The task branch starts without inheriting the base branch's tracking
-configuration. Publish it explicitly with your normal push procedure.
+Agents commit with plain `git commit`. After a full push, the caller can run
+`release --claim <id>` from outside the claimed directory. A partial push keeps
+the claim. A release error reports separately from the successful push.
+`status --json` reports current Git observations, holders, errors, disk, and
+maintenance. Maintenance reconciles interrupted operations and reuses safe
+worktrees before it builds a deficit. It preserves branches and unique ignored data.
 
-After creation, `new` runs the `bootstrap` command from PATH with argument `run`
-and the new worktree as its working directory. It streams output to stderr and
-sets up the worktree's own venv and packages. Never link package folders from
-the main checkout. User bootstrap layers apply even without a project manifest.
-Use `new <task> --no-setup` for a quick read-only look or a repository without
-a bootstrap manifest when setup is unwanted.
+Commands, settings, records, safety evidence, and the library call for push
+integration: [Lifecycle reference](skills/worktrees/references/pool.md).
+The legacy `new`, positional `take <task-name>`, and raw `remove` paths refuse mutation.
+The supported `take --agent ... --session ... --task ...` form accepts task metadata.
+Existing namespaces require migration before lifecycle mutation.
 
-The JSON result includes `setup: {"ran": true, "exit": 0}` after successful
-setup, or `setup: {"ran": false, "exit": null}` when skipped. A bootstrap
-failure keeps the worktree, prints its path and the bootstrap exit code and
-error, and exits non-zero. This includes lock exit 2; there is no retry.
+For an enabled repository, a PreToolUse hook refuses Agent requests with
+`isolation: "worktree"` and Bash commands that invoke Git's raw `worktree add`.
+This includes `git -C` and common command wrappers.
+The refusal names `take --agent ... --session ...` and `configure --propose`.
+Disabled and unconfigured repositories keep their ordinary tool behavior.
+Managed builds prove maintenance-lock and worker ownership.
+An environment flag grants no bypass.
 
-`list` emits JSON for every task directory under the root, across repositories.
-It fetches each repository's remotes before classifying entries.
-`no_unpublished_commits` means no commit is absent from all remote-tracking
-branches. `merged` means HEAD is contained in the main checkout's upstream;
-a pushed task branch alone is insufficient. `gone` means the configured
-tracking branch disappeared. These flags can overlap. Unregistered leftovers
-and failed Git commands stop the helper with a diagnostic.
-`dirty` reports modified tracked files and untracked files; `ignored` reports
-ignored files separately. A checkout containing only ignored `.venv` or build
-files has `dirty: false` and `ignored: true`.
+`migrate --inventory` journals existing worktrees across known clones and legacy
+Agent-tool paths. Repeat `--clone /path/to/clone` for clones outside automatic discovery.
+`migrate --apply` removes safe candidates and records every other candidate as
+parked without a holder. Both commands require approved settings, the user-level
+installation, and exited Claude sessions. Their output states the live-process check.
+The journal makes interrupted migration resumable without repeated removal or duplicate records.
+Migration preserves branches and main checkouts.
+For the terminal commands, discovery rules, and recovery phases, read
+[Cutover](skills/worktrees/references/migration.md).
 
-With user opt-in, `list` also works outside a Git repository. `remove <path>`
-resolves that entry's repository and project settings, so it can retire an
-entry listed for another repository. Run it outside the target directory.
-After the task is pushed or merged, `remove` runs Git's worktree removal and
-pruning. It refuses unpublished commits, modified tracked files and untracked
-files. Git also refuses locked entries.
-For a clean, unlocked worktree, `remove` deletes the worktree together with its
-ignored files (`.venv`, `node_modules`, build output).
-This also deletes an ignored hand-made file whose only copy is in the worktree,
-such as `.env` or a local database. Copy such files outside the worktree before
-removal. It does not delete branches.
-The script uses Python and Git argument arrays without shell commands and is
-intended for macOS, Linux and Windows Git Bash.
+Git-kit registers no SessionStart maintenance hook.
+Lifecycle operations request maintenance. There are no timers or idle-age cleanup.
+Project SessionStart checks and delivery rules remain project-owned.
 
 ## Background review
 

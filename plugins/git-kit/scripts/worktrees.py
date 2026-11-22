@@ -10,15 +10,68 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+
+POOL_FOLDER = "ready"  # <root>/<repo>/ready holds the shared pool (worktree_pool.py).
+
+
+@dataclass(frozen=True)
+class PoolSettings:
+    size: int
+    setup: list[list[str]]
+    rebuild_when_changed: list[str]
+    after_take_remove: list[str] = ()
+    after_take: list[list[str]] = ()
 
 
 @dataclass(frozen=True)
 class WorktreeSettings:
     enabled: bool
     root: Path
+    pool: PoolSettings | None = None
+
+
+def parse_pool(raw: Any) -> PoolSettings | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("git_kit.worktrees.pool must be an object")
+    if isinstance(raw.get("setup"), list) and raw["setup"] and isinstance(raw["setup"][0], dict):
+        from worktree_config import Pool
+        config = Pool.model_validate(raw)
+        return PoolSettings(config.size, [step.argv for step in config.setup], list(config.rerun_files))
+    unknown = set(raw) - {"size", "setup", "rebuild_when_changed", "after_take"}
+    if unknown:
+        raise ValueError(f"Unknown git_kit.worktrees.pool keys: {sorted(unknown)}")
+    size = raw.get("size", 2)
+    if not isinstance(size, int) or isinstance(size, bool) or size < 1:
+        raise ValueError("git_kit.worktrees.pool.size must be an integer of 1 or more")
+    setup = raw.get("setup", [["bootstrap", "run"]])
+    if not setup or not _is_steps(setup):
+        raise ValueError("git_kit.worktrees.pool.setup must be a nonempty list of command arrays")
+    after = raw.get("after_take", {})
+    if not isinstance(after, dict) or set(after) - {"remove", "steps"}:
+        raise ValueError("git_kit.worktrees.pool.after_take must be an object with remove and steps")
+    remove = after.get("remove", [])
+    if not isinstance(remove, list) or not all(
+            isinstance(p, str) and p and not Path(p).is_absolute() and ".." not in Path(p).parts for p in remove):
+        raise ValueError("git_kit.worktrees.pool.after_take.remove must be a list of paths inside the worktree")
+    after_steps = after.get("steps", [])
+    if not _is_steps(after_steps):
+        raise ValueError("git_kit.worktrees.pool.after_take.steps must be a list of command arrays")
+    rebuild = raw.get("rebuild_when_changed", [])
+    if not isinstance(rebuild, list) or not all(isinstance(p, str) and p for p in rebuild):
+        raise ValueError("git_kit.worktrees.pool.rebuild_when_changed must be a list of paths")
+    return PoolSettings(size, setup, rebuild, remove, after_steps)
+
+
+def _is_steps(value: Any) -> bool:
+    return isinstance(value, list) and all(
+        isinstance(step, list) and step and all(isinstance(a, str) and a for a in step) for step in value)
 
 
 def resolve_settings(project_dir: Path | None) -> WorktreeSettings:
@@ -40,7 +93,7 @@ def resolve_settings(project_dir: Path | None) -> WorktreeSettings:
     config = section.get("worktrees", {})
     if not isinstance(config, dict):
         raise ValueError("git_kit.worktrees must be an object")
-    unknown = set(config) - {"enabled", "root"}
+    unknown = set(config) - {"enabled", "root", "pool", "disk_floor_percent", "after_take", "before_release"}
     if unknown:
         raise ValueError(f"Unknown git_kit.worktrees keys: {sorted(unknown)}")
     enabled = config.get("enabled", False)
@@ -54,7 +107,7 @@ def resolve_settings(project_dir: Path | None) -> WorktreeSettings:
     root = home / raw_root[2:] if raw_root.startswith("~/") else Path(raw_root)
     if not root.is_absolute():
         raise ValueError("git_kit.worktrees.root must be absolute or start with ~/")
-    return WorktreeSettings(enabled, root.resolve())
+    return WorktreeSettings(enabled, root.resolve(), parse_pool(config.get("pool")))
 
 
 def _expand_entry(entry: str, home: Path) -> Path:
@@ -180,51 +233,19 @@ def contained_task(root: Path, path: Path) -> Path:
     return resolved
 
 
-def new(
-    repo: Path, settings: WorktreeSettings, task: str, source: str | None,
-    *, no_setup: bool = False,
-) -> dict[str, Any]:
+def validate_task(repo: Path, task: str) -> None:
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", task) or task.endswith("."):
         raise ValueError("task must be one portable path component: letters, digits, _, . or -")
     if task.split(".")[0].upper() in {"CON", "PRN", "AUX", "NUL", *[f"COM{i}" for i in range(1, 10)], *[f"LPT{i}" for i in range(1, 10)]}:
         raise ValueError("task uses a reserved Windows filename")
+    if task == POOL_FOLDER:
+        raise ValueError(f"task name {POOL_FOLDER} is reserved for the worktree pool")
     git(repo, "check-ref-format", "--branch", task)
-    main = project_root(repo)
-    destination = contained_task(settings.root, settings.root / main.name / task)
-    if source is None:
-        source = main_upstream(main)
-        refresh(repo)
-    else:
-        resolved = git(repo, "rev-parse", "--symbolic-full-name", "--verify", "--end-of-options", source)
-        if resolved.startswith("refs/remotes/"):
-            source = resolved
-            refresh(repo)
-    commit = git(repo, "rev-parse", "--verify", "--end-of-options", f"{source}^{{commit}}")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    git(repo, "worktree", "add", "--no-track", "-b", task, str(destination), commit)
-    setup: dict[str, Any] = {"ran": False, "exit": None}
-    if not no_setup:
-        setup["ran"] = True
-        try:
-            executable = shutil.which("bootstrap")
-            if executable is None:
-                raise FileNotFoundError("bootstrap command is not on PATH")
-            # The installed PATH shim owns discovery. Keep stdout JSON-only;
-            # bootstrap's output streams directly to the diagnostic stream.
-            setup["exit"] = subprocess.run(
-                [executable, "run"], cwd=destination,
-                stdout=sys.stderr, stderr=sys.stderr, check=False,
-            ).returncode
-        except OSError as exc:
-            setup["exit"] = 127
-            print(f"bootstrap run: {exc}", file=sys.stderr)
-        if setup["exit"] != 0:
-            print(
-                f"git-kit worktrees: kept {destination}; bootstrap run failed "
-                f"(exit {setup['exit']}); see bootstrap error above",
-                file=sys.stderr,
-            )
-    return {"path": str(destination), "branch": task, "from": source, "setup": setup}
+
+
+def new(repo: Path, settings: WorktreeSettings, task: str, source: str | None, *, no_setup: bool = False) -> dict[str, Any]:
+    """Deprecated raw creation entry point; lifecycle creation belongs to maintenance."""
+    raise ValueError("Raw new is unavailable; run configure --propose, then take --agent --session")
 
 
 def worktree_status(task: Path) -> tuple[bool, bool]:
@@ -235,101 +256,19 @@ def worktree_status(task: Path) -> tuple[bool, bool]:
 
 
 def list_worktrees(settings: WorktreeSettings) -> list[dict[str, Any]]:
-    result: list[dict[str, Any]] = []
-    if not settings.root.exists():
-        return result
-    refreshed: set[Path] = set()
-    for repo_dir in sorted(settings.root.iterdir()):
-        if not repo_dir.is_dir() or repo_dir.is_symlink():
-            raise ValueError(f"Unexpected entry under worktree root: {repo_dir}")
-        for path in sorted(repo_dir.iterdir()):
-            task = contained_task(settings.root, path)
-            if not (task / ".git").is_file():
-                raise ValueError(f"Unregistered leftover under worktree root: {task}")
-            main = project_root(task)
-            if main not in refreshed:
-                refresh(task)
-                refreshed.add(main)
-            entry = next((r for r in records(task) if Path(r["worktree"]).resolve() == task), None)
-            if entry is None:
-                raise ValueError(f"Unregistered worktree: {task}")
-            head = entry["HEAD"]
-            branch = entry.get("branch", "")
-            upstream = upstream_ref(task, branch.removeprefix("refs/heads/")) if branch else None
-            refs = remote_refs(task)
-            base = main_upstream(main)
-            containing = set(git(task, "for-each-ref", f"--contains={head}", "--format=%(refname)", "refs/remotes").splitlines())
-            merged = base in containing
-            dirty, ignored = worktree_status(task)
-            result.append({
-                "path": str(task), "branch": branch.removeprefix("refs/heads/"),
-                "no_unpublished_commits": not unpublished(task, head),
-                "merged": merged, "gone": bool(upstream and upstream not in refs),
-                "dirty": dirty, "ignored": ignored,
-            })
-    return result
+    """Compatibility reader for the current repository's lifecycle records."""
+    from worktree_lifecycle import Lifecycle
+    return Lifecycle(Path.cwd()).status()["records"]
 
 
 def remove(repo: Path, settings: WorktreeSettings, path: Path) -> dict[str, str]:
-    task = contained_task(settings.root, path)
-    entry = next((r for r in records(repo) if Path(r["worktree"]).resolve() == task), None)
-    if entry is None or task == project_root(repo):
-        raise ValueError(f"Not a linked worktree of the current repository: {task}")
-    if Path.cwd().resolve().is_relative_to(task):
-        raise ValueError("Run remove from a different worktree of this repository")
-    refresh(repo)
-    if unpublished(repo, entry["HEAD"]):
-        raise ValueError(f"Refusing to remove worktree with unpublished commits: {task}")
-    dirty, ignored = worktree_status(task)
-    if dirty:
-        raise ValueError(f"Refusing to remove dirty worktree: {task}")
-    # Ignored files (.venv, node_modules, build output) are setup, not work: they go with a clean worktree.
-    flags = ["--force"] if ignored else []
-    git(repo, "worktree", "remove", *flags, str(task))
-    git(repo, "worktree", "prune")
-    return {"removed": str(task)}
+    """Deprecated removal entry point; a delivery releases an exact holder claim."""
+    raise ValueError("Raw remove is unavailable; use release --claim after full delivery, or migrate legacy worktrees")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    commands = parser.add_subparsers(dest="command", required=True)
-    create = commands.add_parser("new")
-    create.add_argument("task")
-    create.add_argument("--from", dest="source")
-    create.add_argument("--no-setup", action="store_true", help="Skip bootstrap run in the new worktree")
-    commands.add_parser("list")
-    commands.add_parser("config", help="Read effective settings without changing files")
-    delete = commands.add_parser("remove")
-    delete.add_argument("path", type=Path)
-    args = parser.parse_args()
-    try:
-        repo = Path.cwd()
-        if args.command == "remove":
-            repo = project_root(args.path)
-            project = repo
-        elif args.command in {"list", "config"}:
-            project = current_project(repo)
-        else:
-            project = project_root(repo)
-        settings = resolve_settings(project)
-        if args.command == "config":
-            output = {"enabled": settings.enabled, "root": str(settings.root)}
-        elif not settings.enabled:
-            raise ValueError("git_kit.worktrees.enabled is false; opt in through bootstrap.json")
-        elif args.command == "new":
-            output = new(repo, settings, args.task, args.source, no_setup=args.no_setup)
-        elif args.command == "list":
-            output = list_worktrees(settings)
-        else:
-            output = remove(repo, settings, args.path)
-        print(json.dumps(output, indent=2))
-        if args.command == "new" and output["setup"]["exit"]:
-            return output["setup"]["exit"] if output["setup"]["exit"] > 0 else 1
-        return 0
-    except (OSError, ValueError, subprocess.SubprocessError) as exc:
-        detail = exc.stderr if isinstance(exc, subprocess.CalledProcessError) else str(exc)
-        print(f"git-kit worktrees: {detail}", file=sys.stderr)
-        return 2
+    from worktree_cli import main as lifecycle_main
+    return lifecycle_main(sys.argv[1:])
 
 
 if __name__ == "__main__":

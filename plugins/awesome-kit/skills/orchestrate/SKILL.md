@@ -232,6 +232,9 @@ technique_skill:
         - n: 5
           action: Launch every delegated unit -- each prompt a standalone brief (goal, paths, constraints, premises, return shape).
           detail: |
+            Apply the rendered `agent-reuse-razor` first: default to a follow-up with
+            SendMessage; test interference, availability, or location before launching another
+            agent. Any checkout needed for a split comes from the user's own configuration.
             Use the launch mechanics the rendered policy gives for the chosen backend; they
             differ materially between backends (a CLI backend has no built-in isolation or
             completion report). If the razor does not admit a parallel split, launch one coherent

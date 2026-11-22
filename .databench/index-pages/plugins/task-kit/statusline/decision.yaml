@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/task-kit/statusline",
+  "decision": "none",
+  "source_sha": "d35c6eeff183e358c0e129ac860c6e5f4211d60f",
+  "input_sha256": "8aefb09844e21638215201bd329e170f3b322c91773ac82fa0118415520c7a39",
+  "input_shape_sha256": "e2af4ba7970d674558841569fb995b11def8ef5ee50914f4fc166d7c2b4d3fe0",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

@@ -2873,11 +2873,31 @@ class TestOneOrchestrationContract:
         assert "one coherent delegated implementation unit" in rendered
         assert "sequential delegated units on an eligible backend" in rendered
         assert "main-thread implementation" in rendered
+        for rule in (
+            "send a follow-up request to the existing agent with sendmessage",
+            "interference",
+            "availability",
+            "location",
+            "work in one checkout ships in commit order",
+            "separately from, or before, work already waiting there",
+            "mid-task and the request does not depend on that task",
+            "queue it to the same agent with sendmessage, even if that is slower",
+            "location: the work belongs in another repository or checkout",
+            "two agents may share one checkout only when each owns separate files and the orchestrator records which agent writes where",
+            "where a split needs a checkout, it comes from the user's own configuration",
+        ):
+            assert rule in rendered
         for old in (
             "no -- write it inline",
             "handle them inline",
             "rarely needs delegating at all",
             "author the draft and delegate plan review",
+            "and keep its worktree",
+            "another agent and another worktree",
+            "each agent holds its own worktree",
+            "two agents never share a worktree",
+            "take a worktree from the pool and release it back",
+            "context survives across worktrees",
         ):
             assert old not in rendered
 

@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Agent|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}\" \"${CLAUDE_PLUGIN_ROOT}/scripts/worktree_enforcement.py\""
+          }
+        ]
+      }
+    ]
+  }
+}

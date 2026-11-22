@@ -58,7 +58,7 @@
     {
       "name": "git-kit",
       "description": "Multi-agent pre-push code review for git (/git-code-review) with per-finding validation and declined-findings memory.",
-      "version": "0.56.4",
+      "version": "0.60.0",
       "author": {
         "name": "Christina"
       },
@@ -97,7 +97,7 @@
     {
       "name": "awesome-kit",
       "description": "Provides plugin-ecosystem, orchestrate, debug-context, verbose-updates, and arewedone skills for plugin browsing, delegated work, answering why-did-you questions from context, progress communication, and auditing whether session work is complete.",
-      "version": "0.80.2",
+      "version": "0.80.3",
       "author": {
         "name": "Christina"
       },
@@ -176,7 +176,7 @@
     {
       "name": "task-kit",
       "description": "Provides the task skill (a file-backed task-folder system with a CLI for creating, listing, working, closing, archiving, and moving task folders and task_list references) and task-kit export, the task facts databench's tasks view reads; bare task-kit opens that view.",
-      "version": "0.27.4",
+      "version": "0.28.0",
       "author": {
         "name": "Christina"
       },
