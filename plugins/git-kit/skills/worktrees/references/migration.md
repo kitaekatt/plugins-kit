@@ -10,8 +10,8 @@ The source checkouts and their branches remain in place.
 2. Apply only the approved settings with `configure --apply approved.json`.
 3. Commit `.claude/bootstrap.json` through the repository's normal procedure.
 4. Verify that a usable git-kit installation is enabled at user scope.
-5. Exit every Claude session on the machine.
-6. From a terminal, run the inventory command:
+5. Exit Claude sessions whose cwd or open files are inside migration candidate worktrees.
+6. Run the inventory command:
 
 ```bash
 "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${GIT_KIT_ROOT:?requires git-kit provisioning}/scripts/worktrees.py" migrate --inventory --repo /path/to/clone
@@ -19,12 +19,15 @@ The source checkouts and their branches remain in place.
 
 Both migration modes inspect live Claude processes.
 Their output states the process check and its result.
-A live Claude process refuses migration before candidate changes.
-A session restart or compaction does not satisfy this prerequisite.
-Uncertain process evidence preserves work.
+A Claude process whose cwd or open files are inside a candidate worktree blocks migration before candidate changes.
+Sessions in main clones, other repositories, and the calling session can remain open when they do not use candidate paths.
+Output lists these processes as `ignored_claude_processes`, with each PID and cwd.
+The caller has no PID exemption if it uses a candidate path.
+Uncertain directory-use evidence blocks migration and preserves work.
+A session restart or compaction does not prove that waiting work is complete.
 
 The inventory command journals its findings but changes no candidate checkout.
-After inspection, apply the inventory from the same terminal:
+After inspection, apply the inventory:
 
 ```bash
 "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${GIT_KIT_ROOT:?requires git-kit provisioning}/scripts/worktrees.py" migrate --apply --repo /path/to/clone

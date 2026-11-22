@@ -242,7 +242,8 @@ def test_migration_refuses_untracked_settings(lifecycle) -> None:
     assert not obj.state.exists()
 
 
-def test_live_claude_refuses_migration(lifecycle, tmp_path, monkeypatch, capsys) -> None:
+@pytest.mark.parametrize("location", ["candidate", "open-file", "main", "elsewhere", "argument"])
+def test_live_claude_migration_scope(lifecycle, tmp_path, location: str) -> None:
     import worktree_migration as migration
 
     obj = lifecycle
@@ -250,16 +251,85 @@ def test_live_claude_refuses_migration(lifecycle, tmp_path, monkeypatch, capsys)
     # A real process named claude exercises discovery without starting the harness.
     executable = tmp_path / ("claude.exe" if os.name == "nt" else "claude")
     executable.symlink_to(sys.executable)
-    child = subprocess.Popen([str(executable), "-c", "import time; time.sleep(120)"], cwd=tmp_path)
+    cwd = path if location == "candidate" else obj.repo if location == "main" else tmp_path
+    runtime = path / "runtime.log" if location == "open-file" else tmp_path / "runtime.log"
+    child = subprocess.Popen([str(executable), "-c",
+        "import sys, time; f = open(sys.argv[1], 'w'); print('ready', flush=True); time.sleep(120)", str(runtime),
+        str(path) if location == "argument" else "unused"],
+        cwd=cwd, stdout=subprocess.PIPE, text=True)
     try:
+        assert child.stdout.readline().strip() == "ready"
         assert any(row["pid"] == child.pid for row in migration.claude_processes())
         for apply in (False, True):
-            with pytest.raises(ValueError, match="Claude.*running|running.*Claude"):
-                obj.migrate(apply=apply)
-        assert path.exists() and not obj.state.exists()
+            if location in {"candidate", "open-file"}:
+                with pytest.raises(ValueError, match="Claude.*candidate"):
+                    obj.migrate(apply=apply)
+                assert path.exists() and not obj.state.exists()
+            else:
+                result = obj.migrate(apply=apply)
+                assert {"pid": child.pid, "cwd": str(cwd)} in result["ignored_claude_processes"]
+        if location in {"main", "elsewhere"}:
+            assert not path.exists()
     finally:
         child.terminate()
         child.wait(timeout=10)
+
+
+def test_migration_uncertain_lsof_blocks(migration, monkeypatch) -> None:
+    import worktree_migration as module
+    import worktree_safety as safety
+
+    obj = migration
+    path = legacy(obj, "uncertain-lsof")
+    monkeypatch.setattr(module, "claude_processes", lambda: [{"pid": os.getpid()}])
+    monkeypatch.setattr(safety.sys, "platform", "darwin")
+    monkeypatch.setattr(safety.shutil, "which", lambda name: "/usr/sbin/lsof")
+    real_run = safety.subprocess.run
+
+    def uncertain(argv, **kwargs):
+        if Path(argv[0]).name == "lsof" and "+D" in argv:
+            return subprocess.CompletedProcess(argv, 1, "", "permission denied")
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr(safety.subprocess, "run", uncertain)
+    for apply in (False, True):
+        with pytest.raises(ValueError, match="uncertain.*permission denied"):
+            obj.migrate(apply=apply)
+        assert path.exists() and not obj.state.exists()
+
+
+def test_candidate_claude_from_other_uid_is_not_ignored(tmp_path, monkeypatch) -> None:
+    """Explicit census PIDs require directory-use evidence regardless of owner."""
+    import worktree_migration as migration
+    import worktree_safety as safety
+
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    process = tmp_path / "proc/4242"
+    (process / "fd").mkdir(parents=True)
+    (process / "cmdline").write_bytes(b"claude\0")
+    (process / "cwd").symlink_to(candidate)
+    (process / "exe").symlink_to(sys.executable)
+    real_iterdir, real_stat = Path.iterdir, Path.stat
+
+    def processes(path):
+        return iter([process]) if path == Path("/proc") else real_iterdir(path)
+
+    def other_owner(path, **kwargs):
+        result = real_stat(path, **kwargs)
+        if path == process:
+            fields = list(result)
+            fields[4] = 1001
+            return os.stat_result(fields)
+        return result
+
+    monkeypatch.setattr(Path, "iterdir", processes)
+    monkeypatch.setattr(Path, "stat", other_owner)
+    monkeypatch.setattr(safety.sys, "platform", "linux")
+    monkeypatch.setattr(safety.os, "getuid", lambda: 1000, raising=False)
+    monkeypatch.setattr(migration, "claude_processes", lambda: [{"pid": 4242}])
+    with pytest.raises(ValueError, match="Claude.*candidate"):
+        migration.process_check([{"path": str(candidate)}])
 
 
 def test_migration_cli_states_process_check(migration, capsys) -> None:

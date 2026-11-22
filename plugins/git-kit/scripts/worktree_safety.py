@@ -52,18 +52,35 @@ def process_state(identity: dict[str, Any]) -> str:
     return "live" if actual["start"] == start else "dead"
 
 
-def path_processes(path: Path) -> list[str]:
+def process_cwd(pid: int) -> str | None:
+    """Report a process cwd; directory-use inspection still owns safety evidence."""
+    if sys.platform.startswith("linux"):
+        try:
+            return str((Path("/proc") / str(pid) / "cwd").resolve(strict=True))
+        except (FileNotFoundError, PermissionError):
+            return None
+    if sys.platform == "darwin" and (executable := shutil.which("lsof")):
+        result = subprocess.run([executable, "-nP", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
+                                capture_output=True, text=True, check=False, timeout=30)
+        if not result.stderr.strip() and result.returncode == 0:
+            return next((line[1:] for line in result.stdout.splitlines() if line.startswith("n")), None)
+    return None
+
+
+def path_processes(path: Path, *, pids: set[int] | None = None) -> list[str]:
     """Include cwd and open runtime files, including processes absent from records."""
     if sys.platform.startswith("linux"):
         blockers = []
         for process in Path("/proc").iterdir():
             if not process.name.isdigit():
                 continue
+            if pids is not None and int(process.name) not in pids:
+                continue
             try:
-                if process.stat().st_uid != os.getuid():
+                if pids is None and process.stat().st_uid != os.getuid():
                     continue  # Other users' processes are outside our inspection scope.
                 commandline = (process / "cmdline").read_bytes().decode("utf-8", errors="replace")
-                if str(path) in commandline:
+                if pids is None and str(path) in commandline:
                     blockers.append(f"live process runtime {process.name}: {commandline.replace(chr(0), ' ')}")
                 targets = [process / "cwd", process / "exe", *(process / "fd").iterdir()]
                 for target in targets:
@@ -83,11 +100,14 @@ def path_processes(path: Path) -> list[str]:
         executable = shutil.which("lsof")
         if not executable:
             return ["uncertain process evidence: lsof is unavailable"]
-        result = subprocess.run([executable, "-nP", "-Fpn", "+D", str(path)],
+        selection = ["-a", "-p", ",".join(str(pid) for pid in sorted(pids))] if pids is not None else []
+        result = subprocess.run([executable, "-nP", "-Fpn", *selection, "+D", str(path)],
                                 capture_output=True, text=True, check=False, timeout=30)
         if result.stderr.strip() or result.returncode not in (0, 1):
             return [f"uncertain process evidence: {result.stderr.strip() or result.returncode}"]
         blockers = [f"live process/runtime: {result.stdout.strip()}"] if result.stdout.strip() else []
+        if pids is not None:
+            return blockers
         processes = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True, check=True, timeout=15)
         for line in processes.stdout.splitlines():
             parts = line.strip().split(None, 1)

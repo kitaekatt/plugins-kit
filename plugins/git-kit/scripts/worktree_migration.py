@@ -70,12 +70,20 @@ def claude_processes() -> list[dict[str, Any]]:
     return found
 
 
-def process_check() -> dict[str, Any]:
+def process_check(candidates: list[dict[str, Any]]) -> dict[str, Any]:
     processes = claude_processes()
-    result = {"checked": True, "description": "Live Claude process names and command lines checked; all Claude sessions must be exited",
-              "running": processes, "at": time.time()}
-    if processes:
-        raise ValueError(f"Claude sessions are running; exit all Claude sessions before migration. Process check: {json.dumps(result)}")
+    pids = {row["pid"] for row in processes}
+    blockers = []
+    for row in candidates:
+        path = Path(row["path"]).resolve()
+        if pids and path.exists():
+            blockers.extend(f"{path}: {detail}" for detail in safety.path_processes(path, pids=pids))
+    result = {"checked": True, "description": "Claude cwd and open files checked against migration candidates; uncertain evidence blocks migration",
+              "running": processes, "blockers": blockers, "at": time.time()}
+    if blockers:
+        raise ValueError("Claude processes may be using migration candidates; exit Claude sessions using candidate worktrees "
+                         f"or resolve uncertain process evidence. Process check: {json.dumps(result)}")
+    result["ignored_claude_processes"] = [{"pid": row["pid"], "cwd": safety.process_cwd(row["pid"])} for row in processes]
     return result
 
 
@@ -311,7 +319,7 @@ def migrated_record(obj: Lifecycle, row: dict[str, Any]) -> dict[str, Any]:
     return record
 
 
-def refresh_inventory(obj: Lifecycle, journal: dict[str, Any], clones: list[Path], check: dict[str, Any]) -> dict[str, Any]:
+def refresh_inventory(obj: Lifecycle, journal: dict[str, Any], clones: list[Path]) -> dict[str, Any]:
     sources, candidates, metadata = discover(obj, clones, journal)
     previous = {row["path"]: row for row in journal.get("candidates", [])}
     for row in candidates:
@@ -332,7 +340,7 @@ def refresh_inventory(obj: Lifecycle, journal: dict[str, Any], clones: list[Path
     return {**journal, "version": 1, "remote": obj.url, "phase": journal.get("phase", "inventory"),
         "sources": sources, "candidates": sorted(previous.values(), key=lambda row: row["path"]),
         "metadata": sorted(known_metadata.values(), key=lambda row: row["path"]),
-        "process_check": check, "at": journal.get("at", time.time())}
+        "process_check": process_check(list(previous.values())), "at": journal.get("at", time.time())}
 
 
 def verify_agreement(obj: Lifecycle, journal: dict[str, Any]) -> None:
@@ -364,7 +372,6 @@ def run(obj: Lifecycle, *, apply: bool = False, clones: list[Path] | None = None
     obj.gate(namespace=False)
     if ".claude/bootstrap.json" not in wt.git(obj.repo, "ls-files", "-z", "--", ".claude/bootstrap.json").split("\0"):
         raise ValueError("Migration requires approved settings in tracked .claude/bootstrap.json; configure and track the file first")
-    check = process_check()  # Before any state directory, lock, journal or tree mutation.
     if obj.namespace.is_symlink() or obj.state.is_symlink():
         raise ValueError("Refusing symlinked lifecycle namespace or state")
     for relative in ("ready", ".state", ".state/records", "ready/.state", "ready/.state/records", ".staging", "ready/.staging"):
@@ -375,6 +382,10 @@ def run(obj: Lifecycle, *, apply: bool = False, clones: list[Path] | None = None
     identity = read_object(obj.state / "namespace.json")
     if identity and (identity.get("version") != 1 or identity.get("remote") != obj.url):
         raise ValueError("Namespace remote identity collision during migration")
+    # Discover without writing so the process guard precedes locks and journals.
+    previous = read_object(obj.state / "migration.json")
+    _, candidates, _ = discover(obj, clones or [], previous)
+    check = process_check([*previous.get("candidates", []), *candidates])
     with ExitStack() as stack:
         for lock in (obj.state / "migration.lock", obj.state / "maintenance.lock", obj.state / "claim.lock"):
             if not stack.enter_context(_file_lock(lock, blocking=False)):
@@ -395,16 +406,17 @@ def run(obj: Lifecycle, *, apply: bool = False, clones: list[Path] | None = None
                 raise ValueError("Migration is complete; an additional clone cannot be silently added to the completed cutover")
             result = {**journal, "process_check": check}
         else:
-            journal = refresh_inventory(obj, journal, clones or [], check)
+            journal = refresh_inventory(obj, journal, clones or [])
+            check = journal["process_check"]
             atomic_json(journal_path, journal)
             if not apply:
-                return {**journal, "process_check": check}
+                return {**journal, "process_check": check, "ignored_claude_processes": check["ignored_claude_processes"]}
             journal["phase"] = "classify"
             atomic_json(journal_path, journal)
             for row in journal["candidates"]:
                 if row["phase"] in {"removed", "parked"}:
                     continue
-                check = process_check()
+                check = process_check(journal["candidates"])
                 path, source = Path(row["path"]), Path(row["source_clone"])
                 if remote_url(source) != obj.url or wt.git(source, "rev-parse", "--path-format=absolute", "--git-common-dir") != row["common_dir"]:
                     raise ValueError(f"Migration source identity changed: {source}")
@@ -427,7 +439,7 @@ def run(obj: Lifecycle, *, apply: bool = False, clones: list[Path] | None = None
                     obj.save(record)  # Durable reservation precedes destructive work.
                     record["safety"] = evidence(obj, record)
                     if record["safety"]["safe"]:
-                        process_check()
+                        check = process_check(journal["candidates"])
                         safety.remove_outputs(path, obj.declared_outputs())
                         wt.git(source, "worktree", "remove", str(path))
                         record["state"] = "removed"
@@ -477,4 +489,4 @@ def run(obj: Lifecycle, *, apply: bool = False, clones: list[Path] | None = None
             result = journal
     if apply:
         result = {**result, "maintenance": obj.request_maintenance()}
-    return result
+    return {**result, "ignored_claude_processes": check["ignored_claude_processes"]}

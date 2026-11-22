@@ -26,11 +26,15 @@ ERRORS = (OSError, ValueError, subprocess.SubprocessError)
 
 
 def atomic_json(path: Path, value: dict[str, Any]) -> None:
+    atomic_text(path, json.dumps(value, indent=2) + "\n", newline=None)
+
+
+def atomic_text(path: Path, text: str, *, newline: str | None = "") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
-        with temporary.open("w", encoding="utf-8") as stream:
-            stream.write(json.dumps(value, indent=2) + "\n")
+        with temporary.open("w", encoding="utf-8", newline=newline) as stream:
+            stream.write(text)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
@@ -83,6 +87,47 @@ def current_settings(repo: Path) -> dict[str, str]:
     return {"status": "valid"}
 
 
+def replace_git_kit(text: str, expected: dict[str, Any]) -> str:
+    """Replace one top-level value, or insert before the last top-level member."""
+    original = json.loads(text)
+    if not isinstance(original, dict):
+        raise ValueError("Repository manifest must be a JSON object")
+    decoder = json.JSONDecoder()
+
+    def skip_space(index: int) -> int:
+        while index < len(text) and text[index] in " \t\r\n":
+            index += 1
+        return index
+
+    cursor = skip_space(0) + 1  # Opening object brace; JSON was validated above.
+    members = []
+    while text[skip_space(cursor)] != "}":
+        key_start = skip_space(cursor)
+        key, key_end = decoder.raw_decode(text, key_start)
+        value_start = skip_space(skip_space(key_end) + 1)  # Colon, then value.
+        _, value_end = decoder.raw_decode(text, value_start)
+        members.append((key, key_start, value_start, value_end, text[cursor:key_start]))
+        cursor = skip_space(value_end)
+        if text[cursor] == "}":
+            break
+        cursor += 1  # Comma before the next member.
+    value = json.dumps(expected["git_kit"])
+    matches = [member for member in members if member[0] == "git_kit"]
+    if matches:
+        # JSON's last duplicate key is authoritative, as in read_manifest.
+        _, _, start, end, _ = matches[-1]
+        result = text[:start] + value + text[end:]
+    elif members:
+        _, start, _, _, spacing = members[-1]
+        result = text[:start] + '"git_kit": ' + value + "," + spacing + text[start:]
+    else:
+        start = skip_space(cursor)
+        result = text[:start] + '"git_kit": ' + value + text[start:]
+    if json.loads(result) != expected:
+        raise ValueError("Manifest text update does not match the approved object; file preserved")
+    return result
+
+
 def configure_repository(repo: Path, approved: dict[str, Any] | None = None) -> dict[str, Any]:
     """Propose or replace settings without loading the existing lifecycle."""
     repo = wt.project_root(repo)
@@ -120,7 +165,8 @@ def configure_repository(repo: Path, approved: dict[str, Any] | None = None) -> 
     payload = read_manifest(target)
     section = payload.get("git_kit")
     payload["git_kit"] = {**section, "worktrees": approved} if isinstance(section, dict) else {"worktrees": approved}
-    atomic_json(target, payload)
+    text = target.read_bytes().decode("utf-8") if target.exists() else "{}\n"
+    atomic_text(target, replace_git_kit(text, payload))
     return {"applied": str(target), "settings": approved}
 
 
