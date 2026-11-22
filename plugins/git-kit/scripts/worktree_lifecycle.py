@@ -52,6 +52,78 @@ def operation(method: Callable) -> Callable:
     return run
 
 
+def read_manifest(target: Path) -> dict[str, Any]:
+    """Read the repository manifest; a file configure --apply cannot update raises ValueError."""
+    try:
+        return read_object(target)
+    except ValueError as exc:
+        raise ValueError(f"{target} is not valid JSON object content ({exc}); "
+                         "repair or remove it before configure --apply") from exc
+
+
+def current_settings(repo: Path) -> dict[str, str]:
+    """Diagnose existing settings without making them a prerequisite for recovery."""
+    try:
+        manifest = read_manifest(repo / ".claude/bootstrap.json")
+    except ValueError as exc:
+        return {"status": "invalid", "message": f"Current settings are invalid; configure --apply cannot run until the file is repaired: {exc}"}
+    section = manifest.get("git_kit", {})
+    if not isinstance(section, dict):
+        return {"status": "invalid", "message":
+                "Current settings are invalid: git_kit is not an object; configure --apply replaces it "
+                "with an object holding only the approved worktrees"}
+    raw = section.get("worktrees")
+    if raw is None:
+        return {"status": "unconfigured"}
+    try:
+        validate_config(raw, repo)
+    except ValueError as exc:
+        return {"status": "invalid", "message":
+                f"Current settings are invalid or legacy and will be replaced by configure --apply: {exc}"}
+    return {"status": "valid"}
+
+
+def configure_repository(repo: Path, approved: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Propose or replace settings without loading the existing lifecycle."""
+    repo = wt.project_root(repo)
+    require_install(repo)
+    if approved is None:
+        steps = []
+        reruns: dict[str, list[str]] = {}
+        tracked = {p for p in wt.git(repo, "ls-files", "-z").split("\0") if p}
+        lockfiles = sorted(p for p in tracked if Path(p).name == "package-lock.json")
+        for index, lockfile in enumerate(lockfiles):
+            directory = Path(lockfile).parent
+            identifier = "root" if directory == Path(".") else f"npm-{index}"
+            steps.append({"id": identifier, "argv": ["npm", "ci", *(["--prefix", directory.as_posix()] if directory != Path(".") else [])],
+                          "recreate": [(directory / "node_modules").as_posix()]})
+            reruns[lockfile] = [identifier]
+        if steps and ".nvmrc" in tracked:
+            reruns[".nvmrc"] = [step["id"] for step in steps]
+        steps.append({"id": "bootstrap", "argv": ["bootstrap", "run", "--project-only"],
+                      "path_bound": True, "recreate": [".venv"]})
+        if "uv.lock" in tracked:
+            reruns["uv.lock"] = ["bootstrap"]
+        return {"current_settings": current_settings(repo),
+                "defaults": {"enabled": False, "pool_size": 2, "disk_floor_percent": 10},
+                "proposal": {"enabled": True, "pool": {"size": 2, "setup": steps, "rerun_files": reruns}},
+                "approval": "Review and approve the proposal, then pass that JSON file to configure --apply"}
+    validate_config(approved, repo)
+    # Configuration replaces approved settings without touching legacy worktrees.
+    # Existing namespace identity must still match before any write.
+    url = remote_url(repo)
+    state = data_dir("git-kit") / "worktrees" / repo_identity(url)
+    identity = read_object(state / "namespace.json")
+    if identity and (identity.get("version") != 1 or identity.get("remote") != url):
+        raise ValueError("Namespace remote identity collision")
+    target = repo / ".claude/bootstrap.json"
+    payload = read_manifest(target)
+    section = payload.get("git_kit")
+    payload["git_kit"] = {**section, "worktrees": approved} if isinstance(section, dict) else {"worktrees": approved}
+    atomic_json(target, payload)
+    return {"applied": str(target), "settings": approved}
+
+
 class Lifecycle:
     def __init__(self, repo: Path) -> None:
         self.repo = wt.project_root(repo)
@@ -357,40 +429,11 @@ class Lifecycle:
 
     @operation
     def configure(self, approved: dict[str, Any] | None = None) -> dict[str, Any]:
-        require_install(self.repo)
-        if approved is None:
-            steps = []
-            reruns: dict[str, list[str]] = {}
-            tracked = {p for p in wt.git(self.repo, "ls-files", "-z").split("\0") if p}
-            lockfiles = sorted(p for p in tracked if Path(p).name == "package-lock.json")
-            for index, lockfile in enumerate(lockfiles):
-                directory = Path(lockfile).parent
-                identifier = "root" if directory == Path(".") else f"npm-{index}"
-                steps.append({"id": identifier, "argv": ["npm", "ci", *(["--prefix", directory.as_posix()] if directory != Path(".") else [])],
-                              "recreate": [(directory / "node_modules").as_posix()]})
-                reruns[lockfile] = [identifier]
-            if steps and ".nvmrc" in tracked:
-                reruns[".nvmrc"] = [step["id"] for step in steps]
-            steps.append({"id": "bootstrap", "argv": ["bootstrap", "run", "--project-only"],
-                          "path_bound": True, "recreate": [".venv"]})
-            if "uv.lock" in tracked:
-                reruns["uv.lock"] = ["bootstrap"]
-            return {"defaults": {"enabled": False, "pool_size": 2, "disk_floor_percent": 10},
-                    "proposal": {"enabled": True, "pool": {"size": 2, "setup": steps, "rerun_files": reruns}},
-                    "approval": "Review and approve the proposal, then pass that JSON file to configure --apply"}
-        validate_config(approved, self.repo)
-        # Configuration writes approved settings, not worktrees. Legacy trees
-        # remain blocked until migrate --apply establishes their records.
-        identity = read_object(self.state / "namespace.json")
-        if identity and (identity.get("version") != 1 or identity.get("remote") != self.url):
-            raise ValueError("Namespace remote identity collision")
-        target = self.repo / ".claude/bootstrap.json"
-        payload = read_object(target)
-        payload.setdefault("git_kit", {})["worktrees"] = approved
-        atomic_json(target, payload)
-        self.settings = load(self.repo)
-        self.namespace = wt.resolve_settings(self.repo).root / repo_identity(self.url)
-        return {"applied": str(target), "settings": approved}
+        result = configure_repository(self.repo, approved)
+        if approved is not None:
+            self.settings = load(self.repo)
+            self.namespace = wt.resolve_settings(self.repo).root / repo_identity(self.url)
+        return result
 
     @operation
     def take(self, agent: str, session: str, task: str | None = None, *, process: dict[str, Any] | None = None) -> dict[str, Any]:

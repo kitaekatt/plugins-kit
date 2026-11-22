@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 from worktree_config import read_object
-from worktree_lifecycle import Lifecycle
+from worktree_lifecycle import Lifecycle, configure_repository
 from worktree_pool import remote_url
 from worktree_safety import process_identity
 import worktrees as wt
@@ -83,6 +83,12 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     obj = None
     try:
+        if args.command == "configure":
+            result = configure_repository(args.repo, read_object(args.apply) if args.apply else None)
+            if args.apply:
+                result["maintenance"] = Lifecycle(args.repo).request_maintenance()
+            print(json.dumps(result, indent=2))
+            return 0
         if args.command == "pool" and args.quiet_if_off and lifecycle_off(args.repo):
             return 0
         if args.command == "check-task-close" and lifecycle_off(args.repo):
@@ -91,9 +97,7 @@ def main(argv: list[str]) -> int:
         obj = Lifecycle(args.repo)
         if args.command in {"new", "remove"}:
             raise ValueError("Raw lifecycle mutation is unavailable; configure --propose, then take --agent --session or release --claim; legacy worktrees require migration")
-        if args.command == "configure":
-            result = obj.configure(read_object(args.apply) if args.apply else None)
-        elif args.command == "take":
+        if args.command == "take":
             result = obj.take(args.agent, args.session, args.task, process=process_identity(args.holder_pid))
         elif args.command == "adopt":
             result = obj.adopt(args.id, args.agent, args.session, process=process_identity(args.holder_pid))
@@ -125,5 +129,7 @@ def main(argv: list[str]) -> int:
         detail = exc.stderr if isinstance(exc, subprocess.CalledProcessError) else str(exc)
         if obj is not None and args.command in {"new", "remove"}:
             detail = f"{detail}; maintenance: {json.dumps(obj.request_maintenance())}"
+        if args.command == "check-task-close":
+            print(json.dumps({"allowed": False, "parked": [], "error": detail}))
         print(f"git-kit worktrees: {detail}", file=sys.stderr)
         return 4 if "READY_POOL_EMPTY" in str(detail) else 2
