@@ -129,6 +129,10 @@ def bootstrap(ctx) -> None:
 def _bootstrap_worktrees(ctx) -> None:
     """Load beside this file even when the engine imports us by spec."""
     path = Path(__file__).with_name("worktrees.py")
+    # Spec loading does not expose sibling imports used by lifecycle settings.
+    scripts_dir = str(path.resolve().parent)
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
     spec = importlib.util.spec_from_file_location("_git_kit_worktrees", path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
