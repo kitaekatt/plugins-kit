@@ -633,6 +633,10 @@ class Lifecycle:
         for record in self.read_records():
             if record["state"] == "removed":
                 continue
+            pending_discard = (record["operation"].get("name") == "discard"
+                               and (record.get("discard") or {}).get("outcome") == "applying")
+            if record["state"] == "parked" and (record.get("holder") or not pending_discard):
+                continue  # Preserve claims; only explicit discard recovery runs here.
             worker = record.get("worker")
             if worker and safety.process_state(worker) != "dead":
                 continue
@@ -736,8 +740,12 @@ class Lifecycle:
             try:
                 with _file_lock(self.state / "claim.lock", blocking=True):
                     self.reconcile()
+                    from worktree_retirement import recheck_parked
+                    parked_ids = {r["id"] for r in self.read_records() if r["state"] == "parked"}
+                    result["parked_recheck"] = recheck_parked(self)
+                    result["removed"] = [r["id"] for r in self.read_records() if r["id"] in parked_ids and r["state"] == "removed"]
                 for record in self.read_records():
-                    if record["state"] in {"ready", "taken", "removed", "building", "recycled"}:
+                    if record["state"] in {"ready", "taken", "removed", "building", "recycled", "parked"}:
                         continue
                     with _file_lock(self.state / "claim.lock", blocking=True):
                         record = self.get(record["id"])

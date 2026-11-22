@@ -77,7 +77,11 @@ def test_migration_rebuildable_safety_and_resume(migration, unique: bool) -> Non
     assert set(record["safety"]["reproducible"]) == set(OUTPUTS)
     assert record["safety"]["unique_ignored"] == (["local.secret"] if unique else [])
     assert path.exists() is unique
-    assert obj.migrate(apply=True)["candidates"] == result["candidates"]
+    resumed = obj.migrate(apply=True)
+    before, after = result["candidates"][0], resumed["candidates"][0]
+    assert {k: v for k, v in after.items() if k != "safety"} == {k: v for k, v in before.items() if k != "safety"}
+    assert {k: v for k, v in after["safety"].items() if k != "at"} == {k: v for k, v in before["safety"].items() if k != "at"}
+    assert resumed["parked_recheck"]["rechecked"] == int(unique)
     if unique:
         assert (path / "local.secret").read_text() == "preserve"
         assert all((path / name).exists() for name in OUTPUTS)

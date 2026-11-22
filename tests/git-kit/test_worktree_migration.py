@@ -444,7 +444,12 @@ def test_migration_resumes_parked_and_pending_rows(migration, monkeypatch, claud
     result = migration.migrate(apply=True)
     assert result["phase"] == "complete"
     assert all(row["phase"] == "parked" for row in result["candidates"])
-    assert next(row for row in migration.read_records() if row["id"] == parked["id"]) == parked
+    rechecked = next(row for row in migration.read_records() if row["id"] == parked["id"])
+    assert {key: value for key, value in rechecked.items() if key != "operation"} == {
+        key: value for key, value in parked.items() if key != "operation"}
+    assert rechecked["operation"]["name"] == "parked-recheck"
+    assert result["parked_recheck"] == {"rechecked": 3, "removed": 0, "still_parked": 3,
+                                        "by_reason": {"preserve work": 3}}
     assert visited[2:] == [[row["path"]] for row in before["candidates"][1:]]
 
 
