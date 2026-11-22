@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -51,6 +52,78 @@ def process_state(identity: dict[str, Any]) -> str:
     except (ValueError, OSError, subprocess.SubprocessError):
         return "uncertain"
     return "live" if actual["start"] == start else "dead"
+
+
+def process_info(pid: int) -> dict[str, Any]:
+    """Read parent and executable evidence without trusting a caller's argv."""
+    if os.name == "nt":
+        result = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+            f"Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}' | Select-Object ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress"],
+            capture_output=True, text=True, check=True, timeout=15)
+        row = json.loads(result.stdout)
+        if not isinstance(row, dict):
+            raise ValueError(f"Cannot inspect process {pid}")
+        return {"ppid": int(row["ParentProcessId"]), "executable": row["Name"],
+                "command": row.get("CommandLine") or ""}
+    names = subprocess.run(["ps", "-p", str(pid), "-o", "ppid=,comm="],
+                           capture_output=True, text=True, check=True, timeout=15)
+    command = subprocess.run(["ps", "-p", str(pid), "-o", "args="],
+                             capture_output=True, text=True, check=True, timeout=15)
+    parent, executable = names.stdout.strip().split(None, 1)
+    return {"ppid": int(parent), "executable": executable, "command": command.stdout.strip()}
+
+
+def holder_identity(explicit: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Prefer the nearest Claude session ancestor; require an explicit fallback."""
+    from worktree_migration import claude_command
+
+    pid = os.getppid()
+    seen: set[int] = set()
+    while pid > 0 and pid not in seen:
+        seen.add(pid)
+        try:
+            identity = process_identity(pid)
+            info = process_info(pid)
+            if claude_command(info["executable"], info["command"]):
+                if process_state(identity) != "live":
+                    raise ValueError("Claude holder changed during process inspection")
+                return {**identity, "executable": info["executable"], "command": info["command"]}
+            pid = info["ppid"]
+        except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
+            break  # An incomplete chain cannot establish an automatic holder.
+    if explicit is None:
+        raise ValueError("No live Claude session ancestor found; provide --holder-pid <pid> explicitly")
+    if process_state(explicit) != "live":
+        raise ValueError("Holder process identity must be live and certain")
+    info = process_info(explicit["pid"])
+    if process_state(explicit) != "live":
+        raise ValueError("Holder changed during process inspection")
+    return {**explicit, "executable": info["executable"], "command": info["command"]}
+
+
+def holder_state(identity: dict[str, Any]) -> str:
+    """Only proven Claude-session death can end a claim automatically."""
+    from worktree_migration import claude_command, claude_processes
+
+    state = process_state(identity)
+    if state != "dead":
+        return state
+    if not claude_command(identity.get("executable", ""), identity.get("command", "")):
+        return "uncertain"  # Legacy shell holders provide no session-death evidence.
+    session = identity.get("session")
+    if not session:
+        return "dead"
+    try:
+        processes = claude_processes()
+        if any(session in row["command"] for row in processes):
+            return "live"
+        # An argv that omits the ID cannot prove a Claude process belongs to
+        # another session. Keep ownership until all possible holders end.
+        if processes:
+            return "uncertain"
+    except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
+        return "uncertain"
+    return "dead"
 
 
 def process_cwd(pid: int) -> str | None:

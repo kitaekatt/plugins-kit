@@ -31,6 +31,15 @@ def write_json(path: Path, value: dict) -> None:
 @pytest.fixture
 def lifecycle(tmp_path, monkeypatch, git_repo):
     import worktree_lifecycle as lc
+    import worktree_safety as safety
+
+    # Host Claude sessions must not own test claims or influence their death.
+    # CLI ancestry integration uses real test-owned subprocesses separately.
+    parent_pid = os.getppid()
+    real_info = safety.process_info
+    monkeypatch.setattr(safety, "process_info", lambda pid:
+        {"ppid": 0, "executable": "pytest-harness", "command": "pytest-harness"}
+        if pid == parent_pid else real_info(pid))
 
     home = tmp_path / "home"
     home.mkdir()
@@ -155,6 +164,8 @@ def test_invalid_pool_upstream_is_rejected(lifecycle, upstream):
 
 
 def test_claim_races_and_crash_recovery(lifecycle, monkeypatch):
+    import worktree_migration as migration
+    monkeypatch.setattr(migration, "claude_processes", lambda: [])
     obj = lifecycle
     obj.maintain()
     def take(index):
@@ -174,7 +185,7 @@ def test_claim_races_and_crash_recovery(lifecycle, monkeypatch):
         obj.take(record["holder"]["agent"], "s", process=holder())
     # Kill-shaped journal: durable reservation written, rename already happened,
     # registration and final setup did not complete. Never return it to ready.
-    record["holder"].update(pid=99999999, start="gone")
+    record["holder"].update(pid=99999999, start="gone", executable="claude", command="claude")
     (Path(record["path"]) / "unfinished").write_text("preserve")
     record["operation"] = {"name": "take", "phase": "rename", "previous": "ready", "at": "test",
                            "from": record["path"], "to": record["path"]}
@@ -482,13 +493,15 @@ def test_take_setup_failure_keeps_claim_and_log(lifecycle):
     assert "setup failed" in Path(record["error"]["log"]).read_text()
 
 
-def test_reconcile_rename_uses_journal_before_missing_path(lifecycle):
+def test_reconcile_rename_uses_journal_before_missing_path(lifecycle, monkeypatch):
+    import worktree_migration as migration
+    monkeypatch.setattr(migration, "claude_processes", lambda: [])
     obj = lifecycle
     obj.maintain()
     record = obj.read_records()[0]
     before = Path(record["path"])
     after = obj.namespace / "crashed"
-    record["holder"] = {"agent": "crashed", "session": "s", "claim": "c-crashed", "pid": 99999999, "start": "gone"}
+    record["holder"] = {"agent": "crashed", "session": "s", "claim": "c-crashed", "pid": 99999999, "start": "gone", "executable": "claude"}
     record["worker"] = {"pid": 99999999, "start": "gone"}
     record["operation"] = {"name": "take", "phase": "rename", "from": str(before), "to": str(after)}
     os.rename(before, after)

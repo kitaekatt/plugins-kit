@@ -467,9 +467,7 @@ class Lifecycle:
         wt.validate_task(self.repo, agent)
         if agent in {".state", ".staging"} or not session.strip():
             raise ValueError("adopt requires a portable agent ID and a nonempty session")
-        identity = process or safety.process_identity(os.getppid())
-        if safety.process_state(identity) != "live":
-            raise ValueError("Holder process identity must be live and certain")
+        identity = safety.holder_identity(process)
         with _file_lock(self.state / "claim.lock", blocking=True):
             record = self.get(identifier)
             if record["state"] != "parked" or record.get("holder"):
@@ -522,9 +520,7 @@ class Lifecycle:
         wt.validate_task(self.repo, agent)
         if agent in {".state", ".staging"} or not session.strip():
             raise ValueError("take requires a portable agent ID and a nonempty session")
-        identity = process or safety.process_identity(os.getppid())
-        if safety.process_state(identity) != "live":
-            raise ValueError("Holder process identity must be live and certain")
+        identity = safety.holder_identity(process)
         record = None
         parked = self.parked_rows()
         own_parked = [r for r in parked if r["session"] == session or (task is not None and r.get("task") == task)]
@@ -647,7 +643,7 @@ class Lifecycle:
                 record["observed"] = {"head": wt.git(path, "rev-parse", "HEAD"),
                     "branch": wt.git(path, "branch", "--show-current"),
                     "dirty": bool(wt.git(path, "status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none")),
-                    "holder_process": safety.process_state(record["holder"]) if record["holder"] else None,
+                    "holder_process": safety.holder_state(record["holder"]) if record["holder"] else None,
                     "process_blockers": [*safety.path_processes(path), *safety.declared_process_blockers(record)], "at": time.time()}
                 record["safety_is_historical"] = record.get("safety") is not None
         return {"namespace": str(self.namespace), "enabled": bool(self.settings.config and self.settings.config.enabled),
@@ -700,7 +696,7 @@ class Lifecycle:
                 continue
             if record.get("holder"):
                 record["state"] = "taken"
-                state = safety.process_state(record["holder"])
+                state = safety.holder_state(record["holder"])
                 if state == "dead":
                     record["last_holder"] = record["holder"]
                     record["holder"] = None

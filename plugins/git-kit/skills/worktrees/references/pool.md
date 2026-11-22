@@ -192,9 +192,15 @@ An empty pool blocks take with exit 4 and requests maintenance.
 A failed take retains its claim, files, failed step, and log.
 Incomplete claims never become available spares.
 
-`--holder-pid` names the long-lived holder process. Its default is the CLI parent.
-Callers with short-lived shell parents must supply the actual holder PID.
-Records include PID and process start identity.
+Take and adopt use the nearest Claude Code CLI ancestor as the holder.
+Records include its PID, process start identity, executable, and command.
+If no Claude ancestor exists, the caller must supply `--holder-pid <pid>`.
+Otherwise, take and adopt refuse the claim.
+
+Reconciliation parks a claim only after proven Claude holder death.
+If the record has a session ID, a live Claude process for that session blocks parking.
+Uncertain session evidence also retains the holder.
+An older holder record without Claude executable or command evidence retains its claim after PID death.
 
 ## Parked work and adoption
 

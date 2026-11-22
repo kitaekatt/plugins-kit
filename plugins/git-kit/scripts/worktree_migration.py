@@ -66,8 +66,9 @@ def claude_processes() -> list[dict[str, Any]]:
         if len(fields) != 2:
             raise ValueError(f"Claude process check returned an invalid process row: {line!r}")
         pid, executable = int(fields[0]), fields[1]
-        if pid in by_pid and claude_command(executable, by_pid[pid]):
-            found.append({"pid": pid, "executable": executable, "command": by_pid[pid]})
+        command = by_pid.get(pid, "")
+        if claude_command(executable, command):
+            found.append({"pid": pid, "executable": executable, "command": command})
     return found
 
 
