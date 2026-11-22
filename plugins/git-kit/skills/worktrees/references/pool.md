@@ -26,6 +26,8 @@ before or after its name.
 | `discard --id w-... --apply approved.json` | Apply targeted user direction for an unchanged proposal. |
 | `release --claim c-...` | Release the exact claim after full delivery and successful safety checks. |
 | `status [--json]` | Show records, current Git observations, process blockers, disk, and maintenance. |
+| `migrate --inventory [--clone /path/to/clone ...]` | Journal legacy candidates and clone identities after the Claude-process guard passes. |
+| `migrate --apply [--clone /path/to/clone ...]` | Resume safe removal or preservation, convert records, and request maintenance. |
 | `maintenance` | Run the internal maintenance pass in the foreground. |
 
 Status always emits JSON. `config` and `list` are status aliases.
@@ -52,6 +54,31 @@ A usable git-kit installation must be enabled at user scope.
 An unconfigured repository directs the caller to configure.
 A disabled repository creates no lifecycle state or worktrees.
 An existing legacy namespace blocks mutation until migration.
+For migration prerequisites, discovery, and recovery, read [Cutover](migration.md).
+
+## Creation enforcement
+
+For an enabled repository, the PreToolUse hook blocks these creation requests:
+
+- The Agent tool with `isolation: "worktree"`.
+- A Bash command that invokes Git's raw `worktree add` subcommand.
+  Detection includes Git's `-C` argument and common command wrappers.
+
+The hook reads tracked repository `.claude/bootstrap.json`, under `git_kit.worktrees`.
+User settings and local overrides cannot enable this enforcement.
+Disabled and unconfigured repositories keep their ordinary tool behavior.
+The hook returns a PreToolUse `permissionDecision: "deny"` with the lifecycle
+take command and the configure command for settings approval.
+
+An internal build creates a staging checkout through the lifecycle worker.
+The worker proves maintenance-lock ownership and its recorded process identity.
+An environment variable cannot grant build authority.
+A raw tool request remains refused even during a legitimate background build.
+
+Git-kit registers no SessionStart maintenance hook.
+Completed and blocked lifecycle operations request maintenance.
+Project SessionStart duties, such as main-status reports and `core.hooksPath`,
+remain project-owned.
 
 ## Settings
 
@@ -339,7 +366,8 @@ automatic retirement. Claims and new builds remain available.
 ## Shared state and record schema
 
 The checkout namespace is `<root>/<remote-basename>/`.
-The remote URL and source common directory must agree across clones.
+Clones share the same remote URL.
+Each worktree registration must match its recorded source clone and Git common directory.
 A basename collision fails with an identity error.
 
 All lifecycle state belongs in git-kit's user-scoped plugin data home:
@@ -362,6 +390,8 @@ Worktree checkouts remain under the configured root.
 | `launch.lock` | Launcher/worker acceptance handshake. |
 | `maintenance.json`, `maintenance.log` | Worker identity, outcome, and output. |
 | `launcher-error.json` | Failed launcher operation and reason. |
+| `migration.json` | Clone identities, legacy-to-record mappings, and resumable cutover phases. |
+| `migration.lock`, `migration-legacy/` | Cutover exclusion and verified copies of retired legacy metadata. |
 
 Record version 1 contains `id`, `repo`, `path`, `state`, `operation`, `holder`,
 `task`, `branch`, `head`, `upstream`, `boundary`, `waiting`, `setup`,

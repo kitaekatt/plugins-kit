@@ -1,6 +1,6 @@
 # git-kit
 
-A pre-push review gate that defends every finding and remembers what you declined.
+Git-kit reviews local changes before delivery and manages worktrees in repositories that explicitly enable its lifecycle.
 
 ## What it does
 
@@ -144,6 +144,28 @@ integration: [Lifecycle reference](skills/worktrees/references/pool.md).
 The legacy `new`, positional `take <task-name>`, and raw `remove` paths refuse mutation.
 The supported `take --agent ... --session ... --task ...` form accepts task metadata.
 Existing namespaces require migration before lifecycle mutation.
+
+For an enabled repository, a PreToolUse hook refuses Agent requests with
+`isolation: "worktree"` and Bash commands that invoke Git's raw `worktree add`.
+This includes `git -C` and common command wrappers.
+The refusal names `take --agent ... --session ...` and `configure --propose`.
+Disabled and unconfigured repositories keep their ordinary tool behavior.
+Managed builds prove maintenance-lock and worker ownership.
+An environment flag grants no bypass.
+
+`migrate --inventory` journals existing worktrees across known clones and legacy
+Agent-tool paths. Repeat `--clone /path/to/clone` for clones outside automatic discovery.
+`migrate --apply` removes safe candidates and records every other candidate as
+parked without a holder. Both commands require approved settings, the user-level
+installation, and exited Claude sessions. Their output states the live-process check.
+The journal makes interrupted migration resumable without repeated removal or duplicate records.
+Migration preserves branches and main checkouts.
+For the terminal commands, discovery rules, and recovery phases, read
+[Cutover](skills/worktrees/references/migration.md).
+
+Git-kit registers no SessionStart maintenance hook.
+Lifecycle operations request maintenance. There are no timers or idle-age cleanup.
+Project SessionStart checks and delivery rules remain project-owned.
 
 ## Background review
 
