@@ -137,7 +137,9 @@ def _bootstrap_worktrees(ctx) -> None:
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
-    settings = module.resolve_settings(ctx.project_dir)
+    # The engine only provisions the root and permissions. Pool validation
+    # belongs to git-kit's runtime, which owns the pydantic dependency.
+    settings = module.resolve_settings(ctx.project_dir, include_pool=False)
     if not settings.enabled:
         return
     if module.ensure_permissions(settings.root):

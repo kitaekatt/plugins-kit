@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/git-kit/hooks",
+  "decision": "none",
+  "source_sha": "5b9b4e22051f8737b1321573ce9d04867eeed814",
+  "input_sha256": "811ade144fcf704f32e37fa514838ee964f0c73e053e8bf8628dae3131d01ffd",
+  "input_shape_sha256": "a27c4001a022b1c2c8d6e8a4196da87ed8e8df7fa48c9d37e8bedd9069fa3293",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

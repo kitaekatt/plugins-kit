@@ -180,6 +180,7 @@ class Lifecycle:
         self.settings = load(self.repo)
         self.namespace = wt.resolve_settings(self.repo).root / repo_identity(self.url)
         self.state = data_dir("git-kit") / "worktrees" / repo_identity(self.url)
+        self._maintenance_upstreams: dict[Path, tuple[str, str] | str] | None = None
 
     def gate(self, *, namespace: bool = True) -> None:
         require_install(self.repo)
@@ -268,9 +269,32 @@ class Lifecycle:
     def declared_outputs(self) -> list[str]:
         return [p for step in self.settings.config.pool.setup for p in step.recreate]
 
+    def record_upstream(self, record: dict[str, Any]) -> tuple[str, str]:
+        """Resolve the approved upstream in the record's own object database."""
+        source = Path(record["repo"]["source_clone"]).resolve()
+        configured = self.source()
+        if source == configured.resolve():
+            return self.fresh()
+        cache = self._maintenance_upstreams
+        with _file_lock(self.state / "fetch.lock", blocking=True):
+            result = cache.get(source) if cache is not None else None
+            if result is None:
+                try:
+                    ref = wt.main_upstream(configured)
+                    wt.refresh(source)
+                    result = (ref, wt.git(source, "rev-parse", "--verify", f"{ref}^{{commit}}"))
+                except ERRORS as exc:
+                    detail = exc.stderr if isinstance(exc, subprocess.CalledProcessError) else str(exc)
+                    result = f"Source clone upstream fetch/resolve failed for {source}: {exc}; {detail}"
+                if cache is not None:
+                    cache[source] = result
+            if isinstance(result, str):
+                raise ValueError(result)
+            return result
+
     def safety(self, record: dict[str, Any], *, persist: bool = True) -> dict[str, Any]:
-        ref, oid = self.fresh()
-        path = self.record_path(record)
+        self.record_path(record)
+        ref, oid = self.record_upstream(record)
         evidence = safety.inspect(record, oid, self.declared_outputs(), self.settings.config.pool.rebuildable)
         evidence["upstream_ref"] = ref
         record["safety"] = evidence
@@ -633,6 +657,10 @@ class Lifecycle:
         for record in self.read_records():
             if record["state"] == "removed":
                 continue
+            pending_discard = (record["operation"].get("name") == "discard"
+                               and (record.get("discard") or {}).get("outcome") == "applying")
+            if record["state"] == "parked" and (record.get("holder") or not pending_discard):
+                continue  # Preserve claims; only explicit discard recovery runs here.
             worker = record.get("worker")
             if worker and safety.process_state(worker) != "dead":
                 continue
@@ -733,11 +761,16 @@ class Lifecycle:
             with _file_lock(self.state / "launch.lock", blocking=True):
                 atomic_json(self.state / "maintenance.json", worker)
             result: dict[str, Any] = {"outcome": "complete", "built": [], "recycled": [], "removed": []}
+            self._maintenance_upstreams = {}
             try:
                 with _file_lock(self.state / "claim.lock", blocking=True):
                     self.reconcile()
+                    from worktree_retirement import recheck_parked
+                    parked_ids = {r["id"] for r in self.read_records() if r["state"] == "parked"}
+                    result["parked_recheck"] = recheck_parked(self)
+                    result["removed"] = [r["id"] for r in self.read_records() if r["id"] in parked_ids and r["state"] == "removed"]
                 for record in self.read_records():
-                    if record["state"] in {"ready", "taken", "removed", "building", "recycled"}:
+                    if record["state"] in {"ready", "taken", "removed", "building", "recycled", "parked"}:
                         continue
                     with _file_lock(self.state / "claim.lock", blocking=True):
                         record = self.get(record["id"])
@@ -745,7 +778,16 @@ class Lifecycle:
                             continue
                         if legacy_problem(self, record):
                             continue
-                        if not self.safety(record)["safe"]:
+                        try:
+                            evidence = self.safety(record)
+                        except ERRORS as exc:
+                            detail = exc.stderr if isinstance(exc, subprocess.CalledProcessError) else str(exc)
+                            record["safety"] = {"safe": False, "at": time.time(),
+                                                "blockers": [f"safety evidence unavailable: {exc}; {detail}"]}
+                            record["state"] = "parked"
+                            self.save(record)
+                            continue
+                        if not evidence["safe"]:
                             continue
                         ready = sum(r["state"] in {"ready", "building", "recycled"} for r in self.read_records())
                         record["worker"] = safety.process_identity(os.getpid())
@@ -780,6 +822,8 @@ class Lifecycle:
             except ERRORS as exc:
                 atomic_json(self.state / "maintenance.json", {**worker, "outcome": "failed", "reason": str(exc), "finished": time.time()})
                 raise
+            finally:
+                self._maintenance_upstreams = None
 
     def request_maintenance(self) -> dict[str, Any]:
         if not self.settings.config or not self.settings.config.enabled:

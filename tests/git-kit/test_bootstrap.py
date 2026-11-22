@@ -242,6 +242,8 @@ class TestBootstrap:
             assert str(script.parent) not in sys.path
             # The engine provides bootstrap_lib, but never the plugin's scripts path.
             sys.path.insert(0, str(bootstrap_root))
+            # The bootstrap engine interpreter does not own plugin dependencies.
+            sys.modules["pydantic"] = None
             spec = importlib.util.spec_from_file_location("engine_git_bootstrap", script)
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)

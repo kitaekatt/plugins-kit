@@ -331,7 +331,10 @@ def legacy_problem(obj: Lifecycle, record: dict[str, Any]) -> str | None:
         if exc.returncode != 128:
             raise
         return f"Legacy Git metadata cannot be verified (git exit 128: {exc.stderr.strip()}); files and registration preserved"
-    if common != record["repo"]["common_dir"] or remote_url(path) != obj.url:
+    source = Path(record["repo"]["source_clone"])
+    source_common = wt.git(source, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    if (common != record["repo"]["common_dir"] or source_common != common
+            or record["repo"]["remote"] != obj.url or remote_url(source) != obj.url or remote_url(path) != obj.url):
         return "Legacy Git identity disagrees with the journal mapping; files preserved"
     return None
 
@@ -342,10 +345,13 @@ def evidence(obj: Lifecycle, record: dict[str, Any]) -> dict[str, Any]:
     problem = legacy_problem(obj, record)
     if problem:
         return {"safe": False, "at": time.time(), "blockers": [problem]}
-    ref = wt.main_upstream(source)
-    with _file_lock(obj.state / "fetch.lock", blocking=True):
-        wt.refresh(source)
-        oid = wt.git(source, "rev-parse", "--verify", f"{ref}^{{commit}}")
+    if obj._maintenance_upstreams is not None:
+        ref, oid = obj.record_upstream(record)
+    else:
+        ref = wt.main_upstream(source)
+        with _file_lock(obj.state / "fetch.lock", blocking=True):
+            wt.refresh(source)
+            oid = wt.git(source, "rev-parse", "--verify", f"{ref}^{{commit}}")
     result = safety.inspect(record, oid, obj.declared_outputs(), obj.settings.config.pool.rebuildable)
     result["upstream_ref"] = ref
     return result
@@ -373,7 +379,8 @@ def migrated_record(obj: Lifecycle, row: dict[str, Any]) -> dict[str, Any]:
         identity = {"pid": old["pid"], "start": old.get("start")}
         if safety.process_state(identity) != "dead":
             record["processes"].append(identity)
-    record.update(holder=None, worker=None, state="parked", migration={"legacy": old, "origins": row["origins"]})
+    record.update(repo={"remote": obj.url, "source_clone": row["source_clone"], "common_dir": row["common_dir"]},
+                  holder=None, worker=None, state="parked", migration={"legacy": old, "origins": row["origins"]})
     return record
 
 
@@ -545,6 +552,10 @@ def run(obj: Lifecycle, *, apply: bool = False, clones: list[Path] | None = None
             journal.update(phase="complete", process_check=check, finished=time.time())
             atomic_json(journal_path, journal)
             result = journal
+        if apply:
+            from worktree_retirement import recheck_parked
+            summary = recheck_parked(obj)
+            result = {**read_object(journal_path), "parked_recheck": summary}
     if apply:
         result = {**result, "maintenance": obj.request_maintenance()}
     return {**result, "ignored_claude_processes": check["ignored_claude_processes"]}
