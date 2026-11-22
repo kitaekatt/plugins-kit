@@ -130,14 +130,15 @@ def outputs(path: Path, declared: list[str], rebuildable: Sequence[str] = ()) ->
     return reproducible, unique
 
 
-def output_path(root: Path, name: Path) -> Path:
-    """Resolve containment and refuse links in every output's parent chain."""
+def output_path(root: Path, name: Path, *, resolve_target: bool = True) -> Path:
+    """Refuse linked parents; check target containment for selected deletions."""
     target = root / name
     if any(parent.is_symlink() or parent.is_junction() for parent in target.parents if parent.is_relative_to(root)):
         raise ValueError(f"Output path traverses a symlink or junction: {target}")
-    resolved = target.resolve()
-    if resolved == root or not resolved.is_relative_to(root):
-        raise ValueError(f"Output path escapes the worktree: {target}")
+    if resolve_target:
+        resolved = target.resolve()
+        if resolved == root or not resolved.is_relative_to(root):
+            raise ValueError(f"Output path escapes the worktree: {target}")
     return target
 
 
@@ -166,7 +167,9 @@ def remove_outputs(path: Path, declared: list[str]) -> None:
 
     candidates: set[Path] = set()
     for name in approved:
-        output_path(root, name)
+        # Nested links are unlinked by the native directory delete. Resolve only
+        # the selected deletion roots after collapsing fully approved outputs.
+        output_path(root, name, resolve_target=False)
         candidates.update(parent for parent in (name, *name.parents) if parent != Path("."))
     # Three batched Git queries replace two subprocesses per output file.
     protected = wt.git(root, "ls-files", "--cached", "--others", "--exclude-standard", "-z")

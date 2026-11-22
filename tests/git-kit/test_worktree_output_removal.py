@@ -1,12 +1,16 @@
 """Run: uv run --extra dev pytest tests/git-kit/test_worktree_output_removal.py -q.
 
-Triggers: large ignored trees, partial approvals, symlink parents, delete failure,
-and work arriving after a durable removal reservation. All repositories are fixtures.
+Triggers: large ignored trees, partial approvals, symlink targets and parents,
+delete failure, and work arriving after a durable removal reservation.
+All repositories are fixtures.
 """
 
 from __future__ import annotations
 
+import errno
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -14,6 +18,142 @@ import pytest
 import worktree_safety as safety
 from test_worktree_lifecycle import git, lifecycle
 from test_worktree_migration import legacy, migration
+
+
+def symlink(target: str | Path, link: Path, *, directory: bool = False) -> None:
+    try:
+        os.symlink(target, link, target_is_directory=directory)
+    except OSError as exc:
+        if sys.platform == "win32" and (exc.winerror == 1314 or exc.errno in {errno.EPERM, errno.EACCES}):
+            pytest.skip(f"Windows does not permit symlink creation: {exc}")
+        raise
+
+
+@pytest.fixture
+def symlink_worktree(git_repo) -> Path:
+    # Ignore the name itself so a top-level symlink is also an approved output.
+    git_repo.commit_file(".gitignore", "node_modules\n")
+    (git_repo.path / "packages/pkg").mkdir(parents=True)
+    git_repo.commit_file("packages/pkg/source.js", "tracked source\n")
+    path = git_repo.path.parent / "symlink-worktree"
+    git(git_repo.path, "worktree", "add", "--detach", str(path))
+    return path
+
+
+@pytest.mark.parametrize("kind", ["outside-directory", "workspace", "outside-file", "dangling"])
+def test_output_removal_unlinks_nested_symlinks(symlink_worktree: Path, tmp_path: Path, kind: str) -> None:
+    path = symlink_worktree
+    output = path / "node_modules"
+    output.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside_file = outside / "keep.txt"
+    outside_file.write_text("outside data\n")
+    source = path / "packages/pkg/source.js"
+    if kind == "workspace":
+        (output / "@scope").mkdir()
+        link = output / "@scope/pkg"
+        symlink("../../packages/pkg", link, directory=True)
+        assert link.resolve() == source.parent
+    elif kind == "outside-file":
+        link = output / "file-link"
+        symlink(outside_file, link)
+    elif kind == "dangling":
+        link = output / "missing-link"
+        symlink(outside / "missing", link, directory=True)
+        assert not link.exists()
+    else:
+        link = output / "link-out"
+        symlink(outside, link, directory=True)
+    assert link.is_symlink()
+    reproducible, unique = safety.outputs(path, [], ["node_modules/"])
+    assert reproducible == [link.relative_to(path).as_posix()] and not unique
+
+    # Use the discovered approval list, exactly as the retirement path does.
+    safety.remove_outputs(path, reproducible)
+
+    assert not link.is_symlink() and not output.exists()
+    assert outside.is_dir() and outside_file.read_text() == "outside data\n"
+    assert source.read_text() == "tracked source\n"
+    assert git(path, "diff", "HEAD", "--", "packages/pkg") == ""
+
+
+def test_output_symlink_to_internal_directory_preserves_target(symlink_worktree: Path) -> None:
+    path = symlink_worktree
+    link = path / "node_modules"
+    target = path / "packages/pkg"
+    symlink(target, link, directory=True)
+    assert link.is_symlink()
+
+    safety.remove_outputs(path, ["node_modules/"])
+
+    assert not link.is_symlink() and not link.exists()
+    assert target.is_dir() and (target / "source.js").read_text() == "tracked source\n"
+    assert git(path, "diff", "HEAD", "--", "packages/pkg") == ""
+
+
+@pytest.fixture
+def retiring_symlink_worktree(lifecycle) -> tuple:
+    obj = lifecycle
+    (obj.repo / ".gitignore").write_text((obj.repo / ".gitignore").read_text() + "node_modules\n")
+    git(obj.repo, "add", ".gitignore")
+    git(obj.repo, "commit", "-qm", "ignore approved node_modules output")
+    git(obj.repo, "push", "origin", "main")
+    config = obj.settings.raw
+    config["pool"]["size"] = 2
+    config["pool"]["rebuildable"] = ["node_modules/"]
+    config["pool"]["setup"].append({"id": "node", "argv": [sys.executable, "-c", "pass"],
+                                    "recreate": ["node_modules"]})
+    obj.configure(config)
+    obj.maintain()
+    record = obj.read_records()[0]
+    record["state"] = "released"
+    obj.save(record)
+    config["pool"]["size"] = 1
+    obj.configure(config)
+    return obj, record, Path(record["path"])
+
+
+def test_output_symlink_to_outside_parks_record(retiring_symlink_worktree: tuple, tmp_path: Path) -> None:
+    obj, record, path = retiring_symlink_worktree
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    kept = outside / "keep.txt"
+    kept.write_text("outside data\n")
+    link = path / "node_modules"
+    symlink(outside, link, directory=True)
+
+    obj.maintain()
+
+    parked = obj.get(record["id"])
+    assert parked["state"] == "parked" and parked["worker"] is None
+    assert str(link) in str(parked["safety"]["blockers"])
+    assert "escapes the worktree" in str(parked["safety"]["blockers"])
+    assert path.is_dir() and link.is_symlink()
+    assert outside.is_dir() and kept.read_text() == "outside data\n"
+
+
+def test_full_worktree_removal_preserves_outside_symlink_targets(retiring_symlink_worktree: tuple, tmp_path: Path) -> None:
+    obj, record, path = retiring_symlink_worktree
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    kept = outside / "keep.txt"
+    kept.write_text("outside data\n")
+    outside_file = tmp_path / "outside-file.txt"
+    outside_file.write_text("outside file\n")
+    output = path / "node_modules"
+    output.mkdir()
+    symlink(outside, output / "link-out", directory=True)
+    symlink(outside_file, output / "file-link")
+
+    result = obj.maintain()
+
+    assert record["id"] in result["removed"]
+    assert obj.get(record["id"])["state"] == "removed"
+    assert not path.exists()
+    assert str(path) not in git(obj.repo, "worktree", "list", "--porcelain")
+    assert outside.is_dir() and kept.read_text() == "outside data\n"
+    assert outside_file.read_text() == "outside file\n"
 
 
 def test_large_outputs_use_one_delete_per_directory(git_repo, monkeypatch) -> None:
