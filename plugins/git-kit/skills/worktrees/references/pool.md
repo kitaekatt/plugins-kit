@@ -119,6 +119,7 @@ Remove inputs that the repository does not use.
 | `root` | Absolute or `~/` path, default `~/.worktrees`. The namespace is `<root>/<repo>`. |
 | `after_take`, `before_release` | Lists of nonempty argument arrays. Default: empty lists. See [Project extensions](#project-extensions). |
 | `pool.size` | Positive integer, default 2. Ready spares and active builds count toward capacity. |
+| `pool.rebuildable` | Optional list of relative gitignore-style globs for reproducible ignored outputs. Default: empty list. No glob can match tracked files. |
 | `setup[].id` | Unique stable ID: letters, digits, underscore, or hyphen, starting with a letter. |
 | `setup[].argv` | Nonempty argument array. Commands run in declaration order without a shell. |
 | `setup[].path_bound` | Boolean, default false. Repeat this step after each relocation. |
@@ -140,6 +141,31 @@ come only from tracked repository settings.
 The proposal includes one `npm ci` step per tracked `package-lock.json`
 directory, including the root. Each lockfile maps to its own step.
 Untracked lockfiles are excluded.
+
+The proposal includes no `pool.rebuildable` entries by default.
+After project-specific user approval, Claude can add entries under `git_kit.worktrees.pool`:
+
+```json
+{
+  "rebuildable": [
+    "packages/*/dist/",
+    "*.tsbuildinfo",
+    "web/dist",
+    ".venv.sync.sha256",
+    "node_modules/"
+  ]
+}
+```
+
+These globs use Git's ignore syntax, including `*`, `**`, and directory patterns.
+Patterns must be relative and contain no `..` component.
+Absolute paths, negations, comments, backslashes, and `.git` paths are invalid.
+Git-kit rejects settings whose globs match tracked files.
+It repeats this check against each candidate worktree before classification.
+Only ignored files that match a glob count as reproducible.
+Unmatched ignored files remain unique data and block retirement.
+Untracked files still block retirement, even when a glob matches their names.
+This setting does not add setup commands or guarantee that setup rebuilds these outputs.
 
 User `~/.claude/bootstrap.json` and `bootstrap.local.json` can set
 `git_kit.worktrees.disk_floor_percent`. The default is 10 percent.
@@ -345,7 +371,8 @@ It also requires no `+` in `git cherry <fresh-upstream> HEAD`,
 no unique ignored data, and no locked Git registration.
 The main checkout never enters retirement. A remote task branch cannot prove delivery.
 
-Only declared, ignored reproducible outputs qualify for removal.
+Only ignored outputs declared by `setup[].recreate` or matched by
+`pool.rebuildable` qualify for removal. Git-kit checks each output before removal.
 Unique ignored data remains in place. Removal uses no blanket `--force`.
 The lifecycle never removes branches.
 

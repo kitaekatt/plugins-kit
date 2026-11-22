@@ -346,7 +346,7 @@ def evidence(obj: Lifecycle, record: dict[str, Any]) -> dict[str, Any]:
     with _file_lock(obj.state / "fetch.lock", blocking=True):
         wt.refresh(source)
         oid = wt.git(source, "rev-parse", "--verify", f"{ref}^{{commit}}")
-    result = safety.inspect(record, oid, obj.declared_outputs())
+    result = safety.inspect(record, oid, obj.declared_outputs(), obj.settings.config.pool.rebuildable)
     result["upstream_ref"] = ref
     return result
 
@@ -498,7 +498,7 @@ def run(obj: Lifecycle, *, apply: bool = False, clones: list[Path] | None = None
                     record["safety"] = evidence(obj, record)
                 check = process_check([row])
                 if record["safety"]["safe"]:
-                    safety.remove_outputs(path, obj.declared_outputs())
+                    safety.remove_outputs(path, record["safety"]["reproducible"])
                     wt.git(source, "worktree", "remove", str(path))
                     record["state"] = "removed"
                     row["phase"] = "removed"

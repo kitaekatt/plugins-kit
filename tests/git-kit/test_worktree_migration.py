@@ -356,7 +356,7 @@ def test_migration_removal_uses_one_fresh_query_per_row(migration, monkeypatch, 
 
     calls, _ = claude_lsof
     path = legacy(migration, "safe-batched")
-    monkeypatch.setattr(module, "evidence", lambda *args: {"safe": True, "blockers": []})
+    monkeypatch.setattr(module, "evidence", lambda *args: {"safe": True, "blockers": [], "reproducible": []})
     result = migration.migrate(apply=True)
     assert result["candidates"][0]["phase"] == "removed" and not path.exists()
     assert len(calls) == 3  # Two inventory checks and one immediately before removal.

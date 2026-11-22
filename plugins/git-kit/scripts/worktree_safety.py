@@ -7,12 +7,13 @@ import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 import worktrees as wt
 from worktree_extensions import pending_blockers
-from worktree_config import relative_path
+from worktree_config import rebuildable_matches, relative_path
 
 
 def process_identity(pid: int) -> dict[str, Any]:
@@ -117,11 +118,15 @@ def path_processes(path: Path, *, pids: set[int] | None = None) -> list[str]:
     return ["uncertain process/runtime evidence: directory-use inspection is unavailable on this platform"]
 
 
-def outputs(path: Path, declared: list[str]) -> tuple[list[str], list[str]]:
+def outputs(path: Path, declared: list[str], rebuildable: Sequence[str] = ()) -> tuple[list[str], list[str]]:
     ignored = [p for p in wt.git(path, "ls-files", "--others", "--ignored", "--exclude-standard", "-z").split("\0") if p]
+    tracked = rebuildable_matches(path, rebuildable, tracked=True)
+    if tracked:
+        raise ValueError(f"rebuildable glob matches tracked data: {sorted(tracked)}")
+    matched = rebuildable_matches(path, rebuildable)
     reproducible, unique = [], []
     for name in ignored:
-        (reproducible if any(Path(name) == Path(p) or Path(name).is_relative_to(p) for p in declared) else unique).append(name)
+        (reproducible if name in matched or any(Path(name) == Path(p) or Path(name).is_relative_to(p) for p in declared) else unique).append(name)
     return reproducible, unique
 
 
@@ -156,7 +161,7 @@ def declared_process_blockers(record: dict[str, Any]) -> list[str]:
     return [*blockers, *pending_blockers(record)]
 
 
-def inspect(record: dict[str, Any], upstream: str, declared: list[str]) -> dict[str, Any]:
+def inspect(record: dict[str, Any], upstream: str, declared: list[str], rebuildable: Sequence[str] = ()) -> dict[str, Any]:
     path = Path(record["path"])
     blockers = []
     if path.is_symlink():
@@ -174,7 +179,7 @@ def inspect(record: dict[str, Any], upstream: str, declared: list[str]) -> dict[
     cherry = wt.git(path, "cherry", upstream, "HEAD")
     if any(line.startswith("+") for line in cherry.splitlines()):
         blockers.append("commits outside fresh upstream")
-    reproducible, unique = outputs(path, declared)
+    reproducible, unique = outputs(path, declared, rebuildable)
     if unique:
         blockers.append(f"unique ignored data must be preserved: {unique}")
     blockers.extend(declared_process_blockers(record))

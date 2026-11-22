@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import stat
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +27,7 @@ def file_fingerprint(root: Path, name: str) -> dict[str, Any]:
     return {"path": name, "sha256": digest, "mode": stat.S_IMODE(info.st_mode)}
 
 
-def inventory(record: dict[str, Any], upstream: str, declared: list[str]) -> dict[str, Any]:
+def inventory(record: dict[str, Any], upstream: str, declared: list[str], rebuildable: Sequence[str] = ()) -> dict[str, Any]:
     path = Path(record["path"])
     index = wt.git(path, "ls-files", "--stage", "-z")
     if any(line.startswith("160000 ") for line in index.split("\0")):
@@ -35,7 +36,7 @@ def inventory(record: dict[str, Any], upstream: str, declared: list[str]) -> dic
     if any(entry and (entry[0].islower() or entry[0] == "S") for entry in flags):
         raise ValueError("Ambiguous discard scope: assume-unchanged or skip-worktree index flags may hide work")
     untracked = sorted(p for p in wt.git(path, "ls-files", "--others", "--exclude-standard", "-z").split("\0") if p)
-    reproducible, unique = outputs(path, declared)
+    reproducible, unique = outputs(path, declared, rebuildable)
     patch = wt.git(path, "diff", "HEAD", "--binary", "--no-ext-diff", "--no-textconv")
     return {"head": wt.git(path, "rev-parse", "HEAD"), "branch": wt.git(path, "branch", "--show-current"),
             "upstream": upstream, "commits": wt.git(path, "cherry", upstream, "HEAD").splitlines(),
