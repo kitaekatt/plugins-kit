@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -39,12 +38,12 @@ def main(argv: list[str]) -> int:
     take.add_argument("--agent", required=True)
     take.add_argument("--session", required=True)
     take.add_argument("--task")
-    take.add_argument("--holder-pid", type=int, default=os.getppid(), help="Long-lived holder process (default: invoking parent)")
+    take.add_argument("--holder-pid", type=int, help="Explicit holder fallback when no Claude session ancestor exists")
     adopt = commands.add_parser("adopt")
     adopt.add_argument("--id", required=True)
     adopt.add_argument("--agent", required=True)
     adopt.add_argument("--session", required=True)
-    adopt.add_argument("--holder-pid", type=int, default=os.getppid())
+    adopt.add_argument("--holder-pid", type=int, help="Explicit holder fallback when no Claude session ancestor exists")
     parked = commands.add_parser("parked")
     scope = parked.add_mutually_exclusive_group()
     scope.add_argument("--session")
@@ -101,9 +100,11 @@ def main(argv: list[str]) -> int:
         if args.command in {"new", "remove"}:
             raise ValueError("Raw lifecycle mutation is unavailable; configure --propose, then take --agent --session or release --claim; legacy worktrees require migration")
         if args.command == "take":
-            result = obj.take(args.agent, args.session, args.task, process=process_identity(args.holder_pid))
+            result = obj.take(args.agent, args.session, args.task,
+                              process=process_identity(args.holder_pid) if args.holder_pid is not None else None)
         elif args.command == "adopt":
-            result = obj.adopt(args.id, args.agent, args.session, process=process_identity(args.holder_pid))
+            result = obj.adopt(args.id, args.agent, args.session,
+                               process=process_identity(args.holder_pid) if args.holder_pid is not None else None)
         elif args.command == "parked":
             result = obj.parked(session=args.session, task=args.task)
         elif args.command == "check-task-close":

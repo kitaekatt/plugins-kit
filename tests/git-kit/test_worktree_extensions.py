@@ -113,7 +113,9 @@ def test_relocation_preserves_global_launchers(lifecycle) -> None:
 
 
 @pytest.mark.parametrize("report", ["{'processes':'bad'}", "{'processes':[], 'unknown':True}", "None"])
-def test_invalid_extension_reports_preserve_claim(lifecycle, report: str) -> None:
+def test_invalid_extension_reports_preserve_claim(lifecycle, monkeypatch, report: str) -> None:
+    import worktree_migration as migration
+    monkeypatch.setattr(migration, "claude_processes", lambda: [])
     code = (
         "import json,os; from pathlib import Path; "
         f"Path(os.environ['GIT_KIT_EXTENSION_RESULT']).write_text(json.dumps({report}))"
@@ -125,7 +127,7 @@ def test_invalid_extension_reports_preserve_claim(lifecycle, report: str) -> Non
     record = next(r for r in obj.read_records() if (r.get("holder") or {}).get("agent") == "bad-report")
     assert record["holder"]["claim"] and Path(record["path"]).exists()
     assert record["extension"]["after_take"][-1]["outcome"] == "failed"
-    record["holder"].update(pid=99999999, start="exited")
+    record["holder"].update(pid=99999999, start="exited", executable="claude", command="claude")
     obj.save(record)
     obj.maintain()
     assert obj.get(record["id"])["state"] == "parked"
@@ -204,7 +206,9 @@ def test_before_release_runs_outside_claim_lock(lifecycle) -> None:
 
 
 @pytest.mark.parametrize("output", ["malformed", "dangling"])
-def test_unreadable_extension_report_blocks_retirement(lifecycle, output: str) -> None:
+def test_unreadable_extension_report_blocks_retirement(lifecycle, monkeypatch, output: str) -> None:
+    import worktree_migration as migration
+    monkeypatch.setattr(migration, "claude_processes", lambda: [])
     code = "import os; from pathlib import Path; result=Path(os.environ['GIT_KIT_EXTENSION_RESULT']); "
     code += "result.write_text('{unfinished')" if output == "malformed" else "result.symlink_to(result.parent/'missing')"
     obj = configured(lifecycle, "after_take", code)
@@ -213,7 +217,7 @@ def test_unreadable_extension_report_blocks_retirement(lifecycle, output: str) -
         obj.take("unreadable-report", "s", process=holder())
     record = next(r for r in obj.read_records() if (r.get("holder") or {}).get("agent") == "unreadable-report")
     assert record["extension"]["after_take"][-1]["report_uncertain"] is True
-    record["holder"].update(pid=99999999, start="exited")
+    record["holder"].update(pid=99999999, start="exited", executable="claude", command="claude")
     obj.save(record)
     obj.maintain()
     assert obj.get(record["id"])["state"] == "parked"

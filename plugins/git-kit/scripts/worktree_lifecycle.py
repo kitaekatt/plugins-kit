@@ -383,8 +383,9 @@ class Lifecycle:
         path = self.record_path(record)
         if not path.is_dir() or path.resolve() == wt.project_root(path):
             raise ValueError(f"Missing target or main checkout: {path}")
-        matches = [r for r in self.read_records() if r["state"] != "removed"
-                   and Path(r["path"]).resolve() == path.resolve()]
+        from worktree_paths import path_identity
+        matches = [r for r in self.read_records() if r["state"] not in {"removed", "retired-duplicate"}
+                   and path_identity(Path(r["path"])) == path_identity(path)]
         registrations = [r for r in wt.records(path) if Path(r["worktree"]).resolve() == path.resolve()]
         if len(matches) != 1 or len(registrations) != 1 or "locked" in registrations[0]:
             raise ValueError(f"Ambiguous or locked worktree scope: {record['id']} at {path}")
@@ -466,9 +467,7 @@ class Lifecycle:
         wt.validate_task(self.repo, agent)
         if agent in {".state", ".staging"} or not session.strip():
             raise ValueError("adopt requires a portable agent ID and a nonempty session")
-        identity = process or safety.process_identity(os.getppid())
-        if safety.process_state(identity) != "live":
-            raise ValueError("Holder process identity must be live and certain")
+        identity = safety.holder_identity(process)
         with _file_lock(self.state / "claim.lock", blocking=True):
             record = self.get(identifier)
             if record["state"] != "parked" or record.get("holder"):
@@ -521,9 +520,7 @@ class Lifecycle:
         wt.validate_task(self.repo, agent)
         if agent in {".state", ".staging"} or not session.strip():
             raise ValueError("take requires a portable agent ID and a nonempty session")
-        identity = process or safety.process_identity(os.getppid())
-        if safety.process_state(identity) != "live":
-            raise ValueError("Holder process identity must be live and certain")
+        identity = safety.holder_identity(process)
         record = None
         parked = self.parked_rows()
         own_parked = [r for r in parked if r["session"] == session or (task is not None and r.get("task") == task)]
@@ -635,7 +632,7 @@ class Lifecycle:
         from worktree_migration import legacy_problem
         rows = self.read_records()
         for record in rows:
-            if record["state"] == "removed":
+            if record["state"] in {"removed", "retired-duplicate"}:
                 continue
             problem = legacy_problem(self, record)
             if problem:
@@ -646,7 +643,7 @@ class Lifecycle:
                 record["observed"] = {"head": wt.git(path, "rev-parse", "HEAD"),
                     "branch": wt.git(path, "branch", "--show-current"),
                     "dirty": bool(wt.git(path, "status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none")),
-                    "holder_process": safety.process_state(record["holder"]) if record["holder"] else None,
+                    "holder_process": safety.holder_state(record["holder"]) if record["holder"] else None,
                     "process_blockers": [*safety.path_processes(path), *safety.declared_process_blockers(record)], "at": time.time()}
                 record["safety_is_historical"] = record.get("safety") is not None
         return {"namespace": str(self.namespace), "enabled": bool(self.settings.config and self.settings.config.enabled),
@@ -663,7 +660,7 @@ class Lifecycle:
     def reconcile(self) -> None:
         from worktree_migration import legacy_path, legacy_problem
         for record in self.read_records():
-            if record["state"] == "removed":
+            if record["state"] in {"removed", "retired-duplicate"}:
                 continue
             pending_discard = (record["operation"].get("name") == "discard"
                                and (record.get("discard") or {}).get("outcome") == "applying")
@@ -699,7 +696,7 @@ class Lifecycle:
                 continue
             if record.get("holder"):
                 record["state"] = "taken"
-                state = safety.process_state(record["holder"])
+                state = safety.holder_state(record["holder"])
                 if state == "dead":
                     record["last_holder"] = record["holder"]
                     record["holder"] = None
@@ -772,13 +769,15 @@ class Lifecycle:
             self._maintenance_upstreams = {}
             try:
                 with _file_lock(self.state / "claim.lock", blocking=True):
+                    from worktree_retirement import retire_duplicates
+                    result["duplicates_retired"] = retire_duplicates(self)
                     self.reconcile()
                     from worktree_retirement import recheck_parked
                     parked_ids = {r["id"] for r in self.read_records() if r["state"] == "parked"}
                     result["parked_recheck"] = recheck_parked(self)
                     result["removed"] = [r["id"] for r in self.read_records() if r["id"] in parked_ids and r["state"] == "removed"]
                 for record in self.read_records():
-                    if record["state"] in {"ready", "taken", "removed", "building", "recycled", "parked"}:
+                    if record["state"] in {"ready", "taken", "removed", "retired-duplicate", "building", "recycled", "parked"}:
                         continue
                     with _file_lock(self.state / "claim.lock", blocking=True):
                         record = self.get(record["id"])

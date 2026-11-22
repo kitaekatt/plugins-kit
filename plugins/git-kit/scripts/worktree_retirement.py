@@ -12,9 +12,60 @@ import worktree_migration as migration
 import worktree_safety as safety
 import worktrees as wt
 from worktree_config import read_object
+from worktree_paths import path_identity
 
 if TYPE_CHECKING:
     from worktree_lifecycle import Lifecycle
+
+
+def retire_duplicates(obj: Lifecycle) -> int:
+    """Retire alias records only; caller holds maintenance and claim locks."""
+    from worktree_lifecycle import atomic_json
+
+    groups: dict[tuple, list[dict[str, Any]]] = {}
+    records = obj.read_records()
+    for record in records:
+        if record["state"] != "retired-duplicate":
+            groups.setdefault(path_identity(Path(record["path"])), []).append(record)
+    retired = 0
+    for group in groups.values():
+        if len(group) < 2 or any(r.get("holder") or (r.get("worker") and safety.process_state(r["worker"]) != "dead") for r in group):
+            continue
+        path = Path(group[0]["path"])
+        common = None
+        if path.is_dir() and not path.is_symlink() and (path / ".git").exists() and not (path / ".git").is_symlink():
+            try:
+                common = path_identity(Path(wt.git(path, "rev-parse", "--path-format=absolute", "--git-common-dir")))
+            except subprocess.CalledProcessError as exc:
+                if exc.returncode != 128:
+                    raise
+
+        def priority(record: dict[str, Any]) -> tuple:
+            origins = record.get("migration", {}).get("origins", [])
+            return (common is not None and path_identity(Path(record["repo"]["common_dir"])) == common,
+                    record["state"] == "removed" if not path.exists() else record["state"] != "removed",
+                    "registered" in origins or "legacy-agent" in origins,
+                    record["id"])
+
+        keeper = max(group, key=priority)
+        for record in group:
+            if record["id"] == keeper["id"]:
+                continue
+            record.update(state="retired-duplicate", duplicate_of=keeper["id"], worker=None, waiting=None, error=None)
+            obj.transition(record, "retire-duplicate", "complete")
+            retired += 1
+    # Also finish a journal write interrupted after the durable record write.
+    journal_path = obj.state / "migration.json"
+    journal = read_object(journal_path)
+    retired_ids = {r["id"] for r in obj.read_records() if r["state"] == "retired-duplicate"}
+    changed = False
+    for row in journal.get("candidates", []):
+        if row["id"] in retired_ids and row["phase"] != "retired-duplicate":
+            row["phase"] = "retired-duplicate"
+            changed = True
+    if changed:
+        atomic_json(journal_path, journal)
+    return retired
 
 
 def evidence(obj: Lifecycle, record: dict[str, Any], *, recover_removed: bool = False) -> dict[str, Any]:
@@ -49,6 +100,11 @@ def recheck_parked(obj: Lifecycle, *, exclude: set[str] | None = None) -> dict[s
             blockers = record["safety"]["blockers"]
         elif record.get("holder"):
             blockers = ["holder claim remains"]
+        elif any(other["id"] != record["id"]
+                 and (other.get("holder") or (other.get("worker") and safety.process_state(other["worker"]) != "dead"))
+                 and path_identity(Path(other["path"])) == path_identity(Path(record["path"]))
+                 for other in obj.read_records()):
+            blockers = ["holder or live/uncertain worker remains on duplicate record"]
         elif worker and safety.process_state(worker) != "dead":
             blockers = ["live or uncertain worker"]
         else:

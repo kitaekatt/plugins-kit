@@ -241,7 +241,7 @@ def test_migrated_adoption_recovers_interrupted_external_rename(migration, monke
     current = obj.get(record["id"])
     assert current["operation"]["phase"] == "rename" and current["path"] == str(path)
     assert not path.exists() and (obj.namespace / "recovering-agent/unfinished").read_text() == "recover this work"
-    current["holder"].update(pid=99999999, start="exited")
+    current["holder"].update(pid=99999999, start="exited", executable="claude", command="claude")
     obj.save(current)
     monkeypatch.setattr(wt, "git", real_git)
     obj.reconcile()
