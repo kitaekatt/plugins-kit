@@ -1,7 +1,8 @@
 """Cutover contracts.
 
 Run: uv run --extra dev pytest tests/git-kit/test_worktree_migration.py -q.
-Triggers: install scope, legacy pool/Agent paths, interrupted removal, live Claude processes.
+Triggers: install scope, legacy pool/Agent paths, interrupted removal, live Claude processes,
+batched process evidence and case-insensitive candidate paths.
 """
 
 from __future__ import annotations
@@ -63,6 +64,9 @@ def test_migration_resumes_idempotently(migration, monkeypatch) -> None:
     assert journal_path.exists() and not journal_path.is_relative_to(obj.namespace)
     before = json.loads(journal_path.read_text())
     assert before["candidates"][0]["path"] == str(path)
+    # Resuming cutover must not depend on the main checkout's current branch.
+    git(obj.repo, "switch", "-c", "ref-test")
+    branches = git(obj.repo, "for-each-ref", "--format=%(refname)", "refs/heads")
     save = obj.save
     interrupted = False
 
@@ -287,7 +291,7 @@ def test_migration_uncertain_lsof_blocks(migration, monkeypatch) -> None:
     real_run = safety.subprocess.run
 
     def uncertain(argv, **kwargs):
-        if Path(argv[0]).name == "lsof" and "+D" in argv:
+        if Path(argv[0]).name == "lsof":
             return subprocess.CompletedProcess(argv, 1, "", "permission denied")
         return real_run(argv, **kwargs)
 
@@ -296,6 +300,218 @@ def test_migration_uncertain_lsof_blocks(migration, monkeypatch) -> None:
         with pytest.raises(ValueError, match="uncertain.*permission denied"):
             obj.migrate(apply=apply)
         assert path.exists() and not obj.state.exists()
+
+
+@pytest.fixture
+def claude_lsof(monkeypatch, tmp_path):
+    """Keep the real migration guard; double only the platform process queries."""
+    import worktree_migration as module
+    import worktree_safety as safety
+
+    calls = []
+    evidence = {4242: [("cwd", str(tmp_path)), ("3", str(tmp_path / "outside.log"))],
+                4243: [("cwd", str(tmp_path))]}
+    monkeypatch.setattr(module, "claude_processes", lambda: [{"pid": pid} for pid in evidence])
+    monkeypatch.setattr(safety.sys, "platform", "darwin")
+    monkeypatch.setattr(safety.shutil, "which", lambda name: "/usr/sbin/lsof")
+    real_run = subprocess.run
+
+    def run(argv, **kwargs):
+        if Path(argv[0]).name != "lsof":
+            return real_run(argv, **kwargs)
+        calls.append(argv)
+        if "+D" in argv:
+            return subprocess.CompletedProcess(argv, 1, "", "")
+        selected = [int(pid) for pid in argv[argv.index("-p") + 1].split(",")]
+        if "-d" in argv:
+            output = "".join(f"p{pid}\nn{evidence[pid][0][1]}\n" for pid in selected)
+        else:
+            output = "".join(f"p{pid}\n" + "".join(f"f{fd}\nn{path}\n" for fd, path in evidence[pid]) for pid in selected)
+        return subprocess.CompletedProcess(argv, 0, output, "")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    return calls, evidence
+
+
+@pytest.mark.parametrize("count", [4, 8])
+def test_migration_lsof_calls_are_linear(migration, monkeypatch, claude_lsof, count: int) -> None:
+    """N parked candidates require two census checks plus one query per row."""
+    import worktree_migration as module
+
+    calls, _ = claude_lsof
+    for index in range(count):
+        legacy(migration, f"candidate-{index}")
+    monkeypatch.setattr(module, "evidence", lambda *args: {"safe": False, "blockers": ["keep work"]})
+    result = migration.migrate(apply=True)
+    assert result["phase"] == "complete"
+    assert len(result["candidates"]) == count
+    assert all(row["phase"] == "parked" for row in result["candidates"])
+    print(f"N={count}: {len(calls)} lsof calls")
+    assert len(calls) == count + 2
+    assert all("+D" not in argv for argv in calls)
+
+
+def test_migration_removal_uses_one_fresh_query_per_row(migration, monkeypatch, claude_lsof) -> None:
+    import worktree_migration as module
+
+    calls, _ = claude_lsof
+    path = legacy(migration, "safe-batched")
+    monkeypatch.setattr(module, "evidence", lambda *args: {"safe": True, "blockers": [], "reproducible": []})
+    result = migration.migrate(apply=True)
+    assert result["candidates"][0]["phase"] == "removed" and not path.exists()
+    assert len(calls) == 3  # Two inventory checks and one immediately before removal.
+
+
+@pytest.mark.parametrize("failure", ["missing", "exit-one", "error", "timeout", "partial"])
+def test_migration_batched_uncertainty_blocks(migration, monkeypatch, claude_lsof, failure: str) -> None:
+    import worktree_safety as safety
+
+    path = legacy(migration, "uncertain-batch")
+    if failure == "missing":
+        monkeypatch.setattr(safety.shutil, "which", lambda name: None)
+    else:
+        real_run = subprocess.run
+
+        def run(argv, **kwargs):
+            if Path(argv[0]).name != "lsof":
+                return real_run(argv, **kwargs)
+            if failure == "timeout":
+                raise subprocess.TimeoutExpired(argv, 30)
+            if failure == "partial":
+                return subprocess.CompletedProcess(argv, 0, "p4242\nfcwd\nn/elsewhere\n", "")
+            return subprocess.CompletedProcess(argv, 1 if failure == "exit-one" else 2, "", "permission denied" if failure == "error" else "")
+
+        monkeypatch.setattr(subprocess, "run", run)
+    with pytest.raises(ValueError, match="Claude.*uncertain process evidence"):
+        migration.migrate(apply=True)
+    assert path.exists() and not migration.state.exists()
+
+
+def test_migration_resumes_parked_and_pending_rows(migration, monkeypatch, claude_lsof) -> None:
+    import worktree_migration as module
+
+    for index in range(3):
+        legacy(migration, f"resume-{index}")
+    real_check = module.process_check
+    visited = []
+    interrupted = False
+
+    def check(rows):
+        nonlocal interrupted
+        visited.append([row["path"] for row in rows])
+        if len(visited) == 4 and not interrupted:
+            interrupted = True
+            raise OSError("interrupted during process check")
+        return real_check(rows)
+
+    monkeypatch.setattr(module, "process_check", check)
+    monkeypatch.setattr(module, "evidence", lambda *args: {"safe": False, "blockers": ["preserve work"]})
+    with pytest.raises(OSError, match="interrupted"):
+        migration.migrate(apply=True)
+    journal_path = migration.state / "migration.json"
+    before = json.loads(journal_path.read_text())
+    assert [row["phase"] for row in before["candidates"]] == ["parked", "pending", "pending"]
+    parked = migration.read_records()[0]
+    visited.clear()
+    result = migration.migrate(apply=True)
+    assert result["phase"] == "complete"
+    assert all(row["phase"] == "parked" for row in result["candidates"])
+    assert next(row for row in migration.read_records() if row["id"] == parked["id"]) == parked
+    assert visited[2:] == [[row["path"]] for row in before["candidates"][1:]]
+
+
+@pytest.mark.parametrize("location", ["open-file", "cwd", "sibling", "symlink", "symlink-real", "case-alias"])
+def test_migration_batched_path_prefixes(tmp_path, monkeypatch, claude_lsof, location: str) -> None:
+    import worktree_migration as module
+
+    calls, evidence = claude_lsof
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    runtime = candidate / "runtime.log"
+    runtime.write_text("in use")
+    if location == "open-file":
+        runtime = candidate / "missing/../runtime.log"
+    elif location == "cwd":
+        runtime = tmp_path / "outside.log"
+    elif location == "sibling":
+        runtime = tmp_path / "candidate-other/runtime.log"
+    elif location in {"symlink", "symlink-real"}:
+        alias = tmp_path / "alias"
+        alias.symlink_to(candidate, target_is_directory=True)
+        if location == "symlink":
+            runtime = alias / "runtime.log"
+        candidate = alias
+    elif location == "case-alias":
+        # Emulate a case-insensitive filesystem even on case-sensitive CI hosts.
+        runtime = candidate.with_name("CANDIDATE") / "runtime.log"
+        real_samefile = Path.samefile
+
+        def samefile(path: Path, other: Path) -> bool:
+            if {str(path), str(other)} == {str(candidate), str(candidate.with_name("CANDIDATE"))}:
+                return True
+            return real_samefile(path, other)
+
+        monkeypatch.setattr(Path, "samefile", samefile)
+    evidence[4242] = [("cwd", str(candidate if location == "cwd" else tmp_path)), ("3", str(runtime))]
+    real_stat, real_lstat = os.stat, os.lstat
+    accesses = []
+
+    def no_process_path_access(function):
+        def guarded(path, *args, **kwargs):
+            if os.fspath(path) == str(runtime):
+                accesses.append(path)
+                raise PermissionError(f"Process path must not be inspected: {path}")
+            return function(path, *args, **kwargs)
+        return guarded
+
+    monkeypatch.setattr(os, "stat", no_process_path_access(real_stat))
+    monkeypatch.setattr(os, "lstat", no_process_path_access(real_lstat))
+    real_resolve = Path.resolve
+
+    def resolve(path: Path, *args, **kwargs) -> Path:
+        if path == runtime:
+            path.stat()  # Simulate an unreadable process path during resolution.
+        return real_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+    if location == "sibling":
+        result = module.process_check([{"path": str(candidate)}])
+        assert result["blockers"] == []
+        assert result["ignored_claude_processes"] == [{"pid": pid, "cwd": str(tmp_path)} for pid in evidence]
+    else:
+        with pytest.raises(ValueError, match="Claude.*candidate.*live process/runtime"):
+            module.process_check([{"path": str(candidate)}])
+    assert len(calls) == 1
+    assert accesses == []
+
+
+def test_migration_unreadable_process_path_outside_candidates(tmp_path, monkeypatch, claude_lsof) -> None:
+    """An unrelated system file must never be accessed or block migration."""
+    import worktree_migration as module
+
+    calls, evidence = claude_lsof
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    unreadable = "/private/var/db/analyticsd/events.allowlist"
+    evidence[4242].append(("4", unreadable))
+    real_stat, real_lstat = os.stat, os.lstat
+    accesses = []
+
+    def no_system_path_access(function):
+        def guarded(path, *args, **kwargs):
+            if os.fspath(path) == unreadable:
+                accesses.append(path)
+                raise PermissionError(13, "Permission denied", unreadable)
+            return function(path, *args, **kwargs)
+        return guarded
+
+    monkeypatch.setattr(os, "stat", no_system_path_access(real_stat))
+    monkeypatch.setattr(os, "lstat", no_system_path_access(real_lstat))
+    result = module.process_check([{"path": str(candidate)}])
+    assert result["blockers"] == []
+    assert len(result["ignored_claude_processes"]) == len(evidence)
+    assert len(calls) == 1
+    assert accesses == []
 
 
 def test_candidate_claude_from_other_uid_is_not_ignored(tmp_path, monkeypatch) -> None:

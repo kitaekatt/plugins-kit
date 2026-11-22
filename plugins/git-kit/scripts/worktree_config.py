@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -57,8 +58,28 @@ class Step(BaseModel):
 class Pool(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     size: StrictInt = Field(default=2, ge=1)
+    upstream: str | None = None
     setup: list[Step] = Field(min_length=1)
     rerun_files: dict[str, list[str]] = Field(default_factory=dict)
+    rebuildable: list[str] = Field(default_factory=list)
+
+    @field_validator("upstream")
+    @classmethod
+    def check_upstream(cls, value: str | None) -> str | None:
+        if value is not None:
+            remote, separator, branch = value.partition("/")
+            if not remote or not separator or not branch or ".." in value:
+                raise ValueError("pool.upstream must have the form remote/branch without '..'")
+        return value
+
+    @field_validator("rebuildable")
+    @classmethod
+    def check_globs(cls, patterns: list[str]) -> list[str]:
+        for pattern in patterns:
+            relative_path(pattern)
+            if pattern.startswith(("!", "#")) or any(c in pattern for c in "\0\r\n"):
+                raise ValueError("rebuildable requires positive relative gitignore-style globs")
+        return patterns
 
     @model_validator(mode="after")
     def check_map(self) -> Pool:
@@ -106,10 +127,27 @@ class RepositoryConfig(BaseModel):
         return self
 
 
+def rebuildable_matches(repo: Path, patterns: Sequence[str], *, tracked: bool = False) -> set[str]:
+    """Let Git apply its ignore glob semantics without the repository's rules."""
+    if not patterns:
+        return set()
+    selection = ["--cached"] if tracked else ["--others"]
+    return {p for p in wt.git(repo, "ls-files", *selection, "--ignored", "-z",
+                             *(f"--exclude={pattern}" for pattern in patterns)).split("\0") if p}
+
+
 def validate_config(raw: dict[str, Any], repo: Path) -> RepositoryConfig:
     config = RepositoryConfig.model_validate(raw)
     if config.pool is None:
         return config
+    if config.pool.upstream is not None:
+        remote = config.pool.upstream.partition("/")[0]
+        if remote not in wt.git(repo, "remote").splitlines():
+            raise ValueError(f"pool.upstream remote is not configured: {remote}")
+        wt.git(repo, "check-ref-format", f"refs/remotes/{config.pool.upstream}")
+    matched = rebuildable_matches(repo, config.pool.rebuildable, tracked=True)
+    if matched:
+        raise ValueError(f"rebuildable glob matches tracked data: {sorted(matched)}")
     tracked = set(wt.git(repo, "ls-files", "-z").split("\0"))
     for path in config.pool.rerun_files:
         if path not in tracked:

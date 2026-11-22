@@ -151,7 +151,9 @@ def configure_repository(repo: Path, approved: dict[str, Any] | None = None) -> 
             reruns["uv.lock"] = ["bootstrap"]
         return {"current_settings": current_settings(repo),
                 "defaults": {"enabled": False, "pool_size": 2, "disk_floor_percent": 10},
-                "proposal": {"enabled": True, "pool": {"size": 2, "setup": steps, "rerun_files": reruns}},
+                "proposal": {"enabled": True, "pool": {"size": 2,
+                    "upstream": wt.default_upstream(repo).removeprefix("refs/remotes/"),
+                    "setup": steps, "rerun_files": reruns}},
                 "approval": "Review and approve the proposal, then pass that JSON file to configure --apply"}
     validate_config(approved, repo)
     # Configuration replaces approved settings without touching legacy worktrees.
@@ -269,7 +271,7 @@ class Lifecycle:
     def safety(self, record: dict[str, Any], *, persist: bool = True) -> dict[str, Any]:
         ref, oid = self.fresh()
         path = self.record_path(record)
-        evidence = safety.inspect(record, oid, self.declared_outputs())
+        evidence = safety.inspect(record, oid, self.declared_outputs(), self.settings.config.pool.rebuildable)
         evidence["upstream_ref"] = ref
         record["safety"] = evidence
         if persist:
@@ -393,7 +395,7 @@ class Lifecycle:
                 raise ValueError("Discard requires a parked target without a holder claim")
             path = self.unheld_path(record)
             _, upstream = self.fresh()
-            lost = discard_work.inventory(record, upstream, self.declared_outputs())
+            lost = discard_work.inventory(record, upstream, self.declared_outputs(), self.settings.config.pool.rebuildable)
             scope = {"id": identifier, "path": str(path), "repo": record["repo"], "lost_work": lost}
             fingerprint = hashlib.sha256(json.dumps(scope, sort_keys=True).encode()).hexdigest()
             if approved is None:
@@ -754,7 +756,7 @@ class Lifecycle:
                             recycle = True
                         else:
                             path = self.record_path(record)
-                            safety.remove_outputs(path, self.declared_outputs())
+                            safety.remove_outputs(path, record["safety"]["reproducible"])
                             wt.git(Path(record["repo"]["source_clone"]), "worktree", "remove", str(path))
                             record.update(state="removed", worker=None)
                             self.transition(record, "remove", "complete")

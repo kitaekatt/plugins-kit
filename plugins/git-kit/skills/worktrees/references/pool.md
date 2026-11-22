@@ -119,6 +119,8 @@ Remove inputs that the repository does not use.
 | `root` | Absolute or `~/` path, default `~/.worktrees`. The namespace is `<root>/<repo>`. |
 | `after_take`, `before_release` | Lists of nonempty argument arrays. Default: empty lists. See [Project extensions](#project-extensions). |
 | `pool.size` | Positive integer, default 2. Ready spares and active builds count toward capacity. |
+| `pool.upstream` | Optional remote-tracking branch, such as `origin/dev` or `upstream/develop`. The remote must exist, the name must have the form `<remote>/<branch>`, and `..` is invalid. Default: the remote default branch resolved below. |
+| `pool.rebuildable` | Optional list of relative gitignore-style globs for reproducible ignored outputs. Default: empty list. No glob can match tracked files. |
 | `setup[].id` | Unique stable ID: letters, digits, underscore, or hyphen, starting with a letter. |
 | `setup[].argv` | Nonempty argument array. Commands run in declaration order without a shell. |
 | `setup[].path_bound` | Boolean, default false. Repeat this step after each relocation. |
@@ -128,7 +130,16 @@ Remove inputs that the repository does not use.
 Changed inputs select mapped steps once, in declaration order.
 A definition change selects every step. Path-bound steps repeat after relocation.
 The record stores input object IDs and a definition hash.
-The upstream branch comes from the source checkout's tracking settings.
+`pool.upstream` selects the upstream for spare creation, freshness, and safety checks.
+Set it when integration uses a branch such as `dev` or `develop`, or a fork's
+canonical `upstream` remote.
+When the setting is absent, the upstream is the remote default branch, named by
+the remote's HEAD. Git-kit uses `origin`, or the sole remote when `origin` is absent.
+It reads the local remote HEAD symbolic ref, then queries the remote if absent.
+An undetermined default branch blocks the operation. The source checkout's
+current branch and its tracking settings do not select the upstream.
+`configure --propose` includes `pool.upstream` with the resolved remote default.
+Review and change that value as needed before approving the proposal.
 The root uses bootstrap's effective layered settings, including user, project,
 local overrides, and profiles. Repository enablement and setup approval still
 come only from tracked repository settings.
@@ -136,6 +147,31 @@ come only from tracked repository settings.
 The proposal includes one `npm ci` step per tracked `package-lock.json`
 directory, including the root. Each lockfile maps to its own step.
 Untracked lockfiles are excluded.
+
+The proposal includes no `pool.rebuildable` entries by default.
+After project-specific user approval, Claude can add entries under `git_kit.worktrees.pool`:
+
+```json
+{
+  "rebuildable": [
+    "packages/*/dist/",
+    "*.tsbuildinfo",
+    "web/dist",
+    ".venv.sync.sha256",
+    "node_modules/"
+  ]
+}
+```
+
+These globs use Git's ignore syntax, including `*`, `**`, and directory patterns.
+Patterns must be relative and contain no `..` component.
+Absolute paths, negations, comments, backslashes, and `.git` paths are invalid.
+Git-kit rejects settings whose globs match tracked files.
+It repeats this check against each candidate worktree before classification.
+Only ignored files that match a glob count as reproducible.
+Unmatched ignored files remain unique data and block retirement.
+Untracked files still block retirement, even when a glob matches their names.
+This setting does not add setup commands or guarantee that setup rebuilds these outputs.
 
 User `~/.claude/bootstrap.json` and `bootstrap.local.json` can set
 `git_kit.worktrees.disk_floor_percent`. The default is 10 percent.
@@ -341,7 +377,8 @@ It also requires no `+` in `git cherry <fresh-upstream> HEAD`,
 no unique ignored data, and no locked Git registration.
 The main checkout never enters retirement. A remote task branch cannot prove delivery.
 
-Only declared, ignored reproducible outputs qualify for removal.
+Only ignored outputs declared by `setup[].recreate` or matched by
+`pool.rebuildable` qualify for removal. Git-kit checks each output before removal.
 Unique ignored data remains in place. Removal uses no blanket `--force`.
 The lifecycle never removes branches.
 
