@@ -16,6 +16,7 @@ import worktrees as wt
 import worktree_safety as safety
 from worktree_config import read_object
 from worktree_pool import _file_lock, remote_url
+from worktree_paths import path_identity
 
 if TYPE_CHECKING:
     from worktree_lifecycle import Lifecycle
@@ -193,7 +194,7 @@ def legacy_values(paths: list[Path]) -> list[tuple[Path, dict[str, Any]]]:
 def discover(obj: Lifecycle, clones: list[Path], previous: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[Path]]:
     metadata = legacy_metadata(obj)
     old = legacy_values(metadata)
-    sources: dict[str, dict[str, Any]] = {}
+    sources: dict[tuple, dict[str, Any]] = {}
     queue: list[tuple[Path, bool]] = [(obj.repo, True), *((p, True) for p in clones)]
     for value in [read_object(obj.state / "namespace.json"), *obj.read_records(), *(r for _, r in old)]:
         nested = value.get("repo", value)
@@ -225,7 +226,7 @@ def discover(obj: Lifecycle, clones: list[Path], previous: dict[str, Any]) -> tu
     while queue:
         path, required = queue.pop(0)
         path = path.absolute()
-        if str(path) in sources:
+        if path_identity(path) in sources:
             continue
         if path.is_symlink() or not (path / ".git").exists():
             if required:
@@ -237,27 +238,28 @@ def discover(obj: Lifecycle, clones: list[Path], previous: dict[str, Any]) -> tu
             continue
         main = wt.project_root(path)
         common = wt.git(main, "rev-parse", "--path-format=absolute", "--git-common-dir")
-        sources[str(main)] = {"path": str(main), "common_dir": common}
+        sources[path_identity(main)] = {"path": str(main), "common_dir": common}
         if main.parent not in scanned_parents:
             scanned_parents.add(main.parent)
             queue.extend((sibling, False) for sibling in sorted(main.parent.iterdir())
                          if sibling.is_dir() and not sibling.is_symlink() and (sibling / ".git").exists())
-    entries: dict[str, dict[str, Any]] = {}
-    existing = {r["path"]: r for r in obj.read_records()}
-    known = {r["path"]: r for r in previous.get("candidates", [])}
+    entries: dict[tuple, dict[str, Any]] = {}
+    existing = {path_identity(Path(r["path"])): r for r in obj.read_records() if r["state"] != "retired-duplicate"}
+    known = {path_identity(Path(r["path"])): r for r in previous.get("candidates", []) if r["phase"] != "retired-duplicate"}
 
     def add(path: Path, source: dict[str, Any], origin: str, value: dict[str, Any] | None = None) -> None:
         path = path.absolute()
-        key = str(path)
-        if str(path) in sources:
+        key = path_identity(path)
+        if key in sources and not path.is_symlink():
             return
         if key not in entries:
             prior = known.get(key, {})
-            identifier = existing.get(key, {}).get("id") or prior.get("id") or "w-" + hashlib.sha256((obj.url + "\0" + key).encode()).hexdigest()[:32]
-            entries[key] = {"id": identifier, "path": key, "source_clone": source["path"],
+            identifier = existing.get(key, {}).get("id") or prior.get("id") or "w-" + hashlib.sha256((obj.url + "\0" + str(path)).encode()).hexdigest()[:32]
+            entries[key] = {"id": identifier, "path": str(path), "source_clone": source["path"],
                             "common_dir": source["common_dir"], "origins": [], "legacy": {}, "phase": "pending"}
         candidate = entries[key]
-        if candidate["source_clone"] != source["path"] or candidate["common_dir"] != source["common_dir"]:
+        if (path_identity(Path(candidate["source_clone"])) != path_identity(Path(source["path"]))
+                or path_identity(Path(candidate["common_dir"])) != path_identity(Path(source["common_dir"]))):
             raise ValueError(f"Ambiguous registration/source mapping for {path}")
         if origin not in candidate["origins"]:
             candidate["origins"].append(origin)
@@ -270,9 +272,9 @@ def discover(obj: Lifecycle, clones: list[Path], previous: dict[str, Any]) -> tu
         for path in sorted((Path(source["path"]) / ".claude/worktrees").glob("*")):
             if path.is_dir() or path.is_symlink():
                 add(path, source, "legacy-agent")
-    default_source = sources[str(obj.repo)]
+    default_source = sources[path_identity(obj.repo)]
     for path in sorted(loose):
-        if str(path) not in entries:
+        if path_identity(path) not in entries:
             add(path, default_source, "namespace-filesystem")
     for metadata_path, value in old:
         if metadata_path.name == "pool.json":
@@ -280,7 +282,8 @@ def discover(obj: Lifecycle, clones: list[Path], previous: dict[str, Any]) -> tu
                 raise ValueError(f"Legacy namespace remote identity collision: {metadata_path}")
             continue
         nested = value.get("repo", value)
-        source = sources.get(nested.get("source_clone") or nested.get("source") or "", default_source)
+        source_path = nested.get("source_clone") or nested.get("source")
+        source = sources.get(path_identity(Path(source_path)), default_source) if source_path else default_source
         path = value.get("path")
         if not path and value.get("id"):
             identifier = str(value["id"])
@@ -290,9 +293,9 @@ def discover(obj: Lifecycle, clones: list[Path], previous: dict[str, Any]) -> tu
             alternatives = [pool / identifier, pool / ".staging" / identifier, obj.namespace / ".staging" / identifier]
             path = str(next((p for p in alternatives if p.exists()), alternatives[1]))
         if path:
-            if str(Path(path).absolute()) in entries:
-                source = {"path": entries[str(Path(path).absolute())]["source_clone"],
-                          "common_dir": entries[str(Path(path).absolute())]["common_dir"]}
+            if path_identity(Path(path)) in entries:
+                source = {"path": entries[path_identity(Path(path))]["source_clone"],
+                          "common_dir": entries[path_identity(Path(path))]["common_dir"]}
             add(Path(path), source, str(metadata_path), value)
     return sorted(sources.values(), key=lambda row: row["path"]), sorted(entries.values(), key=lambda row: row["path"]), metadata
 
@@ -386,16 +389,16 @@ def migrated_record(obj: Lifecycle, row: dict[str, Any]) -> dict[str, Any]:
 
 def refresh_inventory(obj: Lifecycle, journal: dict[str, Any], clones: list[Path]) -> dict[str, Any]:
     sources, candidates, metadata = discover(obj, clones, journal)
-    previous = {row["path"]: row for row in journal.get("candidates", [])}
+    previous = {path_identity(Path(row["path"])): row for row in journal.get("candidates", [])}
     for row in candidates:
-        old = previous.get(row["path"])
+        old = previous.get(path_identity(Path(row["path"])))
         if old:
             if any(old[key] != row[key] for key in ("id", "source_clone", "common_dir")):
                 raise ValueError(f"Migration candidate mapping changed after inventory: {row['path']}")
             row.update(phase=old["phase"], legacy={**old["legacy"], **row["legacy"]})
             if "safety" in old:
                 row["safety"] = old["safety"]
-        previous[row["path"]] = row
+        previous[path_identity(Path(row["path"]))] = row
     known_metadata = {row["path"]: row for row in journal.get("metadata", [])}
     for path in metadata:
         if str(path) not in known_metadata:
