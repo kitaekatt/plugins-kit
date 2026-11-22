@@ -383,8 +383,9 @@ class Lifecycle:
         path = self.record_path(record)
         if not path.is_dir() or path.resolve() == wt.project_root(path):
             raise ValueError(f"Missing target or main checkout: {path}")
-        matches = [r for r in self.read_records() if r["state"] != "removed"
-                   and Path(r["path"]).resolve() == path.resolve()]
+        from worktree_paths import path_identity
+        matches = [r for r in self.read_records() if r["state"] not in {"removed", "retired-duplicate"}
+                   and path_identity(Path(r["path"])) == path_identity(path)]
         registrations = [r for r in wt.records(path) if Path(r["worktree"]).resolve() == path.resolve()]
         if len(matches) != 1 or len(registrations) != 1 or "locked" in registrations[0]:
             raise ValueError(f"Ambiguous or locked worktree scope: {record['id']} at {path}")
@@ -635,7 +636,7 @@ class Lifecycle:
         from worktree_migration import legacy_problem
         rows = self.read_records()
         for record in rows:
-            if record["state"] == "removed":
+            if record["state"] in {"removed", "retired-duplicate"}:
                 continue
             problem = legacy_problem(self, record)
             if problem:
@@ -663,7 +664,7 @@ class Lifecycle:
     def reconcile(self) -> None:
         from worktree_migration import legacy_path, legacy_problem
         for record in self.read_records():
-            if record["state"] == "removed":
+            if record["state"] in {"removed", "retired-duplicate"}:
                 continue
             pending_discard = (record["operation"].get("name") == "discard"
                                and (record.get("discard") or {}).get("outcome") == "applying")
@@ -772,13 +773,15 @@ class Lifecycle:
             self._maintenance_upstreams = {}
             try:
                 with _file_lock(self.state / "claim.lock", blocking=True):
+                    from worktree_retirement import retire_duplicates
+                    result["duplicates_retired"] = retire_duplicates(self)
                     self.reconcile()
                     from worktree_retirement import recheck_parked
                     parked_ids = {r["id"] for r in self.read_records() if r["state"] == "parked"}
                     result["parked_recheck"] = recheck_parked(self)
                     result["removed"] = [r["id"] for r in self.read_records() if r["id"] in parked_ids and r["state"] == "removed"]
                 for record in self.read_records():
-                    if record["state"] in {"ready", "taken", "removed", "building", "recycled", "parked"}:
+                    if record["state"] in {"ready", "taken", "removed", "retired-duplicate", "building", "recycled", "parked"}:
                         continue
                     with _file_lock(self.state / "claim.lock", blocking=True):
                         record = self.get(record["id"])

@@ -573,9 +573,10 @@ def run(obj: Lifecycle, *, apply: bool = False, clones: list[Path] | None = None
             atomic_json(journal_path, journal)
             result = journal
         if apply:
-            from worktree_retirement import recheck_parked
+            from worktree_retirement import recheck_parked, retire_duplicates
+            retired = retire_duplicates(obj)
             summary = recheck_parked(obj, exclude=failed_removals)
-            result = {**read_object(journal_path), "parked_recheck": summary}
+            result = {**read_object(journal_path), "duplicates_retired": retired, "parked_recheck": summary}
     if apply:
         result = {**result, "maintenance": obj.request_maintenance()}
     return {**result, "ignored_claude_processes": check["ignored_claude_processes"]}
