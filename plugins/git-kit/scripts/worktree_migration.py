@@ -345,10 +345,13 @@ def evidence(obj: Lifecycle, record: dict[str, Any]) -> dict[str, Any]:
     problem = legacy_problem(obj, record)
     if problem:
         return {"safe": False, "at": time.time(), "blockers": [problem]}
-    ref = wt.main_upstream(source)
-    with _file_lock(obj.state / "fetch.lock", blocking=True):
-        wt.refresh(source)
-        oid = wt.git(source, "rev-parse", "--verify", f"{ref}^{{commit}}")
+    if obj._maintenance_upstreams is not None:
+        ref, oid = obj.record_upstream(record)
+    else:
+        ref = wt.main_upstream(source)
+        with _file_lock(obj.state / "fetch.lock", blocking=True):
+            wt.refresh(source)
+            oid = wt.git(source, "rev-parse", "--verify", f"{ref}^{{commit}}")
     result = safety.inspect(record, oid, obj.declared_outputs(), obj.settings.config.pool.rebuildable)
     result["upstream_ref"] = ref
     return result
