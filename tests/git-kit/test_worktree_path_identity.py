@@ -5,7 +5,7 @@ Triggers: case aliases in discovery, missing twins, and duplicate parked records
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
@@ -76,3 +76,38 @@ def test_path_identity_keeps_distinct_directories(tmp_path: Path) -> None:
     second.mkdir()
     assert path_identity(first) != path_identity(second)
     assert path_identity(first / "missing") != path_identity(second / "missing")
+
+
+@pytest.mark.parametrize("insensitive", [False, True])
+def test_missing_suffix_folds_only_for_insensitive_parent(tmp_path: Path, monkeypatch, insensitive: bool) -> None:
+    import worktree_paths as module
+
+    monkeypatch.setattr(module, "case_insensitive", lambda parent: insensitive)
+    monkeypatch.setattr(module.os.path, "normcase", lambda value: value.lower())
+    assert (module.path_identity(tmp_path / "Missing") == module.path_identity(tmp_path / "missing")) is insensitive
+
+
+def test_windows_path_equality_does_not_disable_case_probe() -> None:
+    from worktree_paths import case_insensitive
+
+    class WindowsDirectory(PureWindowsPath):
+        def samefile(self, other: PureWindowsPath) -> bool:
+            return str(self).casefold() == str(other).casefold()
+
+    assert case_insensitive(WindowsDirectory("C:/Worktrees/Afterplay"))
+
+
+def test_namespace_scan_maps_git_common_dir_to_own_clone(migration, tmp_path: Path, monkeypatch) -> None:
+    import worktree_migration as module
+
+    obj = migration
+    clone = tmp_path / "other/clone"
+    clone.parent.mkdir()
+    git(obj.repo, "clone", "--branch", "main", obj.url, str(clone))
+    legacy(obj, "unlisted", source=clone)
+    records = module.wt.records
+    monkeypatch.setattr(module.wt, "records", lambda source: records(source)[:1])
+    _, candidates, _ = module.discover(obj, [], {})
+    assert len(candidates) == 1
+    assert candidates[0]["source_clone"] == str(clone)
+    assert candidates[0]["common_dir"] == str(clone / ".git")

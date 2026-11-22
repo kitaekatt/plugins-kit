@@ -10,7 +10,7 @@ def case_insensitive(parent: Path) -> bool:
     """Observe case aliases without writing a probe into a repository."""
     for path in (parent, *parent.parents):
         alternate = path.with_name(path.name.swapcase()) if path.name else path
-        if alternate == path:
+        if str(alternate) == str(path):
             continue
         try:
             return alternate.samefile(path)
@@ -34,5 +34,5 @@ def path_identity(path: Path) -> tuple:
     if not suffix:
         return ("inode", info.st_dev, info.st_ino)
     missing = str(Path(*reversed(suffix)))
-    missing = missing.casefold() if case_insensitive(parent) else os.path.normcase(missing)
+    missing = os.path.normcase(missing).casefold() if case_insensitive(parent) else missing
     return ("missing", info.st_dev, info.st_ino, missing)

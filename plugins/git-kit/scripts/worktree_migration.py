@@ -275,7 +275,19 @@ def discover(obj: Lifecycle, clones: list[Path], previous: dict[str, Any]) -> tu
     default_source = sources[path_identity(obj.repo)]
     for path in sorted(loose):
         if path_identity(path) not in entries:
-            add(path, default_source, "namespace-filesystem")
+            source = default_source
+            if not path.is_symlink() and (path / ".git").is_file() and not (path / ".git").is_symlink():
+                try:
+                    common = wt.git(path, "rev-parse", "--path-format=absolute", "--git-common-dir")
+                except subprocess.CalledProcessError as exc:
+                    if exc.returncode != 128:
+                        raise
+                else:
+                    matches = [s for s in sources.values() if path_identity(Path(s["common_dir"])) == path_identity(Path(common))]
+                    if len(matches) != 1:
+                        raise ValueError(f"Cannot map namespace worktree Git common directory to a source clone: {path}")
+                    source = matches[0]
+            add(path, source, "namespace-filesystem")
     for metadata_path, value in old:
         if metadata_path.name == "pool.json":
             if value.get("remote") != obj.url:
