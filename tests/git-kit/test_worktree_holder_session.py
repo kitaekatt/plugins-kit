@@ -90,7 +90,7 @@ def pid_named(pid: int, text: str) -> bool:
     return re.search(rf"(?<![0-9a-f]){pid}(?![0-9a-f])", text) is not None
 
 
-@pytest.mark.parametrize("case", ["alone", "inside", "pipeline", "other_shell"])
+@pytest.mark.parametrize("case", ["alone", "inside", "pipeline", "subshell", "other_shell"])
 def test_release_ignores_its_caller_chain_but_not_other_processes(lifecycle, tmp_path: Path, monkeypatch, case: str) -> None:
     """claude -> Bash-tool shell (cwd and argv in the worktree) -> python release.
 
@@ -98,6 +98,8 @@ def test_release_ignores_its_caller_chain_but_not_other_processes(lifecycle, tmp
     same shell command ("pipeline": a sibling with its cwd in the worktree) does
     not block release either, but maintenance keeps the worktree while it runs.
     A separate shell under the holder ("other_shell": another Bash call) blocks.
+    "subshell" is a grandchild of the same shell, as a pipeline element that
+    runs through a shell function or a ( ... ) subshell; it does not block.
     "inside" runs release with its own cwd in the worktree, with no pipeline:
     neither release nor the scans it starts may block it.
     """
@@ -114,10 +116,13 @@ def test_release_ignores_its_caller_chain_but_not_other_processes(lifecycle, tmp
                      'echo $! > "$OTHER_PID_FILE"; fi; echo "$claim" | "$@"; read waiting')
     script = ('read claim; cd "$1" || exit 90; shift; echo $$ > "$SHELL_PID_FILE"; '
               'if [ "$CASE" = pipeline ]; then sleep 60 & echo $! > "$SIBLING_PID_FILE"; fi; '
+              'if [ "$CASE" = subshell ]; then (sleep 60 & echo $! > "$GRANDCHILD_PID_FILE"; wait) & '
+              'echo $! > "$SIBLING_PID_FILE"; while [ ! -s "$GRANDCHILD_PID_FILE" ]; do sleep 0.05; done; fi; '
               'run_dir=$REPO_DIR; if [ "$CASE" = inside ]; then run_dir=$PWD; fi; '
               '(cd "$run_dir" && exec "$@" --claim "$claim") > "$RESULT_FILE" 2> "$ERROR_FILE"; echo $? > "$EXIT_FILE"')
     files = {name: tmp_path / name.lower() for name in
-             ("SHELL_PID_FILE", "SIBLING_PID_FILE", "OTHER_PID_FILE", "RESULT_FILE", "ERROR_FILE", "EXIT_FILE")}
+             ("SHELL_PID_FILE", "SIBLING_PID_FILE", "GRANDCHILD_PID_FILE", "OTHER_PID_FILE",
+              "RESULT_FILE", "ERROR_FILE", "EXIT_FILE")}
     for name, path in files.items():
         monkeypatch.setenv(name, str(path))
     monkeypatch.setenv("REPO_DIR", str(obj.repo))
@@ -151,14 +156,14 @@ def test_release_ignores_its_caller_chain_but_not_other_processes(lifecycle, tmp
             assert code == "0", error
             assert json.loads(files["RESULT_FILE"].read_text())["state"] == "released"
             assert record["holder"] is None and record["state"] == "released"
-            if case == "pipeline":
+            if case in {"pipeline", "subshell"}:
                 # Maintenance has no callers: the sibling still in the worktree keeps it.
                 obj.maintain()
                 kept = obj.get(result["id"])
                 assert kept["state"] == "released" and kept["path"] == str(worktree) and worktree.is_dir()
         finally:
             # Background sleeps hold the fake holder's pipes; end them before it exits.
-            for name in ("SIBLING_PID_FILE", "OTHER_PID_FILE"):
+            for name in ("GRANDCHILD_PID_FILE", "SIBLING_PID_FILE", "OTHER_PID_FILE"):
                 if files[name].exists():
                     try:
                         os.kill(int(files[name].read_text()), 15)
