@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from test_worktree_lifecycle import git, holder, lifecycle
+from test_worktree_lifecycle import deliver, git, holder, lifecycle
 
 
 def park(obj, agent: str = "old", session: str = "old-session", task: str | None = "task-one") -> dict:
@@ -87,7 +87,9 @@ def test_adopt_preserves_relocated_work(lifecycle) -> None:
 def test_adopt_preserves_relocated_work_when_setup_fails(lifecycle) -> None:
     obj = lifecycle
     record = park(obj)
-    obj.settings.config.pool.setup[1].argv = [sys.executable, "-c", "raise SystemExit(31)"]
+    config = obj.settings.raw
+    config["pool"]["setup"][1]["argv"] = [sys.executable, "-c", "raise SystemExit(31)"]
+    deliver(obj, config)
     with pytest.raises(ValueError, match="kept claim"):
         obj.adopt(record["id"], "failed", "new-session", process=holder())
     current = obj.get(record["id"])

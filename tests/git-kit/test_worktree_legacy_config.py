@@ -23,6 +23,7 @@ def legacy_repo(lifecycle: Any) -> Path:
     write_json(repo / ".claude/bootstrap.json", {"git_kit": {"worktrees": {"enabled": True}}})
     git(repo, "add", ".claude/bootstrap.json")
     git(repo, "commit", "-qm", "legacy enablement without pool")
+    git(repo, "push", "origin", "main")
     return repo
 
 

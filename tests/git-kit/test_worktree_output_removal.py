@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 import worktree_safety as safety
-from test_worktree_lifecycle import git, lifecycle
+from test_worktree_lifecycle import deliver, git, lifecycle
 from test_worktree_migration import legacy, migration
 
 
@@ -137,13 +137,13 @@ def retiring_symlink_worktree(lifecycle) -> tuple:
     config["pool"]["rebuildable"] = ["node_modules/"]
     config["pool"]["setup"].append({"id": "node", "argv": [sys.executable, "-c", "pass"],
                                     "recreate": ["node_modules"]})
-    obj.configure(config)
+    deliver(obj, config)
     obj.maintain()
     record = obj.read_records()[0]
     record["state"] = "released"
     obj.save(record)
     config["pool"]["size"] = 1
-    obj.configure(config)
+    deliver(obj, config)
     return obj, record, Path(record["path"])
 
 
@@ -292,13 +292,13 @@ def test_delete_failure_parks_only_failed_record(migration, monkeypatch, operati
     else:
         config = obj.settings.raw
         config["pool"]["size"] = 3
-        obj.configure(config)
+        deliver(obj, config)
         obj.maintain()
         for record in obj.read_records()[:2]:
             record["state"] = "parked" if operation == "parked-recheck" else "released"
             obj.save(record)
         config["pool"]["size"] = 1
-        obj.configure(config)
+        deliver(obj, config)
         failed_path = Path(next(r for r in obj.read_records() if r["state"] != "ready")["path"])
     remove = safety.remove_outputs
     failures = []
@@ -325,13 +325,13 @@ def test_maintenance_removal_rechecks_after_reservation(lifecycle, monkeypatch) 
     obj = lifecycle
     config = obj.settings.raw
     config["pool"]["size"] = 2
-    obj.configure(config)
+    deliver(obj, config)
     obj.maintain()
     record = obj.read_records()[0]
     record["state"] = "released"
     obj.save(record)
     config["pool"]["size"] = 1
-    obj.configure(config)
+    deliver(obj, config)
     path, save = Path(record["path"]), obj.save
 
     def reserve(value: dict) -> None:

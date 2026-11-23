@@ -69,6 +69,11 @@ def retire_duplicates(obj: Lifecycle) -> int:
 
 
 def evidence(obj: Lifecycle, record: dict[str, Any], *, recover_removed: bool = False) -> dict[str, Any]:
+    from worktree_lifecycle import source_missing
+
+    problem = source_missing(record)
+    if problem:
+        return {"safe": False, "at": time.time(), "blockers": [problem]}
     path = Path(record["path"])
     op = record["operation"]
     if (recover_removed and op.get("name") == "parked-recheck" and op.get("phase") == "reserved"

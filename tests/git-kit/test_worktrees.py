@@ -102,6 +102,11 @@ def test_main_upstream_uses_repository_override(wt, git_repo, tmp_path, remote):
     wt.git(git_repo.path, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
     manifest(git_repo.path, {"git_kit": {"worktrees": {"enabled": True, "pool": {
         "upstream": f"{remote}/team/develop", "setup": [{"id": "deps", "argv": ["true"]}]}}}})
+    # The approved upstream is read from that branch, so the settings must be on it.
+    wt.git(git_repo.path, "add", ".claude/bootstrap.json")
+    wt.git(git_repo.path, "commit", "-qm", "approve team/develop")
+    wt.git(git_repo.path, "push", remote, "HEAD:team/develop")
+    wt.git(git_repo.path, "fetch", remote)
     assert wt.main_upstream(git_repo.path) == f"refs/remotes/{remote}/team/develop"
 
 

@@ -89,6 +89,15 @@ def lifecycle(tmp_path, monkeypatch, git_repo):
     return obj
 
 
+def deliver(obj, config: dict | None = None, *, remote: str = "origin", branch: str = "main") -> None:
+    """Lifecycle settings come from the upstream ref: apply, commit and push them."""
+    if config is not None:
+        obj.configure(config)
+    git(obj.repo, "add", "-A", ".claude")
+    git(obj.repo, "commit", "-qm", "deliver settings")
+    git(obj.repo, "push", remote, f"HEAD:{branch}")
+
+
 def holder() -> dict:
     import worktree_safety as safety
     return safety.process_identity(os.getpid())
@@ -101,6 +110,7 @@ def test_configure_and_install_gates(lifecycle, monkeypatch):
     obj = lifecycle
     settings_file = obj.repo / ".claude/bootstrap.json"
     settings_file.unlink()
+    deliver(obj)
     with pytest.raises(ValueError, match="configure"):
         lc.Lifecycle(obj.repo).take("agent", "session", process=holder())
     before = set(obj.repo.rglob("*"))
@@ -547,6 +557,7 @@ def test_ready_take_does_not_run_unrelated_changed_setup(lifecycle: Lifecycle) -
     config = json.loads(json.dumps(obj.settings.raw))
     config["pool"]["setup"][2]["argv"] = [sys.executable, "-c", "import sys; print('setup failed'); sys.exit(7)"]
     write_json(obj.repo / ".claude/bootstrap.json", {"git_kit": {"worktrees": config}})
+    deliver(obj)
     obj = lc.Lifecycle(obj.repo)
     result = obj.take("prepared", "s", process=holder())
     record = obj.read_records()[0]
@@ -644,6 +655,7 @@ def test_explicit_disabled_settings_do_not_mutate(lifecycle):
     import worktree_lifecycle as lc
     obj = lifecycle
     write_json(obj.repo / ".claude/bootstrap.json", {"git_kit": {"worktrees": {"enabled": False}}})
+    deliver(obj)
     disabled = lc.Lifecycle(obj.repo)
     assert disabled.status()["enabled"] is False
     with pytest.raises(ValueError, match="disabled"):
@@ -665,7 +677,7 @@ def test_linux_runtime_arguments_block_retirement(tmp_path, monkeypatch):
     monkeypatch.setattr(safety.sys, "platform", "linux")
     monkeypatch.setattr(safety.os, "getuid", lambda: process.stat().st_uid, raising=False)
     assert any("runtime" in blocker for blocker in safety.path_processes(candidate))
-    # A release caller chain (caller_chain) is excluded; nothing else is.
+    # Release callers (release_callers) are excluded; nothing else is.
     assert safety.path_processes(candidate, exclude={1234}) == []
 
 

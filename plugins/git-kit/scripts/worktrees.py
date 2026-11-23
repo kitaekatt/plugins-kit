@@ -146,12 +146,12 @@ def ensure_permissions(root: Path) -> bool:
     return True
 
 
-def git(repo: Path, *args: str) -> str:
+def git(repo: Path, *args: str, env: dict[str, str] | None = None) -> str:
     """Every Git failure is fatal, including fetch and status failures."""
     result = subprocess.run(
         ["git", "-C", str(repo), *args], capture_output=True, text=True,
         encoding="utf-8", timeout=120, check=True,
-        env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"},
+        env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C", **(env or {})},
     )
     return result.stdout.rstrip("\n")
 
@@ -218,12 +218,9 @@ def upstream_ref(repo: Path, branch: str) -> str | None:
 
 def main_upstream(main: Path) -> str:
     """Use the approved upstream, or the remote default when none is configured."""
-    from worktree_config import load
+    from worktree_config import upstream_settings
 
-    config = load(main).config
-    if config is not None and config.pool is not None and config.pool.upstream is not None:
-        return f"refs/remotes/{config.pool.upstream}"
-    return default_upstream(main)
+    return upstream_settings(main)[0]
 
 
 def default_upstream(main: Path) -> str:

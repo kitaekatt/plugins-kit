@@ -5,6 +5,7 @@ Triggers: build leftovers, unmatched ignored data, unsafe glob approval, cutover
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -89,3 +90,49 @@ def test_migration_rebuildable_safety_and_resume(migration, unique: bool) -> Non
 
 def test_proposal_does_not_approve_rebuildable(lifecycle) -> None:
     assert not lifecycle.configure()["proposal"]["pool"].get("rebuildable")
+
+
+def publish_settings(obj, tmp_path: Path, change) -> None:
+    """Push a settings change from another clone, so the main checkout falls behind."""
+    publisher = tmp_path / "publisher"
+    git(obj.repo, "clone", "--branch", "main", obj.url, str(publisher))
+    change(publisher)
+    git(publisher, "add", "-A")
+    git(publisher, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "publish settings")
+    git(publisher, "push", "origin", "main")
+
+
+def test_release_reads_rebuildable_from_upstream_not_stale_checkout(lifecycle, tmp_path) -> None:
+    """Trigger: upstream approves a rebuildable glob; the main checkout was not pulled."""
+    from test_worktree_lifecycle import holder
+
+    obj = lifecycle
+
+    def approve_build_cache(publisher: Path) -> None:
+        ignore = publisher / ".gitignore"
+        ignore.write_text(ignore.read_text() + "build-cache/\n", encoding="utf-8")
+        manifest = publisher / ".claude/bootstrap.json"
+        data = json.loads(manifest.read_text())
+        data["git_kit"]["worktrees"]["pool"]["rebuildable"] = ["build-cache/"]
+        manifest.write_text(json.dumps(data), encoding="utf-8")
+
+    publish_settings(obj, tmp_path, approve_build_cache)
+    stale = json.loads((obj.repo / ".claude/bootstrap.json").read_text())
+    assert "rebuildable" not in stale["git_kit"]["worktrees"]["pool"]
+    obj.maintain()
+    taken = obj.take("stale-checkout", "s", process=holder())
+    output = Path(taken["path"]) / "build-cache/index.js"
+    output.parent.mkdir()
+    output.write_text("rebuild me", encoding="utf-8")
+    assert obj.release(taken["claim"])["state"] == "released"
+
+
+def test_unreadable_upstream_settings_fail_loudly(lifecycle, tmp_path) -> None:
+    """Trigger: upstream settings are not valid JSON while the checkout copy still is."""
+    import worktree_lifecycle as lc
+
+    obj = lifecycle
+    publish_settings(obj, tmp_path, lambda publisher: (publisher / ".claude/bootstrap.json").write_text("{bad", encoding="utf-8"))
+    git(obj.repo, "fetch", "origin")
+    with pytest.raises(ValueError, match="refs/remotes/origin/main"):
+        lc.Lifecycle(obj.repo)
