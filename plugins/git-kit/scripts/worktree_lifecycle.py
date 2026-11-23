@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 import uuid
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Callable
 
@@ -361,10 +362,11 @@ class Lifecycle:
                 raise ValueError(result)
             return result
 
-    def safety(self, record: dict[str, Any], *, persist: bool = True) -> dict[str, Any]:
+    def safety(self, record: dict[str, Any], *, persist: bool = True,
+               callers: Sequence[dict[str, Any]] = ()) -> dict[str, Any]:
         self.record_path(record)
         ref, oid = self.record_upstream(record)
-        evidence = safety.inspect(record, oid, self.declared_outputs(), self.settings.config.pool.rebuildable)
+        evidence = safety.inspect(record, oid, self.declared_outputs(), self.settings.config.pool.rebuildable, callers)
         evidence["upstream_ref"] = ref
         record["safety"] = evidence
         if persist:
@@ -715,7 +717,9 @@ class Lifecycle:
                     raise ValueError("Release holder or worker reservation changed; preserving current ownership")
                 self.transition(record, "release", "safety")
                 record["holder"] = None  # Clear only in memory until safety is proven.
-                evidence = self.safety(record, persist=False)
+                # The caller chain up to the holder waits on this release; its cwd in
+                # the worktree does not block. Every other process still does.
+                evidence = self.safety(record, persist=False, callers=safety.caller_chain(saved))
                 if not evidence["safe"]:
                     raise ValueError(f"Release safety failed: {evidence['blockers']}")
                 record.update(state="released", last_claim=claim, error=None, worker=None, head=evidence["head"])
