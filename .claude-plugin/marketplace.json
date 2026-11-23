@@ -35,7 +35,7 @@
     {
       "name": "bootstrap",
       "description": "Installs each plugin's tools, Python venvs, and config automatically at session start.",
-      "version": "0.172.0",
+      "version": "0.173.0",
       "author": {
         "name": "Christina"
       },
@@ -204,7 +204,7 @@
     {
       "name": "llm-kit",
       "description": "LLM access, durable agent jobs and batch content pipelines in one library. Consolidation of llm-scripting-kit, job-kit and content-pipeline-kit.",
-      "version": "0.24.7",
+      "version": "0.24.8",
       "author": {
         "name": "Christina"
       },

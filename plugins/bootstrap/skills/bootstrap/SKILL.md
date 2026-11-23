@@ -150,9 +150,10 @@ reference_skill:
         interpreter record (_global_ key); no user Codex hook installed;
         stdin closed; exit 1 when the pass reports failures.
 
-        run refuses with exit code 2 while another pass holds the shared lock
-        (and the engine exits 2 if it loses that race); it never attaches to a
-        pass with a potentially different scope. Success is 0.
+        run waits while another pass holds the shared lock (and again if its
+        engine loses that race and exits 2), then runs its own pass; it never
+        attaches to a pass with a potentially different scope. It exits 2 if
+        the other pass is still running after 30 minutes. Success is 0.
         Bare status still follows a running pass; --json never blocks.
         bootstrap profile set converges through the same pass.
 
@@ -174,8 +175,8 @@ reference_skill:
       gotchas:
         - Run from the repository root to include its project manifests; running
           from src/ checks src/.claude instead.
-        - Bare bootstrap follows another pass, while bootstrap run refuses it.
-          Retry run after that pass finishes.
+        - Bare bootstrap follows another pass, while bootstrap run waits for it
+          to finish and then runs its own pass.
         - bootstrap run is a live pass, not a read-only probe. It installs,
           updates and rewrites registry state like a hook pass, so snapshot a
           broken machine's state before running it there.
@@ -618,7 +619,7 @@ reference_skill:
       keywords: [bootstrap command, bootstrap CLI, bootstrap run, bootstrap codex-hook, Codex SessionStart, Codex additionalContext, bootstrap --json, is a pass running, run bootstrap from a terminal, without starting Claude, tail a pass, attach to a running pass, stream the pass, events.watch, blocks, exit codes, BOOTSTRAP_MARKETPLACE, BOOTSTRAP_PLUGIN_ROOT, dev checkout, worktree, ~/.local/bin lever, command not found, cooldown exempt, bootstrap profile, profile set, profile clear, profile status, PowerShell, cmd.exe, bootstrap.cmd, returns instantly with no output, Windows shim]
       summary: >-
         The bootstrap PATH command -- full-pass run scope and how it differs
-        from a hook pass, busy-pass refusal,
+        from a hook pass, busy-pass wait,
         status following, cooldown behavior, exit codes, engine/data discovery,
         runtime prerequisites, the Windows `.cmd` shims for cmd.exe and
         PowerShell, and the `profile` / `profile set` / `profile clear`
