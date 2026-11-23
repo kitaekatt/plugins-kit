@@ -69,7 +69,7 @@ capability_skill:
     - id: update
       keywords: [update task, edit fields, refresh folder, set status, set priority, rotation]
       user_objective: "Upsert a task and apply task.yaml field edits; refresh the folder."
-      operation: task.py update <ref> [--status S] [--priority P] [--description D] [--depends-on PATH ...] [--blocked-by PATH ...] [--agent-hint H] [--skill-to-invoke NAME ...] [--durable-output PATH ...] [--summary S] [--root PATH]
+      operation: task.py update <ref> [--status S] [--priority P] [--description D] [--depends-on PATH ...] [--blocked-by PATH ...] [--agent-hint H] [--skill-to-invoke NAME ...] [--durable-output PATH ...] [--summary S] [--hidden-until DATE|none] [--root PATH]
       details: references/lifecycle-operations.md#update
       gotchas:
         - "update refreshes the folder record only; for substantive progress, run /task refresh <ref>, which applies handoff-template.md's four update passes."
@@ -117,7 +117,7 @@ capability_skill:
     - id: list
       keywords: [list tasks, open tasks, enumerate, discovery, scope, filter]
       user_objective: "Enumerate tasks in a scope (folder crawl + task_list reference scan)."
-      operation: task.py list [--scope all|user|project|skill|file] [--target X] [--status S] [--priority P] [--format text|json|yaml] [--root PATH]
+      operation: task.py list [--scope all|user|project|skill|file] [--target X] [--status S] [--priority P] [--format text|json|yaml] [--include-hidden] [--root PATH]
       details: references/query-operations.md#list
     - id: triage
       keywords: [triage, triage the tasks, task triage, audit tasks, oldest first, review old tasks, /task triage]
@@ -129,8 +129,8 @@ capability_skill:
           action: "Load references/task-triage-protocol.md and follow its trigger, scope, selection, audit, presentation, and ruling procedures."
     - id: review
       keywords: [review tasks, task overview, task summaries, task answers, open tasks, closed tasks, missing summaries]
-      user_objective: "Generate and open an HTML review of non-archived tasks in configured projects, or in the current project when no project directories are configured."
-      operation: task.py review [--scope all|user|project|skill|file] [--target X] [--output PATH|-] [--no-open] [--generate-missing-summaries | --no-generate-missing-summaries] [--root PATH]
+      user_objective: "Generate and open an HTML review of non-archived, not-hidden tasks in configured projects, or in the current project when no project directories are configured."
+      operation: task.py review [--scope all|user|project|skill|file] [--target X] [--output PATH|-] [--no-open] [--include-hidden] [--generate-missing-summaries | --no-generate-missing-summaries] [--root PATH]
       details: references/task-review.md#review
     - id: answers
       keywords: [task answers, answers refresh, answers status, answers prune, orientation, coverage, question catalog]

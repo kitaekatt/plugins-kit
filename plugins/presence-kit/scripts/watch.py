@@ -7,13 +7,15 @@ Usage:
 
 --task ID derives the paths of a background task: its output file
 `<tmp>/claude-<uid>/<project slug>/<CLAUDE_CODE_SESSION_ID>/tasks/<ID>.output` (<tmp> is
-/tmp; the file is found by pattern, so the slug need not be known). A shell task's file is both watched and the done condition
+/tmp), or on Windows `<tmp>/claude/<hash>/<CLAUDE_CODE_SESSION_ID>/tasks/<ID>.output` (<tmp>
+is the temp directory); the file is found by pattern, so the slug or hash need not be known. A shell task's file is both watched and the done condition
 (unless a done option is given). An agent task's file is a symlink to the agent's
-transcript, whose records carry the agent's working directory (its worktree): that
+transcript (on Windows an empty regular file: the transcript is then found at
+`<config dir>/projects/*/<session>/subagents/agent-<ID>.jsonl`), whose records carry the agent's working directory (its worktree): that
 directory is watched too. The agent's done condition is its hand-back: the watcher
 ends with DONE once the transcript's last record answers a SubagentHandback tool call.
 An agent resumed later by SendMessage needs a new watcher. The id must be a whole name of one file; an unset
-CLAUDE_CODE_SESSION_ID, an unsupported platform or a missing output file exits 2.
+CLAUDE_CODE_SESSION_ID, a missing output file or transcript exits 2.
 
 Every --poll-seconds (default 300) the watcher takes the newest modification time
 across the watched paths: a file's own mtime, or for a directory the newest mtime of
@@ -56,6 +58,7 @@ import math
 import os
 import re
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -76,6 +79,7 @@ SESSION_ENV = "CLAUDE_CODE_SESSION_ID"
 TASK_ID = re.compile(r"[A-Za-z0-9]+")
 PROJECT_ENV = "CLAUDE_PROJECT_DIR"
 COMMAND_SHOWN = 60
+ERROR_CANT_ACCESS_FILE = 1920  # Windows: "The file cannot be accessed by the system"
 
 
 class _BadArguments(wait._BadArguments):
@@ -171,16 +175,22 @@ def _newest(paths):
                 mtime = os.stat(candidate).st_mtime
             except FileNotFoundError:
                 continue
+            except OSError as exc:
+                # Windows: an unresolvable link (a stale package-cache entry) is not a file to watch.
+                if getattr(exc, "winerror", None) != ERROR_CANT_ACCESS_FILE:
+                    raise
+                continue
             if best is None or mtime > best[0]:
                 best = (mtime, candidate)
     return best
 
 
 def _task_base(tmp_root):
-    """`<tmp>/claude-<uid>`: where Claude Code keeps a session's task files (POSIX only)."""
-    if not hasattr(os, "getuid"):
-        raise _BadArguments("--task needs a POSIX platform: the task output layout is not known elsewhere")
-    return Path(tmp_root if tmp_root is not None else "/tmp") / f"claude-{os.getuid()}"
+    """Where Claude Code keeps a session's task files: `<tmp>/claude-<uid>` on POSIX (<tmp> is
+    /tmp), `<tmp>/claude` on Windows (<tmp> is the temp directory, %TEMP%)."""
+    if hasattr(os, "getuid"):
+        return Path(tmp_root if tmp_root is not None else "/tmp") / f"claude-{os.getuid()}"
+    return Path(tmp_root if tmp_root is not None else tempfile.gettempdir()) / "claude"
 
 
 def _agent_cwd(output):
@@ -223,6 +233,19 @@ def _agent_finished(transcript):
     return False
 
 
+def _agent_transcript_path(task_id, session, env):
+    """The agent transcript `<config dir>/projects/<slug>/<session>/subagents/agent-<id>.jsonl`,
+    found by pattern, or None. Where the output file is not a link to the transcript (Windows
+    writes an empty regular file), this is the only route to it."""
+    config = env.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+    pattern = os.path.join(glob.escape(config), "projects", "*", glob.escape(session), "subagents",
+                           f"agent-{task_id}.jsonl")
+    found = sorted(glob.glob(pattern))
+    if len(found) > 1:
+        raise _BadArguments(f"agent {task_id} transcript is ambiguous: {', '.join(found)}")
+    return found[0] if found else None
+
+
 def _resolve_task(args, env, task_root):
     """Add the task's output file (and an agent's working directory) to args.watched."""
     session = env.get(SESSION_ENV)
@@ -240,11 +263,21 @@ def _resolve_task(args, env, task_root):
     output = found[0]
     args.watched.append(output)
     real = os.path.realpath(output)
+    if not real.endswith(".jsonl") and args.task.startswith("a") and os.path.getsize(output) == 0:
+        # An agent task whose output file is not a link (an empty regular file).
+        real = _agent_transcript_path(args.task, session, env)
+        if real is None:
+            raise _BadArguments(
+                f"agent task {args.task}: its output file {output} is empty and not a link, and no "
+                f"transcript matches <config dir>/projects/*/{session}/subagents/agent-{args.task}.jsonl"
+            )
     if real.endswith(".jsonl"):
         cwd = _agent_cwd(real)
         if cwd is None:
             raise _BadArguments(f"agent transcript {real} records no working directory")
         args.watched.append(cwd)
+        if os.path.realpath(output) != real:
+            args.watched.append(real)  # not a link: the output file never changes, the transcript does
         args.agent_transcript = real
     elif args.done_path is None:
         args.output = output

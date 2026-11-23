@@ -7,7 +7,7 @@ working-session registrations.
 
 Operation signature: `task.py list [--scope all|user|project|skill|file]
 [--target X] [--status S] [--priority P] [--format text|json|yaml]
-[--root PATH]`.
+[--include-hidden] [--root PATH]`.
 
 Default output has three sections in order: Open tasks, Deferred tasks, and
 Closed tasks. Open means active or blocked. Deferred means purposefully on
@@ -17,6 +17,13 @@ last_update is the latest ISO date in dated log entries. Explicit `--status`
 prints only matching tasks, including archived and other classifications.
 List deduplicates by canonical path, validates each task, and exits 0 when
 empty. Notes and summary warnings use stderr.
+
+A task hidden until a later date (`task.hidden_until`, see core-contracts.md,
+"Hidden until") is left out of every list and of review, the dashboard export
+and the answers catalogs. `--include-hidden` lists it too, and its line ends
+`(hidden until YYYY-MM-DD)`. JSON and YAML carry `hidden_until` and `hidden`
+per task. A `--status` filter does not unhide a task. By-name verbs (show,
+work, update, close, ...) work on a hidden task.
 
 Text format preserves the line output. JSON and YAML emit listing projection
 version 2: summary, summary source and state, answers and coverage, update

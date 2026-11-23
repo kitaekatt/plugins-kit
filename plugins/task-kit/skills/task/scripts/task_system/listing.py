@@ -75,6 +75,9 @@ class TaskView:
     answers: Mapping[str, Any] | None = None
     coverage: Mapping[str, int] | None = None
     answer_notes: tuple[str, ...] = ()
+    # task.hidden_until as written (YYYY-MM-DD), whether or not the task is hidden today.
+    hidden_until: str | None = None
+    hidden: bool = False  # hidden on the listing's day (present only when the listing includes hidden tasks)
 
 
 @dataclass(frozen=True)
@@ -163,6 +166,8 @@ def _view_record(record: TaskRecord, fallback_root: Path, context: AnswerContext
             host=record.host,
             project_name=record.project_name or root.name,
             project_root=root,
+            hidden_until=record.hidden_until,
+            hidden=record.hidden,
         )
     block = read_task_block(folder)
     updates = read_task_updates(folder)
@@ -183,6 +188,8 @@ def _view_record(record: TaskRecord, fallback_root: Path, context: AnswerContext
             project_root=root,
             updates=updates,
             last_activity=_last_activity(updates),
+            hidden_until=record.hidden_until,
+            hidden=record.hidden,
         )
     raw_summary = block.get("summary")
     summary = (
@@ -255,6 +262,8 @@ def _view_record(record: TaskRecord, fallback_root: Path, context: AnswerContext
         answers=answers,
         coverage=coverage_data,
         answer_notes=answer_notes,
+        hidden_until=record.hidden_until,
+        hidden=record.hidden,
     )
 
 
@@ -287,13 +296,16 @@ def collect_listing(
     devroot: Path | None = None,
     catalog: Catalog | None = None,
     now: datetime.datetime | None = None,
+    include_hidden: bool = False,
 ) -> TaskListing:
     """Discover tasks and project them, with their answers.
 
     ``catalog`` defaults to the shipped questions plus the fleet layer; a catalog that cannot load is a note
-    (``answers: ...``) and the listing carries no answers. ``now`` is the naive local time scripts read.
+    (``answers: ...``) and the listing carries no answers. ``now`` is the naive local time scripts read; its
+    date decides which tasks are hidden (``hidden_until``) unless ``include_hidden``.
     """
     notes: list[str] = []
+    now = now if now is not None else datetime.datetime.now()
     context: AnswerContext | None = None
     if catalog is None:
         try:
@@ -302,7 +314,7 @@ def collect_listing(
             notes.append(f"answers: the question catalog cannot be loaded: {exc}")
     logs = answer_store.RepoLogs()
     if catalog is not None:
-        context = AnswerContext(catalog=catalog, logs=logs, now=now if now is not None else datetime.datetime.now())
+        context = AnswerContext(catalog=catalog, logs=logs, now=now)
     effective_root = (
         user_root if user_root is not None else DEFAULT_USER_ROOT
         if scope == "user"
@@ -317,6 +329,8 @@ def collect_listing(
         user_root=user_root,
         notes=notes,
         devroot=devroot,
+        today=now.date(),
+        include_hidden=include_hidden,
     )
     views = tuple(
         sorted(
@@ -457,6 +471,8 @@ def _view_dict(listing: TaskListing, view: TaskView) -> dict[str, Any]:
         "summary_fingerprint": view.summary_fingerprint,
         "current_fingerprint": view.current_fingerprint,
         "host": view.host,
+        "hidden_until": view.hidden_until,
+        "hidden": view.hidden,
         "project": view.project_name,
         "project_root": str(view.project_root),
         "sessions": [record_dict(record) for record in view.sessions],

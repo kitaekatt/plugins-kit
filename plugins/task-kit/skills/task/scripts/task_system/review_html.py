@@ -91,6 +91,8 @@ def _render_task(task: dict[str, Any], now: datetime) -> str:
     task_id = _text(task.get("id"))
     title = _text(task.get("title"), "Untitled task")
     status = _text(task.get("status"))
+    if task.get("hidden"):
+        status += f" (hidden until {_text(task.get('hidden_until'))})"
     last_update = _text(task.get("last_update"))
     summary_id = "task-summary-" + quote(_task_key(task), safe="")
     return (

@@ -3,7 +3,7 @@
 ## review
 
 Operation signature: `task.py review [--scope all|user|project|skill|file]
-[--target X] [--output PATH|-] [--no-open]
+[--target X] [--output PATH|-] [--no-open] [--include-hidden]
 [--generate-missing-summaries | --no-generate-missing-summaries]
 [--root PATH]`.
 
@@ -15,7 +15,8 @@ and name both options instead of narrowing to the current project. Explicit
 `--scope project` renders only the current project's tasks.
 
 Group active and blocked tasks as Open, deferred tasks as Deferred, closed
-tasks as Closed, and omit archived tasks. Order projects by the newest dated
+tasks as Closed, and omit archived tasks and tasks hidden until a later date
+(`task.hidden_until`; `--include-hidden` keeps them). Order projects by the newest dated
 activity among open tasks; closed activity and summary dates do not count.
 Projects without open activity sort last by name. Within each group, sort by
 the latest log activity, newest first. Rows stay full brightness through four

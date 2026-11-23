@@ -120,21 +120,28 @@ def _machine(inject: dict):
 
 
 def _repositories(
-    args: argparse.Namespace, inject: dict, errors: list[dict]
+    args: argparse.Namespace, inject: dict, errors: list[dict], *, include_hidden: bool = False
 ) -> dict[Path, list[answer_engine.TaskTarget]]:
     """The task folders export discovery finds, grouped by the repository that holds them.
+
+    A task hidden until a later date (``hidden_until``, read on the date of the injected or real local time)
+    is left out unless ``include_hidden``; only ``prune`` includes them, since retiring a question's answer
+    files is maintenance of every task, not a menu.
 
     ``--project`` replaces the discovery under the parents with the named checkouts (intersected with the
     ``--parent`` set when both are given); without it the parents are ``--parent`` or task-kit's configuration.
     """
     parents = tuple(args.parent) or None
     config_path = inject.get("config_path")
+    hide_on = None if include_hidden else inject.get("local_now", datetime.datetime.now)().date()
     if args.project:
         scope = export.resolve_parents(parents, config_path) if parents else None
         selection = export.resolve_projects(tuple(args.project), scope, errors)
-        owners, _bases = export._owners((), errors, selection)  # noqa: SLF001
+        owners, _bases = export._owners((), errors, selection, hide_on=hide_on)  # noqa: SLF001
     else:
-        owners, _bases = export._owners(export.resolve_parents(parents, config_path), errors)  # noqa: SLF001
+        owners, _bases = export._owners(  # noqa: SLF001
+            export.resolve_parents(parents, config_path), errors, hide_on=hide_on
+        )
 
     def classify(owner) -> str:
         return validate_ref(owner.path, owner.project.root).classification
@@ -244,7 +251,7 @@ def _status(args: argparse.Namespace, inject: dict) -> dict:
 def _prune(args: argparse.Namespace, inject: dict) -> dict:
     catalog, machine = _catalog(inject), _machine(inject)
     errors: list[dict] = []
-    repositories = _repositories(args, inject, errors)
+    repositories = _repositories(args, inject, errors, include_hidden=True)
     reports = [
         answer_engine.prune(
             top, machine, catalog, targets=targets, data_dir=inject.get("data_dir"),

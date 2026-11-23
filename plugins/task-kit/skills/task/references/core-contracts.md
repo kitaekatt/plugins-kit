@@ -74,6 +74,31 @@ task:
 - Write the block into `task.yaml` by hand; `update` keeps it intact and has no
   flag for it.
 
+## Hidden until (`task.yaml` `hidden_until:`)
+
+A task may be hidden from task menus until a calendar date. The field is
+optional; absent or null means visible.
+
+```yaml
+task:
+  hidden_until: 2026-11-30   # YYYY-MM-DD, local time
+```
+
+- The task is hidden while today is before the date and visible on and after
+  it. Hidden is independent of `status`: an active task stays active.
+- A hidden task is left out of `list`, `review`, the dashboard export
+  (`export tasks`), `answers refresh` and `answers status`, and so out of
+  triage selection. `list --include-hidden` and `review --include-hidden`
+  keep it; `answers prune` always covers it.
+- By-name verbs work on a hidden task: show (prints `hidden_until`), work,
+  status, validate, update, items, close, reopen, archive, delete, move.
+- `update --hidden-until YYYY-MM-DD` sets it; `update --hidden-until none`
+  removes it. A bad date is an error and nothing is written.
+- `validate` reports a value that is not a `YYYY-MM-DD` date as an error. A
+  malformed value does not hide the task. A past date is valid.
+- One function decides: `task_system/hidden.py` `is_hidden(task, today)`.
+  Discovery and the export's owner scan apply it, so every view shares it.
+
 ## Validation behavior
 
 Validation gates work with BOTH errors and warnings. An uncommitted dev/tasks

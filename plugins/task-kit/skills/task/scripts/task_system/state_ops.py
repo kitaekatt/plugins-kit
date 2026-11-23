@@ -70,13 +70,14 @@ Readings chosen in Step 4 (flagged in the implementation report):
 
 from __future__ import annotations
 
+import datetime
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 
-from . import resolve
+from . import hidden, resolve
 from .relocate import (
     RelocationError,
     absorb_leftover_source,
@@ -206,6 +207,28 @@ def _write_task_yaml(folder: Path, data: dict) -> None:
     )
 
 
+class _Plain(str):
+    """A log value shown as written, without quotes."""
+
+    __repr__ = str.__str__
+
+
+def _log_value(value: object) -> str:
+    return value.isoformat() if isinstance(value, datetime.date) else repr(value)
+
+
+def _parse_hidden_until_edit(value: str | None) -> tuple[datetime.date | None, bool]:
+    """``update --hidden-until``: (the new date, None) or (None, True) to remove the field; (None, False) when unset."""
+    if value is None:
+        return None, False
+    if value.strip().lower() == hidden.CLEAR_VALUE:
+        return None, True
+    try:
+        return hidden.parse_hidden_until(value.strip()), False
+    except hidden.HiddenUntilError as exc:
+        raise StateOpError(f"--hidden-until: {exc} (or 'none' to remove it)") from exc
+
+
 def _append_log_entry(folder: Path, edits: dict[str, object]) -> None:
     """The minimal rotation share (module docstring): one dated log.md line
     recording the update; plan.md is untouched."""
@@ -216,7 +239,7 @@ def _append_log_entry(folder: Path, edits: dict[str, object]) -> None:
         detail = "summary: refreshed"
     else:
         detail = (
-            "; ".join(f"{name} = {value!r}" for name, value in edits.items())
+            "; ".join(f"{name} = {_log_value(value)}" for name, value in edits.items())
             if edits
             else "refresh (no field edits)"
         )
@@ -321,6 +344,7 @@ def update(
     agent_hint: str | None = None,
     skills_to_invoke: list[str] | None = None,
     durable_outputs: list[str] | None = None,
+    hidden_until: str | None = None,
     ref_host: str | None = None,
     local_host: str | None = None,
     allow_init: bool = True,
@@ -331,7 +355,11 @@ def update(
     With ``allow_init=False``, a missing folder is an error. When
     ``expected_folder`` is supplied, the resolved folder must still match
     before any write, which protects summary maintenance from link retargets.
+
+    ``hidden_until`` is a ``YYYY-MM-DD`` date, or ``none`` to remove the field; a bad date raises before
+    anything is created or written.
     """
+    new_hidden, clear_hidden = _parse_hidden_until_edit(hidden_until)
     resolved = _resolve(ref, project_root)
 
     pre = validate_ref(
@@ -376,12 +404,17 @@ def update(
     ):
         if value is not None:
             edits[name] = value
+    if new_hidden is not None:
+        edits[hidden.HIDDEN_UNTIL_KEY] = new_hidden  # a date object: written as an unquoted YAML date
 
-    if edits:
+    if edits or clear_hidden:
         data = _read_task_yaml(folder, resolved.canonical)
         data["task"].update(edits)
+        if clear_hidden:
+            data["task"].pop(hidden.HIDDEN_UNTIL_KEY, None)
         _write_task_yaml(folder, data)
-    _append_log_entry(folder, edits)
+    logged = {**edits, hidden.HIDDEN_UNTIL_KEY: _Plain("removed")} if clear_hidden else edits
+    _append_log_entry(folder, logged)
 
     result = validate_ref(
         resolved.canonical, project_root, ref_host=ref_host, local_host=local_host

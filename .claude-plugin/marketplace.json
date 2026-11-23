@@ -176,7 +176,7 @@
     {
       "name": "task-kit",
       "description": "Provides the task skill (a file-backed task-folder system with a CLI for creating, listing, working, closing, archiving, and moving task folders and task_list references) and task-kit export, the task facts databench's tasks view reads; bare task-kit opens that view.",
-      "version": "0.28.2",
+      "version": "0.29.0",
       "author": {
         "name": "Christina"
       },
@@ -191,7 +191,7 @@
     {
       "name": "presence-kit",
       "description": "Is the user at the keyboard, away, or has the work been handed over, and how should Claude wait, ask and recap in each case? Sits above bootstrap, which provisions the environment, because presence is a policy question bootstrap cannot answer for any session.",
-      "version": "0.8.0",
+      "version": "0.8.1",
       "author": {
         "name": "Christina"
       },

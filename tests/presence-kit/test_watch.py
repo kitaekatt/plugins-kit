@@ -479,7 +479,21 @@ def task_env(tmp_path, **extra):
 
 
 def task_dir(root):
-    return root / f"claude-{os.getuid()}" / "-proj-slug" / SESSION / "tasks"
+    # POSIX: <tmp>/claude-<uid>/<slug>/...; Windows: <tmp>/claude/<hash>/...
+    base = f"claude-{os.getuid()}" if hasattr(os, "getuid") else "claude"
+    return root / base / "-proj-slug" / SESSION / "tasks"
+
+
+def link_agent_output(tmp_path, tdir, name, transcript):
+    """Create an agent's task output. POSIX: a symlink to the transcript. Windows: an empty
+    regular file, with the transcript under <config dir>/projects/<slug>/<session>/subagents/."""
+    if hasattr(os, "getuid"):
+        (tdir / name).symlink_to(transcript)
+    else:
+        (tdir / name).write_text("", encoding="utf-8")
+        sub = tmp_path / "cfg" / "projects" / "-proj-slug" / SESSION / "subagents"
+        sub.mkdir(parents=True)
+        os.replace(transcript, sub / f"agent-{name[:-len('.output')]}.jsonl")
 
 
 def test_task_watches_the_shell_task_output_and_ends_on_its_trailer(tmp_path):
@@ -506,7 +520,7 @@ def test_task_for_an_agent_also_watches_the_agent_working_directory(tmp_path):
     transcript = make_file(tmp_path / "agent-a1.jsonl", 0, json.dumps({"cwd": str(worktree), "type": "user"}) + "\n")
     tdir = task_dir(root)
     tdir.mkdir(parents=True)
-    (tdir / "a1.output").symlink_to(transcript)
+    link_agent_output(tmp_path, tdir, "a1.output", transcript)
 
     def touch(n, clock):
         if n == 3:
@@ -864,13 +878,54 @@ def _agent_task(tmp_path, records):
     transcript = make_file(tmp_path / "agent-a1.jsonl", 0, "".join(json.dumps(r) + "\n" for r in [head, *records]))
     tdir = task_dir(root)
     tdir.mkdir(parents=True)
-    (tdir / "a1.output").symlink_to(transcript)
+    link_agent_output(tmp_path, tdir, "a1.output", transcript)
     return root
 
 
 def _run_agent(tmp_path, records):
     root = _agent_task(tmp_path, records)
     return run(["--task", "a1"], FakeClock(stop_after=3), tmp_path, task_env(tmp_path), task_root=root)
+
+
+def test_task_for_an_agent_with_an_empty_output_file_finds_the_transcript_by_pattern(tmp_path, monkeypatch):
+    monkeypatch.delattr(os, "getuid", raising=False)
+    # Windows layout: the output file is an empty regular file, not a link.
+    root = tmp_path / "tmp"
+    worktree = tmp_path / "wt"
+    make_file(worktree / "a.py", 0)
+    head = {"cwd": str(worktree), "type": "user", "uuid": "u0"}
+    tdir = root / "claude" / "0123456789abcdef" / SESSION / "tasks"
+    tdir.mkdir(parents=True)
+    (tdir / "a1.output").write_text("", encoding="utf-8")
+    sub = tmp_path / "cfg" / "projects" / "D--some-proj" / SESSION / "subagents"
+    sub.mkdir(parents=True)
+    (sub / "agent-a1.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in [head, *_handback_records()]), encoding="utf-8")
+    code, out, _ = run(["--task", "a1"], FakeClock(stop_after=3), tmp_path, task_env(tmp_path), task_root=root)
+    assert code == 0
+    assert lines(out) == ["DONE: agent handed back its report"]
+
+
+def test_task_for_an_agent_whose_transcript_is_missing_fails_loudly(tmp_path, monkeypatch):
+    monkeypatch.delattr(os, "getuid", raising=False)
+    root = tmp_path / "tmp"
+    tdir = root / "claude" / "0123456789abcdef" / SESSION / "tasks"
+    tdir.mkdir(parents=True)
+    (tdir / "a1.output").write_text("", encoding="utf-8")
+    code, _, err = run(["--task", "a1"], FakeClock(stop_after=1), tmp_path, task_env(tmp_path), task_root=root)
+    assert code == 2 and "transcript" in err.text
+
+
+def test_task_without_a_uid_uses_the_windows_layout(tmp_path, monkeypatch):
+    # <tmp>/claude/<hash>/<session>/tasks/<id>.output, with no -<uid> suffix.
+    monkeypatch.delattr(os, "getuid", raising=False)
+    root = tmp_path / "tmp"
+    tdir = root / "claude" / "74411014221794bd" / SESSION / "tasks"
+    tdir.mkdir(parents=True)
+    (tdir / "b123.output").write_text("hi\n[exited with code 0]\n", encoding="utf-8")
+    code, out, _ = run(["--task", "b123"], FakeClock(stop_after=3), tmp_path, task_env(tmp_path), task_root=root)
+    assert code == 0
+    assert lines(out) == ["DONE: [exited with code 0]"]
 
 
 def test_task_for_an_agent_ends_with_done_when_the_agent_hands_back(tmp_path):
@@ -970,3 +1025,46 @@ def test_windows_unreadable_working_directories_are_absent_not_errors(monkeypatc
     monkeypatch.undo()
     # pid 4 is the System process: it cannot be opened, so it is simply absent
     assert 4 not in watch._sample_cwds([4])
+
+
+def test_a_file_windows_cannot_access_through_a_broken_reparse_point_counts_for_nothing(tmp_path, monkeypatch):
+    # Windows reports WinError 1920 (not FileNotFoundError) for an unresolvable link, such as
+    # a stale entry in a package cache under a watched directory.
+    good = make_file(tmp_path / "w" / "good.txt", 0)
+    bad = tmp_path / "w" / "bad-link"
+    bad.write_text("x", encoding="utf-8")
+    real_stat = os.stat
+
+    def stat(path, *a, **k):
+        if str(path) == str(bad):
+            exc = OSError(1920, "The file cannot be accessed by the system")
+            exc.winerror = 1920
+            raise exc
+        return real_stat(path, *a, **k)
+
+    monkeypatch.setattr(os, "stat", stat)
+    found = watch._newest([str(tmp_path / "w")])
+    assert found is not None and found[1] == str(good)
+
+
+def test_transcript_growth_is_activity_when_the_output_file_is_not_a_link(tmp_path, monkeypatch):
+    # Windows: the empty output file never changes, so the transcript itself must be watched.
+    monkeypatch.delattr(os, "getuid", raising=False)
+    root = tmp_path / "tmp"
+    worktree = tmp_path / "wt"
+    make_file(worktree / "a.py", 0)
+    head = {"cwd": str(worktree), "type": "user", "uuid": "u0"}
+    tdir = root / "claude" / "0123456789abcdef" / SESSION / "tasks"
+    tdir.mkdir(parents=True)
+    (tdir / "a1.output").write_text("", encoding="utf-8")
+    set_mtime(tdir / "a1.output", 0)
+    sub = tmp_path / "cfg" / "projects" / "D--some-proj" / SESSION / "subagents"
+    transcript = make_file(sub / "agent-a1.jsonl", 0, json.dumps(head) + "\n")
+
+    def grow(n, clock):
+        set_mtime(transcript, clock.t)
+
+    code, out, _ = run(["--task", "a1", "--poll-seconds", "600", "--stall-minutes", "20"],
+                       FakeClock(on_sleep=grow, stop_after=6), tmp_path, task_env(tmp_path), task_root=root)
+    assert code is None
+    assert stalls(out) == []

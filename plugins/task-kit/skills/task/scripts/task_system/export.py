@@ -38,7 +38,7 @@ from typing import Callable
 
 from . import answer_store
 from . import machine as machine_mod
-from . import plan_sections, questions, repo_identity, sessions, sessions_config, vcs
+from . import hidden, plan_sections, questions, repo_identity, sessions, sessions_config, vcs
 from .answers_types import Catalog
 from .discovery import (
     NO_PROJECT_DIRECTORIES_MESSAGE,
@@ -179,7 +179,11 @@ def _list_task_stubs(base: Path) -> list[str]:
 
 
 def _owners(
-    parents: tuple[Path, ...], errors: list[dict], projects: tuple[ProjectRoot, ...] | None = None
+    parents: tuple[Path, ...],
+    errors: list[dict],
+    projects: tuple[ProjectRoot, ...] | None = None,
+    *,
+    hide_on: datetime_mod.date | None = None,
 ) -> tuple[dict[str, _Owner], dict[str, tuple[ProjectRoot, Path]]]:
     """Every task folder once, keyed by its physical path, and every physical task root once.
 
@@ -187,6 +191,10 @@ def _owners(
     a folder owns it. ``projects`` (from ``resolve_projects``) replaces the
     discovery under ``parents``: only those checkouts are visited, so a folder
     they reach is owned by the first of THEM, whatever other checkouts link it.
+
+    ``hide_on`` is the day the hidden-task rule (``hidden.is_hidden``) is read on: a task hidden that day is
+    not an owner, so the dashboard export and the answers verbs leave it out. None keeps every task (the
+    by-name callers and ``answers prune``).
     """
     try:
         roots = discover_project_roots(parents) if projects is None else projects
@@ -209,6 +217,8 @@ def _owners(
                     errors.append(_error("unreadable", f"cannot list {base}: {exc}", project.root))
                     stubs_by_base[physical_base] = []
             for stub in stubs_by_base[physical_base]:
+                if hide_on is not None and hidden.is_hidden(read_task_block(base / stub), hide_on):
+                    continue
                 owners.setdefault(_canonical(base / stub), _Owner(project, location, stub))
     return owners, bases
 
@@ -402,14 +412,18 @@ def tasks_payload(
     now: Callable[[], datetime] = _utc_now,
     catalog: Catalog | None = None,
     local_now: Callable[[], datetime_mod.datetime] = datetime_mod.datetime.now,
+    include_hidden: bool = False,
 ) -> dict:
     """The payload of ``export tasks`` (protocol 1).
 
     ``catalog`` is the question catalog (default: the shipped questions plus the fleet layer); ``local_now``
-    is the naive local time the script answers read. Both are for tests.
+    is the naive local time the script answers read, and its date decides which tasks are hidden
+    (``hidden_until``) unless ``include_hidden``. Those two are for tests.
     """
     errors: list[dict] = []
-    owners, bases = _owners(resolve_parents(parents, config_path), errors)
+    owners, bases = _owners(
+        resolve_parents(parents, config_path), errors, hide_on=None if include_hidden else local_now().date()
+    )
     env: AnswerEnv | None = None
     logs = answer_store.RepoLogs()
     if catalog is None:

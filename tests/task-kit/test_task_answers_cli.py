@@ -592,3 +592,17 @@ def test_the_launcher_serves_protocols_without_discovery():
     doc = json.loads(done.stdout)
     assert done.returncode == 0 and done.stdout.count("\n") == 1
     assert doc["kind"] == "answers-protocols" and "project" in doc["payload"]["options"]
+
+
+# --- hidden_until -----------------------------------------------------------------------------------------------------
+
+
+def test_a_hidden_task_is_left_out_of_status_and_refresh_until_its_date(world, parent, llm):
+    """``hidden_until`` (read against the injected local time, 2026-10-22): hidden tasks are not catalogued or answered."""
+    task_yaml = world.folder("a") / "task.yaml"
+    task_yaml.write_text(task_yaml.read_text(encoding="utf-8") + "  hidden_until: '2026-11-30'\n", encoding="utf-8")
+    _code, doc, _text, _err = call(world, parent, "status", "--format", "json", "--protocol", "1", "--parent", str(parent))
+    assert doc["payload"]["totals"]["tasks"] == 2
+    code, doc, _text, _err = refresh(world, parent, "--allow", "local", run=FakeRun(llm))
+    assert code == 0
+    assert {item["task"] for item in only_repository(doc)["answered"]} == {"proj/b", "proj/c"}

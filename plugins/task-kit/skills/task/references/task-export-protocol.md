@@ -1,7 +1,7 @@
 # task-kit export protocol
 
 `task-kit export` gives another program the facts of every task task-kit can
-see, as JSON. It is the interface databench's tasks module reads. This page is
+see, as JSON, except tasks hidden until a later date (see "Payload of `tasks`"). It is the interface databench's tasks module reads. This page is
 normative; `task-export.schema.json` beside it is the JSON Schema of each
 document. task-kit works the same whether or not anything reads the export.
 
@@ -53,6 +53,11 @@ directories are projects. Without it, task-kit uses its own configuration:
   task-kit minor release.
 
 ## Payload of `tasks` (protocol 1)
+
+`tasks[]` leaves out a task hidden until a later date (`task.yaml`
+`hidden_until`, read against the local date; see core-contracts.md, "Hidden
+until"); `export item` still reaches it by name. `answers refresh` and
+`answers status` leave it out too; `answers prune` covers every task.
 
 Every field is present; `?` marks a value that may be null.
 
