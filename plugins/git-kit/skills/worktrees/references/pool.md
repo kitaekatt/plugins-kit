@@ -462,3 +462,7 @@ Adoption retains the prior waiting details in `last_waiting`.
 Optional `discard` stores the inventory-bound proposal, `user_direction`, and outcome,
 including a reconciled removal outcome after an interrupted discard.
 Status adds live `observed` fields and marks stored safety as historical.
+Status, parked, check-task-close and an empty-pool take print each record with
+bounded evidence. In `safety`, `discard` and `error`, a list other than
+`blockers` becomes `<key>_count`, and text over 500 characters is cut.
+`record_file` names the record file that keeps the full evidence.

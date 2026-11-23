@@ -139,7 +139,8 @@ Agents commit with plain `git commit`. After a full push, the caller can run
 `release --claim <id>` from outside the claimed directory. A partial push keeps
 the claim. A release error reports separately from the successful push.
 `status --json` reports current Git observations, holders, errors, disk, and
-maintenance. Maintenance reconciles interrupted operations and reuses safe
+maintenance. It prints counts and cut text for large safety and discard
+evidence; each row's `record_file` keeps the full evidence. Maintenance reconciles interrupted operations and reuses safe
 worktrees before it builds a deficit. It preserves branches and unique ignored data.
 
 Commands, settings, records, safety evidence, and the library call for push

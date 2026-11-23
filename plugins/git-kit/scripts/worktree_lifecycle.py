@@ -24,6 +24,26 @@ import worktree_extensions as extensions
 import worktree_discard as discard_work
 
 ERRORS = (OSError, ValueError, subprocess.SubprocessError)
+TEXT_LIMIT = 500  # Characters of one stored text that status output keeps.
+SUMMARIZED = ("safety", "discard", "error")  # Record fields that hold unbounded evidence.
+
+
+def summarize_evidence(value: Any) -> Any:
+    """Bound stored evidence for output: a list becomes <key>_count, except
+    blockers, and long text is cut. The record file keeps the full evidence."""
+    if isinstance(value, dict):
+        summary = {}
+        for key, item in value.items():
+            if isinstance(item, list) and key != "blockers":
+                summary[f"{key}_count"] = len(item)
+            else:
+                summary[key] = summarize_evidence(item)
+        return summary
+    if isinstance(value, list):
+        return [summarize_evidence(item) for item in value]
+    if isinstance(value, str) and len(value) > TEXT_LIMIT:
+        return f"{value[:TEXT_LIMIT]}... ({len(value)} characters; full text in record_file)"
+    return value
 
 
 def atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -262,10 +282,18 @@ class Lifecycle:
     def read_records(self) -> list[dict[str, Any]]:
         return [read_object(p) for p in sorted((self.state / "records").glob("*.json"))]
 
+    def record_file(self, identifier: str) -> Path:
+        return self.state / "records" / f"{identifier}.json"
+
+    def output_row(self, record: dict[str, Any]) -> dict[str, Any]:
+        """One record as status-like commands print it, with evidence bounded."""
+        return {**record, **{key: summarize_evidence(record[key]) for key in SUMMARIZED if key in record},
+                "record_file": str(self.record_file(record["id"]))}
+
     def save(self, record: dict[str, Any]) -> None:
         if not isinstance(record.get("id"), str) or not record["id"].startswith("w-") or not all(c in "w-0123456789abcdef" for c in record["id"]):
             raise ValueError("Invalid stable worktree ID")
-        atomic_json(self.state / "records" / f"{record['id']}.json", record)
+        atomic_json(self.record_file(record["id"]), record)
 
     def get(self, identifier: str) -> dict[str, Any]:
         matches = [r for r in self.read_records() if r["id"] == identifier]
@@ -294,7 +322,7 @@ class Lifecycle:
             record["safety"] = {"safe": False, "at": time.time(), "blockers": [str(exc)]}
             # Release clears its holder only in memory during inspection. Retain
             # durable ownership when recording a failed freshness observation.
-            stored = read_object(self.state / "records" / f"{record['id']}.json")
+            stored = read_object(self.record_file(record["id"]))
             if stored:
                 stored["safety"] = record["safety"]
                 self.save(stored)
@@ -580,8 +608,9 @@ class Lifecycle:
             if not ready:
                 summary = self.inventory(rows)
                 summary["records"] = [r for r in summary["records"] if r["state"] != "parked"]
-                summary.update(parked=own_parked, other_parked_count=len(parked) - len(own_parked))
-                summary["failures"] = [r["error"] for r in [*summary["records"], *own_parked] if r.get("error")]
+                own_rows = [self.output_row(r) for r in own_parked]
+                summary.update(parked=own_rows, other_parked_count=len(parked) - len(own_parked))
+                summary["failures"] = [r["error"] for r in [*summary["records"], *own_rows] if r.get("error")]
                 raise ValueError(f"READY_POOL_EMPTY: {json.dumps(summary)}")
             record = ready[0]
             record["holder"] = {"agent": agent, "session": session, "claim": f"c-{uuid.uuid4().hex}", "since": time.time(), **identity}
@@ -712,6 +741,7 @@ class Lifecycle:
 
     def inventory(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
         """Summarize stored metadata without inspecting any worktree."""
+        rows = [self.output_row(r) for r in rows]
         return {"namespace": str(self.namespace), "enabled": bool(self.settings.config and self.settings.config.enabled),
                 "configured": self.settings.config is not None, "records": rows, "disk": self.disk(),
                 "failures": [r["error"] for r in rows if r.get("error")],
