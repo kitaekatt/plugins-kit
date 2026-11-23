@@ -90,7 +90,7 @@ def pid_named(pid: int, text: str) -> bool:
     return re.search(rf"(?<![0-9a-f]){pid}(?![0-9a-f])", text) is not None
 
 
-@pytest.mark.parametrize("case", ["alone", "pipeline", "other_shell"])
+@pytest.mark.parametrize("case", ["alone", "inside", "pipeline", "other_shell"])
 def test_release_ignores_its_caller_chain_but_not_other_processes(lifecycle, tmp_path: Path, monkeypatch, case: str) -> None:
     """claude -> Bash-tool shell (cwd and argv in the worktree) -> python release.
 
@@ -98,6 +98,8 @@ def test_release_ignores_its_caller_chain_but_not_other_processes(lifecycle, tmp
     same shell command ("pipeline": a sibling with its cwd in the worktree) does
     not block release either, but maintenance keeps the worktree while it runs.
     A separate shell under the holder ("other_shell": another Bash call) blocks.
+    "inside" runs release with its own cwd in the worktree, with no pipeline:
+    neither release nor the scans it starts may block it.
     """
     obj = lifecycle
     obj.maintain()
@@ -112,7 +114,8 @@ def test_release_ignores_its_caller_chain_but_not_other_processes(lifecycle, tmp
                      'echo $! > "$OTHER_PID_FILE"; fi; echo "$claim" | "$@"; read waiting')
     script = ('read claim; cd "$1" || exit 90; shift; echo $$ > "$SHELL_PID_FILE"; '
               'if [ "$CASE" = pipeline ]; then sleep 60 & echo $! > "$SIBLING_PID_FILE"; fi; '
-              '(cd "$REPO_DIR" && exec "$@" --claim "$claim") > "$RESULT_FILE" 2> "$ERROR_FILE"; echo $? > "$EXIT_FILE"')
+              'run_dir=$REPO_DIR; if [ "$CASE" = inside ]; then run_dir=$PWD; fi; '
+              '(cd "$run_dir" && exec "$@" --claim "$claim") > "$RESULT_FILE" 2> "$ERROR_FILE"; echo $? > "$EXIT_FILE"')
     files = {name: tmp_path / name.lower() for name in
              ("SHELL_PID_FILE", "SIBLING_PID_FILE", "OTHER_PID_FILE", "RESULT_FILE", "ERROR_FILE", "EXIT_FILE")}
     for name, path in files.items():

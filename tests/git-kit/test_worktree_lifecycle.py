@@ -272,11 +272,10 @@ def test_full_partial_failed_release(lifecycle, monkeypatch):
         obj.release(result["claim"])
     assert obj.get(result["id"])["holder"]["claim"] == result["claim"]
     git(path, "push", "origin", "HEAD:main")
+    # Release from inside the claimed worktree: its own process never blocks.
     monkeypatch.chdir(path)
-    with pytest.raises(ValueError, match="outside"):
-        obj.release(result["claim"])
-    monkeypatch.chdir(obj.repo)
     assert obj.release(result["claim"])["state"] == "released"
+    monkeypatch.chdir(obj.repo)
     assert obj.get(result["id"])["holder"] is None
     assert obj.release(result["claim"])["state"] == "released"  # idempotent
 

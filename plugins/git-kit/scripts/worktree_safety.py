@@ -199,8 +199,13 @@ def path_processes(path: Path, *, pids: set[int] | None = None, exclude: Collect
     """Include cwd and open runtime files, including processes absent from records.
 
     ``exclude`` names processes whose use of the path is known not to block:
-    release passes its callers (``release_callers``).
+    release passes its callers (``release_callers``). The inspecting process
+    itself never blocks, and the scanner runs from the filesystem root, so a
+    caller whose cwd is inside the path cannot make its own scan report it.
+    Other descendants of the caller still block, for example a server that a
+    before_release script left running in the worktree.
     """
+    exclude = {os.getpid(), *exclude}
     if sys.platform.startswith("linux"):
         blockers = []
         for process in Path("/proc").iterdir():
@@ -233,7 +238,8 @@ def path_processes(path: Path, *, pids: set[int] | None = None, exclude: Collect
         if not executable:
             return ["uncertain process evidence: lsof is unavailable"]
         selection = ["-a", "-p", ",".join(str(pid) for pid in sorted(pids))] if pids is not None else []
-        result = subprocess.run([executable, "-nP", "-Fpn", *selection, "+D", str(path)],
+        # lsof and the helper it forks inherit this cwd; keep it outside every worktree.
+        result = subprocess.run([executable, "-nP", "-Fpn", *selection, "+D", str(path)], cwd=os.sep,
                                 capture_output=True, text=True, check=False, timeout=30)
         if result.stderr.strip() or result.returncode not in (0, 1):
             return [f"uncertain process evidence: {result.stderr.strip() or result.returncode}"]
@@ -247,7 +253,7 @@ def path_processes(path: Path, *, pids: set[int] | None = None, exclude: Collect
         blockers = [f"live process/runtime: {chr(10).join(kept)}"] if kept else []
         if pids is not None:
             return blockers
-        skipped = {str(os.getpid()), *(str(pid) for pid in exclude)}
+        skipped = {str(pid) for pid in exclude}
         processes = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True, check=True, timeout=15)
         for line in processes.stdout.splitlines():
             parts = line.strip().split(None, 1)
