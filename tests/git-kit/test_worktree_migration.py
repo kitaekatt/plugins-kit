@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from test_worktree_lifecycle import git, lifecycle, write_json
+from test_worktree_lifecycle import deliver, git, lifecycle, write_json
 
 
 @pytest.fixture
@@ -257,6 +257,7 @@ def test_migration_requires_settings_and_install(lifecycle, monkeypatch) -> None
 
     obj = lifecycle
     (obj.repo / ".claude/bootstrap.json").unlink()
+    deliver(obj)
     with pytest.raises(ValueError, match="configur"):
         lc.Lifecycle(obj.repo).migrate()
     write_json(obj.repo / ".claude/bootstrap.json", {"git_kit": {"worktrees": obj.settings.raw}})

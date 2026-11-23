@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from test_worktree_lifecycle import git, holder, lifecycle, write_json
+from test_worktree_lifecycle import deliver, git, holder, lifecycle, write_json
 from test_worktree_migration import legacy, migration
 
 
@@ -42,6 +42,7 @@ def test_parked_recheck_uses_current_rebuildable_settings(migration, operation: 
     config = obj.settings.raw
     config["pool"]["rebuildable"] = ["devtools/dist/**", "**/*.tsbuildinfo"]
     write_json(obj.repo / ".claude/bootstrap.json", {"git_kit": {"worktrees": config}})
+    deliver(obj)
     obj = lc.Lifecycle(obj.repo)
     result = obj.maintain() if operation == "maintenance" else obj.migrate(apply=True)
     assert not path.exists(), result

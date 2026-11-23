@@ -56,7 +56,9 @@ Review the proposal with the user before applying it. Save the approved
 `proposal` object as JSON, then pass its file path to `--apply`.
 Apply changes only repository `.claude/bootstrap.json`, preserving unrelated
 sections. Commit this file through the repository's normal procedure.
-User disk settings remain separate.
+Lifecycle operations read the settings from the upstream branch, so the change
+takes effect when its commit reaches that branch. The apply result names that
+branch in `takes_effect`. User disk settings remain separate.
 
 A usable git-kit installation must be enabled at user scope.
 
@@ -100,6 +102,30 @@ remain project-owned.
 
 Repository settings live under `git_kit.worktrees` in tracked
 `.claude/bootstrap.json`. User and local opt-ins cannot enable a repository.
+
+Lifecycle operations read these settings from the upstream branch, not from the
+source checkout's working tree. A main checkout that is behind its upstream
+therefore cannot apply old settings. Status and the gate read the upstream
+remote-tracking ref as the clone last fetched it. Each operation that fetches,
+such as take, adopt, release, discard and maintenance, reads the settings
+again from the fetched commit. Setup, `rebuildable` and the other checks then
+use the settings of the commit that they act on.
+
+The working-tree file only names the first branch to read: its `pool.upstream`,
+or the remote default branch. When that branch does not exist yet, reading
+starts at the remote default branch. The settings on the branch must name the
+same branch. One step follows a changed `pool.upstream`; a disagreement after
+that step blocks the operation. An unreadable or invalid file on the branch
+blocks the operation with an error that names the branch and commit. Git-kit
+never uses the working-tree copy instead. When the branch has no
+`.claude/bootstrap.json`, the repository is unconfigured.
+
+Validation checks tracked paths (`rerun_files`, `recreate`, `rebuildable`)
+against the files of that commit. The worktree `root` and user
+`disk_floor_percent` come from the bootstrap layers on disk, including an
+untracked `bootstrap.local.json`, because they are machine settings.
+The creation-enforcement hook, `check-task-close` and `pool --quiet-if-off`
+still decide whether the lifecycle applies from the working-tree file.
 
 ```json
 {
@@ -323,6 +349,13 @@ loss scope ambiguous and block discard.
 The record retains the identified lost work, user direction, and outcome.
 Ordinary retirement continues to require the full safety proof.
 
+When the worktree path, its source clone and that clone's Git directory all
+no longer exist, the proposal's `lost_work` has `absent: true`, empty `files`,
+`commits` and `branch_refs`, the `checked` paths, and a `statement` that
+nothing remains on disk to lose. The same user direction applies it. Apply
+repeats the holder and declared-process checks, retires the record as
+`removed`, and deletes nothing. If any checked path exists again, apply refuses.
+
 ## Project extensions
 
 Repository `after_take` and `before_release` settings contain lists of argument arrays:
@@ -409,13 +442,18 @@ An old token cannot release a subsequent holder.
 
 Release proves safety before it atomically persists the cleared holder.
 A live or uncertain builder blocks release.
-Release ignores its own caller chain: each parent process from the release
-process up to and including the holder's recorded process. These processes wait
-for release, so their cwd or open files in the worktree do not block it.
+Release ignores its callers. They are its caller chain, which is each parent
+process from the release process up to and including the holder's recorded
+process. They also include the direct children of each chain member except the
+holder, which are the other processes of the same shell command, such as
+`grep` and `head` in `release ... | grep ... | head`, or a `sleep &` of that
+command. Their cwd or open files in the worktree do not block release.
 A chain that does not reach the holder (same PID and start) excludes nothing.
-Every other process still blocks, including a background job the holder started.
-Maintenance has no caller chain. It reuses or removes a released worktree only
-after those processes stop using it.
+An ignored process that ends or changes identity during inspection blocks release.
+Every other process still blocks. This includes the holder's other children,
+such as another shell command of the session or a background job.
+Maintenance has no callers. It reuses or removes a released worktree only
+after every process, including an ignored sibling, stops using it.
 Retirement requires clean tracked files, no untracked files, no holder,
 and no live or uncertain process found by the platform inspection described below.
 It also requires no `+` in `git cherry <fresh-upstream> HEAD`,
@@ -439,6 +477,17 @@ Surplus safe candidates enter removal. Removed records remain available.
 A setup or Git error stops the pass and retains its evidence.
 Detached stdout and stderr go to a log. Status shows launcher and worker errors.
 
+A recorded source clone that no longer exists (no `.git` at its path) blocks
+nothing else. Git never runs in that path. Status shows a `git_blockers` line
+for each of its records. Take skips its ready spares. Maintenance parks its
+unheld records, keeps holder claims, and adds one `failures` line for each such
+clone that lists the live records that name it. A clone stays in
+`namespace.json` `sources` while a live record names it. A pass drops it once
+no live record names it, and reports that drop once. The configured source clone
+never leaves `sources`. Maintenance deletes nothing on disk for a missing clone.
+To retire a record whose files are also gone, use
+[User-directed discard](#user-directed-discard).
+
 On macOS, process inspection requires `ps` and `lsof` with sufficient visibility.
 On Linux it reads `/proc` for processes owned by the current UID.
 Other users' processes are skipped. Unreadable same-user evidence blocks retirement.
@@ -461,7 +510,7 @@ Worktree checkouts remain under the configured root.
 
 | Path under the lifecycle state directory | Purpose |
 |---|---|
-| `namespace.json` | Version, remote URL, source clone, common Git directory. |
+| `namespace.json` | Version, remote URL, source clone, common Git directory, and migrated clone `sources`. |
 | `records/<stable-id>.json` | Durable record and current transition journal. |
 | `logs/<stable-id>.log` | Setup command output and errors. |
 | `logs/<stable-id>-<phase>-<token>.log` | Extension command output and errors. |

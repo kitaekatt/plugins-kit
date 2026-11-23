@@ -122,6 +122,39 @@ def caller_chain(holder: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
+def child_processes(parents: Collection[int]) -> list[dict[str, Any]]:
+    """Start identities of the direct children of ``parents``."""
+    if os.name == "nt":
+        # Windows directory-use inspection is uncertain and blocks release anyway.
+        return []
+    listing = subprocess.run(["ps", "-axo", "pid=,ppid="], capture_output=True, text=True, check=True, timeout=15)
+    children = []
+    for line in listing.stdout.splitlines():
+        pid, ppid = (int(value) for value in line.split())
+        if ppid in parents:
+            try:
+                children.append(process_identity(pid))
+            except ValueError:
+                continue  # Exited after the listing; an unknown process is never excluded.
+    return children
+
+
+def release_callers(holder: dict[str, Any]) -> list[dict[str, Any]]:
+    """Processes whose use of the worktree does not block a release.
+
+    The caller chain (``caller_chain``) plus the direct children of each chain
+    member except the holder: the other processes of the same shell command,
+    such as ``grep`` in ``release ... | grep``. Children of the holder (other
+    shell commands of the session, background jobs) are not included.
+    """
+    chain = caller_chain(holder)
+    if not chain:
+        return []
+    known = {caller["pid"] for caller in chain}
+    siblings = child_processes({caller["pid"] for caller in chain[:-1]})
+    return [*chain, *(child for child in siblings if child["pid"] not in known)]
+
+
 def holder_state(identity: dict[str, Any]) -> str:
     """Only proven Claude-session death can end a claim automatically."""
     from worktree_migration import claude_command, claude_processes
@@ -166,7 +199,7 @@ def path_processes(path: Path, *, pids: set[int] | None = None, exclude: Collect
     """Include cwd and open runtime files, including processes absent from records.
 
     ``exclude`` names processes whose use of the path is known not to block:
-    release passes its own caller chain (``caller_chain``).
+    release passes its callers (``release_callers``).
     """
     if sys.platform.startswith("linux"):
         blockers = []
@@ -326,7 +359,7 @@ def declared_process_blockers(record: dict[str, Any]) -> list[str]:
 
 def inspect(record: dict[str, Any], upstream: str, declared: list[str], rebuildable: Sequence[str] = (),
             callers: Sequence[dict[str, Any]] = ()) -> dict[str, Any]:
-    """``callers`` (from ``caller_chain``) do not block; a caller that changed does."""
+    """``callers`` (from ``release_callers``) do not block; a caller that changed does."""
     path = Path(record["path"])
     blockers = []
     if path.is_symlink():

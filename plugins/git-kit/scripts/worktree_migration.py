@@ -347,6 +347,10 @@ def legacy_problem(obj: Lifecycle, record: dict[str, Any]) -> str | None:
         if exc.returncode != 128:
             raise
         return f"Legacy Git metadata cannot be verified (git exit 128: {exc.stderr.strip()}); files and registration preserved"
+    from worktree_lifecycle import source_missing
+    problem = source_missing(record)
+    if problem:
+        return problem
     source = Path(record["repo"]["source_clone"])
     source_common = wt.git(source, "rev-parse", "--path-format=absolute", "--git-common-dir")
     if (common != record["repo"]["common_dir"] or source_common != common

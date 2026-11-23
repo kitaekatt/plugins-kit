@@ -39,6 +39,7 @@ technique_skill:
         - A failed take preserves its claim and files. An empty pool exits 4 and requests maintenance.
         - Adoption preserves the branch and files. Live or uncertain process evidence blocks adoption.
         - A discard proposal is not authority. Only targeted user direction authorizes its application.
+        - Lifecycle operations read repository settings from the upstream branch. A configure --apply takes effect when its commit reaches that branch.
         - Migration blocks Claude processes whose cwd or open files are inside candidate worktrees, and uncertain process evidence. Sessions elsewhere are reported as ignored_claude_processes. A restart or compaction does not prove that waiting work is complete.
       steps:
         - n: 1

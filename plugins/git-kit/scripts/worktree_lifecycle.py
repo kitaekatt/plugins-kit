@@ -17,7 +17,8 @@ from typing import Any, Callable
 
 import worktrees as wt
 from bootstrap_guard import data_dir
-from worktree_config import Step, home_config, inventory_api, load, read_object, require_install, validate_config
+from worktree_config import (SETTINGS_FILE, Step, home_config, inventory_api, load, read_object, require_enabled,
+                             require_install, upstream_of, validate_config)
 from worktree_pool import _file_lock, remote_url, repo_identity
 from worktree_paths import registration_matches
 import worktree_safety as safety
@@ -170,6 +171,33 @@ def replace_git_kit(text: str, expected: dict[str, Any]) -> str:
     return result
 
 
+def source_missing(record: dict[str, Any]) -> str | None:
+    """Name a recorded source clone that no longer exists.
+
+    Git is never run in it: without its own Git marker, ``git -C`` would fail
+    or search a parent directory for some other repository.
+    """
+    source = Path(record["repo"]["source_clone"])
+    if (source / ".git").exists():
+        return None
+    return f"Source clone no longer exists: {source}; record and any files preserved"
+
+
+ABSENT_STATEMENT = ("Nothing remains on disk to lose: the worktree path, its source clone and that clone's "
+                    "Git directory do not exist, so no files, Git registration, branch ref or commits remain "
+                    "at the recorded locations. Applying discard retires the record and deletes nothing.")
+
+
+def absent_scope(record: dict[str, Any]) -> dict[str, Any] | None:
+    """The loss inventory of a record when nothing of it remains on disk, else None."""
+    checked = {"path": record["path"], "source_clone": record["repo"]["source_clone"],
+               "common_dir": record["repo"]["common_dir"]}
+    if any(os.path.lexists(value) for value in checked.values()):
+        return None
+    return {"absent": True, "checked": checked, "files": [], "commits": [], "branch_refs": [],
+            "statement": ABSENT_STATEMENT}
+
+
 def require_free_agent(rows: list[dict[str, Any]], agent: str) -> None:
     """Refuse an agent ID that a live claim holds, and name that holder."""
     for row in rows:
@@ -223,7 +251,9 @@ def configure_repository(repo: Path, approved: dict[str, Any] | None = None) -> 
     payload["git_kit"] = {**section, "worktrees": approved} if isinstance(section, dict) else {"worktrees": approved}
     text = target.read_bytes().decode("utf-8") if target.exists() else "{}\n"
     atomic_text(target, replace_git_kit(text, payload))
-    return {"applied": str(target), "settings": approved}
+    return {"applied": str(target), "settings": approved,
+            "takes_effect": f"Lifecycle operations read git_kit.worktrees from {upstream_of(approved, repo)}:{SETTINGS_FILE}; "
+                            "this change takes effect when the commit that holds it reaches that branch"}
 
 
 class Lifecycle:
@@ -238,10 +268,7 @@ class Lifecycle:
 
     def gate(self, *, namespace: bool = True) -> None:
         require_install(self.repo)
-        if self.settings.config is None:
-            raise ValueError("Repository is unconfigured; run worktrees.py configure --propose, then --apply after approval")
-        if not self.settings.config.enabled:
-            raise ValueError("Repository lifecycle is disabled; configure --propose to enable it")
+        require_enabled(self.settings)
         if namespace:
             self.check_namespace()
 
@@ -342,17 +369,24 @@ class Lifecycle:
             raise
 
     def clone_upstream(self, source: Path) -> tuple[str, str]:
-        """Fetch and resolve under the lock in the database that will use the OID."""
+        """Fetch and resolve under the lock in the database that will use the OID.
+
+        Each fresh fetch reloads the repository settings from the fetched upstream
+        commit, so the decisions that follow use settings of the commit they act on.
+        """
         source = source.resolve()
         cache = self._operation_upstreams
         with _file_lock(self.state / "fetch.lock", blocking=True):
             result = cache.get(source) if cache is not None else None
             if result is None:
                 try:
-                    configured = self.source() if (self.state / "namespace.json").exists() else self.repo
-                    ref = wt.main_upstream(configured)
+                    if (self.state / "namespace.json").exists():
+                        self.source()  # The configured clone must still exist with its identity.
                     wt.refresh(source)
-                    result = (ref, wt.git(source, "rev-parse", "--verify", f"{ref}^{{commit}}"))
+                    settings = load(source)
+                    require_enabled(settings)
+                    self.settings = settings
+                    result = (settings.upstream_ref, settings.commit)
                 except ERRORS as exc:
                     detail = exc.stderr if isinstance(exc, subprocess.CalledProcessError) else str(exc)
                     result = f"Source clone upstream fetch/resolve failed for {source}: {exc}; {detail}"
@@ -382,6 +416,9 @@ class Lifecycle:
                 raise ValueError(f"Unsafe migrated worktree path: {path}")
         else:
             self.validate_path(path)
+        problem = source_missing(record)
+        if problem:
+            raise ValueError(problem)
         source = Path(record["repo"]["source_clone"])
         if remote_url(source) != self.url or wt.git(source, "rev-parse", "--path-format=absolute", "--git-common-dir") != record["repo"]["common_dir"]:
             raise ValueError(f"Record repository identity changed: {record['id']}")
@@ -455,19 +492,36 @@ class Lifecycle:
         path = self.record_path(record)
         if not path.is_dir() or registration_matches(wt.records(path)[0], path):
             raise ValueError(f"Missing target or main checkout: {path}")
+        registrations = [r for r in wt.records(path) if registration_matches(r, path)]
+        if len(registrations) != 1 or "locked" in registrations[0]:
+            raise ValueError(f"Ambiguous or locked worktree scope: {record['id']} at {path}")
+        self.require_unused(record, path_processes=safety.path_processes(path))
+        return path
+
+    def require_unused(self, record: dict[str, Any], *, path_processes: list[str]) -> None:
+        """One live record for the path, and no live or uncertain process evidence."""
         from worktree_paths import path_identity
+        path = Path(record["path"])
         matches = [r for r in self.read_records() if r["state"] not in {"removed", "retired-duplicate"}
                    and path_identity(Path(r["path"])) == path_identity(path)]
-        registrations = [r for r in wt.records(path) if registration_matches(r, path)]
-        if len(matches) != 1 or len(registrations) != 1 or "locked" in registrations[0]:
+        if len(matches) != 1:
             raise ValueError(f"Ambiguous or locked worktree scope: {record['id']} at {path}")
         blockers = safety.declared_process_blockers(record)
         if record.get("worker") and safety.process_state(record["worker"]) != "dead":
             blockers.append(f"{safety.process_state(record['worker'])} worker process: {record['worker']}")
-        blockers.extend(safety.path_processes(path))
+        blockers.extend(path_processes)
         if blockers:
             raise ValueError(f"Live or uncertain process blocks operation: {blockers}")
-        return path
+
+    def unheld_absent(self, record: dict[str, Any]) -> dict[str, Any] | None:
+        """For a record with nothing left on disk, the same owner and process checks."""
+        lost = absent_scope(record)
+        if lost is not None:
+            if record.get("holder"):
+                raise ValueError(f"Worktree has a holder claim: {record['holder']}")
+            # No directory exists for a process to use; declared processes still count.
+            self.require_unused(record, path_processes=[])
+        return lost
 
     def parked_rows(self) -> list[dict[str, Any]]:
         rows = [r for r in self.snapshot()["records"] if r["state"] == "parked"]
@@ -498,9 +552,13 @@ class Lifecycle:
             record = self.get(identifier)
             if record["state"] != "parked":
                 raise ValueError("Discard requires a parked target without a holder claim")
-            path = self.unheld_path(record)
-            _, upstream = self.record_upstream(record)
-            lost = discard_work.inventory(record, upstream, self.declared_outputs(), self.settings.config.pool.rebuildable)
+            lost = self.unheld_absent(record)
+            if lost is None:
+                path = self.unheld_path(record)
+                _, upstream = self.record_upstream(record)
+                lost = discard_work.inventory(record, upstream, self.declared_outputs(), self.settings.config.pool.rebuildable)
+            else:
+                path = Path(record["path"])
             scope = {"id": identifier, "path": str(path), "repo": record["repo"], "lost_work": lost}
             fingerprint = hashlib.sha256(json.dumps(scope, sort_keys=True).encode()).hexdigest()
             if approved is None:
@@ -522,8 +580,12 @@ class Lifecycle:
             self.transition(record, "discard", "remove")
             try:
                 # Repeat ownership/process checks immediately before the approved removal.
-                self.unheld_path(record)
-                wt.git(Path(record["repo"]["source_clone"]), "worktree", "remove", "--force", str(path))
+                if lost.get("absent"):
+                    if self.unheld_absent(record) != lost:
+                        raise ValueError("Discard target reappeared on disk; propose again")
+                else:
+                    self.unheld_path(record)
+                    wt.git(Path(record["repo"]["source_clone"]), "worktree", "remove", "--force", str(path))
                 record.update(state="removed", worker=None, error=None)
                 record["discard"].update(outcome="removed", finished=time.time())
                 self.transition(record, "discard", "complete")
@@ -582,7 +644,7 @@ class Lifecycle:
     def configure(self, approved: dict[str, Any] | None = None) -> dict[str, Any]:
         result = configure_repository(self.repo, approved)
         if approved is not None:
-            self.settings = load(self.repo)
+            # Settings stay those of the upstream ref until the change reaches it.
             self.namespace = wt.resolve_settings(self.repo).root / repo_identity(self.url)
         return result
 
@@ -616,7 +678,8 @@ class Lifecycle:
             destination = self.namespace / agent
             if destination.exists():
                 raise ValueError(f"Claim destination already exists: {destination}")
-            ready = [r for r in rows if r["state"] == "ready" and not r["holder"]]
+            # Maintenance parks a spare whose source clone was deleted; skip it until then.
+            ready = [r for r in rows if r["state"] == "ready" and not r["holder"] and not source_missing(r)]
             if not ready:
                 summary = self.inventory(rows)
                 summary["records"] = [r for r in summary["records"] if r["state"] != "parked"]
@@ -717,9 +780,10 @@ class Lifecycle:
                     raise ValueError("Release holder or worker reservation changed; preserving current ownership")
                 self.transition(record, "release", "safety")
                 record["holder"] = None  # Clear only in memory until safety is proven.
-                # The caller chain up to the holder waits on this release; its cwd in
-                # the worktree does not block. Every other process still does.
-                evidence = self.safety(record, persist=False, callers=safety.caller_chain(saved))
+                # The caller chain up to the holder, and the other processes of the
+                # same shell command, do not block. Every other process still does;
+                # maintenance has no callers and removes nothing they still use.
+                evidence = self.safety(record, persist=False, callers=safety.release_callers(saved))
                 if not evidence["safe"]:
                     raise ValueError(f"Release safety failed: {evidence['blockers']}")
                 record.update(state="released", last_claim=claim, error=None, worker=None, head=evidence["head"])
@@ -739,7 +803,7 @@ class Lifecycle:
         for record in rows:
             if record["state"] in {"removed", "retired-duplicate"}:
                 continue
-            problem = legacy_problem(self, record)
+            problem = source_missing(record) or legacy_problem(self, record)
             if problem:
                 record["observed"] = {"git_blockers": [problem], "at": time.time()}
                 continue
@@ -780,6 +844,18 @@ class Lifecycle:
             if worker and safety.process_state(worker) != "dead":
                 continue
             op = record["operation"]
+            problem = source_missing(record)
+            if problem:
+                # Git cannot inspect or repair this record. Keep claims; park the rest.
+                if pending_discard and absent_scope(record):
+                    record.update(state="removed", worker=None)
+                    record["discard"].update(outcome="removed", reconciled=True, finished=time.time())
+                    self.transition(record, "reconcile", "discarded record with nothing on disk")
+                elif not record.get("holder") and record["state"] != "parked":
+                    record["safety"] = {"safe": False, "at": time.time(), "blockers": [problem]}
+                    record.update(state="parked", worker=None, waiting=problem)
+                    self.save(record)
+                continue
             if op.get("phase") == "rename":
                 before, after = Path(op["from"]), Path(op["to"])
                 if legacy_path(self, {**record, "path": str(before)}):
@@ -820,6 +896,32 @@ class Lifecycle:
                 self.fail(record, ValueError("Interrupted build/recycle; unavailable until safety reconciliation"))
             record["worker"] = None
             self.save(record)
+
+    def missing_sources(self) -> list[dict[str, Any]]:
+        """One failure line per deleted source clone; caller holds claim.lock.
+
+        A deleted clone leaves namespace ``sources`` only when no live record
+        names it. The configured source clone never leaves. Nothing on disk changes.
+        """
+        identity_file = self.state / "namespace.json"
+        identity = read_object(identity_file)
+        live = [r for r in self.read_records() if r["state"] not in {"removed", "retired-duplicate"}]
+        listed = identity.get("sources", [])
+        lines, kept = [], []
+        for path in dict.fromkeys([*(s["path"] for s in listed), *(r["repo"]["source_clone"] for r in live)]):
+            if (Path(path) / ".git").exists():
+                continue
+            needed = sorted(r["id"] for r in live if r["repo"]["source_clone"] == path)
+            if needed or path == identity.get("source_clone"):
+                reason = "Source clone no longer exists; it stays in namespace sources while these records name it"
+                kept.append(path)
+            else:
+                reason = "Source clone no longer exists and no live record names it; dropped from namespace sources"
+            lines.append({"source_clone": path, "records": needed, "reason": reason})
+        remaining = [s for s in listed if (Path(s["path"]) / ".git").exists() or s["path"] in kept]
+        if remaining != listed:
+            atomic_json(identity_file, {**identity, "sources": remaining})
+        return lines
 
     def new_record(self) -> dict[str, Any]:
         identifier = f"w-{uuid.uuid4().hex}"
@@ -888,6 +990,9 @@ class Lifecycle:
                     parked_ids = {r["id"] for r in self.read_records() if r["state"] == "parked"}
                     result["parked_recheck"] = recheck_parked(self)
                     result["removed"] = [r["id"] for r in self.read_records() if r["id"] in parked_ids and r["state"] == "removed"]
+                    missing = self.missing_sources()
+                    if missing:
+                        result.setdefault("failures", []).extend(missing)
                 for record in self.read_records():
                     if record["state"] in {"ready", "taken", "removed", "retired-duplicate", "building", "recycled", "parked"}:
                         continue

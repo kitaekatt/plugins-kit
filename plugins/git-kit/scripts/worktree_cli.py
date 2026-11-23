@@ -89,7 +89,14 @@ def main(argv: list[str]) -> int:
         if args.command == "configure":
             result = configure_repository(args.repo, read_object(args.apply) if args.apply else None)
             if args.apply:
-                result["maintenance"] = Lifecycle(args.repo).request_maintenance()
+                try:
+                    result["maintenance"] = Lifecycle(args.repo).request_maintenance()
+                except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                    # Upstream can still hold the settings this apply replaces
+                    # (for example legacy ones). The file is written; report why
+                    # no maintenance pass started.
+                    detail = exc.stderr if isinstance(exc, subprocess.CalledProcessError) else str(exc)
+                    result["maintenance"] = {"outcome": "failed", "reason": detail}
             print(json.dumps(result, indent=2))
             return 0
         if args.command == "pool" and args.quiet_if_off and lifecycle_off(args.repo):
