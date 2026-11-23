@@ -56,8 +56,9 @@ technique_skill:
             Inspect parked [--session <session-id> | --task <task-id>] for waiting work.
             To resume an identified parked entry, run adopt --id <worktree-id> --agent <agent-id> --session <session-id>.
             To claim a ready spare, run take --agent <agent-id> --session <session-id> [--task <task-id>].
-            Report take or adoption success only when the command completes setup.
-            Take shows this session's and task's parked entries in full and counts the rest.
+            Report take or adoption success only after the command returns success.
+            Take uses completed spare setup and runs project after_take commands.
+            Take returns stored parked metadata for its session or task and counts the rest.
             On exit 4, report the empty pool and maintenance request, including builds,
             failures, holders, and disk evidence. Report a failed take with its preserved claim.
         - n: 3

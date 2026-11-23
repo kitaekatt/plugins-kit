@@ -105,13 +105,16 @@ claims a ready worktree at `<root>/<repo>/<agent-id>`.
 `git_kit.worktrees.root` uses bootstrap's layered settings and defaults to
 `~/.worktrees`. Lifecycle records, journals, logs, and locks live under
 `~/.claude/plugins/data/plugins-kit/git-kit/worktrees/<repo>/`.
-A take completes mapped setup and path-bound setup before it returns success.
+A take uses the spare's completed setup and runs project `after_take` commands.
+Background maintenance owns pool preparation and output removal.
+The result reports phase durations in seconds under `timings`, including separate `after_take` and maintenance-launch durations.
 An empty pool blocks the take with exit 4 and requests maintenance.
 A failed take keeps its claim, files, and error log.
 
 `parked [--session <id> | --task <id>]` lists waiting work, including taskless
-entries. Take shows this session's and task's parked entries in full and counts
-the rest. `adopt --id <worktree-id> --agent <id> --session <id>` atomically
+entries. Take returns stored metadata for this session's and task's parked entries
+and counts the rest. It does not inspect parked paths.
+`adopt --id <worktree-id> --agent <id> --session <id>` atomically
 claims a parked entry, preserves its branch and files, and completes setup at
 the agent path. A lost adoption reports the winning holder. Live or uncertain
 process evidence blocks adoption. Failed setup keeps the adopting claim.

@@ -97,7 +97,9 @@ def test_relocation_preserves_global_launchers(lifecycle) -> None:
     )
     obj = configured(lifecycle, "after_take", code)
     obj.maintain()
+    ready_path = obj.read_records()[0]["path"]
     taken = obj.take("relocated", "s", process=holder())
+    assert taken["path"] != ready_path
     assert (Path(taken["path"]) / "output/extension-path").read_text() == taken["path"]
     assert (Path(taken["path"]) / "output/cwd").read_text() == taken["path"]
     assert {link: os.readlink(link) for link in links} == before

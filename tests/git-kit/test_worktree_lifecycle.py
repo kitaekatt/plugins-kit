@@ -13,10 +13,14 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 import worktrees as wt
+
+if TYPE_CHECKING:
+    from worktree_lifecycle import Lifecycle
 
 
 def git(path: Path, *args: str) -> str:
@@ -180,6 +184,7 @@ def test_claim_races_and_crash_recovery(lifecycle, monkeypatch):
     record = obj.read_records()[0]
     assert Path(record["path"]).name == record["holder"]["agent"]
     assert record["holder"]["claim"] == wins[0]["claim"]
+    assert record["setup"]["final_path_result"]["passed"]
     assert record["setup"]["final_path_result"]["path"] == record["path"]
     with pytest.raises(ValueError, match="claim|destination"):
         obj.take(record["holder"]["agent"], "s", process=holder())
@@ -197,22 +202,21 @@ def test_claim_races_and_crash_recovery(lifecycle, monkeypatch):
     assert git(Path(recovered["path"]), "rev-parse", "--show-toplevel") == recovered["path"]
 
 
-def test_mapped_reruns_and_path_setup(lifecycle):
+def test_ready_take_reruns_changed_inputs_while_fast_forwarding(lifecycle: Lifecycle) -> None:
+    """Trigger: upstream lock changes after preparation. Run this file with pytest."""
     obj = lifecycle
     obj.maintain()
     spare = obj.read_records()[0]
-    old_path = spare["path"]
     (obj.repo / "lock.txt").write_text("two")
     git(obj.repo, "add", "lock.txt")
     git(obj.repo, "commit", "-qm", "lock changes")
     git(obj.repo, "push", "origin", "main")
     result = obj.take("mapped", "s", process=holder())
     record = obj.get(result["id"])
-    assert record["setup"]["selected"] == ["deps", "paths"]  # once, declared order
     assert (Path(result["path"]) / "deps-output/value").read_text() == "two"
-    assert (Path(result["path"]) / "output/cwd").read_text() == result["path"] != old_path
     assert git(Path(result["path"]), "rev-parse", "HEAD") == git(obj.repo, "rev-parse", "origin/main")
-    assert record["setup"]["inputs"]["lock.txt"]
+    assert record["setup"]["inputs"]["lock.txt"] == git(obj.repo, "rev-parse", "HEAD:lock.txt")
+    assert record["setup"]["inputs"]["lock.txt"] != spare["setup"]["inputs"]["lock.txt"]
     # Rewritten upstream must not reset an acquired spare backwards.
     obj.maintain()
     git(obj.repo, "push", "origin", "HEAD~1:main", "--force")
@@ -220,6 +224,18 @@ def test_mapped_reruns_and_path_setup(lifecycle):
         obj.take("diverged", "s", process=holder())
     failed = next(r for r in obj.read_records() if Path(r["path"]).name == "diverged")
     assert failed["holder"] and failed["error"]
+
+
+def test_ready_take_rebuilds_path_bound_output_at_claim_path(lifecycle: Lifecycle) -> None:
+    """Trigger: a prepared path-bound output is relocated. Run this file with pytest."""
+    obj = lifecycle
+    obj.maintain()
+    spare = obj.read_records()[0]
+    assert (Path(spare["path"]) / "output/cwd").read_text() == spare["path"]
+    result = obj.take("relocated", "s", process=holder())
+    assert result["path"] != spare["path"]
+    assert (Path(result["path"]) / "output/cwd").read_text() == result["path"]
+    assert obj.get(result["id"])["setup"]["final_path_result"]["path"] == result["path"]
 
 
 def test_full_partial_failed_release(lifecycle, monkeypatch):
@@ -478,19 +494,40 @@ def test_background_maintenance_and_launcher_failure(lifecycle, monkeypatch):
     assert "launcher unavailable" in (obj.state / "launcher-error.json").read_text()
 
 
-def test_take_setup_failure_keeps_claim_and_log(lifecycle):
+def test_ready_take_does_not_run_unrelated_changed_setup(lifecycle: Lifecycle) -> None:
     import worktree_lifecycle as lc
     obj = lifecycle
     obj.maintain()
     config = json.loads(json.dumps(obj.settings.raw))
-    config["pool"]["setup"][1]["argv"] = [sys.executable, "-c", "import sys; print('setup failed'); sys.exit(7)"]
+    config["pool"]["setup"][2]["argv"] = [sys.executable, "-c", "import sys; print('setup failed'); sys.exit(7)"]
     write_json(obj.repo / ".claude/bootstrap.json", {"git_kit": {"worktrees": config}})
     obj = lc.Lifecycle(obj.repo)
-    with pytest.raises(ValueError, match="kept claim"):
+    result = obj.take("prepared", "s", process=holder())
+    record = obj.read_records()[0]
+    assert record["holder"]["claim"] == result["claim"] and record["error"] is None
+    assert "setup failed" not in (obj.state / "logs" / f"{record['id']}.log").read_text()
+
+
+@pytest.mark.parametrize("step_index,step_id", [(0, "deps"), (1, "paths")])
+def test_ready_take_setup_failure_retains_claim_and_names_step(lifecycle: Lifecycle, step_index: int, step_id: str) -> None:
+    """Trigger: a required take step fails. Run this file with pytest."""
+    import worktree_lifecycle as lc
+
+    obj = lifecycle
+    obj.maintain()
+    config = json.loads(json.dumps(obj.settings.raw))
+    config["pool"]["setup"][step_index]["argv"] = [sys.executable, "-c", "raise SystemExit(7)"]
+    write_json(obj.repo / ".claude/bootstrap.json", {"git_kit": {"worktrees": config}})
+    (obj.repo / "lock.txt").write_text("two")
+    git(obj.repo, "commit", "-qam", "change lock and setup")
+    git(obj.repo, "push", "origin", "main")
+    obj = lc.Lifecycle(obj.repo)
+    with pytest.raises(ValueError, match=f"setup:{step_id}"):
         obj.take("failed", "s", process=holder())
     record = obj.read_records()[0]
-    assert record["holder"] and record["error"]["exit"] == 7
-    assert "setup failed" in Path(record["error"]["log"]).read_text()
+    assert record["holder"]["agent"] == "failed" and record["state"] == "taken"
+    assert record["worker"] is None and record["error"]["step"] == f"setup:{step_id}"
+    assert Path(record["path"]).is_dir() and Path(record["error"]["log"]).is_file()
 
 
 def test_reconcile_rename_uses_journal_before_missing_path(lifecycle, monkeypatch):

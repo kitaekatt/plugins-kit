@@ -18,7 +18,7 @@ before or after its name.
 |---|---|
 | `configure --propose` | Show defaults and a project-fit proposal without changing settings. |
 | `configure --apply approved.json` | Validate and write the approved repository settings. |
-| `take --agent a1 --session s1 [--task task-id]` | Claim a spare and complete setup at its final path. |
+| `take --agent a1 --session s1 [--task task-id]` | Claim a prepared spare and run project `after_take` commands. |
 | `adopt --id w-... --agent a1 --session s1` | Claim a parked worktree and complete setup while preserving its branch and files. |
 | `parked [--session s1 | --task task-id]` | Show all parked entries, or entries for one session or task. |
 | `check-task-close --task task-id --json` | Return `{allowed, parked:[...]}` for a task-close check. |
@@ -123,12 +123,12 @@ Remove inputs that the repository does not use.
 | `pool.rebuildable` | Optional list of relative gitignore-style globs for reproducible ignored outputs. Default: empty list. No glob can match tracked files. |
 | `setup[].id` | Unique stable ID: letters, digits, underscore, or hyphen, starting with a letter. |
 | `setup[].argv` | Nonempty argument array. Commands run in declaration order without a shell. |
-| `setup[].path_bound` | Boolean, default false. Repeat this step after each relocation. |
+| `setup[].path_bound` | Boolean, default false. Repeat this step after relocation during preparation, take, or adoption. |
 | `setup[].recreate` | Relative reproducible outputs. Paths cannot overlap or contain tracked data. |
 | `rerun_files` | Map from tracked inputs to known setup IDs. Default: empty map. |
 
-Changed inputs select mapped steps once, in declaration order.
-A definition change selects every step. Path-bound steps repeat after relocation.
+Preparation runs every setup step in declaration order.
+Take follows the selection rules in [Claims](#claims).
 The record stores input object IDs and a definition hash.
 `pool.upstream` selects the upstream for spare creation, freshness, and safety checks.
 Set it when integration uses a branch such as `dev` or `develop`, or a fork's
@@ -187,7 +187,21 @@ The destination is `<root>/<repo>/<agent-id>`.
 The optional task is record metadata.
 
 Take repairs registration, fetches the source upstream, and proves a fast-forward.
-It creates a separate branch and completes selected setup.
+It creates a separate branch and runs project `after_take` commands.
+The READY spare already passed setup before it entered the pool.
+Take repeats every `path_bound` setup step at the claim path.
+It also repeats steps mapped by `rerun_files` when their recorded input blobs differ after the fast-forward.
+Selected steps run in `pool.setup` declaration order.
+A step selected by both rules runs once. Take records the current input blobs after these steps pass.
+Other setup steps stay prepared, even when their settings change.
+Maintenance owns pool preparation, output removal, recycling, and parked rechecks.
+Selected setup steps recreate only their own declared outputs.
+Additional project commands for the claim belong in `after_take`.
+The result's `timings` object reports phase durations in seconds.
+It includes `initialize`, `holder`, `claim`, `freshness`, `branch`, `path_bound`, `rerun`, `after_take`, `finalize`, `maintenance`, and `total`.
+The `path_bound` and `rerun` durations sum the selected setup calls in each category.
+A step selected by both rules counts only toward `path_bound`.
+The `maintenance` duration covers the background launch request, and `total` includes project commands and that request.
 An empty pool blocks take with exit 4 and requests maintenance.
 A failed take retains its claim, files, failed step, and log.
 Incomplete claims never become available spares.
@@ -207,7 +221,8 @@ An older holder record without Claude executable or command evidence retains its
 `parked` includes taskless entries. Its optional filters select the last
 holder's session or the recorded task. A full entry includes path, branch,
 task, session, last holder, waiting work, approved boundary, and process blockers.
-Take shows entries for its session or task in full and counts the other entries.
+Take returns stored metadata for its session or task and counts the other entries.
+It does not inspect parked paths. The explicit `parked` command observes their current state.
 
 `adopt` reserves a parked worktree under the same claim lock as take.
 The caller names one stable worktree ID. The adopting agent must have no claim.
@@ -303,7 +318,7 @@ Repository `after_take` and `before_release` settings contain lists of argument 
 
 These settings belong under `git_kit.worktrees` in tracked `.claude/bootstrap.json`.
 Commands run sequentially in the worktree directory, without a shell.
-After-take commands run after setup at the final path, including adoption.
+After-take commands run at the final claim path. Adoption completes its setup first.
 Before-release commands run while the holder still owns the claim.
 A script error retains ownership and records the script and log.
 Release errors remain separate from any successful push.
@@ -340,8 +355,7 @@ The lifecycle retains the command logs and result file for inspection.
 Project scripts own server startup, port allocation, routing, and public-slot claims.
 Git-kit stores their evidence without interpreting those project resources.
 
-Path-bound setup repeats after relocation. Project-only setup, such as
-`bootstrap run --project-only`, keeps global launcher links unchanged.
+Project-only setup, such as `bootstrap run --project-only`, keeps global launcher links unchanged.
 Project extension scripts must preserve those links too.
 
 ## Push integration

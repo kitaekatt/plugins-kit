@@ -62,12 +62,17 @@ def operation(method: Callable) -> Callable:
     method = upstream_operation(method)
     @functools.wraps(method)
     def run(self: Lifecycle, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        started = time.perf_counter()
         try:
             result = method(self, *args, **kwargs)
         except ERRORS as exc:
             outcome = self.request_maintenance()
             raise ValueError(f"{method.__name__}: {exc}; maintenance: {json.dumps(outcome)}") from exc
+        maintenance_started = time.perf_counter()
         result["maintenance"] = self.request_maintenance()
+        if "timings" in result:
+            finished = time.perf_counter()
+            result["timings"].update(maintenance=finished - maintenance_started, total=finished - started)
         return result
     return run
 
@@ -542,16 +547,30 @@ class Lifecycle:
 
     @operation
     def take(self, agent: str, session: str, task: str | None = None, *, process: dict[str, Any] | None = None) -> dict[str, Any]:
+        timings: dict[str, float] = {}
+        phase_started = time.perf_counter()
+
+        def mark(phase: str) -> None:
+            nonlocal phase_started
+            finished = time.perf_counter()
+            timings[phase] = finished - phase_started
+            phase_started = finished
+
         self.initialize()
+        mark("initialize")
         wt.validate_task(self.repo, agent)
         if agent in {".state", ".staging"} or not session.strip():
             raise ValueError("take requires a portable agent ID and a nonempty session")
         identity = safety.holder_identity(process)
+        mark("holder")
         record = None
-        parked = self.parked_rows()
-        own_parked = [r for r in parked if r["session"] == session or (task is not None and r.get("task") == task)]
         with _file_lock(self.state / "claim.lock", blocking=True):
             rows = self.read_records()
+            # Historical hints only. Inspecting parked paths belongs to maintenance
+            # and the explicit parked/status commands, never the take fast path.
+            parked = [{**r, "session": (r.get("last_holder") or {}).get("session")}
+                      for r in rows if r["state"] == "parked"]
+            own_parked = [r for r in parked if r["session"] == session or (task is not None and r.get("task") == task)]
             if any(r.get("holder", {}).get("agent") == agent for r in rows if r.get("holder")):
                 raise ValueError(f"Agent {agent} already holds a claim")
             destination = self.namespace / agent
@@ -559,7 +578,7 @@ class Lifecycle:
                 raise ValueError(f"Claim destination already exists: {destination}")
             ready = [r for r in rows if r["state"] == "ready" and not r["holder"]]
             if not ready:
-                summary = self.snapshot()
+                summary = self.inventory(rows)
                 summary["records"] = [r for r in summary["records"] if r["state"] != "parked"]
                 summary.update(parked=own_parked, other_parked_count=len(parked) - len(own_parked))
                 summary["failures"] = [r["error"] for r in [*summary["records"], *own_parked] if r.get("error")]
@@ -576,6 +595,7 @@ class Lifecycle:
             except ERRORS as exc:
                 self.fail(record, exc)
                 raise
+        mark("claim")
         try:
             ref, oid = self.record_upstream(record)
             path = self.record_path(record)
@@ -588,26 +608,42 @@ class Lifecycle:
                 raise ValueError(f"Cannot prove fast-forward from {base} to fresh upstream {oid}") from exc
             self.transition(record, "take", "fast-forward")
             wt.git(path, "merge", "--ff-only", oid)
+            mark("freshness")
             branch = f"agent/{agent}/{record['holder']['claim']}"
             wt.git(path, "checkout", "--no-track", "-b", branch)
             record.update(branch=branch, head=oid, upstream={"ref": ref, "oid": oid})
+            mark("branch")
             config = self.settings.config.pool
-            definition = hashlib.sha256(config.model_dump_json().encode()).hexdigest()
-            changed = {p for p in config.rerun_files if record["setup"].get("inputs", {}).get(p) != wt.git(path, "rev-parse", f"HEAD:{p}")}
-            selected_ids = {step for p in changed for step in config.rerun_files[p]}
-            selected = [step for step in config.setup if step.path_bound or step.id in selected_ids or record["setup"].get("definition_hash") != definition]
-            self.setup(record, selected)
+            inputs = {p: wt.git(path, "rev-parse", f"HEAD:{p}") for p in config.rerun_files}
+            rerun_ids = {identifier for p, identifiers in config.rerun_files.items()
+                         if record["setup"]["inputs"].get(p) != inputs[p] for identifier in identifiers}
+            # Freeze the union before setup refreshes the recorded input blobs.
+            selected = [step for step in config.setup if step.path_bound or step.id in rerun_ids]
+            timings.update(path_bound=0.0, rerun=0.0)
+            for step in selected:
+                started = time.perf_counter()
+                self.setup(record, [step])
+                # Overlapping selectors count once, under path_bound.
+                phase = "path_bound" if step.path_bound else "rerun"
+                timings[phase] += time.perf_counter() - started
+            if selected:
+                record["setup"]["selected"] = [step.id for step in selected]
+            phase_started = time.perf_counter()
+            record["setup"]["inputs"] = inputs
             extensions.run(record, "after_take", self.settings.config.after_take, self.state, self.save)
+            mark("after_take")
             record["worker"] = None
             record["error"] = None
             self.transition(record, "take", "complete")
+            disk = self.disk()
+            mark("finalize")
             return {"id": record["id"], "path": record["path"], "claim": record["holder"]["claim"],
-                    "branch": branch, "head": oid, "disk": self.disk(), "setup": record["setup"],
+                    "branch": branch, "head": oid, "disk": disk, "setup": record["setup"], "timings": timings,
                     "parked": own_parked, "other_parked_count": len(parked) - len(own_parked)}
         except ERRORS as exc:
             record["worker"] = None
             self.fail(record, exc)
-            raise ValueError(f"take kept claim {record['holder']['claim']} at {record['path']}: {exc}; log: {record['error']['log']}") from exc
+            raise ValueError(f"take kept claim {record['holder']['claim']} at {record['path']}: {record['error']['step']}: {exc}; log: {record['error']['log']}") from exc
 
     @operation
     def release(self, claim: str) -> dict[str, Any]:
@@ -672,6 +708,10 @@ class Lifecycle:
                     "holder_process": safety.holder_state(record["holder"]) if record["holder"] else None,
                     "process_blockers": [*safety.path_processes(path), *safety.declared_process_blockers(record)], "at": time.time()}
                 record["safety_is_historical"] = record.get("safety") is not None
+        return self.inventory(rows)
+
+    def inventory(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
+        """Summarize stored metadata without inspecting any worktree."""
         return {"namespace": str(self.namespace), "enabled": bool(self.settings.config and self.settings.config.enabled),
                 "configured": self.settings.config is not None, "records": rows, "disk": self.disk(),
                 "failures": [r["error"] for r in rows if r.get("error")],
