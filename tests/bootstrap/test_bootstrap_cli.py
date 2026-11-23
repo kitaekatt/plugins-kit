@@ -222,24 +222,62 @@ class TestRun:
             "CLAUDE_BOOTSTRAP_DATA_ROOT",
             str(tmp_path_factory.mktemp("default-data-root")))
 
-    def test_refuses_instead_of_attaching_to_a_different_scope(
-            self, tmp_path, monkeypatch, capsys):
+    def _held_lock_run(self, tmp_path, monkeypatch, release_after):
+        """Run `bootstrap run` while another pass holds the lock.
+
+        The holder releases after `release_after` seconds (None: never).
+        Returns (exit code, launches); each launch records whether the lock was held.
+        """
         monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(tmp_path))
         monkeypatch.setenv("BOOTSTRAP_MARKETPLACE", "mkt-a")
         data_dir = tmp_path / "mkt-a" / "bootstrap"
         data_dir.mkdir(parents=True)
-
-        launched = []
-        monkeypatch.setattr(cli.subprocess, "Popen",
-                            lambda *a, **k: launched.append(a))
+        monkeypatch.setattr(cli, "find_plugin_root", lambda m, f="": "/plug")
         monkeypatch.setattr(cli, "follow", lambda d: pytest.fail("attached"))
+        monkeypatch.setattr(cli, "LOCK_CHECK_INTERVAL", 0.05)
+        monkeypatch.setattr(cli, "FINAL_GRACE_SECONDS", 0.0)
+        monkeypatch.setattr(cli, "POLL_INTERVAL", 0.0)
+        monkeypatch.setattr(cli, "RUN_WAIT_SECONDS", 0.5 if release_after is None else 30.0)
+        launches = []
 
-        with proc_lock.engine_lock(str(data_dir)):
+        def fake_popen(cmd, **kw):
+            launches.append(proc_lock.lock_holder(str(data_dir)) is not None)
+            return _ExitedProcess()
+
+        monkeypatch.setattr(cli.subprocess, "Popen", fake_popen)
+        acquired, release = threading.Event(), threading.Event()
+
+        def hold():
+            with proc_lock.engine_lock(str(data_dir)):
+                acquired.set()
+                release.wait(release_after if release_after is not None else 5)
+
+        holder_thread = threading.Thread(target=hold)
+        holder_thread.start()
+        acquired.wait(5)
+        try:
             rc = cli.cmd_run(_args(plugin_root="", forward=[]))
+        finally:
+            release.set()
+            holder_thread.join(5)
+        return rc, launches
 
+    def test_waits_for_a_running_pass_then_runs_its_own(
+            self, tmp_path, monkeypatch, capsys):
+        """A held lock means wait, not fail: worktree setup ran into a
+        SessionStart pass and failed with exit 2 (user, 2026-11-23: "If
+        bootstrap is blocked it should wait for it to free up")."""
+        rc, launches = self._held_lock_run(tmp_path, monkeypatch, release_after=0.3)
+        assert rc == 0
+        assert launches == [False], "one own pass, started only after the lock cleared"
+        assert "waiting" in capsys.readouterr().err
+
+    def test_gives_up_loudly_when_the_pass_never_finishes(
+            self, tmp_path, monkeypatch, capsys):
+        rc, launches = self._held_lock_run(tmp_path, monkeypatch, release_after=None)
         assert rc == 2
-        assert launched == [], "a second engine must never be spawned"
-        assert "already running" in capsys.readouterr().err
+        assert launches == [], "a second engine must never be spawned beside a live one"
+        assert "still running after" in capsys.readouterr().err
 
     def test_engine_flags_pass_through(self, tmp_path, monkeypatch, capsys):
         """`bootstrap run --verbose` is the spelling the help advertises.
@@ -321,12 +359,13 @@ class TestRun:
             cli.main(["--nonsense"])
         assert "unrecognized" in capsys.readouterr().err
 
-    def test_losing_the_lock_race_returns_runner_refusal(
+    def test_losing_the_lock_race_waits_for_the_winner_then_runs(
             self, tmp_path, monkeypatch, capsys):
         """The up-front lock check is not the last word.
 
-        Another launcher can take the lock after the up-front check. The
-        runner's refusal must be returned; no wider pass may be attached.
+        Another launcher can take the lock after the up-front check, so the
+        engine we launched stands down with exit 2. `run` waits for the
+        winner and launches its own pass again; it never attaches.
         """
         monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(tmp_path))
         monkeypatch.setenv("BOOTSTRAP_MARKETPLACE", "mkt-a")
@@ -337,21 +376,51 @@ class TestRun:
 
         monkeypatch.setattr(cli, "FINAL_GRACE_SECONDS", 0.0)
         monkeypatch.setattr(cli, "POLL_INTERVAL", 0.0)
+        monkeypatch.setattr(cli, "LOCK_CHECK_INTERVAL", 0.05)
+        launches = []
+        winner = proc_lock.engine_lock(str(data_dir))
 
         def racing_engine(cmd, **kw):
-            # Stand in for the launcher that won: it holds the lock by the
-            # time the engine we launched has given up.
-            racing_engine.lock = proc_lock.engine_lock(str(data_dir))
-            assert racing_engine.lock.__enter__() is True
+            process = _ExitedProcess()
+            launches.append(proc_lock.lock_holder(str(data_dir)) is not None)
+            if len(launches) == 1:
+                # Stand in for the launcher that won: it holds the lock by
+                # the time the engine we launched has given up, and finishes
+                # a moment later.
+                assert winner.__enter__() is True
+                threading.Timer(0.2, winner.__exit__, (None, None, None)).start()
+                process.returncode = 2
+            return process
+
+        monkeypatch.setattr(cli.subprocess, "Popen", racing_engine)
+        assert cli.cmd_run(_args(plugin_root="", forward=[])) == 0
+        assert launches == [False, False], "relaunched only after the winner finished"
+        capsys.readouterr()
+
+    def test_an_engine_exit_2_with_no_lock_held_is_returned_once(
+            self, tmp_path, monkeypatch, capsys):
+        """Exit 2 is also a usage error (a bad forwarded flag), not only a
+        stand-down: with no other pass holding the lock, run returns it
+        instead of relaunching."""
+        monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(tmp_path))
+        monkeypatch.setenv("BOOTSTRAP_MARKETPLACE", "mkt-a")
+        (tmp_path / "mkt-a" / "bootstrap").mkdir(parents=True)
+        monkeypatch.setattr(cli, "find_plugin_root", lambda m, f="": "/plug")
+        monkeypatch.setattr(cli, "FINAL_GRACE_SECONDS", 0.0)
+        monkeypatch.setattr(cli, "POLL_INTERVAL", 0.0)
+        launches = []
+
+        def usage_error(cmd, **kw):
+            launches.append(cmd)
+            if len(launches) > 3:
+                pytest.fail("relaunched a usage error")
             process = _ExitedProcess()
             process.returncode = 2
             return process
 
-        monkeypatch.setattr(cli.subprocess, "Popen", racing_engine)
-        try:
-            assert cli.cmd_run(_args(plugin_root="", forward=[])) == 2
-        finally:
-            racing_engine.lock.__exit__(None, None, None)
+        monkeypatch.setattr(cli.subprocess, "Popen", usage_error)
+        assert cli.cmd_run(_args(plugin_root="", forward=["--bogus"])) == 2
+        assert len(launches) == 1
         capsys.readouterr()
 
     def test_streams_the_pass_it_launched(

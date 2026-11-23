@@ -72,6 +72,10 @@ CODEX_SESSION_MARKER_TTL_SECONDS = 24 * 60 * 60
 # coarser than POLL_INTERVAL: see the comment at its use in follow().
 LOCK_CHECK_INTERVAL = 1.0
 
+# `bootstrap run` waits this long for a running pass to finish before it
+# gives up (a worktree take's setup can start during a SessionStart pass).
+RUN_WAIT_SECONDS = 30 * 60
+
 # After the lock clears, keep reading for this long. The recorder's atexit
 # flush runs AFTER engine_lock's release (the context manager exits first,
 # then interpreter shutdown runs atexit), so the final -- and most
@@ -362,13 +366,6 @@ def cmd_run(args) -> int:
         return 2
 
     data_dir = plugin_data_dir(marketplace)
-    info = holder(data_dir)
-    if info is not None:
-        sys.stderr.write(
-            "bootstrap run: another pass is already running; retry after it finishes.\n"
-            "It is not attached because its manifest scope may be different.\n")
-        return 2
-
     plugin_root = find_plugin_root(marketplace, args.plugin_root)
     if not plugin_root:
         sys.stderr.write(
@@ -378,8 +375,39 @@ def cmd_run(args) -> int:
             % (marketplace, marketplace, marketplace))
         return 2
 
-    return _launch_pass(plugin_root, data_dir, Path.cwd(), args.forward,
-                        project_only=getattr(args, "project_only", False))
+    # A running pass is waited for, never attached to (its manifest scope may
+    # differ) and never run beside (one engine lock per marketplace). An
+    # engine exit 2 with another pass holding the lock is a stand-down after
+    # losing the lock race, so it waits again under the same deadline. An exit
+    # 2 with no holder (a usage error such as a bad forwarded flag) is final.
+    deadline = time.monotonic() + RUN_WAIT_SECONDS
+    while True:
+        if not _wait_for_lock(data_dir, deadline):
+            return 2
+        code = _launch_pass(plugin_root, data_dir, Path.cwd(), args.forward,
+                            project_only=getattr(args, "project_only", False))
+        if code != 2 or holder(data_dir) is None:
+            return code
+
+
+def _wait_for_lock(data_dir: str, deadline: float) -> bool:
+    """Wait until no pass holds the engine lock; False at the deadline."""
+    info = holder(data_dir)
+    if info is None:
+        return True
+    sys.stderr.write(
+        "bootstrap run: another pass (pid %s) is running; waiting up to %ds "
+        "for it to finish.\n" % (info.get("pid"), RUN_WAIT_SECONDS))
+    sys.stderr.flush()
+    while info is not None:
+        if time.monotonic() >= deadline:
+            sys.stderr.write(
+                "bootstrap run: the other pass (pid %s) is still running after "
+                "%ds; no pass ran.\n" % (info.get("pid"), RUN_WAIT_SECONDS))
+            return False
+        time.sleep(LOCK_CHECK_INTERVAL)
+        info = holder(data_dir)
+    return True
 
 
 # --------------------------------------------------------------------------
@@ -618,8 +646,8 @@ def _launch_pass(plugin_root, data_dir, project_dir, forward=(),
         print("Bootstrap pass reported failures (exit 1).")
     elif code == 2:
         sys.stderr.write(
-            "bootstrap: no pass ran (exit 2) -- another pass may already be "
-            "running; retry after it finishes.\n")
+            "bootstrap: no pass ran (exit 2) -- another pass held the lock, "
+            "or the engine refused its arguments.\n")
     return code
 
 

@@ -39,7 +39,7 @@ A terminal pass differs from a hook pass only where it must:
 | Not throttled by the cooldown, and does not consume or reset it | It is the explicit request for a pass now |
 | `--project-key _global_`: the per-project interpreter record is neither read nor written | The record is keyed by the hook's hash of Claude's cwd, which a terminal cwd cannot reproduce |
 | No user Codex hook is installed | A console pass does not install the user-level hook; project legacy cleanup may still run |
-| Refuses a held lock (exit 2) instead of attaching | A running pass may have a different project scope |
+| Waits for a held lock, then runs its own pass, instead of attaching; exits 2 if the other pass still holds it after `RUN_WAIT_SECONDS` | A running pass may have a different project scope |
 | Exits 1 when the pass reports failures (`--exit-status`) | A hook pass always exits 0 so a defect cannot block a session |
 | stdin is closed | A manifest command or custom script cannot prompt on, or hang on, the terminal |
 
@@ -156,10 +156,11 @@ requiring one `/hooks` trust review.
 ## Running passes and exit codes
 
 The terminal pass uses the shared single-instance lock. If another pass is
-running, `bootstrap run` refuses with exit code 2 and asks you to retry after it
-finishes. It never attaches to that pass: its project may differ. The engine
-also checks the lock atomically to cover a race after the initial probe, and
-exits 2 when it stands down (`--exit-status`).
+running, `bootstrap run` waits for it to finish, then runs its own pass. It
+never attaches to that pass: its project may differ. The engine also checks the
+lock atomically to cover a race after the initial probe, and exits 2 when it
+stands down (`--exit-status`); `bootstrap run` then waits again. It exits 2 when
+the other pass is still running after `RUN_WAIT_SECONDS` (30 minutes).
 
 Bare `bootstrap` retains its status-and-follow behavior. `bootstrap --json`
 always returns immediately. The status probe reads the lock without acquiring
@@ -169,7 +170,7 @@ or clearing it.
 |---|---|
 | Bare `bootstrap` | 0 whether idle or running |
 | `bootstrap run` | 0 on a clean pass; 1 when the pass reports failures or crashes |
-| `bootstrap run`, busy (before or during launch) or ambiguous marketplace | 2 |
+| `bootstrap run`, still busy after `RUN_WAIT_SECONDS`, engine refused its arguments, or ambiguous marketplace | 2 |
 | `bootstrap run`, missing plugin tree | 2 |
 | `bootstrap reset` | The delegated reset script's exit code |
 
