@@ -191,6 +191,7 @@ It creates a separate branch and runs project `after_take` commands.
 The READY spare already passed setup before it entered the pool.
 Take repeats every `path_bound` setup step at the claim path.
 It also repeats steps mapped by `rerun_files` when their recorded input blobs differ after the fast-forward.
+Selected steps run in `pool.setup` declaration order.
 A step selected by both rules runs once. Take records the current input blobs after these steps pass.
 Other setup steps stay prepared, even when their settings change.
 Maintenance owns pool preparation, output removal, recycling, and parked rechecks.
@@ -198,6 +199,8 @@ Selected setup steps recreate only their own declared outputs.
 Additional project commands for the claim belong in `after_take`.
 The result's `timings` object reports phase durations in seconds.
 It includes `initialize`, `holder`, `claim`, `freshness`, `branch`, `path_bound`, `rerun`, `after_take`, `finalize`, `maintenance`, and `total`.
+The `path_bound` and `rerun` durations sum the selected setup calls in each category.
+A step selected by both rules counts only toward `path_bound`.
 The `maintenance` duration covers the background launch request, and `total` includes project commands and that request.
 An empty pool blocks take with exit 4 and requests maintenance.
 A failed take retains its claim, files, failed step, and log.

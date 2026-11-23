@@ -617,15 +617,18 @@ class Lifecycle:
             inputs = {p: wt.git(path, "rev-parse", f"HEAD:{p}") for p in config.rerun_files}
             rerun_ids = {identifier for p, identifiers in config.rerun_files.items()
                          if record["setup"]["inputs"].get(p) != inputs[p] for identifier in identifiers}
-            # Select before path-bound setup refreshes the recorded input blobs.
-            path_bound = [step for step in config.setup if step.path_bound]
-            rerun = [step for step in config.setup if step.id in rerun_ids and not step.path_bound]
-            if path_bound:
-                self.setup(record, path_bound)
-            mark("path_bound")
-            if rerun:
-                self.setup(record, rerun)
-            mark("rerun")
+            # Freeze the union before setup refreshes the recorded input blobs.
+            selected = [step for step in config.setup if step.path_bound or step.id in rerun_ids]
+            timings.update(path_bound=0.0, rerun=0.0)
+            for step in selected:
+                started = time.perf_counter()
+                self.setup(record, [step])
+                # Overlapping selectors count once, under path_bound.
+                phase = "path_bound" if step.path_bound else "rerun"
+                timings[phase] += time.perf_counter() - started
+            if selected:
+                record["setup"]["selected"] = [step.id for step in selected]
+            phase_started = time.perf_counter()
             record["setup"]["inputs"] = inputs
             extensions.run(record, "after_take", self.settings.config.after_take, self.state, self.save)
             mark("after_take")

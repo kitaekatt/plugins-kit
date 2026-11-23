@@ -67,10 +67,11 @@ def test_take_does_no_pool_maintenance_inline(lifecycle: Lifecycle, monkeypatch:
         result = obj.take("fast", "session", process=holder())
         assert result["id"] == spare["id"] and Path(result["path"]).is_dir()
         target_paths = {Path(spare["path"]), Path(result["path"])}
-        expected_steps = ["paths", "deps"] if changed else ["paths"]
-        expected_removals = [(Path(result["path"]), ["output"])]
+        expected_steps = ["deps", "paths"] if changed else ["paths"]
+        expected_removals = []
         if changed:
             expected_removals.append((Path(result["path"]), ["deps-output"]))
+        expected_removals.append((Path(result["path"]), ["output"]))
 
     assert {
         "parked_scans": calls["parked_rows"].call_count,
@@ -87,18 +88,29 @@ def test_take_does_no_pool_maintenance_inline(lifecycle: Lifecycle, monkeypatch:
     assert calls["read_records"].call_count == 1
 
 
-def test_take_reports_project_commands_and_maintenance_time_separately(lifecycle: Lifecycle, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("overlap", [False, True], ids=["distinct", "overlap"])
+def test_take_reports_project_commands_and_maintenance_time_separately(lifecycle: Lifecycle, monkeypatch: pytest.MonkeyPatch,
+                                                                      overlap: bool) -> None:
     import worktree_lifecycle as lc
 
     obj = configured(lifecycle, "after_take", "from pathlib import Path; Path('output/ran').write_text(str(Path.cwd()))")
+    config = obj.settings.raw
+    config["pool"]["setup"][1]["argv"][-1] += "; (p/'deps').write_text(Path('deps-output/value').read_text())"
+    if overlap:
+        config["pool"]["rerun_files"]["lock.txt"].append("paths")
+    obj.configure(config)
+    git(obj.repo, "commit", "-qam", "configure dependent setup")
+    git(obj.repo, "push", "origin", "main")
     obj.maintain()
     clock = [0.0]
+    steps = []
     monkeypatch.setattr(lc.time, "perf_counter", lambda: clock[0])
     real_extension = lc.extensions.run
     real_request = obj.request_maintenance
     real_setup = obj.setup
 
     def setup(record: dict[str, Any], selected: list[Any]) -> None:
+        steps.extend(step.id for step in selected)
         real_setup(record, selected)
         clock[0] += 2.0 if selected[0].path_bound else 3.0
 
@@ -118,6 +130,8 @@ def test_take_reports_project_commands_and_maintenance_time_separately(lifecycle
     git(obj.repo, "commit", "-qam", "lock changes")
     git(obj.repo, "push", "origin", "main")
     result = obj.take("timed", "session", process=holder())
+    assert steps == ["deps", "paths"]
+    assert (Path(result["path"]) / "output/deps").read_text() == "two"
     assert (Path(result["path"]) / "output/ran").read_text() == result["path"]
     assert result["timings"] == {
         "initialize": 0.0, "holder": 0.0, "claim": 0.0, "freshness": 0.0,
