@@ -514,6 +514,20 @@ class TestListCLI:
             "tmp/foo  active  P2  -  Fix the run",
         ]
 
+    def test_invalid_task_is_listed_and_flagged(self, tmp_path):
+        make_task(tmp_path, "tmp/good", title="Fine", priority="P2")
+        bad = make_task(tmp_path, "tmp/bad", title="Broken")
+        (bad / "plan.md").unlink()
+        proc = run_cli(["list", "--root", str(tmp_path)], tmp_path)
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout.splitlines() == [
+            "Open tasks:",
+            "tmp/good  active  P2  -  Fine",
+            "",
+            "Invalid tasks:",
+            "tmp/bad  invalid  -  -  Broken  (missing scaffolding file: plan.md)",
+        ]
+
     def test_last_update_uses_latest_dated_log_entry(self, tmp_path):
         folder = make_task(tmp_path, "tmp/foo", title="Fix the run", priority="P2")
         (folder / "log.md").write_text(
