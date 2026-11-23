@@ -132,7 +132,7 @@ def test_unsafe_legacy_is_preserved(migration, monkeypatch, kind: str) -> None:
         (path / ".git").write_text(f"gitdir: {admin}\n")
     elif kind == "process":
         real = safety.path_processes
-        monkeypatch.setattr(safety, "path_processes", lambda candidate: ["uncertain process evidence"] if candidate == path else real(candidate))
+        monkeypatch.setattr(safety, "path_processes", lambda candidate, **options: ["uncertain process evidence"] if candidate == path else real(candidate, **options))
     files = {} if kind == "symlink" else {p.relative_to(path): p.read_bytes() for p in path.rglob("*") if p.is_file()}
     result = obj.migrate(apply=True)
     assert result["phase"] == "complete"

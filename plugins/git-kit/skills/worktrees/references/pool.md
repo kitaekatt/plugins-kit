@@ -409,6 +409,13 @@ An old token cannot release a subsequent holder.
 
 Release proves safety before it atomically persists the cleared holder.
 A live or uncertain builder blocks release.
+Release ignores its own caller chain: each parent process from the release
+process up to and including the holder's recorded process. These processes wait
+for release, so their cwd or open files in the worktree do not block it.
+A chain that does not reach the holder (same PID and start) excludes nothing.
+Every other process still blocks, including a background job the holder started.
+Maintenance has no caller chain. It reuses or removes a released worktree only
+after those processes stop using it.
 Retirement requires clean tracked files, no untracked files, no holder,
 and no live or uncertain process found by the platform inspection described below.
 It also requires no `+` in `git cherry <fresh-upstream> HEAD`,

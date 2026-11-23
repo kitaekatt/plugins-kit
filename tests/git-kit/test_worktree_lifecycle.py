@@ -665,6 +665,8 @@ def test_linux_runtime_arguments_block_retirement(tmp_path, monkeypatch):
     monkeypatch.setattr(safety.sys, "platform", "linux")
     monkeypatch.setattr(safety.os, "getuid", lambda: process.stat().st_uid, raising=False)
     assert any("runtime" in blocker for blocker in safety.path_processes(candidate))
+    # A release caller chain (caller_chain) is excluded; nothing else is.
+    assert safety.path_processes(candidate, exclude={1234}) == []
 
 
 @pytest.mark.parametrize("case", ["outside", "no_remote", "ambiguous_remote", "unconfigured", "disabled", "disabled_invalid"])

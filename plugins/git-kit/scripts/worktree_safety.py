@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -102,6 +102,26 @@ def holder_identity(explicit: dict[str, Any] | None = None) -> dict[str, Any]:
     return {**explicit, "executable": info["executable"], "command": info["command"]}
 
 
+def caller_chain(holder: dict[str, Any]) -> list[dict[str, Any]]:
+    """Identities from this process's parent up to and including the holder.
+
+    Each one waits for this process to return, so a cwd or open file it keeps
+    in the worktree is not use that this process can break. A chain that does
+    not reach the recorded holder (same PID and start) gives no identities.
+    """
+    chain: list[dict[str, Any]] = []
+    pid = os.getppid()
+    seen: set[int] = set()
+    while pid > 0 and pid not in seen:
+        seen.add(pid)
+        identity = process_identity(pid)
+        chain.append(identity)
+        if pid == holder.get("pid") and identity["start"] == holder.get("start"):
+            return chain
+        pid = process_info(pid)["ppid"]
+    return []
+
+
 def holder_state(identity: dict[str, Any]) -> str:
     """Only proven Claude-session death can end a claim automatically."""
     from worktree_migration import claude_command, claude_processes
@@ -142,14 +162,18 @@ def process_cwd(pid: int) -> str | None:
     return None
 
 
-def path_processes(path: Path, *, pids: set[int] | None = None) -> list[str]:
-    """Include cwd and open runtime files, including processes absent from records."""
+def path_processes(path: Path, *, pids: set[int] | None = None, exclude: Collection[int] = ()) -> list[str]:
+    """Include cwd and open runtime files, including processes absent from records.
+
+    ``exclude`` names processes whose use of the path is known not to block:
+    release passes its own caller chain (``caller_chain``).
+    """
     if sys.platform.startswith("linux"):
         blockers = []
         for process in Path("/proc").iterdir():
             if not process.name.isdigit():
                 continue
-            if pids is not None and int(process.name) not in pids:
+            if (pids is not None and int(process.name) not in pids) or int(process.name) in exclude:
                 continue
             try:
                 if pids is None and process.stat().st_uid != os.getuid():
@@ -180,13 +204,21 @@ def path_processes(path: Path, *, pids: set[int] | None = None) -> list[str]:
                                 capture_output=True, text=True, check=False, timeout=30)
         if result.stderr.strip() or result.returncode not in (0, 1):
             return [f"uncertain process evidence: {result.stderr.strip() or result.returncode}"]
-        blockers = [f"live process/runtime: {result.stdout.strip()}"] if result.stdout.strip() else []
+        # -F output: a "p<pid>" line, then that process's field lines.
+        kept, owner = [], None
+        for line in result.stdout.strip().splitlines():
+            if line.startswith("p"):
+                owner = int(line[1:])
+            if owner not in exclude:
+                kept.append(line)
+        blockers = [f"live process/runtime: {chr(10).join(kept)}"] if kept else []
         if pids is not None:
             return blockers
+        skipped = {str(os.getpid()), *(str(pid) for pid in exclude)}
         processes = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True, check=True, timeout=15)
         for line in processes.stdout.splitlines():
             parts = line.strip().split(None, 1)
-            if len(parts) == 2 and parts[0] != str(os.getpid()) and str(path) in parts[1]:
+            if len(parts) == 2 and parts[0] not in skipped and str(path) in parts[1]:
                 blockers.append(f"live process runtime {parts[0]}: {parts[1]}")
         return blockers
     return ["uncertain process/runtime evidence: directory-use inspection is unavailable on this platform"]
@@ -292,7 +324,9 @@ def declared_process_blockers(record: dict[str, Any]) -> list[str]:
     return [*blockers, *pending_blockers(record)]
 
 
-def inspect(record: dict[str, Any], upstream: str, declared: list[str], rebuildable: Sequence[str] = ()) -> dict[str, Any]:
+def inspect(record: dict[str, Any], upstream: str, declared: list[str], rebuildable: Sequence[str] = (),
+            callers: Sequence[dict[str, Any]] = ()) -> dict[str, Any]:
+    """``callers`` (from ``caller_chain``) do not block; a caller that changed does."""
     path = Path(record["path"])
     blockers = []
     if path.is_symlink():
@@ -315,7 +349,11 @@ def inspect(record: dict[str, Any], upstream: str, declared: list[str], rebuilda
     if unique:
         blockers.append(f"unique ignored data must be preserved: {unique}")
     blockers.extend(declared_process_blockers(record))
-    blockers.extend(path_processes(path))
+    blockers.extend(path_processes(path, exclude={caller["pid"] for caller in callers}))
+    # A PID can be reused only after its process exits; prove each one is unchanged.
+    blockers.extend(f"caller process changed during inspection: {caller}"
+                    for caller in callers if process_state(caller) != "live")
     return {"safe": not blockers, "at": time.time(), "upstream": upstream,
             "head": wt.git(path, "rev-parse", "HEAD"), "blockers": blockers,
-            "reproducible": reproducible, "unique_ignored": unique}
+            "reproducible": reproducible, "unique_ignored": unique,
+            "excluded_callers": [caller["pid"] for caller in callers]}
