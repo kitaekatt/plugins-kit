@@ -278,6 +278,13 @@ def _format_list_line(view) -> str:
     return line + sessions_cli.working_suffix(view.sessions)
 
 
+def _format_invalid_line(view) -> str:
+    """An invalid task's row: the usual columns plus its first validation error."""
+    line = _format_list_line(view)
+    errors = validate_ref(view.id, view.project_root).errors
+    return f"{line}  ({errors[0]})" if errors else line
+
+
 def _print_listing_diagnostics(listing: TaskListing) -> None:
     for note in listing.notes:
         print(f"note: {note}", file=sys.stderr)
@@ -308,10 +315,12 @@ def _print_task_sections(
     indent: str = "",
 ) -> bool:
     printed = False
-    for heading, section in (
-        ("Open tasks:", sections["open"]),
-        ("Deferred tasks:", sections["deferred"]),
-        ("Closed tasks:", sections["closed"]),
+    invalid = [view for view in sections["other"] if view.status == "invalid"]
+    for heading, section, format_line in (
+        ("Open tasks:", sections["open"], _format_list_line),
+        ("Deferred tasks:", sections["deferred"], _format_list_line),
+        ("Closed tasks:", sections["closed"], _format_list_line),
+        ("Invalid tasks:", invalid, _format_invalid_line),
     ):
         if not section:
             continue
@@ -319,7 +328,7 @@ def _print_task_sections(
             print()
         print(indent + heading)
         for view in section:
-            print(indent + _format_list_line(view))
+            print(indent + format_line(view))
         printed = True
     return printed
 
