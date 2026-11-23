@@ -50,6 +50,7 @@ from skills_kit_lib.document_walker import YAML_BLOCK_RE
 
 from . import oslock
 from .discovery import log_timestamp
+from .types import context_file
 
 TASK_YAML = "task.yaml"
 PLAN = "plan.md"
@@ -95,16 +96,21 @@ def _digest(data: bytes | None) -> str:
     return hashlib.sha256(b"\0missing" if data is None else b"\1" + data).hexdigest()
 
 
+def _file_path(folder: Path, name: str) -> Path:
+    """The path behind a mutable-file key; the context key maps to CLAUDE.md or AGENTS.md."""
+    return context_file(folder) if name == CONTEXT else Path(folder) / name
+
+
 def read_files(folder: Path) -> dict[str, bytes | None]:
     """The raw bytes of each mutable file (``None`` when the file is absent)."""
     contents: dict[str, bytes | None] = {}
     for name in FILES:
         try:
-            contents[name] = (Path(folder) / name).read_bytes()
+            contents[name] = _file_path(folder, name).read_bytes()
         except FileNotFoundError:
             contents[name] = None
         except OSError as exc:
-            raise MutationError("unreadable", f"cannot read {Path(folder) / name}: {exc}", Path(folder) / name) from exc
+            raise MutationError("unreadable", f"cannot read {_file_path(folder, name)}: {exc}", _file_path(folder, name)) from exc
     return contents
 
 
@@ -213,7 +219,7 @@ class TaskMutator:
                     task_yaml=_text(before[TASK_YAML], folder / TASK_YAML).replace("\r\n", "\n"),
                     plan=_text(before[PLAN], folder / PLAN).replace("\r\n", "\n"),
                     log=_text(before[LOG], folder / LOG).replace("\r\n", "\n"),
-                    context=_text(before[CONTEXT], folder / CONTEXT).replace("\r\n", "\n"),
+                    context=_text(before[CONTEXT], _file_path(folder, CONTEXT)).replace("\r\n", "\n"),
                 )
                 changes = edit(texts)
                 unknown = set(changes) - set(FILES)
@@ -225,9 +231,10 @@ class TaskMutator:
                         text = changes[name].replace("\r\n", "\n")
                         if crlf[name]:
                             text = text.replace("\n", "\r\n")
-                        temp = self._write_temp(folder / name, text)
+                        target = _file_path(folder, name)
+                        temp = self._write_temp(target, text)
                         temps.append(temp)
-                        prepared.append((folder / name, temp, _digest(before[name])))
+                        prepared.append((target, temp, _digest(before[name])))
                 # Phase 2: inside the gate, the refusals, then compare + replace file by file.
                 with (gate if gate is not None else contextlib.nullcontext()):
                     if precommit is not None:

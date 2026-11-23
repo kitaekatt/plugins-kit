@@ -15,6 +15,7 @@ import yaml
 
 from . import answer_store, questions
 from .answers_types import Catalog
+from .types import context_file
 from .discovery import (
     DEFAULT_USER_ROOT,
     OPEN_CLASSIFICATIONS,
@@ -116,7 +117,7 @@ def summary_source_fingerprint(folder: Path, block: dict[str, Any]) -> str:
     material = {
         "prompt_version": SUMMARY_PROMPT_VERSION,
         "task": task_material,
-        "CLAUDE.md": _read_text(folder / "CLAUDE.md"),
+        "CLAUDE.md": _read_text(context_file(folder)),
         "plan.md": _read_text(folder / "plan.md"),
         "activity_log": activity_log,
     }

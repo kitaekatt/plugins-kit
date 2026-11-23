@@ -14,10 +14,26 @@ behavior itself is implemented in later steps.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from .schemas import TASK_SCHEMA
 
 DEFAULT_TYPE_NAME = "hand-off"
+
+# A folder's context file: CLAUDE.md or AGENTS.md (a repository may forbid
+# CLAUDE.md). ``init`` writes CLAUDE.md; one of the two must exist.
+CONTEXT_FILE = "CLAUDE.md"
+CONTEXT_FILE_ALTERNATE = "AGENTS.md"
+
+
+def context_file(folder: Path) -> Path:
+    """The folder's context file: CLAUDE.md when present, else AGENTS.md when
+    present, else the CLAUDE.md path (absent)."""
+    primary = Path(folder) / CONTEXT_FILE
+    alternate = Path(folder) / CONTEXT_FILE_ALTERNATE
+    if not primary.is_file() and alternate.is_file():
+        return alternate
+    return primary
 
 
 @dataclass(frozen=True)

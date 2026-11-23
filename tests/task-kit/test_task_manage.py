@@ -83,6 +83,19 @@ def test_context_edits_change_the_machine_revision(world):
         _mutate(world, _request(revision))
 
 
+def test_an_agents_md_folder_has_its_context_edit_land_in_agents_md(world):
+    root, _ = world
+    folder = root / TASK
+    (folder / "CLAUDE.md").rename(folder / "AGENTS.md")
+    before = mutation.read_files(folder)
+    assert before[mutation.CONTEXT] is not None
+    mutation.TaskMutator(folder.parent / ".lock").mutate(
+        folder, lambda texts: {mutation.CONTEXT: texts.context + "\nAdded.\n"}
+    )
+    assert (folder / "AGENTS.md").read_text().endswith("Added.\n")
+    assert not (folder / "CLAUDE.md").exists()
+
+
 @pytest.mark.parametrize("body", ["", "\n### write-schema -- Duplicate\n\nAnother instruction.\n"])
 def test_missing_or_duplicate_instructions_refuse_without_side_effects(world, body):
     root, local = world

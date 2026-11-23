@@ -183,7 +183,7 @@ try:
     from task_system import summary_ops  # noqa: E402
     from task_system.state_ops import StateOpError  # noqa: E402
     from task_system.task_items import read_task_items, sort_items  # noqa: E402
-    from task_system.types import DEFAULT_TYPE_NAME, get_type  # noqa: E402
+    from task_system.types import DEFAULT_TYPE_NAME, context_file, get_type  # noqa: E402
     from task_system.validate import validate_ref  # noqa: E402
 except ImportError as exc:
     # Safety net for the installed-but-not-yet-provisioned window: the failed
@@ -765,7 +765,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
                 for key, value in block.items():
                     print(f"  {key}: {_render_value(value)}")
             print("documents:")
-            for fname in ("CLAUDE.md", "plan.md", "log.md"):
+            for fname in (context_file(folder).name, "plan.md", "log.md"):
                 fpath = folder / fname
                 suffix = "" if fpath.is_file() else "  (missing)"
                 print(f"  {fname}: {fpath}{suffix}")
