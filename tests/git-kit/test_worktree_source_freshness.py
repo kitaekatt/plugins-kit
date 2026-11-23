@@ -103,6 +103,8 @@ def test_record_operations_fetch_own_clone(two_clones, monkeypatch, action: str,
     record = next(r for r in records if r["repo"]["source_clone"] == str(clone))
     record["state"] = "ready" if action == "take" else "parked"
     if action == "take":
+        # READY records carry completed setup and its input blob evidence.
+        obj.setup(record, obj.settings.config.pool.setup)
         for other in obj.read_records():
             if other["id"] != record["id"] and other["state"] == "ready":
                 other["state"] = "parked"

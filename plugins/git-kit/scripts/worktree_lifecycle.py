@@ -613,8 +613,20 @@ class Lifecycle:
             wt.git(path, "checkout", "--no-track", "-b", branch)
             record.update(branch=branch, head=oid, upstream={"ref": ref, "oid": oid})
             mark("branch")
-            # READY means setup already passed. Preserve its evidence; project
-            # commands that need the claimed path run explicitly in after_take.
+            config = self.settings.config.pool
+            inputs = {p: wt.git(path, "rev-parse", f"HEAD:{p}") for p in config.rerun_files}
+            rerun_ids = {identifier for p, identifiers in config.rerun_files.items()
+                         if record["setup"]["inputs"].get(p) != inputs[p] for identifier in identifiers}
+            # Select before path-bound setup refreshes the recorded input blobs.
+            path_bound = [step for step in config.setup if step.path_bound]
+            rerun = [step for step in config.setup if step.id in rerun_ids and not step.path_bound]
+            if path_bound:
+                self.setup(record, path_bound)
+            mark("path_bound")
+            if rerun:
+                self.setup(record, rerun)
+            mark("rerun")
+            record["setup"]["inputs"] = inputs
             extensions.run(record, "after_take", self.settings.config.after_take, self.state, self.save)
             mark("after_take")
             record["worker"] = None
@@ -628,7 +640,7 @@ class Lifecycle:
         except ERRORS as exc:
             record["worker"] = None
             self.fail(record, exc)
-            raise ValueError(f"take kept claim {record['holder']['claim']} at {record['path']}: {exc}; log: {record['error']['log']}") from exc
+            raise ValueError(f"take kept claim {record['holder']['claim']} at {record['path']}: {record['error']['step']}: {exc}; log: {record['error']['log']}") from exc
 
     @operation
     def release(self, claim: str) -> dict[str, Any]:

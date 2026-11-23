@@ -123,12 +123,12 @@ Remove inputs that the repository does not use.
 | `pool.rebuildable` | Optional list of relative gitignore-style globs for reproducible ignored outputs. Default: empty list. No glob can match tracked files. |
 | `setup[].id` | Unique stable ID: letters, digits, underscore, or hyphen, starting with a letter. |
 | `setup[].argv` | Nonempty argument array. Commands run in declaration order without a shell. |
-| `setup[].path_bound` | Boolean, default false. Repeat this step after relocation during preparation or adoption. |
+| `setup[].path_bound` | Boolean, default false. Repeat this step after relocation during preparation, take, or adoption. |
 | `setup[].recreate` | Relative reproducible outputs. Paths cannot overlap or contain tracked data. |
 | `rerun_files` | Map from tracked inputs to known setup IDs. Default: empty map. |
 
-Changed inputs select mapped steps once, in declaration order.
-A definition change selects every step. Path-bound steps repeat after relocation.
+Preparation runs every setup step in declaration order.
+Take follows the selection rules in [Claims](#claims).
 The record stores input object IDs and a definition hash.
 `pool.upstream` selects the upstream for spare creation, freshness, and safety checks.
 Set it when integration uses a branch such as `dev` or `develop`, or a fork's
@@ -189,11 +189,15 @@ The optional task is record metadata.
 Take repairs registration, fetches the source upstream, and proves a fast-forward.
 It creates a separate branch and runs project `after_take` commands.
 The READY spare already passed setup before it entered the pool.
-Take preserves that setup evidence, even after a fast-forward or a change to setup settings.
+Take repeats every `path_bound` setup step at the claim path.
+It also repeats steps mapped by `rerun_files` when their recorded input blobs differ after the fast-forward.
+A step selected by both rules runs once. Take records the current input blobs after these steps pass.
+Other setup steps stay prepared, even when their settings change.
 Maintenance owns pool preparation, output removal, recycling, and parked rechecks.
-Project commands that require the final claim path belong in `after_take`.
+Selected setup steps recreate only their own declared outputs.
+Additional project commands for the claim belong in `after_take`.
 The result's `timings` object reports phase durations in seconds.
-It includes `initialize`, `holder`, `claim`, `freshness`, `branch`, `after_take`, `finalize`, `maintenance`, and `total`.
+It includes `initialize`, `holder`, `claim`, `freshness`, `branch`, `path_bound`, `rerun`, `after_take`, `finalize`, `maintenance`, and `total`.
 The `maintenance` duration covers the background launch request, and `total` includes project commands and that request.
 An empty pool blocks take with exit 4 and requests maintenance.
 A failed take retains its claim, files, failed step, and log.
@@ -348,9 +352,7 @@ The lifecycle retains the command logs and result file for inspection.
 Project scripts own server startup, port allocation, routing, and public-slot claims.
 Git-kit stores their evidence without interpreting those project resources.
 
-Path-bound setup repeats during preparation or adoption after relocation.
-Take uses the completed spare setup. Project-only setup, such as
-`bootstrap run --project-only`, keeps global launcher links unchanged.
+Project-only setup, such as `bootstrap run --project-only`, keeps global launcher links unchanged.
 Project extension scripts must preserve those links too.
 
 ## Push integration
