@@ -276,6 +276,8 @@ def _resolve_task(args, env, task_root):
         if cwd is None:
             raise _BadArguments(f"agent transcript {real} records no working directory")
         args.watched.append(cwd)
+        if os.path.realpath(output) != real:
+            args.watched.append(real)  # not a link: the output file never changes, the transcript does
         args.agent_transcript = real
     elif args.done_path is None:
         args.output = output

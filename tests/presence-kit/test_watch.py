@@ -887,7 +887,8 @@ def _run_agent(tmp_path, records):
     return run(["--task", "a1"], FakeClock(stop_after=3), tmp_path, task_env(tmp_path), task_root=root)
 
 
-def test_task_for_an_agent_with_an_empty_output_file_finds_the_transcript_by_pattern(tmp_path):
+def test_task_for_an_agent_with_an_empty_output_file_finds_the_transcript_by_pattern(tmp_path, monkeypatch):
+    monkeypatch.delattr(os, "getuid", raising=False)
     # Windows layout: the output file is an empty regular file, not a link.
     root = tmp_path / "tmp"
     worktree = tmp_path / "wt"
@@ -905,7 +906,8 @@ def test_task_for_an_agent_with_an_empty_output_file_finds_the_transcript_by_pat
     assert lines(out) == ["DONE: agent handed back its report"]
 
 
-def test_task_for_an_agent_whose_transcript_is_missing_fails_loudly(tmp_path):
+def test_task_for_an_agent_whose_transcript_is_missing_fails_loudly(tmp_path, monkeypatch):
+    monkeypatch.delattr(os, "getuid", raising=False)
     root = tmp_path / "tmp"
     tdir = root / "claude" / "0123456789abcdef" / SESSION / "tasks"
     tdir.mkdir(parents=True)
@@ -1043,3 +1045,26 @@ def test_a_file_windows_cannot_access_through_a_broken_reparse_point_counts_for_
     monkeypatch.setattr(os, "stat", stat)
     found = watch._newest([str(tmp_path / "w")])
     assert found is not None and found[1] == str(good)
+
+
+def test_transcript_growth_is_activity_when_the_output_file_is_not_a_link(tmp_path, monkeypatch):
+    # Windows: the empty output file never changes, so the transcript itself must be watched.
+    monkeypatch.delattr(os, "getuid", raising=False)
+    root = tmp_path / "tmp"
+    worktree = tmp_path / "wt"
+    make_file(worktree / "a.py", 0)
+    head = {"cwd": str(worktree), "type": "user", "uuid": "u0"}
+    tdir = root / "claude" / "0123456789abcdef" / SESSION / "tasks"
+    tdir.mkdir(parents=True)
+    (tdir / "a1.output").write_text("", encoding="utf-8")
+    set_mtime(tdir / "a1.output", 0)
+    sub = tmp_path / "cfg" / "projects" / "D--some-proj" / SESSION / "subagents"
+    transcript = make_file(sub / "agent-a1.jsonl", 0, json.dumps(head) + "\n")
+
+    def grow(n, clock):
+        set_mtime(transcript, clock.t)
+
+    code, out, _ = run(["--task", "a1", "--poll-seconds", "600", "--stall-minutes", "20"],
+                       FakeClock(on_sleep=grow, stop_after=6), tmp_path, task_env(tmp_path), task_root=root)
+    assert code is None
+    assert stalls(out) == []
