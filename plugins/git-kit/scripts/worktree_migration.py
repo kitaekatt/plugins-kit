@@ -357,17 +357,13 @@ def legacy_problem(obj: Lifecycle, record: dict[str, Any]) -> str | None:
 
 def evidence(obj: Lifecycle, record: dict[str, Any]) -> dict[str, Any]:
     path = Path(record["path"])
-    source = Path(record["repo"]["source_clone"])
     problem = legacy_problem(obj, record)
     if problem:
         return {"safe": False, "at": time.time(), "blockers": [problem]}
-    if obj._maintenance_upstreams is not None:
+    try:
         ref, oid = obj.record_upstream(record)
-    else:
-        ref = wt.main_upstream(source)
-        with _file_lock(obj.state / "fetch.lock", blocking=True):
-            wt.refresh(source)
-            oid = wt.git(source, "rev-parse", "--verify", f"{ref}^{{commit}}")
+    except ValueError:
+        return record["safety"]
     result = safety.inspect(record, oid, obj.declared_outputs(), obj.settings.config.pool.rebuildable)
     result["upstream_ref"] = ref
     return result
