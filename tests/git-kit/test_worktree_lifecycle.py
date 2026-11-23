@@ -180,7 +180,8 @@ def test_claim_races_and_crash_recovery(lifecycle, monkeypatch):
     record = obj.read_records()[0]
     assert Path(record["path"]).name == record["holder"]["agent"]
     assert record["holder"]["claim"] == wins[0]["claim"]
-    assert record["setup"]["final_path_result"]["path"] == record["path"]
+    assert record["setup"]["final_path_result"]["passed"]
+    assert Path(record["setup"]["final_path_result"]["path"]).parent.name == "ready"
     with pytest.raises(ValueError, match="claim|destination"):
         obj.take(record["holder"]["agent"], "s", process=holder())
     # Kill-shaped journal: durable reservation written, rename already happened,
@@ -197,7 +198,7 @@ def test_claim_races_and_crash_recovery(lifecycle, monkeypatch):
     assert git(Path(recovered["path"]), "rev-parse", "--show-toplevel") == recovered["path"]
 
 
-def test_mapped_reruns_and_path_setup(lifecycle):
+def test_ready_take_preserves_setup_while_fast_forwarding(lifecycle):
     obj = lifecycle
     obj.maintain()
     spare = obj.read_records()[0]
@@ -208,9 +209,9 @@ def test_mapped_reruns_and_path_setup(lifecycle):
     git(obj.repo, "push", "origin", "main")
     result = obj.take("mapped", "s", process=holder())
     record = obj.get(result["id"])
-    assert record["setup"]["selected"] == ["deps", "paths"]  # once, declared order
-    assert (Path(result["path"]) / "deps-output/value").read_text() == "two"
-    assert (Path(result["path"]) / "output/cwd").read_text() == result["path"] != old_path
+    assert record["setup"] == spare["setup"]
+    assert (Path(result["path"]) / "deps-output/value").read_text() == "one"
+    assert (Path(result["path"]) / "output/cwd").read_text() == old_path != result["path"]
     assert git(Path(result["path"]), "rev-parse", "HEAD") == git(obj.repo, "rev-parse", "origin/main")
     assert record["setup"]["inputs"]["lock.txt"]
     # Rewritten upstream must not reset an acquired spare backwards.
@@ -478,7 +479,7 @@ def test_background_maintenance_and_launcher_failure(lifecycle, monkeypatch):
     assert "launcher unavailable" in (obj.state / "launcher-error.json").read_text()
 
 
-def test_take_setup_failure_keeps_claim_and_log(lifecycle):
+def test_ready_take_does_not_run_changed_setup(lifecycle):
     import worktree_lifecycle as lc
     obj = lifecycle
     obj.maintain()
@@ -486,11 +487,10 @@ def test_take_setup_failure_keeps_claim_and_log(lifecycle):
     config["pool"]["setup"][1]["argv"] = [sys.executable, "-c", "import sys; print('setup failed'); sys.exit(7)"]
     write_json(obj.repo / ".claude/bootstrap.json", {"git_kit": {"worktrees": config}})
     obj = lc.Lifecycle(obj.repo)
-    with pytest.raises(ValueError, match="kept claim"):
-        obj.take("failed", "s", process=holder())
+    result = obj.take("prepared", "s", process=holder())
     record = obj.read_records()[0]
-    assert record["holder"] and record["error"]["exit"] == 7
-    assert "setup failed" in Path(record["error"]["log"]).read_text()
+    assert record["holder"]["claim"] == result["claim"] and record["error"] is None
+    assert "setup failed" not in (obj.state / "logs" / f"{record['id']}.log").read_text()
 
 
 def test_reconcile_rename_uses_journal_before_missing_path(lifecycle, monkeypatch):
