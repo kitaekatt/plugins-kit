@@ -18,6 +18,7 @@ import worktrees as wt
 from bootstrap_guard import data_dir
 from worktree_config import Step, home_config, inventory_api, load, read_object, require_install, validate_config
 from worktree_pool import _file_lock, remote_url, repo_identity
+from worktree_paths import registration_matches
 import worktree_safety as safety
 import worktree_extensions as extensions
 import worktree_discard as discard_work
@@ -42,8 +43,23 @@ def atomic_text(path: Path, text: str, *, newline: str | None = "") -> None:
         temporary.unlink(missing_ok=True)
 
 
+def upstream_operation(method: Callable) -> Callable:
+    """Share fetch results, including refusals, only within one operation."""
+    @functools.wraps(method)
+    def run(self: Lifecycle, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        previous = self._operation_upstreams
+        if previous is None:
+            self._operation_upstreams = {}
+        try:
+            return method(self, *args, **kwargs)
+        finally:
+            self._operation_upstreams = previous
+    return run
+
+
 def operation(method: Callable) -> Callable:
     """One request per public operation, even on refusal. Internal work stays inline."""
+    method = upstream_operation(method)
     @functools.wraps(method)
     def run(self: Lifecycle, *args: Any, **kwargs: Any) -> dict[str, Any]:
         try:
@@ -180,7 +196,7 @@ class Lifecycle:
         self.settings = load(self.repo)
         self.namespace = wt.resolve_settings(self.repo).root / repo_identity(self.url)
         self.state = data_dir("git-kit") / "worktrees" / repo_identity(self.url)
-        self._maintenance_upstreams: dict[Path, tuple[str, str] | str] | None = None
+        self._operation_upstreams: dict[Path, tuple[str, str] | str] | None = None
 
     def gate(self, *, namespace: bool = True) -> None:
         require_install(self.repo)
@@ -260,26 +276,34 @@ class Lifecycle:
         return {"free_percent": usage.free * 100 / usage.total, "floor_percent": self.settings.disk_floor_percent}
 
     def fresh(self) -> tuple[str, str]:
-        source = self.source()
-        ref = wt.main_upstream(source)
-        with _file_lock(self.state / "fetch.lock", blocking=True):
-            wt.refresh(source)
-            return ref, wt.git(source, "rev-parse", "--verify", f"{ref}^{{commit}}")
+        return self.clone_upstream(self.source())
 
     def declared_outputs(self) -> list[str]:
         return [p for step in self.settings.config.pool.setup for p in step.recreate]
 
     def record_upstream(self, record: dict[str, Any]) -> tuple[str, str]:
         """Resolve the approved upstream in the record's own object database."""
-        source = Path(record["repo"]["source_clone"]).resolve()
-        configured = self.source()
-        if source == configured.resolve():
-            return self.fresh()
-        cache = self._maintenance_upstreams
+        try:
+            return self.clone_upstream(Path(record["repo"]["source_clone"]))
+        except ValueError as exc:
+            record["safety"] = {"safe": False, "at": time.time(), "blockers": [str(exc)]}
+            # Release clears its holder only in memory during inspection. Retain
+            # durable ownership when recording a failed freshness observation.
+            stored = read_object(self.state / "records" / f"{record['id']}.json")
+            if stored:
+                stored["safety"] = record["safety"]
+                self.save(stored)
+            raise
+
+    def clone_upstream(self, source: Path) -> tuple[str, str]:
+        """Fetch and resolve under the lock in the database that will use the OID."""
+        source = source.resolve()
+        cache = self._operation_upstreams
         with _file_lock(self.state / "fetch.lock", blocking=True):
             result = cache.get(source) if cache is not None else None
             if result is None:
                 try:
+                    configured = self.source() if (self.state / "namespace.json").exists() else self.repo
                     ref = wt.main_upstream(configured)
                     wt.refresh(source)
                     result = (ref, wt.git(source, "rev-parse", "--verify", f"{ref}^{{commit}}"))
@@ -318,6 +342,7 @@ class Lifecycle:
             raise ValueError(f"Worktree common directory disagrees with record: {path}")
         return path
 
+    @upstream_operation
     def migrate(self, *, apply: bool = False, clones: list[Path] | None = None) -> dict[str, Any]:
         from worktree_migration import run
         return run(self, apply=apply, clones=clones)
@@ -381,12 +406,12 @@ class Lifecycle:
         if record.get("holder"):
             raise ValueError(f"Worktree has a holder claim: {record['holder']}")
         path = self.record_path(record)
-        if not path.is_dir() or path.resolve() == wt.project_root(path):
+        if not path.is_dir() or registration_matches(wt.records(path)[0], path):
             raise ValueError(f"Missing target or main checkout: {path}")
         from worktree_paths import path_identity
         matches = [r for r in self.read_records() if r["state"] not in {"removed", "retired-duplicate"}
                    and path_identity(Path(r["path"])) == path_identity(path)]
-        registrations = [r for r in wt.records(path) if Path(r["worktree"]).resolve() == path.resolve()]
+        registrations = [r for r in wt.records(path) if registration_matches(r, path)]
         if len(matches) != 1 or len(registrations) != 1 or "locked" in registrations[0]:
             raise ValueError(f"Ambiguous or locked worktree scope: {record['id']} at {path}")
         blockers = safety.declared_process_blockers(record)
@@ -427,7 +452,7 @@ class Lifecycle:
             if record["state"] != "parked":
                 raise ValueError("Discard requires a parked target without a holder claim")
             path = self.unheld_path(record)
-            _, upstream = self.fresh()
+            _, upstream = self.record_upstream(record)
             lost = discard_work.inventory(record, upstream, self.declared_outputs(), self.settings.config.pool.rebuildable)
             scope = {"id": identifier, "path": str(path), "repo": record["repo"], "lost_work": lost}
             fingerprint = hashlib.sha256(json.dumps(scope, sort_keys=True).encode()).hexdigest()
@@ -475,6 +500,7 @@ class Lifecycle:
             if any((r.get("holder") or {}).get("agent") == agent for r in self.read_records()):
                 raise ValueError(f"Agent {agent} already holds a claim")
             path = self.unheld_path(record)
+            self.record_upstream(record)
             destination = self.namespace / agent
             if destination != path and (destination.exists() or destination.is_symlink()):
                 raise ValueError(f"Claim destination already exists: {destination}")
@@ -492,7 +518,7 @@ class Lifecycle:
                 self.fail(record, exc)
                 raise ValueError(f"adopt kept claim {record['holder']['claim']}: {exc}") from exc
         try:
-            # Adoption never fetches, resets, checks out a branch, or replaces files.
+            # Adoption preserves the branch, commits and working files.
             self.setup(record, [step for step in self.settings.config.pool.setup if step.path_bound])
             extensions.run(record, "after_take", self.settings.config.after_take, self.state, self.save)
             path = self.record_path(record)
@@ -551,7 +577,7 @@ class Lifecycle:
                 self.fail(record, exc)
                 raise
         try:
-            ref, oid = self.fresh()
+            ref, oid = self.record_upstream(record)
             path = self.record_path(record)
             if wt.git(path, "status", "--porcelain=v1", "--untracked-files=all"):
                 raise ValueError("Ready spare has uncommitted work; preserving claim")
@@ -686,7 +712,7 @@ class Lifecycle:
             if legacy_problem(self, record):
                 continue  # Orphaned files remain parked until explicit repair.
             path = self.record_path(record)
-            registered = any(Path(r["worktree"]).resolve() == path.resolve()
+            registered = any(registration_matches(r, path)
                              for r in wt.records(Path(record["repo"]["source_clone"])))
             if not path.exists() and not registered:
                 record.update(state="removed", holder=None, worker=None)
@@ -724,7 +750,7 @@ class Lifecycle:
 
     def prepare(self, record: dict[str, Any], *, recycle: bool) -> None:
         try:
-            ref, oid = self.fresh()
+            ref, oid = self.record_upstream(record)
             if recycle:
                 record["state"] = "recycled"
                 self.relocate(record, self.namespace / "ready" / record["id"], "recycle")
@@ -766,7 +792,9 @@ class Lifecycle:
             with _file_lock(self.state / "launch.lock", blocking=True):
                 atomic_json(self.state / "maintenance.json", worker)
             result: dict[str, Any] = {"outcome": "complete", "built": [], "recycled": [], "removed": []}
-            self._maintenance_upstreams = {}
+            previous_upstreams = self._operation_upstreams
+            if previous_upstreams is None:
+                self._operation_upstreams = {}
             try:
                 with _file_lock(self.state / "claim.lock", blocking=True):
                     from worktree_retirement import retire_duplicates
@@ -840,7 +868,7 @@ class Lifecycle:
                 atomic_json(self.state / "maintenance.json", {**worker, "outcome": "failed", "reason": str(exc), "finished": time.time()})
                 raise
             finally:
-                self._maintenance_upstreams = None
+                self._operation_upstreams = previous_upstreams
 
     def request_maintenance(self) -> dict[str, Any]:
         if not self.settings.config or not self.settings.config.enabled:

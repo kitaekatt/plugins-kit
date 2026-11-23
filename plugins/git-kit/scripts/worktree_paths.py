@@ -36,3 +36,8 @@ def path_identity(path: Path) -> tuple:
     missing = str(Path(*reversed(suffix)))
     missing = os.path.normcase(missing).casefold() if case_insensitive(parent) else missing
     return ("missing", info.st_dev, info.st_ino, missing)
+
+
+def registration_matches(registration: dict[str, str], path: Path) -> bool:
+    """Match a Git registration by filesystem identity, independently of locks."""
+    return path_identity(Path(registration["worktree"])) == path_identity(path)
