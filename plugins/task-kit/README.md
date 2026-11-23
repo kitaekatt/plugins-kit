@@ -13,6 +13,11 @@ folder). The skill routes a natural-language request ("start a task for X",
 "what tasks are open here?", "archive the closet task") to the right verb and
 states what the agent, rather than the script, must do with the output.
 
+A task can be hidden until a date: `task update <ref> --hidden-until 2026-11-30` leaves it out of `list`, `review`, the task
+view and the answers catalogs until that day, and `--hidden-until none` removes the field. `list --include-hidden` and
+`review --include-hidden` show it; by-name verbs always work on it. The rule is in
+[skills/task/references/core-contracts.md](skills/task/references/core-contracts.md), "Hidden until".
+
 The skill's entry point, verb contracts, and design documents are in
 [skills/task/SKILL.md](skills/task/SKILL.md) and
 [skills/task/design/task-system-design.md](skills/task/design/task-system-design.md).

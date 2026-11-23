@@ -59,7 +59,7 @@ import yaml
 
 from skills_kit_lib import schema_engine
 
-from . import resolve
+from . import hidden, resolve
 from .schemas import MERGE_POLICIES
 from .task_items import read_task_items, stale_priority_refs
 from .types import CONTEXT_FILE, DEFAULT_TYPE_NAME, TaskType, context_file, get_type
@@ -481,6 +481,15 @@ def validate_ref(
                     f"schema violation: task.merge.policy: {policy!r} not in "
                     f"{list(MERGE_POLICIES)}"
                 )
+
+        # hidden_until must be a calendar date (YYYY-MM-DD): independent of the
+        # task type, like merge.policy. A past date is fine (the task is
+        # visible); a malformed one is an error, and the task stays listed.
+        if task_block.get(hidden.HIDDEN_UNTIL_KEY) is not None:
+            try:
+                hidden.parse_hidden_until(task_block[hidden.HIDDEN_UNTIL_KEY])
+            except hidden.HiddenUntilError as exc:
+                errors.append(f"schema violation: task.hidden_until: {exc}")
 
         # Post-walker vocabulary checks -- type-dependent, so only meaningful
         # against a registered type (the layering described in schemas.py).

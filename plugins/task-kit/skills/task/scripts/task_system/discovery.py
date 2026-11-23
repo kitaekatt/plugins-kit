@@ -83,7 +83,7 @@ import yaml
 from skills_kit_lib import schema_engine
 from skills_kit_lib.document_walker import iter_yaml_blocks
 
-from . import resolve
+from . import hidden, resolve
 from .schemas import TASK_LIST_SCHEMA
 from .validate import validate_ref
 
@@ -156,6 +156,8 @@ class TaskRecord:
     host: str | None = None  # retained ref host tag, when any ref carried one
     project_name: str = ""
     project_root: Path | None = None
+    hidden_until: str | None = None  # task.hidden_until as written (YYYY-MM-DD), when the task declares one
+    hidden: bool = False  # hidden on the discovery day (only a listing that includes hidden tasks holds one)
 
 
 def read_task_block(folder: Path) -> dict | None:
@@ -380,6 +382,8 @@ def _discover_local(
     status: str | None = None,
     priority: str | None = None,
     notes: list[str] | None = None,
+    today: datetime.date | None = None,
+    include_hidden: bool = False,
 ) -> list[TaskRecord]:
     """Enumerate the tasks in a scope (spec 8). Returns records sorted by id.
 
@@ -388,9 +392,15 @@ def _discover_local(
     ``status`` values list any classification, including ``archived``.
     ``local_host`` overrides host detection (injectable for tests);
     ``notes``, when given, accumulates skip-with-note findings.
+
+    A task hidden on ``today`` (``hidden.is_hidden``; default: the local date) is left out unless
+    ``include_hidden``. This is the one place the crawl applies the rule, so every view built on discovery
+    shares it; a remote task is opaque and never hidden.
     """
     if notes is None:
         notes = []
+    if today is None:
+        today = hidden.local_today()
     if scope not in LOCAL_SCOPES:
         raise DiscoveryError(
             f"unknown scope {scope!r} (expected one of: " + ", ".join(SCOPES) + ")"
@@ -421,6 +431,8 @@ def _discover_local(
         title: str | None = None
         prio: str | None = None
         last_update: str | None = None
+        hidden_until: str | None = None
+        is_hidden_now = False
         if result.classification != "remote":  # remote is opaque: never read
             folder = effective_root / canonical
             if folder.is_dir():
@@ -430,6 +442,10 @@ def _discover_local(
                     raw_prio = block.get("priority")
                     title = raw_title if isinstance(raw_title, str) else None
                     prio = raw_prio if isinstance(raw_prio, str) else None
+                    is_hidden_now = hidden.is_hidden(block, today)
+                    if is_hidden_now and not include_hidden:
+                        continue
+                    hidden_until = hidden.display_value(block)
                 last_update = read_last_update(folder)
         record = TaskRecord(
             id=canonical,
@@ -440,6 +456,8 @@ def _discover_local(
             host=host,
             project_name=project_name or effective_root.name,
             project_root=effective_root,
+            hidden_until=hidden_until,
+            hidden=is_hidden_now,
         )
         if status is None:
             if record.classification == "archived":
@@ -553,8 +571,12 @@ def discover(
     priority: str | None = None,
     notes: list[str] | None = None,
     devroot: Path | None = None,
+    today: datetime.date | None = None,
+    include_hidden: bool = False,
 ) -> list[TaskRecord]:
-    """Enumerate one project or projects under configured parent directories."""
+    """Enumerate one project or projects under configured parent directories.
+
+    ``today`` and ``include_hidden`` are ``_discover_local``'s hidden-task rule."""
     if scope != "all":
         return _discover_local(
             scope,
@@ -565,6 +587,8 @@ def discover(
             status=status,
             priority=priority,
             notes=notes,
+            today=today,
+            include_hidden=include_hidden,
             project_name=(
                 (user_root if user_root is not None else DEFAULT_USER_ROOT).name
                 if scope == "user"
@@ -589,6 +613,8 @@ def discover(
                 status=status,
                 priority=priority,
                 notes=project_notes,
+                today=today,
+                include_hidden=include_hidden,
                 project_name=project.name,
             )
         )

@@ -21,6 +21,8 @@ Read-op conventions (Step 3):
   is ``id  status  priority  last_update  title`` (two-space separated;
   absent fields ``-``; ``last_update`` is the latest ISO date in dated
   ``log.md`` entries). Explicit ``--status`` prints only matching task lines.
+  A task hidden until a later date (``task.hidden_until``) is left out; with
+  ``--include-hidden`` its line ends ``(hidden until YYYY-MM-DD)``.
   Discovery notes go to stderr. Exit 0 even when empty.
 - ``show <ref>`` prints the selected task.yaml fields, then one ``working:``
   line per working-session registration of the task (``working: -`` without
@@ -63,6 +65,9 @@ State-op conventions (Step 4):
   a write op; validate reports). List-valued flags (``--depends-on``,
   ``--blocked-by``, ``--skill-to-invoke``, ``--durable-output``) are
   repeatable and REPLACE the stored list (no append/remove micro-ops in v1).
+  ``--hidden-until YYYY-MM-DD`` hides the task from list/review until that
+  date; ``--hidden-until none`` removes the field; a bad date exits non-zero
+  before anything is written.
   ``--durable-output`` declares a document that OUTLIVES the task, by its
   path in the owning repo; archive verifies each declaration still resolves
   outside the folder it is about to park or delete.
@@ -117,9 +122,9 @@ Usage:
     task.py init <stub|desc> [--dest tmp|dev/tasks] [--type hand-off] [--root PATH]
     task.py list [--scope all|user|project|skill|file] [--target X]
                  [--status S] [--priority P] [--format text|json|yaml]
-                 [--root PATH]
+                 [--include-hidden] [--root PATH]
   task.py review [--scope all|user|project|skill|file] [--target X]
-                   [--output PATH|-] [--no-open]
+                   [--output PATH|-] [--no-open] [--include-hidden]
                    [--generate-missing-summaries | --no-generate-missing-summaries]
                    [--root PATH]
     task.py show <ref> [--root PATH]
@@ -129,7 +134,8 @@ Usage:
     task.py update <ref> [--status S] [--priority P] [--description D]
                    [--depends-on PATH ...] [--blocked-by PATH ...]
                    [--agent-hint H] [--skill-to-invoke NAME ...]
-                   [--durable-output PATH ...] [--root PATH]
+                   [--durable-output PATH ...] [--hidden-until DATE|none]
+                   [--root PATH]
     task.py close <ref> [--root PATH]
     task.py reopen <ref> [--root PATH]
     task.py archive <ref> [--root PATH]
@@ -161,6 +167,7 @@ from bootstrap_guard import reexec_under_plugin_venv  # noqa: E402
 reexec_under_plugin_venv("task-kit")
 
 try:
+    from task_system import hidden  # noqa: E402
     from task_system import location_ops  # noqa: E402
     from task_system import reference_rewrite  # noqa: E402
     from task_system import resolve  # noqa: E402
@@ -275,6 +282,8 @@ def _format_list_line(view) -> str:
             view.title or "-",
         ]
     )
+    if view.hidden:
+        line += f"  (hidden until {view.hidden_until})"
     return line + sessions_cli.working_suffix(view.sessions)
 
 
@@ -301,6 +310,7 @@ def _collect_listing(args: argparse.Namespace, root: Path) -> TaskListing | None
             status=getattr(args, "status", None),
             priority=getattr(args, "priority", None),
             devroot=getattr(args, "devroot", None),
+            include_hidden=args.include_hidden,
         )
     except DiscoveryError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -429,6 +439,7 @@ _SHOW_FIELDS = (
     "skills_to_invoke",
     "durable_outputs",
     "merge",
+    "hidden_until",
 )
 
 
@@ -597,6 +608,7 @@ def _cmd_update(args: argparse.Namespace) -> int:
             agent_hint=args.agent_hint,
             skills_to_invoke=args.skills_to_invoke,
             durable_outputs=args.durable_outputs,
+            hidden_until=args.hidden_until,
         )
     except StateOpError as exc:
         _print_state_op_error(exc)
@@ -872,6 +884,12 @@ def main(argv: list[str] | None = None) -> int:
         "--priority", default=None, help="Only tasks with this priority."
     )
     p_list.add_argument(
+        "--include-hidden",
+        dest="include_hidden",
+        action="store_true",
+        help="Also list tasks hidden until a later date (task.hidden_until), marked on their line.",
+    )
+    p_list.add_argument(
         "--format",
         choices=["text", "json", "yaml"],
         default="text",
@@ -886,7 +904,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p_review = sub.add_parser(
         "review",
-        help="Build a collapsible HTML review of all discovered non-archived tasks.",
+        help="Build a collapsible HTML review of all discovered non-archived tasks not hidden until a later date.",
     )
     p_review.add_argument(
         "--scope",
@@ -909,6 +927,12 @@ def main(argv: list[str] | None = None) -> int:
         "--no-open",
         action="store_true",
         help="Do not open the generated HTML in the browser.",
+    )
+    p_review.add_argument(
+        "--include-hidden",
+        dest="include_hidden",
+        action="store_true",
+        help="Also review tasks hidden until a later date (task.hidden_until).",
     )
     summary_group = p_review.add_mutually_exclusive_group()
     summary_group.add_argument(
@@ -1072,6 +1096,14 @@ def main(argv: list[str] | None = None) -> int:
         "repo-relative path in the owning repo, outside the task folder "
         "(repeatable; REPLACES the stored list). archive verifies each one "
         "still has a home.",
+    )
+    p_update.add_argument(
+        "--hidden-until",
+        dest="hidden_until",
+        default=None,
+        metavar="DATE",
+        help="Hide the task from list and review until this date (YYYY-MM-DD, local time); "
+        "'none' removes the field. By-name verbs still work on a hidden task.",
     )
     add_state_op_parser(
         "close",

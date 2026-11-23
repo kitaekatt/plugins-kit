@@ -66,6 +66,14 @@ TASK_SCHEMA: dict = {
         # findings gate `work`, and a script cannot tell an architecture
         # spec from a throwaway analysis.
         "durable_outputs": {"required": False, "type": "list"},
+        # Hide the task from menus (list, review, the dashboard export, answers
+        # refresh and status) until a calendar date, ``YYYY-MM-DD`` in local
+        # time: hidden while today is before it, visible on and after it.
+        # Optional; absent or null is visible, and status is unaffected. An
+        # unquoted ``2026-11-30`` loads from YAML as a date and a quoted one as
+        # a string, so the engine checks no type; the date check is a
+        # post-walker one in validate.py (hidden.parse_hidden_until).
+        "hidden_until": {"required": False},
         # Merge target for the task's work, declared once per task. Optional:
         # absent means the task declares no merge policy, and consumers must
         # not infer one. ``remote`` is optional inside the block; a consumer

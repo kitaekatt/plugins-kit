@@ -37,7 +37,7 @@ meanings are in the core contracts.
 `task.py update <ref> [--status S] [--priority P] [--description D]
 [--depends-on PATH ...] [--blocked-by PATH ...] [--agent-hint H]
 [--skill-to-invoke NAME ...] [--durable-output PATH ...] [--summary S]
-[--root PATH]`
+[--hidden-until DATE|none] [--root PATH]`
 
 Requires an explicit ref and initializes the folder when absent (upsert).
 Applies field edits, appends one dated entry to log.md, re-validates, and
@@ -45,6 +45,11 @@ prints the classification. Exit 0 means no findings, but the write persists
 regardless (fix forward). List-valued flags are repeatable and REPLACE the
 stored list. `--summary` writes legacy `task.summary`; an orientation answer's
 headline supersedes it in list and review.
+
+`--hidden-until YYYY-MM-DD` hides the task from list, review and the other
+task menus until that date (see core-contracts.md, "Hidden until"); `--hidden-until
+none` removes the field. A bad date exits non-zero before anything is written
+or scaffolded.
 
 `--status deferred` means purposefully on hold and intended to resume. It is
 neither open nor closed. Deferred tasks leave list's Open section and review's

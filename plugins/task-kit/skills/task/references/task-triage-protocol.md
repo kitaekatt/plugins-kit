@@ -7,7 +7,8 @@ orchestration path.
 ## Trigger and scope
 
 - `triage the tasks` or `/task triage` with no ref means every open and
-  deferred task in the project.
+  deferred task in the project that is not hidden until a later date
+  (core-contracts.md, "Hidden until"). A hidden task is triaged only by ref.
 - `/task triage <ref>` or `triage <task>` means only that task.
 
 For a project-wide triage, prepare all audits before presenting any ruling. For
@@ -15,14 +16,15 @@ a specific task, use the same protocol for that task only.
 
 ## 1. Select
 
-This step is project-wide only. Run `task.py list`. Select every open task
-(active or blocked) and every deferred task; no age or last-updated threshold
-of any kind. An empty scaffold (`task_items` with `items: []` and placeholder
+This step is project-wide only. Run `task.py list`, which leaves out tasks hidden until a later date. Select
+every open task (active or blocked) and every deferred task it prints; no age
+or last-updated threshold of any kind. An empty scaffold (`task_items` with `items: []` and placeholder
 documents) needs no audit: classify it directly as `never-started` and
 recommend archive.
 
-Selection is complete when every open and deferred task is either selected
-for audit or classified as an empty scaffold.
+Selection is complete when every open and deferred task that is not hidden
+until a later date is either selected for audit or classified as an empty
+scaffold.
 
 Audits are prepared for all selected tasks. Presentation order defaults to
 oldest first -- longest since last update, using the `last_update` column
