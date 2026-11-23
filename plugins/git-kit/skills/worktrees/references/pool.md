@@ -451,9 +451,9 @@ that runs through a shell function or a `( ... )` subshell, or a `sleep &` of th
 command. Their cwd or open files in the worktree do not block release.
 The release process itself never blocks, so release can run with its cwd in
 the worktree. Its directory scan runs from the filesystem root, so the scanner
-does not report itself. Processes that release starts are in that subtree too,
-so a server that a `before_release` command leaves running does not block
-release; maintenance keeps the worktree while it runs.
+does not report itself. A `before_release` command finishes before the scan, so
+a server it leaves running is no longer in that subtree (the system reparents
+it) and still blocks release.
 A chain that does not reach the holder (same PID and start) excludes nothing.
 An ignored process that ends or changes identity during inspection blocks release.
 Every other process still blocks. This includes the holder's other children and
