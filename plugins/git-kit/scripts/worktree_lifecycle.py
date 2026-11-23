@@ -763,9 +763,7 @@ class Lifecycle:
                 return {"id": record["id"], "state": record["state"]}
             if record.get("worker") and safety.process_state(record["worker"]) != "dead":
                 raise ValueError("Release blocked by a live or uncertain builder worker")
-            path = self.record_path(record)
-            if Path.cwd().resolve().is_relative_to(path.resolve()):
-                raise ValueError("Run release outside the candidate directory")
+            self.record_path(record)
             saved = record["holder"]
             worker = safety.process_identity(os.getpid())
             record["worker"] = worker
@@ -1086,5 +1084,5 @@ class Lifecycle:
 
 
 def release(repo: Path, claim: str) -> dict[str, Any]:
-    """A full-push caller invokes this outside the claimed worktree after delivery."""
+    """A full-push caller invokes this after delivery, from any directory."""
     return Lifecycle(repo).release(claim)

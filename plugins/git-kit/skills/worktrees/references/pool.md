@@ -412,7 +412,7 @@ Project extension scripts must preserve those links too.
 ## Push integration
 
 Agents use plain `git commit`. After a full push, the caller runs release
-from outside the claimed directory:
+from any directory, including the claimed worktree:
 
 ```bash
 "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${GIT_KIT_ROOT:?requires git-kit provisioning}/scripts/worktrees.py" release --repo /path/to/source --claim c-...
@@ -448,6 +448,10 @@ process. They also include the direct children of each chain member except the
 holder, which are the other processes of the same shell command, such as
 `grep` and `head` in `release ... | grep ... | head`, or a `sleep &` of that
 command. Their cwd or open files in the worktree do not block release.
+The release process itself never blocks, so release can run with its cwd in
+the worktree. Its directory scan runs from the filesystem root, so the scanner
+does not report itself. Other processes that release starts, such as a server
+that a `before_release` command leaves running, still block.
 A chain that does not reach the holder (same PID and start) excludes nothing.
 An ignored process that ends or changes identity during inspection blocks release.
 Every other process still blocks. This includes the holder's other children,
