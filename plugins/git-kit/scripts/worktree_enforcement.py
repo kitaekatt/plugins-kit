@@ -19,6 +19,12 @@ if TYPE_CHECKING:
 
 _BUILD_OWNERS: dict[Path, tuple[Lifecycle, dict[str, Any]]] = {}
 
+# Bootstrap exports GIT_KIT_ROOT as the installed version's root, so the
+# command runs that version rather than an older copy in the plugin cache.
+TAKE_COMMAND = ('"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" '
+                '"${GIT_KIT_ROOT:?requires git-kit provisioning}/scripts/worktrees.py" '
+                "take --agent <unique-id> --session <session-id> [--task <task-id>]")
+
 
 def enabled(repo: Path) -> bool:
     """Only a tracked repository manifest opts into creation enforcement."""
@@ -339,8 +345,10 @@ def decision(payload: dict[str, Any]) -> dict[str, Any]:
     for repo in candidates:
         if enabled(repo):
             message = ("This repository enables git-kit's worktree lifecycle in tracked .claude/bootstrap.json. "
-                       "Use worktrees.py take --agent <agent> --session <session> instead of raw creation; "
-                       "use worktrees.py configure --propose to review settings. "
+                       f"Instead of raw creation, run {TAKE_COMMAND}. "
+                       "The --agent value is a claim ID that must be unique among live claims "
+                       "(for example the task name, not the agent type); it is also the worktree folder name. "
+                       "Run the same script with configure --propose to review settings. "
                        "Only lifecycle maintenance creates managed spares.")
             return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                            "permissionDecisionReason": message}}

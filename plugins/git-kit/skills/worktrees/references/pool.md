@@ -11,15 +11,30 @@ Launch the CLI through the provisioned plugin:
 "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${GIT_KIT_ROOT:?requires git-kit provisioning}/scripts/worktrees.py" configure --propose --repo /path/to/repo
 ```
 
+`GIT_KIT_ROOT` is the root of the installed git-kit version. Bootstrap
+exports it. The plugin cache can also hold older git-kit versions, and an
+older CLI can refuse the current repository settings, so name the CLI
+through `GIT_KIT_ROOT`.
+
 The following arguments use that same CLI. Every command accepts `--repo`
-before or after its name.
+before or after its name. For example, a take is:
+
+```bash
+"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${GIT_KIT_ROOT:?requires git-kit provisioning}/scripts/worktrees.py" take --agent <unique-id> --session <session-id> [--task <task-id>]
+```
+
+The `--agent` value is a claim ID. It must be unique among live claims,
+because it is also the worktree folder name (`<root>/<repo>/<agent-id>`). Use
+the task name or another unique ID, not the agent type, such as `claude`.
+When a live claim holds the ID, take and adopt refuse. The error names that
+holder's session, worktree path, and claim. Choose a different, unique ID.
 
 | Arguments | Result |
 |---|---|
 | `configure --propose` | Show defaults and a project-fit proposal without changing settings. |
 | `configure --apply approved.json` | Validate and write the approved repository settings. |
-| `take --agent a1 --session s1 [--task task-id]` | Claim a prepared spare and run project `after_take` commands. |
-| `adopt --id w-... --agent a1 --session s1` | Claim a parked worktree and complete setup while preserving its branch and files. |
+| `take --agent <unique-id> --session <session-id> [--task <task-id>]` | Claim a prepared spare and run project `after_take` commands. |
+| `adopt --id w-... --agent <unique-id> --session <session-id>` | Claim a parked worktree and complete setup while preserving its branch and files. |
 | `parked [--session s1 | --task task-id]` | Show all parked entries, or entries for one session or task. |
 | `check-task-close --task task-id --json` | Return `{allowed, parked:[...]}` for a task-close check. |
 | `discard --id w-... --propose` | Identify the target and the work that discard will remove. |
@@ -34,8 +49,8 @@ Status always emits JSON. `config` and `list` are status aliases.
 `pool status` and `pool refill` delegate to status and maintenance.
 `pool refill --background` requests a detached pass.
 Raw `new`, positional `take <task-name>`, and raw `remove` refuse mutation.
-The supported `take --agent a1 --session s1 --task task-id` form accepts task
-metadata. The positional legacy form refuses mutation.
+The supported `take --agent <unique-id> --session <session-id> --task <task-id>`
+form accepts task metadata. The positional legacy form refuses mutation.
 
 Review the proposal with the user before applying it. Save the approved
 `proposal` object as JSON, then pass its file path to `--apply`.
@@ -67,8 +82,9 @@ For an enabled repository, the PreToolUse hook blocks these creation requests:
 The hook reads tracked repository `.claude/bootstrap.json`, under `git_kit.worktrees`.
 User settings and local overrides cannot enable this enforcement.
 Disabled and unconfigured repositories keep their ordinary tool behavior.
-The hook returns a PreToolUse `permissionDecision: "deny"` with the lifecycle
-take command and the configure command for settings approval.
+The hook returns a PreToolUse `permissionDecision: "deny"` with the full take
+command through `GIT_KIT_ROOT`, the rule that the agent ID is unique, and the
+configure command for settings approval.
 
 An internal build creates a staging checkout through the lifecycle worker.
 The worker proves maintenance-lock ownership and its recorded process identity.
@@ -184,6 +200,7 @@ Setup can still fail for lack of space.
 Take reserves a holder under the claim lock before it renames a spare.
 The journal records both paths before the rename.
 The destination is `<root>/<repo>/<agent-id>`.
+An agent ID that a live claim holds refuses the take and names that holder.
 The optional task is record metadata.
 
 Take repairs registration, fetches the source upstream, and proves a fast-forward.
@@ -225,7 +242,8 @@ Take returns stored metadata for its session or task and counts the other entrie
 It does not inspect parked paths. The explicit `parked` command observes their current state.
 
 `adopt` reserves a parked worktree under the same claim lock as take.
-The caller names one stable worktree ID. The adopting agent must have no claim.
+The caller names one stable worktree ID. The adopting agent ID must have no
+live claim; otherwise the error names that holder.
 A holder or live or uncertain process evidence blocks adoption.
 A competing adopter receives the winning holder's details.
 

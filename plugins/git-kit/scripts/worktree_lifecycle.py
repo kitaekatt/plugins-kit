@@ -169,6 +169,18 @@ def replace_git_kit(text: str, expected: dict[str, Any]) -> str:
     return result
 
 
+def require_free_agent(rows: list[dict[str, Any]], agent: str) -> None:
+    """Refuse an agent ID that a live claim holds, and name that holder."""
+    for row in rows:
+        held = row.get("holder") or {}
+        if held.get("agent") == agent:
+            raise ValueError(
+                f"Agent {agent} already holds a claim: session {held.get('session')}, "
+                f"worktree {row.get('path')}, claim {held.get('claim')}. "
+                "The --agent value is the claim ID and the worktree folder name, so it must be unique; "
+                "choose a different, unique --agent, for example the task name")
+
+
 def configure_repository(repo: Path, approved: dict[str, Any] | None = None) -> dict[str, Any]:
     """Propose or replace settings without loading the existing lifecycle."""
     repo = wt.project_root(repo)
@@ -530,8 +542,7 @@ class Lifecycle:
             record = self.get(identifier)
             if record["state"] != "parked" or record.get("holder"):
                 raise ValueError(f"Adopt requires parked unheld work; winner/holder: {record.get('holder')}")
-            if any((r.get("holder") or {}).get("agent") == agent for r in self.read_records()):
-                raise ValueError(f"Agent {agent} already holds a claim")
+            require_free_agent(self.read_records(), agent)
             path = self.unheld_path(record)
             self.record_upstream(record)
             destination = self.namespace / agent
@@ -599,8 +610,7 @@ class Lifecycle:
             parked = [{**r, "session": (r.get("last_holder") or {}).get("session")}
                       for r in rows if r["state"] == "parked"]
             own_parked = [r for r in parked if r["session"] == session or (task is not None and r.get("task") == task)]
-            if any(r.get("holder", {}).get("agent") == agent for r in rows if r.get("holder")):
-                raise ValueError(f"Agent {agent} already holds a claim")
+            require_free_agent(rows, agent)
             destination = self.namespace / agent
             if destination.exists():
                 raise ValueError(f"Claim destination already exists: {destination}")
