@@ -312,6 +312,21 @@ class TestErrors:
             v("tmp/foo", tmp_path), "missing scaffolding file: plan.md"
         )
 
+    def test_agents_md_alone_satisfies_the_context_file(self, tmp_path):
+        folder = make_task(tmp_path, "tmp/foo")
+        (folder / "CLAUDE.md").rename(folder / "AGENTS.md")
+        result = v("tmp/foo", tmp_path)
+        assert result.errors == []
+        assert result.classification == "active"
+        assert not (folder / "CLAUDE.md").exists()
+
+    def test_neither_context_file_is_still_missing(self, tmp_path):
+        folder = make_task(tmp_path, "tmp/foo")
+        (folder / "CLAUDE.md").unlink()
+        self._assert_invalid(
+            v("tmp/foo", tmp_path), "missing scaffolding file: CLAUDE.md"
+        )
+
     def test_unknown_type(self, tmp_path):
         make_task(tmp_path, "tmp/foo", type="sprint")
         self._assert_invalid(v("tmp/foo", tmp_path), "unknown type")

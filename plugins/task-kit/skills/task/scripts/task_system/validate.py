@@ -62,7 +62,7 @@ from skills_kit_lib import schema_engine
 from . import resolve
 from .schemas import MERGE_POLICIES
 from .task_items import read_task_items, stale_priority_refs
-from .types import DEFAULT_TYPE_NAME, TaskType, get_type
+from .types import CONTEXT_FILE, DEFAULT_TYPE_NAME, TaskType, context_file, get_type
 
 # --- document-size budgets (handoff-template.md, enforced here) --------------
 # Role-based line budgets, two tiers. NOTE at the healthy target (advisory:
@@ -82,6 +82,7 @@ PLAN_MD_CEILING = 400
 OTHER_DOC_CEILING = 800
 _DOC_BUDGETS: dict[str, tuple[int | None, int]] = {
     "CLAUDE.md": (CLAUDE_MD_TARGET, CLAUDE_MD_CEILING),
+    "AGENTS.md": (CLAUDE_MD_TARGET, CLAUDE_MD_CEILING),
     "plan.md": (PLAN_MD_TARGET, PLAN_MD_CEILING),
 }
 # A single ``##`` section dominating CLAUDE.md/plan.md is the accretion
@@ -90,7 +91,7 @@ _DOC_BUDGETS: dict[str, tuple[int | None, int]] = {
 # past the floor (below it, halves are noise). Catches the metastasis long
 # before the file ceiling.
 SECTION_NOTE_MIN_DOC_LINES = 150
-_SECTION_CHECKED_DOCS = ("CLAUDE.md", "plan.md")
+_SECTION_CHECKED_DOCS = ("CLAUDE.md", "AGENTS.md", "plan.md")
 # Diary detector: dated session-narrative markers in CLAUDE.md (paragraphs
 # opening with a bold date, e.g. ``**2026-07-18...``). More than the cap ->
 # advisory note naming the session-diary anti-pattern (history -> log.md).
@@ -332,13 +333,13 @@ def _doc_size_findings(
                         "referenced doc (task skill "
                         "references/handoff-template.md, 'Rotation strategy')"
                     )
-        if name == "CLAUDE.md":
+        if name in ("CLAUDE.md", "AGENTS.md"):
             marks = sum(1 for line in lines if _DIARY_RE.match(line))
             if marks > DIARY_MARKER_MAX:
                 notes.append(
-                    f"session diary in CLAUDE.md: {canonical}/CLAUDE.md has "
+                    f"session diary in {name}: {canonical}/{name} has "
                     f"{marks} dated session-narrative markers (**YYYY-MM-DD) "
-                    "-- CLAUDE.md is live state, not history; move dated "
+                    f"-- {name} is live state, not history; move dated "
                     "narrative to log.md (task skill "
                     "references/handoff-template.md, 'log.md -- history')"
                 )
@@ -504,7 +505,12 @@ def validate_ref(
                 )
             # Scaffolding (type-defined file set).
             for fname in ttype.scaffolding:
-                if not (folder / fname).is_file():
+                present = (
+                    context_file(folder).is_file()
+                    if fname == CONTEXT_FILE
+                    else (folder / fname).is_file()
+                )
+                if not present:
                     errors.append(f"missing scaffolding file: {fname}")
 
     # --- warnings ------------------------------------------------------------
@@ -580,7 +586,7 @@ def validate_ref(
                 "pre-contract folder')"
             )
         elif not items_result.errors:
-            claude_md = folder / "CLAUDE.md"
+            claude_md = context_file(folder)
             if claude_md.is_file():
                 try:
                     text = claude_md.read_text(encoding="utf-8")

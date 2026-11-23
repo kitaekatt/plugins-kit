@@ -24,7 +24,7 @@ import yaml
 from .answers_types import InputBundle, Question
 from .discovery import TaskUpdate, read_task_updates
 from .task_items import read_task_items
-from .types import HAND_OFF
+from .types import HAND_OFF, context_file
 
 TRUNCATION_MARKER = "[truncated]"
 TASK_EXCLUDED_KEYS = frozenset(("_schema_version", "summary", "summary_fingerprint", "summary_updated"))
@@ -111,7 +111,7 @@ def _read_task(folder: Path, block: Mapping[str, Any] | None) -> str:
 
 
 def _read_claude_md(folder: Path, block: Mapping[str, Any] | None) -> str:
-    return _read_file(folder / "CLAUDE.md")
+    return _read_file(context_file(folder))
 
 
 def _read_plan_md(folder: Path, block: Mapping[str, Any] | None) -> str:
