@@ -444,18 +444,21 @@ Release proves safety before it atomically persists the cleared holder.
 A live or uncertain builder blocks release.
 Release ignores its callers. They are its caller chain, which is each parent
 process from the release process up to and including the holder's recorded
-process. They also include the direct children of each chain member except the
-holder, which are the other processes of the same shell command, such as
-`grep` and `head` in `release ... | grep ... | head`, or a `sleep &` of that
+process. They also include every process below each chain member except the
+holder, at any depth: all processes of the shell command that runs release,
+such as `grep` and `head` in `release ... | grep ... | head`, a pipeline element
+that runs through a shell function or a `( ... )` subshell, or a `sleep &` of that
 command. Their cwd or open files in the worktree do not block release.
 The release process itself never blocks, so release can run with its cwd in
 the worktree. Its directory scan runs from the filesystem root, so the scanner
-does not report itself. Other processes that release starts, such as a server
-that a `before_release` command leaves running, still block.
+does not report itself. A `before_release` command finishes before the scan, so
+a server it leaves running is no longer in that subtree (the system reparents
+it) and still blocks release.
 A chain that does not reach the holder (same PID and start) excludes nothing.
 An ignored process that ends or changes identity during inspection blocks release.
-Every other process still blocks. This includes the holder's other children,
-such as another shell command of the session or a background job.
+Every other process still blocks. This includes the holder's other children and
+their subtrees, such as another shell command of the session, a background job
+or a server.
 Maintenance has no callers. It reuses or removes a released worktree only
 after every process, including an ignored sibling, stops using it.
 Retirement requires clean tracked files, no untracked files, no holder,

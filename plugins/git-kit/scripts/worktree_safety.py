@@ -122,37 +122,43 @@ def caller_chain(holder: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
-def child_processes(parents: Collection[int]) -> list[dict[str, Any]]:
-    """Start identities of the direct children of ``parents``."""
+def descendant_processes(roots: Collection[int]) -> list[dict[str, Any]]:
+    """Start identities of every process below ``roots``, at any depth."""
     if os.name == "nt":
         # Windows directory-use inspection is uncertain and blocks release anyway.
         return []
     listing = subprocess.run(["ps", "-axo", "pid=,ppid="], capture_output=True, text=True, check=True, timeout=15)
-    children = []
+    children: dict[int, list[int]] = {}
     for line in listing.stdout.splitlines():
         pid, ppid = (int(value) for value in line.split())
-        if ppid in parents:
+        children.setdefault(ppid, []).append(pid)
+    found, queue = [], list(roots)
+    while queue:
+        for pid in children.get(queue.pop(), []):
+            queue.append(pid)
             try:
-                children.append(process_identity(pid))
+                found.append(process_identity(pid))
             except ValueError:
                 continue  # Exited after the listing; an unknown process is never excluded.
-    return children
+    return found
 
 
 def release_callers(holder: dict[str, Any]) -> list[dict[str, Any]]:
     """Processes whose use of the worktree does not block a release.
 
-    The caller chain (``caller_chain``) plus the direct children of each chain
-    member except the holder: the other processes of the same shell command,
-    such as ``grep`` in ``release ... | grep``. Children of the holder (other
-    shell commands of the session, background jobs) are not included.
+    The caller chain (``caller_chain``) plus the whole subtree of each chain
+    member strictly below the holder: every process of the shell command that
+    runs release, such as ``grep`` in ``release ... | grep``, including one
+    that runs through a shell function or a ``( ... )`` subshell. The holder's
+    other children and their subtrees (other shell commands of the session,
+    background jobs, servers) are not included.
     """
     chain = caller_chain(holder)
     if not chain:
         return []
     known = {caller["pid"] for caller in chain}
-    siblings = child_processes({caller["pid"] for caller in chain[:-1]})
-    return [*chain, *(child for child in siblings if child["pid"] not in known)]
+    below = descendant_processes({caller["pid"] for caller in chain[:-1]})
+    return [*chain, *(process for process in below if process["pid"] not in known)]
 
 
 def holder_state(identity: dict[str, Any]) -> str:
@@ -202,8 +208,7 @@ def path_processes(path: Path, *, pids: set[int] | None = None, exclude: Collect
     release passes its callers (``release_callers``). The inspecting process
     itself never blocks, and the scanner runs from the filesystem root, so a
     caller whose cwd is inside the path cannot make its own scan report it.
-    Other descendants of the caller still block, for example a server that a
-    before_release script left running in the worktree.
+    Any other process blocks unless ``exclude`` names it.
     """
     exclude = {os.getpid(), *exclude}
     if sys.platform.startswith("linux"):
