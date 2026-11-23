@@ -10,12 +10,13 @@ task-kit works the same whether or not Databench is installed.
 ## Commands
 
 - `task-kit` with no command runs `databench --view tasks`. When `databench` is not on PATH it exits 1 and says databench provides the task view and where to get it. `/task dashboard` runs this command.
+- `task-kit --include-hidden` runs `databench --view tasks --include-hidden`, so the view lists tasks hidden until a later date (`hidden_until`; core-contracts.md, "Hidden until"). It works for a fresh server and for one that already runs: databench opens `/-/tasks?hidden=1` and calls `task-kit export tasks --include-hidden` for that request. It needs a databench that has `--include-hidden` (databench has no version number; the flag arrives with databench commit `00a438e`, "Tasks view: include hidden tasks per request and mark \"hidden until DATE\"", once released). An older databench rejects the flag. Each exported task carries `hidden_until` (a date, or null), the value a view shows as "hidden until DATE".
 - `task-kit export ...` writes the task facts as JSON on stdout. It is the interface databench calls, and it writes nothing.
 - `task-kit answers ...` runs the task answers engine (`refresh`, `status`, and `prune`).
 - `task-kit manage ...` serves full execution input and revision-checked semantic mutations for a manager.
 - `task-kit stop [--force]` stops a dashboard server that an earlier task-kit version started. It reads that server's `dashboard/server.json` in task-kit's data directory, signals the process only when its PID and creation time match the record, and refuses while the server has jobs running unless `--force`. Exit codes: 0 stopped or nothing to stop, 1 error, 2 usage error, 3 task-kit's venv is not provisioned, 5 jobs are running, 6 refused inside a dashboard run. `stop` is a transition aid and is removed in a later minor.
 
-Any other command exits 2 and names `export`, `answers`, `manage` and `stop`.
+Any other command exits 2 and names `export`, `answers`, `manage` and `stop`; the only argument bare `task-kit` takes is `--include-hidden`.
 
 Relay a missing-databench message as printed and do not install databench
 unasked. For `task-kit stop`, relay a refusal as printed; do not delete the

@@ -25,7 +25,8 @@ import pytest
 import yaml
 
 from bootstrap_guard import _REEXEC_SKIP_ENV
-from task_system import export, hidden
+from task_export_support import inject
+from task_system import export, export_cli, hidden
 from task_system.discovery import discover
 from task_system.listing import collect_listing, listing_data
 
@@ -292,3 +293,50 @@ class TestExport:
         )
         found = export.item_payload(export.checkout_id(parent / "alpha"), "dev/tasks/later", "one", (parent,))
         assert found["item"]["id"] == "one"
+
+
+class TestExportCli:
+    """``task-kit export tasks --include-hidden``: the flag reaches ``tasks_payload``; the payload dates the task.
+
+    Revert checks: dropping ``include_hidden`` from ``export_cli._payload`` turns the flag and env tests red;
+    dropping ``hidden_until`` from ``export.task_facts`` turns the marker tests red.
+    """
+
+    ARGV = ["tasks", "--format", "json", "--protocol", "1"]
+
+    def tasks(self, parent: Path, *extra: str) -> dict:
+        code, doc = export_cli.document([*self.ARGV, "--parent", str(parent), *extra], **inject())
+        assert code == 0, doc
+        return {t["path"]: t for t in doc["payload"]["tasks"]}
+
+    def test_default_leaves_a_hidden_task_out(self, parent):
+        assert set(self.tasks(parent)) == {"dev/tasks/shown"}
+
+    def test_the_flag_brings_it_back_with_its_date(self, parent):
+        found = self.tasks(parent, "--include-hidden")
+        assert set(found) == {"dev/tasks/shown", "dev/tasks/later"}
+        assert found["dev/tasks/later"]["hidden_until"] == "2026-11-30"
+
+    def test_a_visible_task_carries_a_null_hidden_until(self, parent):
+        assert self.tasks(parent, "--include-hidden")["dev/tasks/shown"]["hidden_until"] is None
+
+    def test_the_flag_is_refused_for_the_other_kinds(self, parent):
+        for argv in (["protocols", "--format", "json", "--include-hidden"],
+                     ["item", "--format", "json", "--protocol", "1", "--checkout", "c", "--task", "t", "--item", "i",
+                      "--include-hidden"]):
+            code, doc = export_cli.document(argv, **inject())
+            assert code == 2 and doc["error"]["code"] == "usage", doc
+            assert "--include-hidden" in doc["error"]["message"]
+
+    def test_the_real_command_line_takes_the_flag(self, parent, tmp_path):
+        env = dict(os.environ)
+        env.update({_REEXEC_SKIP_ENV: "1", "PYTHONPATH": str(_REPO_ROOT / "plugins" / "skills-kit"),
+                    "HOME": str(tmp_path), "USERPROFILE": str(tmp_path)})
+        entry = _REPO_ROOT / "plugins" / "task-kit" / "bin" / "task_kit_entrypoint.py"
+        done = subprocess.run(
+            [sys.executable, str(entry), "export", *self.ARGV, "--parent", str(parent), "--include-hidden"],
+            capture_output=True, text=True, env=env, timeout=120,
+        )
+        assert done.returncode == 0, done.stderr
+        paths = {t["path"] for t in json.loads(done.stdout)["payload"]["tasks"]}
+        assert paths == {"dev/tasks/shown", "dev/tasks/later"}

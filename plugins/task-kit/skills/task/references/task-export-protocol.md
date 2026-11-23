@@ -15,9 +15,11 @@ the consumer.
 ```
 task-kit export protocols --format json
     no discovery; kind "protocols", payload {"protocols": [1]}
-task-kit export tasks --format json --protocol N [--parent DIR]...
+task-kit export tasks --format json --protocol N [--parent DIR]... [--include-hidden]
 task-kit export item --format json --protocol N --checkout ID --task PATH --item ID
 ```
+
+`--include-hidden` (kind `tasks` only; any other kind exits 2) keeps tasks hidden until a later date.
 
 `--parent DIR` (absolute, repeatable) names a directory whose child
 directories are projects. Without it, task-kit uses its own configuration:
@@ -56,7 +58,7 @@ directories are projects. Without it, task-kit uses its own configuration:
 
 `tasks[]` leaves out a task hidden until a later date (`task.yaml`
 `hidden_until`, read against the local date; see core-contracts.md, "Hidden
-until"); `export item` still reaches it by name. `answers refresh` and
+until"); `--include-hidden` keeps it. `export item` still reaches it by name. `answers refresh` and
 `answers status` leave it out too; `answers prune` covers every task.
 
 Every field is present; `?` marks a value that may be null.
@@ -68,6 +70,7 @@ Every field is present; `?` marks a value that may be null.
 | `repositories[]` | `{id: string, name: string, checkouts: [string]}`; one per origin, checkouts merged |
 | `checkouts[]` | `{id: string, root: string (absolute), repository: string}` |
 | `tasks[].checkout`, `.path`, `.stub`, `.location` | string; `path` is project-relative (`dev/tasks/<stub>`) |
+| `tasks[].hidden_until?` | string, `YYYY-MM-DD`: the task's `task.yaml` `hidden_until`; null when it has none. A task whose date is still ahead is listed only with `--include-hidden`. Added in task-kit 0.30.0, within protocol 1; a consumer built before it ignores it. A malformed stored value is exported as written. |
 | `tasks[].revision` | string; the content revision of the task's `task.yaml`, `plan.md` and `log.md` |
 | `tasks[].title?`, `.priority?`, `.description?`, `.summary?` | string; `summary` is the headline of the task's orientation answer (current or stale) when it has one, else `task.summary` |
 | `tasks[].summary_source?` | open enum: `"answer"` (the orientation answer's headline), `"task.yaml"` |

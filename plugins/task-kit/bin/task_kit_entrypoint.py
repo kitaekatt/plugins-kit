@@ -19,8 +19,10 @@ Commands:
 - ``task-kit answers ...`` runs ``task_system.answers_cli``, the task answers engine (refresh, status, prune),
   under the same one-document rules.
 - ``task-kit manage ...`` serves full input and CAS semantic mutations through ``task_system.manage_cli``.
-- ``task-kit`` with no command runs ``databench --view tasks`` when databench
-  is on PATH, and otherwise exits 1 saying databench provides the task view.
+- ``task-kit [--include-hidden]`` with no command runs ``databench --view tasks`` when databench
+  is on PATH, and otherwise exits 1 saying databench provides the task view. ``--include-hidden`` runs
+  ``databench --view tasks --include-hidden`` instead (a fresh or an attached server; it needs a databench
+  that has the flag), so the view lists tasks hidden until a later date.
 - ``task-kit stop [--force]`` stops a dashboard server an earlier version
   started (``task_system.legacy_stop``). It stays for one task-kit minor.
 
@@ -44,6 +46,7 @@ _VERSION = re.compile(r"^\d+(?:\.\d+)*$")
 
 DATABENCH = "databench"
 DATABENCH_VIEW = ("--view", "tasks")
+INCLUDE_HIDDEN_FLAG = "--include-hidden"
 DATABENCH_MISSING_EXIT = 1
 USAGE_EXIT = 2
 DATABENCH_MISSING_MESSAGE = (
@@ -52,7 +55,7 @@ DATABENCH_MISSING_MESSAGE = (
 )
 RETIRED_MESSAGE = (
     "task-kit: the task-kit dashboard is retired; databench provides the task view (run `task-kit` with no "
-    "arguments). Remaining commands: `task-kit export ...`, `task-kit answers ...`, `task-kit manage ...` and `task-kit stop "
+    "arguments, or with `--include-hidden`). Remaining commands: `task-kit export ...`, `task-kit answers ...`, `task-kit manage ...` and `task-kit stop "
     "[--force]` (stops a dashboard server an earlier version started)."
 )
 
@@ -152,13 +155,17 @@ def run_answers(root: Path, argv: list[str]) -> int:
     return _run_document_command(root, ANSWERS_COMMAND, "answers_cli", argv)
 
 
-def run_databench() -> int:
-    """Bare ``task-kit``: ``databench --view tasks``, or exit 1 saying databench provides the task view."""
+def run_databench(include_hidden: bool = False) -> int:
+    """Bare ``task-kit``: ``databench --view tasks``, or exit 1 saying databench provides the task view.
+
+    ``include_hidden`` adds databench's own ``--include-hidden``, which opens the view with tasks hidden until a
+    later date; databench passes it on to ``task-kit export tasks --include-hidden`` per request.
+    """
     located = shutil.which(DATABENCH)
     if located is None:
         print(DATABENCH_MISSING_MESSAGE, file=sys.stderr)
         return DATABENCH_MISSING_EXIT
-    return subprocess.call([located, *DATABENCH_VIEW])
+    return subprocess.call([located, *DATABENCH_VIEW, *((INCLUDE_HIDDEN_FLAG,) if include_hidden else ())])
 
 
 def run_stop(argv: list[str]) -> int:
@@ -192,8 +199,8 @@ def main() -> int:
         return run_answers(root, argv[1:])
     if argv[:1] == [MANAGE_COMMAND]:
         return _run_document_command(root, MANAGE_COMMAND, "manage_cli", argv[1:])
-    if not argv:
-        return run_databench()
+    if not argv or argv == [INCLUDE_HIDDEN_FLAG]:
+        return run_databench(include_hidden=bool(argv))
     if argv[0] == STOP_COMMAND:
         return run_stop(argv[1:])
     print(RETIRED_MESSAGE, file=sys.stderr)

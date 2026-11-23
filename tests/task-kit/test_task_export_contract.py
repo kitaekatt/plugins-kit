@@ -98,6 +98,8 @@ def test_the_tasks_golden_covers_the_fixture(world):
         pytest.param(lambda t: t.__setitem__("has_items_block", None), id="nulled"),
         pytest.param(lambda t: t.__setitem__("added_without_schema", 1), id="undocumented"),
         pytest.param(lambda t: t.pop("merge"), id="merge-removed"),
+        pytest.param(lambda t: t.pop("hidden_until"), id="hidden-until-removed"),
+        pytest.param(lambda t: t.__setitem__("hidden_until", 20261130), id="hidden-until-retyped"),
         pytest.param(lambda t: t.__setitem__("merge", {"policy": "never", "target": "dev"}), id="merge-incomplete"),
         pytest.param(lambda t: t.__setitem__("merge", {"policy": "never", "target": 3, "remote": None}), id="merge-retyped"),
         pytest.param(lambda t: t.pop("answers"), id="answers-removed"),
