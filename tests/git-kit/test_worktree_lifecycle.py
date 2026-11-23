@@ -445,6 +445,46 @@ def test_status_observes_plain_commits_and_dirty_files(lifecycle):
     assert obj.status()["records"][0]["observed"]["dirty"]
 
 
+def test_status_summarizes_large_safety_and_discard_evidence(lifecycle):
+    """Trigger: thousands of ignored files. Status stays small; record files keep full evidence."""
+    obj = lifecycle
+    obj.maintain()
+    record = obj.read_records()[0]
+    path = Path(record["path"])
+    (path / "output").mkdir(exist_ok=True)
+    for index in range(4000):
+        (path / f"output/reproducible-file-{index:05}.txt").write_text("x")
+    with (obj.repo / ".git/info/exclude").open("a", encoding="utf-8") as stream:
+        stream.write("scratch/\n")
+    (path / "scratch").mkdir()
+    for index in range(400):
+        (path / f"scratch/unique-ignored-file-{index:05}.txt").write_text("only copy")
+    record["state"] = "parked"
+    obj.save(record)
+    obj.safety(record)
+    obj.discard(record["id"])
+    stored = obj.get(record["id"])
+    # Setup steps also leave output/cwd and deps-output/value.
+    assert len(stored["safety"]["reproducible"]) == 4002 and len(stored["safety"]["unique_ignored"]) == 400
+    assert len(stored["discard"]["proposal"]["lost_work"]["files"]) == 400
+    assert Path(obj.state / "records" / f"{record['id']}.json").stat().st_size > 200_000
+
+    status = obj.status()
+    assert len(json.dumps(status, indent=2)) < 20_000
+    row = next(r for r in status["records"] if r["id"] == record["id"])
+    assert row["path"] == record["path"] and row["repo"] == record["repo"] and row["holder"] is None
+    assert Path(row["record_file"]) == obj.state / "records" / f"{record['id']}.json"
+    assert row["safety"]["safe"] is False
+    assert row["safety"]["reproducible_count"] == 4002 and row["safety"]["unique_ignored_count"] == 400
+    assert "reproducible" not in row["safety"] and "unique_ignored" not in row["safety"]
+    unique = [b for b in row["safety"]["blockers"] if b.startswith("unique ignored data must be preserved: ")]
+    assert len(unique) == 1 and "scratch/unique-ignored-file-00000.txt" in unique[0] and len(unique[0]) < 700
+    lost = row["discard"]["proposal"]["lost_work"]
+    assert row["discard"]["outcome"] == "proposed" and row["discard"]["proposal"]["fingerprint"]
+    assert lost["files_count"] == 400 and lost["ignored_count"] == 400 and lost["reproducible_count"] == 4002
+    assert len(json.dumps(obj.parked(), indent=2)) < 20_000
+
+
 def test_new_settings_survive_real_bootstrap_script_phase(lifecycle, tmp_path, monkeypatch):
     from bootstrap_lib.engine import _run_script_phase
     import git_kit_bootstrap as gb
