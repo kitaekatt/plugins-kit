@@ -121,6 +121,7 @@
           "warnings": []
         },
         "has_items_block": true,
+        "hidden_until": null,
         "items": [
           {
             "id": "write-schema",
@@ -272,6 +273,7 @@
           ]
         },
         "has_items_block": false,
+        "hidden_until": null,
         "items": [],
         "last_activity": "2026-10-18 08:00",
         "location": "dev/tasks",
@@ -370,6 +372,7 @@
           ]
         },
         "has_items_block": false,
+        "hidden_until": null,
         "items": [],
         "last_activity": "2026-09-02 10:00",
         "location": "dev/tasks",
@@ -494,6 +497,7 @@
           ]
         },
         "has_items_block": false,
+        "hidden_until": null,
         "items": [],
         "last_activity": "2026-10-19 11:00",
         "location": "dev/tasks",

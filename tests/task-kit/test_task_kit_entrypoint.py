@@ -53,6 +53,27 @@ def test_bare_task_kit_runs_databench_view_tasks(tmp_path):
     assert record.read_text().split() == ["--view", "tasks"]
 
 
+def test_include_hidden_runs_databench_view_tasks_include_hidden(tmp_path):
+    """Revert check: dropping the flag from ``run_databench`` turns this red."""
+    record = tmp_path / "argv.txt"
+    make_fake_databench(tmp_path / "bin", record)
+    done = run_entrypoint(["--include-hidden"], [tmp_path / "bin"])
+    assert done.returncode == 0, done.stderr
+    assert record.read_text().split() == ["--view", "tasks", "--include-hidden"]
+
+
+def test_include_hidden_without_databench_still_says_who_provides_the_view(tmp_path):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    done = run_entrypoint(["--include-hidden"], [empty])
+    assert done.returncode == 1 and "databench provides the task view" in done.stderr
+
+
+def test_an_unknown_flag_to_bare_task_kit_exits_two(tmp_path):
+    done = run_entrypoint(["--bogus"], [tmp_path])
+    assert done.returncode == 2 and "--include-hidden" in done.stderr
+
+
 def test_bare_task_kit_returns_databench_exit_status(tmp_path):
     make_fake_databench(tmp_path / "bin", tmp_path / "argv.txt", exit_code=7)
     assert run_entrypoint([], [tmp_path / "bin"]).returncode == 7

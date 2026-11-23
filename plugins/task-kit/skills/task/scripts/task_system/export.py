@@ -319,6 +319,7 @@ def task_facts(owner: _Owner, env: AnswerEnv | None = None) -> dict:
         "location": owner.location,
         "revision": content_revision(folder),
         "title": _text(block, "title"),
+        "hidden_until": hidden.display_value(block),
         "priority": _text(block, "priority"),
         "description": _text(block, "description"),
         "summary": summary,
@@ -418,7 +419,8 @@ def tasks_payload(
 
     ``catalog`` is the question catalog (default: the shipped questions plus the fleet layer); ``local_now``
     is the naive local time the script answers read, and its date decides which tasks are hidden
-    (``hidden_until``) unless ``include_hidden``. Those two are for tests.
+    (``hidden_until``) unless ``include_hidden``. Those two are for tests. A task that is hidden still carries
+    its date under ``hidden_until`` (every task has the field; null when it has none).
     """
     errors: list[dict] = []
     owners, bases = _owners(

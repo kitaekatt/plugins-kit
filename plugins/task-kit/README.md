@@ -15,7 +15,7 @@ states what the agent, rather than the script, must do with the output.
 
 A task can be hidden until a date: `task update <ref> --hidden-until 2026-11-30` leaves it out of `list`, `review`, the task
 view and the answers catalogs until that day, and `--hidden-until none` removes the field. `list --include-hidden` and
-`review --include-hidden` show it; by-name verbs always work on it. The rule is in
+`review --include-hidden` show it, and so do `task-kit --include-hidden` and `task-kit export tasks --include-hidden`; by-name verbs always work on it. The rule is in
 [skills/task/references/core-contracts.md](skills/task/references/core-contracts.md), "Hidden until".
 
 The skill's entry point, verb contracts, and design documents are in
@@ -34,7 +34,8 @@ An async SessionStart hook runs `databench ensure` for `startup`, `resume` and `
 never blocks the session or opens a browser; Databench's `regeneration.enabled` setting decides whether ensure starts the server.
 
 ```
-task-kit               run `databench --view tasks` (exit 1, with a message, when databench is not on PATH)
+task-kit [--include-hidden]  run `databench --view tasks` (exit 1, with a message, when databench is not on PATH);
+                       the flag runs `databench --view tasks --include-hidden` (needs a databench that has the flag)
 task-kit export ...    print the task facts as JSON (the interface databench reads)
 task-kit manage ...    serve full task input and revision-checked semantic mutations
 task-kit stop          stop a dashboard server an earlier task-kit version started (--force: even with jobs running)

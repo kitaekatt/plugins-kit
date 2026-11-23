@@ -63,6 +63,7 @@ def _parser() -> _Parser:
     parser.add_argument("--checkout")
     parser.add_argument("--task")
     parser.add_argument("--item")
+    parser.add_argument("--include-hidden", action="store_true")
     return parser
 
 
@@ -73,6 +74,8 @@ def _require(args: argparse.Namespace, kind: str, required: tuple[str, ...], all
     for name in ("protocol", "parent", "checkout", "task", "item"):
         if name not in required + allowed and getattr(args, name) not in (None, []):
             raise export.ExportError("usage", f"export {kind} takes no --{name}")
+    if args.include_hidden and kind != "tasks":
+        raise export.ExportError("usage", f"export {kind} takes no --include-hidden")
 
 
 @contextlib.contextmanager
@@ -96,7 +99,7 @@ def _payload(args: argparse.Namespace, **inject) -> dict:
         return export.protocols_payload()
     if args.kind == "tasks":
         _require(args, "tasks", ("protocol",), ("parent",))
-        return export.tasks_payload(parents, **inject)
+        return export.tasks_payload(parents, include_hidden=args.include_hidden, **inject)
     _require(args, "item", ("protocol", "checkout", "task", "item"), ("parent",))
     return export.item_payload(args.checkout, args.task, args.item, parents, config_path=inject.get("config_path"))
 

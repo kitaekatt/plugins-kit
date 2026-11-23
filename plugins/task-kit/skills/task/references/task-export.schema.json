@@ -105,7 +105,7 @@
     "task": {
       "type": "object",
       "required": [
-        "checkout", "path", "stub", "location", "revision", "title", "priority", "description", "summary",
+        "checkout", "path", "stub", "location", "revision", "title", "hidden_until", "priority", "description", "summary",
         "summary_source", "answers", "coverage", "classification", "blocked_by", "merge", "last_activity", "updates",
         "updates_total", "has_items_block", "items", "findings", "sessions"
       ],
@@ -117,6 +117,7 @@
         "location": {"type": "string"},
         "revision": {"type": "string"},
         "title": {"$ref": "#/$defs/nullable_string"},
+        "hidden_until": {"$ref": "#/$defs/nullable_string"},
         "priority": {"$ref": "#/$defs/nullable_string"},
         "description": {"$ref": "#/$defs/nullable_string"},
         "summary": {"$ref": "#/$defs/nullable_string"},

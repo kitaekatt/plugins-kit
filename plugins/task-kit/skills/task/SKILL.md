@@ -140,11 +140,11 @@ capability_skill:
     - id: dashboard
       keywords: [task dashboard, dashboard, /task dashboard, open the dashboard, task-kit, browser view of tasks]
       user_objective: "Open the browser view over every configured project's task folders."
-      operation: "/task dashboard -- agent-side routing; no task.py verb. Runs bare task-kit: bash \"${CLAUDE_PLUGIN_ROOT}/bin/task-kit\""
+      operation: "/task dashboard -- agent-side routing; no task.py verb. Runs bare task-kit: bash \"${CLAUDE_PLUGIN_ROOT}/bin/task-kit\" [--include-hidden]"
       details: references/dashboard.md#the-task-view
       steps:
         - n: 1
-          action: "Run `bash \"${CLAUDE_PLUGIN_ROOT}/bin/task-kit\"`; report exit status and stdout, or failure stderr."
+          action: "Run `bash \"${CLAUDE_PLUGIN_ROOT}/bin/task-kit\"` (add `--include-hidden` to show tasks hidden until a later date; needs a databench that has `--include-hidden`, see references/dashboard.md); report exit status and stdout, or failure stderr."
     - id: queue
       keywords: [queue, queued work, queue this, queue it, queue up, add to the queue, put in the queue, run unattended, do this when you can]
       user_objective: "Take a unit of work the user queues, make it runnable unattended, and hand it to a runner other than the main thread."
