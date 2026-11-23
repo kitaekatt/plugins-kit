@@ -54,8 +54,12 @@ technique_skill:
         - n: 2
           action: |
             Inspect parked [--session <session-id> | --task <task-id>] for waiting work.
-            To resume an identified parked entry, run adopt --id <worktree-id> --agent <agent-id> --session <session-id>.
-            To claim a ready spare, run take --agent <agent-id> --session <session-id> [--task <task-id>].
+            The --agent value is a claim ID, unique among live claims, and the worktree folder name.
+            Use the task name or another unique ID, not the agent type.
+            To resume an identified parked entry, run adopt --id <worktree-id> --agent <unique-id> --session <session-id>.
+            To claim a ready spare, run "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/worktrees.py" take --agent <unique-id> --session <session-id> [--task <task-id>].
+            Outside this skill, the same command names the installed root through GIT_KIT_ROOT (references/pool.md#cli-and-approval).
+            If a live claim holds the ID, take and adopt name its session, path, and claim; choose a different, unique ID.
             Report take or adoption success only after the command returns success.
             Take uses completed spare setup and runs project after_take commands.
             Take returns stored parked metadata for its session or task and counts the rest.

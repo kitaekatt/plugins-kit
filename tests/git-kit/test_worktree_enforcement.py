@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -66,8 +67,13 @@ def test_enabled_creation_paths_block(lifecycle, command):
         response = run_hook(obj.repo, tool, data)["hookSpecificOutput"]
         assert response["hookEventName"] == "PreToolUse"
         assert response["permissionDecision"] == "deny"
-        assert "worktrees.py" in response["permissionDecisionReason"]
-        assert "take --agent" in response["permissionDecisionReason"]
+        reason = response["permissionDecisionReason"]
+        # The reason is a runnable command for the installed version, and it
+        # says the agent ID is a unique claim ID that names the folder.
+        command = re.search(r'"\$\{?BOOTSTRAP_PYTHON[^"]*" "\$\{?GIT_KIT_ROOT[^"]*/(scripts/worktrees\.py)" take --agent ',
+                            reason)
+        assert command and (PLUGIN / command[1]).is_file(), reason
+        assert "--session" in reason and "unique" in reason and "folder" in reason
     assert not (obj.repo.parent / "raw").exists()
 
 

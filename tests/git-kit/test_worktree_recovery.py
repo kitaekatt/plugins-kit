@@ -46,6 +46,21 @@ def test_adopt_has_one_winner(lifecycle) -> None:
     assert (Path(current["path"]) / "unfinished").read_text() == "work to recover"
 
 
+def test_adopt_with_a_held_agent_id_names_the_holder(lifecycle) -> None:
+    """Trigger: adopt reuses the agent ID of another live claim."""
+    obj = lifecycle
+    record = park(obj)
+    obj.maintain()
+    busy = obj.take("busy", "busy-session", process=holder())
+    with pytest.raises(ValueError, match="already holds a claim") as refused:
+        obj.adopt(record["id"], "busy", "new-session", process=holder())
+    message = str(refused.value)
+    assert "busy-session" in message and busy["path"] in message and busy["claim"] in message
+    assert "unique" in message and "--agent" in message
+    current = obj.get(record["id"])
+    assert current["state"] == "parked" and current["holder"] is None
+
+
 def test_adopt_preserves_relocated_work(lifecycle) -> None:
     obj = lifecycle
     record = park(obj)

@@ -174,7 +174,7 @@ def test_claim_races_and_crash_recovery(lifecycle, monkeypatch):
     obj.maintain()
     def take(index):
         try:
-            return obj.take(f"a{index}", "s", process=holder())
+            return obj.take(f"a{index}", "race-session", process=holder())
         except ValueError as exc:
             return str(exc)
     with ThreadPoolExecutor(max_workers=6) as pool:
@@ -186,8 +186,14 @@ def test_claim_races_and_crash_recovery(lifecycle, monkeypatch):
     assert record["holder"]["claim"] == wins[0]["claim"]
     assert record["setup"]["final_path_result"]["passed"]
     assert record["setup"]["final_path_result"]["path"] == record["path"]
-    with pytest.raises(ValueError, match="claim|destination"):
-        obj.take(record["holder"]["agent"], "s", process=holder())
+    # A reused agent ID stays an error and names the live holder, so the
+    # caller can tell which session owns it and pick a unique ID.
+    with pytest.raises(ValueError, match="already holds a claim") as refused:
+        obj.take(record["holder"]["agent"], "other-session", process=holder())
+    message = str(refused.value)
+    assert "race-session" in message and record["path"] in message
+    assert record["holder"]["claim"] in message
+    assert "unique" in message and "--agent" in message
     # Kill-shaped journal: durable reservation written, rename already happened,
     # registration and final setup did not complete. Never return it to ready.
     record["holder"].update(pid=99999999, start="gone", executable="claude", command="claude")
