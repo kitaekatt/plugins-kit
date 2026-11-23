@@ -290,15 +290,23 @@ its id:
 
 `--task` derives the paths from the id and `CLAUDE_CODE_SESSION_ID`: the task's
 output file `<tmp>/claude-<uid>/<project slug>/<session id>/tasks/<id>.output`
-(found by pattern; `<tmp>` is `/tmp`). A shell task's output file is watched and
+(found by pattern; `<tmp>` is `/tmp`). On Windows it is
+`<tmp>/claude/<hash>/<session id>/tasks/<id>.output` (no uid suffix; `<tmp>` is the
+temp directory, `%TEMP%`; the hash is found by pattern too). A shell task's output file is watched and
 its `[exited with code N]` trailer is the done condition. An agent task's output
-file is a symlink to the agent's transcript; the watcher also watches the working
+file is a symlink to the agent's transcript (on Windows it is an empty regular file, and the
+watcher finds the transcript at `<config dir>/projects/*/<session id>/subagents/agent-<id>.jsonl`
+instead; no transcript is an exit 2); the watcher also watches the working
 directory that transcript records (the agent's worktree), and ends with `DONE:
 agent handed back its report` once the transcript's last record answers the
 agent's SubagentHandback call. An agent resumed later by SendMessage needs a new
 watcher. File changes under `.git` and tool caches (`.pytest_cache`,
 `__pycache__`, `.mypy_cache`, `.ruff_cache`) are not activity. A missing session
-id, a missing output file or a non-POSIX platform exits 2 with the reason. For
+id or a missing output file exits 2 with the reason. Process sampling on Windows uses the
+Win32 API (procwatch.py); a Windows link that cannot be resolved is skipped when the watcher
+looks for the newest change. Each poll walks every watched directory, so a very large worktree
+makes a poll slow (tens of seconds on a repository the size of Spirit Crossing); use a
+`--poll-seconds` well above that. For
 anything else, name the paths yourself:
 
     "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${PRESENCE_KIT_ROOT:?presence-kit is not provisioned}/scripts/watch.py" --path <file-or-dir> [--path ...] [--done-output <task output file> | --done-file <path> --done-pattern <regex>]
