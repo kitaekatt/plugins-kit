@@ -18,6 +18,7 @@ import worktrees as wt
 from bootstrap_guard import data_dir
 from worktree_config import Step, home_config, inventory_api, load, read_object, require_install, validate_config
 from worktree_pool import _file_lock, remote_url, repo_identity
+from worktree_paths import registration_matches
 import worktree_safety as safety
 import worktree_extensions as extensions
 import worktree_discard as discard_work
@@ -381,12 +382,12 @@ class Lifecycle:
         if record.get("holder"):
             raise ValueError(f"Worktree has a holder claim: {record['holder']}")
         path = self.record_path(record)
-        if not path.is_dir() or path.resolve() == wt.project_root(path):
+        if not path.is_dir() or registration_matches(wt.records(path)[0], path):
             raise ValueError(f"Missing target or main checkout: {path}")
         from worktree_paths import path_identity
         matches = [r for r in self.read_records() if r["state"] not in {"removed", "retired-duplicate"}
                    and path_identity(Path(r["path"])) == path_identity(path)]
-        registrations = [r for r in wt.records(path) if Path(r["worktree"]).resolve() == path.resolve()]
+        registrations = [r for r in wt.records(path) if registration_matches(r, path)]
         if len(matches) != 1 or len(registrations) != 1 or "locked" in registrations[0]:
             raise ValueError(f"Ambiguous or locked worktree scope: {record['id']} at {path}")
         blockers = safety.declared_process_blockers(record)
@@ -686,7 +687,7 @@ class Lifecycle:
             if legacy_problem(self, record):
                 continue  # Orphaned files remain parked until explicit repair.
             path = self.record_path(record)
-            registered = any(Path(r["worktree"]).resolve() == path.resolve()
+            registered = any(registration_matches(r, path)
                              for r in wt.records(Path(record["repo"]["source_clone"])))
             if not path.exists() and not registered:
                 record.update(state="removed", holder=None, worker=None)

@@ -12,7 +12,7 @@ import worktree_migration as migration
 import worktree_safety as safety
 import worktrees as wt
 from worktree_config import read_object
-from worktree_paths import path_identity
+from worktree_paths import path_identity, registration_matches
 
 if TYPE_CHECKING:
     from worktree_lifecycle import Lifecycle
@@ -74,7 +74,7 @@ def evidence(obj: Lifecycle, record: dict[str, Any], *, recover_removed: bool = 
     if (recover_removed and op.get("name") == "parked-recheck" and op.get("phase") == "reserved"
             and not path.exists() and not path.is_symlink()):
         obj.record_path(record)
-        if not any(Path(row["worktree"]).absolute() == path for row in wt.records(Path(record["repo"]["source_clone"]))):
+        if not any(registration_matches(row, path) for row in wt.records(Path(record["repo"]["source_clone"]))):
             return {"safe": True, "at": time.time(), "blockers": [], "absent": True,
                     "reason": "reserved removal completed; directory and registration absent"}
     problem = migration.legacy_problem(obj, record)

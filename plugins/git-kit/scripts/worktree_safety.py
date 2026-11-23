@@ -15,6 +15,7 @@ from typing import Any
 import worktrees as wt
 from worktree_extensions import pending_blockers
 from worktree_config import rebuildable_matches, relative_path
+from worktree_paths import registration_matches
 
 
 def process_identity(pid: int) -> dict[str, Any]:
@@ -296,9 +297,10 @@ def inspect(record: dict[str, Any], upstream: str, declared: list[str], rebuilda
     blockers = []
     if path.is_symlink():
         blockers.append("worktree path is a symlink")
-    if path.resolve() == wt.project_root(path):
+    registrations = wt.records(path)
+    if registration_matches(registrations[0], path):
         blockers.append("main checkout cannot be retired")
-    registration = next((r for r in wt.records(path) if Path(r["worktree"]).resolve() == path.resolve()), None)
+    registration = next((r for r in registrations if registration_matches(r, path)), None)
     if registration is None or "locked" in registration:
         blockers.append("missing or locked Git registration")
     if record.get("holder"):

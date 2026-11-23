@@ -16,7 +16,7 @@ import worktrees as wt
 import worktree_safety as safety
 from worktree_config import read_object
 from worktree_pool import _file_lock, remote_url
-from worktree_paths import path_identity
+from worktree_paths import path_identity, registration_matches
 
 if TYPE_CHECKING:
     from worktree_lifecycle import Lifecycle
@@ -436,7 +436,7 @@ def verify_agreement(obj: Lifecycle, journal: dict[str, Any]) -> None:
                 or record["repo"]["common_dir"] != row["common_dir"] or record.get("holder")
                 or record["state"] != row["phase"]):
             raise ValueError(f"Migration Git/state agreement failed for record: {row['id']}")
-        registered = any(Path(r["worktree"]).absolute() == path for r in wt.records(source)[1:])
+        registered = any(registration_matches(r, path) for r in wt.records(source)[1:])
         if row["phase"] == "removed" and (path.exists() or path.is_symlink() or registered):
             raise ValueError(f"Migration removal agreement failed: {path}")
         if row["phase"] == "parked" and not path.exists() and not path.is_symlink() and not registered:
@@ -504,7 +504,7 @@ def run(obj: Lifecycle, *, apply: bool = False, clones: list[Path] | None = None
                 if path.absolute() in {Path(s["path"]).absolute() for s in journal["sources"]}:
                     raise ValueError(f"Main checkout cannot be a migration candidate: {path}")
                 record = migrated_record(obj, row)
-                registered = any(Path(r["worktree"]).absolute() == path for r in wt.records(source)[1:])
+                registered = any(registration_matches(r, path) for r in wt.records(source)[1:])
                 if not path.exists() and not path.is_symlink() and not registered:
                     check = process_check([row])
                     record.update(state="removed", safety={"safe": True, "at": time.time(), "blockers": [], "reason": "directory and registration absent"})
