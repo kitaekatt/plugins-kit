@@ -19,7 +19,7 @@ empty: import the sub-package you need.
 ## CLI
 
 The console script is `llm-kit = llm_kit.cli:main`, with the groups `account`,
-`completion`, `models`, `jobs`, `pipeline`, `frontdoor`, `local` and `consent`. Run it by
+`completion`, `models`, `jobs`, `pipeline`, `frontdoor`, `local`, `consent` and `graph`. Run it by
 its version-free venv path, which works from any shell and directory:
 
 ```
@@ -162,6 +162,7 @@ opinions. The long-form documents live in `references/`:
 | skill | `llm-kit:execute-work-unit` | `skills/execute-work-unit/` |
 | skill | `llm-kit:workflow-pipeline` | `skills/workflow-pipeline/` |
 | skill | `llm-kit:direct` | `skills/direct/` |
+| skill | `llm-kit:graph-render` | `skills/graph-render/` |
 | agent | `llm-kit:pipeline-worker` | `agents/pipeline-worker.md` |
 | workflow | `llm-kit:run-ready-wave` | `workflows/run-ready-wave.js` |
 

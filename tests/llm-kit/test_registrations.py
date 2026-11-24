@@ -33,12 +33,13 @@ SKILLS = (
     "execute-work-unit",
     "workflow-pipeline",
     "direct",
+    "graph-render",
 )
 AGENTS = ("pipeline-worker",)
 WORKFLOWS = ("run-ready-wave",)
 QUALIFIED = {f"llm-kit:{n}" for n in (*SKILLS, *AGENTS, *WORKFLOWS)}
 
-CLI_GROUPS = ("account", "completion", "models", "jobs", "pipeline", "frontdoor", "local", "consent", "relay")
+CLI_GROUPS = ("account", "completion", "models", "jobs", "pipeline", "frontdoor", "local", "consent", "relay", "graph")
 
 
 def shipped_files() -> list[Path]:

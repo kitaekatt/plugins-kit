@@ -68,6 +68,7 @@ REGISTERED_NAMES = (
     "pipeline-worker",
     "run-ready-wave",
     "direct",
+    "graph-render",
 )
 
 _BOUND_L = r"(?<![\w-])"
