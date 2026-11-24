@@ -92,7 +92,8 @@ owns composition -- the separator and ordering (lexical by filename; use
   per-segment timeout (`STATUSLINE_SEGMENT_TIMEOUT`, default 2s, via `timeout`
   or `gtimeout`). Emit your own ANSI, one line, no leading separator. Stdout
   is NOT appended verbatim: it is normalized first line only, capped at 120
-  characters, with CR stripped and a RESET appended, so a segment that
+  visible characters (ANSI color codes are not counted and are never cut in
+  half), with CR stripped and a RESET appended, so a segment that
   ignores the single-line contract degrades itself, not the bar. Empty
   output, non-zero exit, timeout, or no `timeout(1)` binary on PATH all
   render as an absent cell -- the last case disables every `*.sh` segment and

@@ -64,6 +64,7 @@ notes, and the resolved configuration. Use `--paths` to print the four layer pat
 | `backends` | list | Machine records for detected dispatch tools. |
 | `capacity` | map | Account-wide usage reporting. |
 | `review_overlap` | map | Review overlap posture; `mode` defaults to `premise-safe`. |
+| `model_overrides` | map | Per-harness and per-model `disabled` and `reset_mode` switches. |
 
 ## `routing[]`
 
@@ -134,6 +135,10 @@ for an in-session caller:
 - The `Rule:`, `Re-select:`, and `Independence:` lines under the rows are printed by
   llm-kit; they say how to choose, announce, and re-select.
 
+- `model_overrides` (below) acts before ranking: a disabled entry is excluded from the
+  ranking and listed after the menu as `UNUSABLE (disabled by config)`, and a reset-mode
+  entry is moved to the front of its row with no usage read.
+
 Quota verdicts are evaluated once per session and pinned; only an observed quota halt moves
 one down.
 
@@ -162,6 +167,36 @@ is a task failure, not a re-selection trigger.
 Do not add a `command` field to routing. The machine record's existing `command` text is read
 through the renderer's command-text provider, so harness-specific command construction has one
 replacement seam.
+
+## `model_overrides`
+
+Two switches take a model out of routing, or put it first, without editing the `routing`
+rows. Each can be set for a harness, which covers every entry that harness drives, or for
+one entry id:
+
+```yaml
+# ~/.claude/config/orchestration.yaml (user layer)
+model_overrides:
+  harnesses:
+    codex: {reset_mode: true}   # every codex entry (sol, luna) is treated as having its full pool
+  models:
+    luna: {reset_mode: false}   # this entry's setting wins over its harness's
+    opus: {disabled: true}      # never route or consult opus
+```
+
+| Field | Meaning |
+|---|---|
+| `disabled` | The entry is not a routing or consult target. In a row it is excluded from the ranking, listed after the menu as `UNUSABLE (disabled by config); do not delegate to it`, and is never `[default]`; the floor names it `excluded (disabled by config)`. In Consult seats it is listed as `disabled by config; do not consult it`. |
+| `reset_mode` | The entry has a usage reset to spend, so it is treated as having its whole pool. In a row no usage is read for it, it moves to the front (several keep their declared order), so the first usable one is `[default]`, and its line ends `reset available (config)`. In Consult seats an out-of-quota seat returns to the seat list, and the seat moves to the front of its relation and tier. |
+
+Resolution, per entry: the harness setting, then the entry's own setting, field by field.
+`disabled` wins over `reset_mode` on the same entry. Harness keys are harness ids as the
+render shows them (`claude`, `codex`, `opencode`); the Claude core ids belong to `claude`.
+The block merges key by key across layers like any mapping. An unknown scope or field, or a
+value that is not `true` or `false`, is a configuration error.
+
+A reset-mode line shows no usage figures, because none was read. Remove the override once the
+reset has been spent; it does not expire by itself.
 
 ## `lexicon[]`
 

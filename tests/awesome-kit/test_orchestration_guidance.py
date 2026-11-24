@@ -3056,3 +3056,184 @@ def test_placeholder_path_posix_is_unchanged(monkeypatch):
         og, "os", SimpleNamespace(name="posix", path=posixpath, sep="/")
     )
     assert og._placeholder_path("root") == "/__orchestrate_placeholder__/root"
+
+
+# --------------------------------------------------------------------------
+# model_overrides: disabled and reset_mode, per harness and per model
+# --------------------------------------------------------------------------
+
+
+def _paced_entries():
+    """opus, sol and luna all opted into usage reads (sol and luna share codex)."""
+    return _entries(
+        opus={"id": "opus", "harness": "claude", "model": "claude-opus",
+              "conserve_usage": _seven_day()},
+        sol={"id": "sol", "harness": "codex", "model": "gpt-5.6-sol",
+             "conserve_usage": _seven_day()},
+        luna={"id": "luna", "harness": "codex", "model": "gpt-5.6-luna",
+              "conserve_usage": _seven_day()},
+    )
+
+
+class TestModelOverrides:
+    """`model_overrides` takes models out of routing (disabled) or puts them
+    first (reset_mode), per harness or per model id; a model setting wins over
+    its harness's, and disabled wins over reset_mode."""
+
+    ROW = [{"shape": ["novel"], "models": ["opus", "sol", "luna"]}]
+
+    def _paced(self, quota):
+        quota("opus", remaining=0.9, window=0.5)   # pace 180%
+        quota("sol", status="out-of-quota", resets_at=1_790_000_000)
+        quota("luna", remaining=0.2, window=0.5)   # pace 40%
+
+    def test_harness_reset_mode_puts_every_harness_entry_first(self, declared, quota):
+        self._paced(quota)
+        text = declared(
+            self.ROW, entries=_paced_entries(),
+            model_overrides={"harnesses": {"codex": {"reset_mode": True}}},
+        )
+        assert _menu_ids(text, 1) == ["sol", "luna", "opus"]
+        sol = _entry_line(text, 1, "sol")
+        assert "[default]" in sol
+        assert "reset available (config)" in sol
+        assert "out of quota" not in sol  # the spent reading is ignored
+        assert "reset available (config)" in _entry_line(text, 1, "luna")
+        assert "[default]" not in _entry_line(text, 1, "opus")
+
+    def test_a_model_setting_wins_over_its_harness(self, declared, quota):
+        self._paced(quota)
+        text = declared(
+            self.ROW, entries=_paced_entries(),
+            model_overrides={
+                "harnesses": {"codex": {"reset_mode": True}},
+                "models": {"luna": {"reset_mode": False}},
+            },
+        )
+        assert _menu_ids(text, 1) == ["sol", "opus", "luna"]
+        assert "[default]" in _entry_line(text, 1, "sol")
+        luna = _entry_line(text, 1, "luna")
+        assert "reset available (config)" not in luna
+        assert "pace 40%" in luna
+
+    def test_a_disabled_model_is_unusable_and_never_the_default(self, declared):
+        text = declared(
+            [{"shape": ["novel"], "models": ["sol", "fable"]}],
+            model_overrides={"models": {"sol": {"disabled": True}}},
+        )
+        assert _menu_ids(text, 1) == ["fable", "sol"]
+        sol = _entry_line(text, 1, "sol")
+        assert "UNUSABLE (disabled by config); do not delegate to it" in sol
+        assert "[default]" not in sol
+        assert "[default]" in _entry_line(text, 1, "fable")
+
+    def test_disabled_wins_over_reset_mode(self, declared):
+        text = declared(
+            [{"shape": ["novel"], "models": ["fable", "sol", "luna"]}],
+            model_overrides={
+                "harnesses": {"codex": {"reset_mode": True}},
+                "models": {"sol": {"disabled": True}},
+            },
+        )
+        assert _menu_ids(text, 1) == ["luna", "fable", "sol"]
+        assert "[default]" in _entry_line(text, 1, "luna")
+        sol = _entry_line(text, 1, "sol")
+        assert "UNUSABLE (disabled by config)" in sol
+        assert "reset available" not in sol
+
+    def test_a_disabled_harness_leaves_the_floor_naming_the_override(self, declared):
+        text = declared(
+            [
+                {"shape": ["novel"], "models": ["sol", "luna"]},
+                {"shape": [], "models": ["sonnet"]},
+            ],
+            model_overrides={"harnesses": {"codex": {"disabled": True}}},
+        )
+        row = "\n".join(_row_lines(text, 1))
+        assert "no usable routing target" in row
+        assert "sol: excluded (disabled by config)" in row
+        assert "luna: excluded (disabled by config)" in row
+        assert _menu_ids(text, 2) == ["sonnet"]
+
+    def test_disabled_core_id_applies_without_the_library(self, layered, monkeypatch):
+        monkeypatch.setitem(sys.modules, "llm_kit", None)
+        monkeypatch.setattr(og, "discover_model_definitions", lambda _root: ({}, []))
+        layered("shipped", cfg(
+            routing=[{"shape": [], "models": ["opus", "sonnet"]}],
+            model_overrides={"models": {"opus": {"disabled": True}},
+                             "harnesses": {"claude": {"reset_mode": True}}},
+        ))
+        config, provenance = og.resolve_config(layered.project_root)
+        text = og.render(config, provenance)
+        assert _menu_ids(text, 1) == ["sonnet", "opus"]
+        assert "[default]" in _entry_line(text, 1, "sonnet")
+        assert "reset available (config)" in _entry_line(text, 1, "sonnet")
+        assert "UNUSABLE (disabled by config)" in _entry_line(text, 1, "opus")
+
+    @pytest.mark.parametrize(
+        "overrides, needle",
+        [
+            ({"harnesses": {"codex": {"reset": True}}}, "reset"),
+            ({"models": {"sol": {"disabled": "yes"}}}, "disabled"),
+            ({"modles": {}}, "modles"),
+            ({"models": ["sol"]}, "models"),
+            ("codex", "model_overrides"),
+        ],
+    )
+    def test_a_malformed_override_fails_loudly(self, layered, overrides, needle):
+        layered("shipped", cfg())
+        layered("user", {"model_overrides": overrides})
+        with pytest.raises(ValueError, match=needle):
+            og.resolve_config(layered.project_root)
+
+
+class TestConsultSeatOverrides:
+    def _render(self, layered, monkeypatch, result, overrides):
+        _install_fake_seats(monkeypatch, lambda _self_ref, *, project_root: result)
+        monkeypatch.setattr(og, "discover_model_definitions", lambda _root: ({}, []))
+        layered("shipped", cfg(model_overrides=overrides))
+        config, provenance = og.resolve_config(layered.project_root)
+        text = og.render(config, provenance, self_ref="opus")
+        return text.split("## Consult seats\n", 1)[1].split("## Dispatch backends\n", 1)[0]
+
+    def _result(self):
+        return SimpleNamespace(
+            self=SimpleNamespace(endpoint="opus", band="strong"),
+            seats=(
+                SimpleNamespace(relation="UP", endpoint="fable", band="frontier",
+                                harness="claude", tier=5, budget=None),
+                SimpleNamespace(relation="BESIDE", endpoint="luna", band="strong",
+                                harness="codex", tier=4, budget=None),
+            ),
+            unclassified=(),
+            probe_unknown=(),
+            out_of_quota=(
+                SimpleNamespace(relation="BESIDE", endpoint="sol", band="strong",
+                                harness="codex", tier=4,
+                                budget=SimpleNamespace(resets_at=1_790_000_000)),
+            ),
+        )
+
+    def test_a_reset_seat_returns_to_the_front_of_its_tier(self, layered, monkeypatch):
+        section = self._render(layered, monkeypatch, self._result(), {
+            "harnesses": {"codex": {"reset_mode": True}},
+            "models": {"luna": {"reset_mode": False}},
+        })
+        assert "out of quota" not in section
+        lines = section.strip().splitlines()
+        assert lines[:3] == [
+            "UP fable (frontier, claude)",
+            "BESIDE sol (strong, codex) reset available (config)",
+            "BESIDE luna (strong, codex)",
+        ]
+
+    def test_a_disabled_seat_is_marked_and_not_offered(self, layered, monkeypatch):
+        section = self._render(layered, monkeypatch, self._result(), {
+            "models": {"fable": {"disabled": True}},
+        })
+        lines = section.strip().splitlines()
+        assert lines[0] == "BESIDE luna (strong, codex)"
+        assert "UP fable (frontier, claude) disabled by config; do not consult it" in lines
+        assert lines.index(
+            "UP fable (frontier, claude) disabled by config; do not consult it"
+        ) > lines.index("BESIDE luna (strong, codex)")
