@@ -133,8 +133,23 @@ no hand-off gate beyond that invocation: it is safe whenever the user asks.
    commit and push the task folder in a git task root.
 2. Do NOT run `task.py sessions release`. Do NOT emit the `CWD:` and
    `Continue:` baton. The session stays registered as working the task.
-3. End the turn with a short report: what changed in the folder, and that the
-   task is current. No baton.
+3. Report briefly: what changed in the folder, and that the task is current.
+   No baton.
+4. Then give compact guidance, in this order:
+   - **Ready?** You are ready to compact when the folder is current and
+     nothing still running (background agent, job) must land its result in the
+     task folder first. Name each running item and whether its result must land
+     in the folder.
+   - **Ready:** show one ready-to-paste `/compact <focus>` line, a single
+     paragraph of about 120 words at most. It names the task ref(s) and their
+     role; the user's binding rulings and holds the next context must keep
+     (verbatim when short); the key artifacts and links; each running job and
+     what to do when it reports; and the open findings. It points at the task
+     folder as the source of truth and does not repeat it.
+   - **Not ready:** do not show the line. State what must finish first and
+     when you will be ready, for example: "Ready to compact when the X agent
+     reports and its result is in the folder; I will show the compact line
+     then." Show the line at that point.
 
 ## hand_off
 

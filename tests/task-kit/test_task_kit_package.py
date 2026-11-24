@@ -74,6 +74,16 @@ def test_refresh_is_agent_side_keeps_the_registration_and_emits_no_baton():
     assert "bring_current" in ref.split("\n## hand_off\n", 1)[1].split("\n## ", 1)[0]
 
 
+def test_refresh_ends_with_compact_guidance_only_when_ready_to_compact():
+    """Red: remove the compact-guidance step from ``## refresh`` or from the capability step in SKILL.md."""
+    assert "/compact" in skill_capabilities()["refresh"]["steps"][0]["action"]
+    ref = (PLUGIN_ROOT / "skills" / "task" / "references" / "work-and-hand-off.md").read_text(encoding="utf-8")
+    section = ref.split("\n## refresh\n", 1)[1].split("\n## ", 1)[0]
+    assert "`/compact <focus>`" in section
+    assert "do not show the line" in section
+    assert "about 120 words" in section
+
+
 def test_plugin_json_and_pyproject_state_one_version():
     """The bump property (a changed plugin carries a version past the last publish) belongs to its producer,
     ``scripts/pre-commit-version-check.sh``. A copy of it here only re-typed a floor that went stale."""
