@@ -761,6 +761,19 @@ The ledger is `packages/released.json` in the plugin's own marketplace clone (th
 
 Only an explicit `bootstrap run` is promised to pick up a release: the SessionStart cooldown can skip a pass, and `bootstrap run` is exempt from it. An engine older than the release that introduced this skips plugins whose `requires_bootstrap` floor it cannot meet, so a machine that missed several releases can need the harvest or a second `bootstrap run` before every plugin converges; one pass is not guaranteed.
 
+## Venv import check and locked-file sync failures
+
+Two failures used to pass as healthy; both now surface.
+
+**`check_imports` rejects a half-installed package.** A package directory that lost its `__init__.py` imports as an empty namespace package: no error, no `__file__`, none of its names. `check_venv` runs each import through a probe in the venv's own interpreter (`_IMPORT_PROBE`, `venv_check.py`) and fails the check, with the reason in the message, when a module that has a `__path__` and no `__file__` also shows either sign of a regular package:
+
+1. the directory holds `.py`, `.pyd` or `.so` files directly (a namespace by design holds only sub-packages), or
+2. an installed `*.dist-info/RECORD` lists `<name>/__init__.py` (the distribution shipped one and it is gone; this also catches a directory emptied completely).
+
+A package that is a namespace by design ships no `__init__.py`, so neither sign fires and it passes. A module without `__path__` (a builtin such as `sys`) is never suspect. The failed check triggers the normal `uv sync` remediation.
+
+**A locked file is a visible failure.** On Windows a running process keeps its loaded `.pyd`/`.dll`/`python.exe` open, so `uv sync` cannot replace it and exits non-zero with `failed to remove file <path>: Access is denied. (os error 5)` (or a sharing/lock violation, os error 32/33). `ensure_venv` recognises that wording (`locked_file_in_uv_error`) when the file is under the venv and returns a FAILED result whatever the re-check says: the entry names the file, the display label is `<prefix>venv: FAILED - <file name> locked; stop the process using this venv`, and the failure's remediation is `bootstrap run` once the holder has exited. Bootstrap never stops the process itself and does not name it, because naming it needs a process-listing dependency bootstrap does not carry. Without this, a pass whose check passed and whose sync failed reported `re-synced` while the half-upgraded venv stayed in place, and the failure appeared only in `bootstrap.log`.
+
 ## First Run Lifecycle
 
 On a clean install (wiping `~/.claude/plugins/`), Claude Code goes through distinct phases across restarts:

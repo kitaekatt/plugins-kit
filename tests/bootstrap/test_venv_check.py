@@ -1292,3 +1292,229 @@ class TestPhaseVenvLedgerPlumbing:
 
         engine._phase_venv(Ctx())
         assert seen["ledger"] is None
+
+
+# ---------------------------------------------------------------------------
+# A half-upgraded package imports as an EMPTY NAMESPACE PACKAGE
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def real_venv(tmp_path_factory):
+    """One real venv for the namespace-package tests (creating one is slow)."""
+    data = tmp_path_factory.mktemp("nsvenv") / "data"
+    venv_dir = data / ".venv"
+    subprocess.run(["uv", "venv", str(venv_dir)], check=True, capture_output=True)
+    return data, venv_dir
+
+
+def _write_dist_info(site, dist, record_lines):
+    info = site / f"{dist}-1.0.dist-info"
+    info.mkdir(parents=True, exist_ok=True)
+    (info / "RECORD").write_text("\n".join(record_lines) + "\n", encoding="utf-8")
+    return info
+
+
+class TestCheckVenvNamespacePackage:
+    """`import yaml` succeeded against a yaml/ dir that had lost __init__.py.
+
+    A directory without __init__.py imports as a namespace package, so the
+    import check passed vacuously while every use of the package failed. The
+    check must tell that apart from a package that is namespace by design.
+    """
+
+    def _check(self, real_venv, tmp_path, module):
+        data, _venv = real_venv
+        return check_venv(str(data), str(tmp_path / "plugin"), [module])
+
+    def test_modules_without_init_are_a_broken_package(self, real_venv, tmp_path):
+        """The wedge: yaml/*.py remain, yaml/__init__.py is gone."""
+        site = site_packages_dirs(str(real_venv[1]))[0]
+        pkg = site / "halfyaml"
+        pkg.mkdir()
+        (pkg / "composer.py").write_text("X = 1\n", encoding="utf-8")
+
+        result = self._check(real_venv, tmp_path, "halfyaml")
+
+        assert not result.passed
+        assert "halfyaml" in result.message
+        assert "namespace package" in result.message
+        assert "__init__.py" in result.message
+        assert result.remediation_cmd is not None
+
+    def test_dist_info_that_ships_init_makes_an_empty_dir_broken(self, real_venv, tmp_path):
+        """An emptied package dir: RECORD says __init__.py ships, the dir holds none."""
+        site = site_packages_dirs(str(real_venv[1]))[0]
+        (site / "emptiedpkg").mkdir()
+        _write_dist_info(site, "emptiedpkg", [
+            "emptiedpkg/__init__.py,sha256=x,1",
+            "emptiedpkg-1.0.dist-info/RECORD,,",
+        ])
+
+        result = self._check(real_venv, tmp_path, "emptiedpkg")
+
+        assert not result.passed
+        assert "namespace package" in result.message
+        assert "emptiedpkg-1.0.dist-info" in result.message
+
+    def test_genuine_namespace_package_passes(self, real_venv, tmp_path):
+        """A namespace by design: no __init__.py shipped, only sub-packages."""
+        site = site_packages_dirs(str(real_venv[1]))[0]
+        sub = site / "realns" / "sub"
+        sub.mkdir(parents=True)
+        (sub / "__init__.py").write_text("", encoding="utf-8")
+        _write_dist_info(site, "realns_sub", [
+            "realns/sub/__init__.py,sha256=x,1",
+            "realns_sub-1.0.dist-info/RECORD,,",
+        ])
+
+        result = self._check(real_venv, tmp_path, "realns")
+
+        assert result.passed, result.message
+
+    def test_regular_package_passes(self, real_venv, tmp_path):
+        site = site_packages_dirs(str(real_venv[1]))[0]
+        pkg = site / "goodpkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("", encoding="utf-8")
+        _write_dist_info(site, "goodpkg", ["goodpkg/__init__.py,sha256=x,1"])
+
+        result = self._check(real_venv, tmp_path, "goodpkg")
+
+        assert result.passed, result.message
+
+    def test_builtin_module_without_file_passes(self, real_venv, tmp_path):
+        """`sys` has no __file__ and no __path__; only a path-bearing module is suspect."""
+        assert self._check(real_venv, tmp_path, "sys").passed
+
+
+# ---------------------------------------------------------------------------
+# A locked file blocks uv sync: say so, name the file
+# ---------------------------------------------------------------------------
+
+
+def _uv_lock_stderr(venv_path, name="_yaml.cp313-win_amd64.pyd", code=5,
+                    why="Access is\n       denied."):
+    """uv's own wording, wrapped as the real failure wrapped it."""
+    target = f"{venv_path}/Lib/site-packages/yaml/{name}"
+    return (
+        "Resolved 49 packages in 169ms\n"
+        "Prepared 1 package in 0.54ms\n"
+        "warning: Failed to uninstall package at "
+        f"{venv_path}/Lib/site-packages/pyyaml-6.0.3.dist-info due to missing "
+        "`RECORD` file. Installation may result in an incomplete environment.\n"
+        f"error: failed to remove file `{target}`: {why} (os error {code})\n"
+    ).encode()
+
+
+class TestEnsureVenvLockedFile:
+    def _run(self, tmp_path, monkeypatch, stderr, *, check_passes=True,
+             always_sync=False, venv_path=None):
+        from bootstrap_lib.result import Result
+
+        venv_path = venv_path or str(tmp_path / "data" / ".venv")
+        os.makedirs(venv_path, exist_ok=True)
+        ok = Result(passed=True, subject=venv_path, message="venv ok (1 imports verified)")
+        bad = Result(passed=False, subject=venv_path, message="venv not found",
+                     remediation_cmd="uv sync --project p")
+        monkeypatch.setattr(
+            "bootstrap_lib.venv_check.check_venv",
+            lambda d, r, i, extras=(), venv_path=None: ok if check_passes else bad,
+        )
+        monkeypatch.setattr("bootstrap_lib.venv_check.find_uv", lambda: "/fake/uv")
+
+        class _Proc:
+            returncode = 2
+
+        _Proc.stderr = stderr
+        monkeypatch.setattr("bootstrap_lib.venv_check.subprocess.run",
+                            lambda cmd, **k: _Proc())
+        # A changed declaration (no stamp yet) is what triggers the sync when
+        # the check itself passes.
+        proj = tmp_path / "proj"
+        proj.mkdir(exist_ok=True)
+        (proj / "pyproject.toml").write_text("[project]\nname = \"x\"\n", encoding="utf-8")
+        result, entries = ensure_venv(
+            str(proj), venv_path, check_imports=["yaml"], always_sync=always_sync,
+        )
+        return venv_path, result, entries
+
+    def test_access_denied_names_the_file_and_fails(self, tmp_path, monkeypatch):
+        venv_path = str(tmp_path / "data" / ".venv")
+        _v, result, entries = self._run(
+            tmp_path, monkeypatch, _uv_lock_stderr(venv_path), venv_path=venv_path)
+
+        assert not result.passed
+        assert "_yaml.cp313-win_amd64.pyd" in result.message
+        assert "locked" in result.message
+        assert "stop" in result.message.lower()
+        assert "bootstrap run" in result.message
+        assert result.remediation_cmd == "bootstrap run"
+        # the full stderr stays in the log entries as before
+        assert any("uv sync failed (exit 2)" in e for e in entries)
+        assert any("locked file blocks" in e and "_yaml.cp313-win_amd64.pyd" in e for e in entries)
+
+    def test_being_used_by_another_process_is_a_lock(self, tmp_path, monkeypatch):
+        venv_path = str(tmp_path / "data" / ".venv")
+        stderr = _uv_lock_stderr(
+            venv_path, name="python.exe", code=32,
+            why="The process cannot access the file because it is being used by "
+                "another process.")
+        _v, result, _e = self._run(tmp_path, monkeypatch, stderr, venv_path=venv_path)
+
+        assert not result.passed
+        assert "python.exe" in result.message
+        assert "locked" in result.message
+
+    def test_lock_fails_even_when_the_check_would_pass(self, tmp_path, monkeypatch):
+        """The silent case: a healthy-looking venv, a sync that cannot finish."""
+        venv_path = str(tmp_path / "data" / ".venv")
+        _v, result, _e = self._run(
+            tmp_path, monkeypatch, _uv_lock_stderr(venv_path),
+            check_passes=True, always_sync=True, venv_path=venv_path)
+
+        assert not result.passed
+        assert "locked" in result.message
+
+    def test_failure_display_names_the_file_without_a_path(self, tmp_path, monkeypatch):
+        """The engine routes it to a visible FAILED action, with a path-free label."""
+        from bootstrap_lib.engine import _process_venv_def
+        from bootstrap_lib.messages import numbered
+
+        venv_path = str(tmp_path / "data" / ".venv")
+        _v, result, entries = self._run(
+            tmp_path, monkeypatch, _uv_lock_stderr(venv_path), venv_path=venv_path)
+        monkeypatch.setattr("bootstrap_lib.venv_check.ensure_venv",
+                            lambda *a, **k: (result, entries))
+        actions, quiet, oks, failures = [], [], [], []
+
+        _process_venv_def({"check_imports": ["yaml"]}, str(tmp_path / "data"),
+                          str(tmp_path / "plugin"), "", "venv", actions, oks,
+                          failures, plugin_name="llm-kit", quiet_entries=quiet)
+
+        display = numbered(actions)
+        assert "_yaml.cp313-win_amd64.pyd" in display
+        assert "locked" in display
+        assert "stop" in display.lower()
+        assert str(tmp_path) not in display
+        assert len(failures) == 1 and "locked" in failures[0]["message"]
+
+    def test_locked_file_outside_the_venv_is_not_a_venv_lock(self, tmp_path, monkeypatch):
+        """Only a file under the venv is evidence about this venv."""
+        venv_path = str(tmp_path / "data" / ".venv")
+        elsewhere = str(tmp_path / "elsewhere")
+        stderr = _uv_lock_stderr(elsewhere)
+        _v, result, entries = self._run(tmp_path, monkeypatch, stderr, venv_path=venv_path)
+
+        assert result.passed
+        assert not any("locked file blocks" in e for e in entries)
+
+    def test_other_sync_failures_are_unchanged(self, tmp_path, monkeypatch):
+        venv_path = str(tmp_path / "data" / ".venv")
+        _v, result, entries = self._run(
+            tmp_path, monkeypatch, b"No pyproject.toml found",
+            check_passes=False, venv_path=venv_path)
+
+        assert not result.passed
+        assert "locked" not in result.message
+        assert any("uv sync failed (exit 2)" in e for e in entries)
