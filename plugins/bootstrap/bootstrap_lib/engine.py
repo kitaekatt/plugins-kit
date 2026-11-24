@@ -5117,7 +5117,7 @@ def _process_venv_def(venv_def, data_dir, plugin_root, prefix, label, action_ent
         _append_detail(
             action_entries,
             f"{prefix}{label}: FAILED - {result.message}",
-            display=f"{prefix}{label}: FAILED",
+            display=f"{prefix}{label}: " + getattr(result, "display", "FAILED"),
         )
         failures.append({
             "type": failure_type,

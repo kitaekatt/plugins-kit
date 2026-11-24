@@ -179,6 +179,66 @@ def scan_editable_installs(
     return stale, unreadable
 
 
+# Exit status the import probe uses for "imports, but only as a namespace
+# package that should be a regular one". Any other nonzero status is an
+# ordinary import failure.
+_PROBE_NAMESPACE_EXIT = 3
+
+# Runs inside the venv's own interpreter (stdlib only). A package directory
+# that has lost its __init__.py imports as a namespace package: no error, no
+# ``__file__``, and none of the package's names. A bare ``import`` therefore
+# passes while every use of the package fails. A module with a ``__path__`` and
+# no ``__file__`` is a namespace package, which is legitimate only when nothing
+# says it should be a regular package. Two observations say so, and either is
+# enough:
+#   1. the directory holds module files (.py, .pyd, .so) directly. A namespace
+#      by design holds only sub-packages, so loose modules beside a missing
+#      __init__.py are the remains of a regular package.
+#   2. an installed dist-info RECORD lists ``<name>/__init__.py``. The
+#      distribution shipped an __init__.py and it is gone, which also catches a
+#      directory emptied completely.
+# A package that is a namespace by design ships no __init__.py, so neither
+# observation fires for it. A module with no ``__path__`` (builtins such as
+# ``sys``) is never suspect.
+_IMPORT_PROBE = """
+import importlib, os, sys
+name = sys.argv[1]
+mod = importlib.import_module(name)
+paths = list(getattr(mod, "__path__", None) or ())
+if getattr(mod, "__file__", None) is None and paths:
+    rel = name.replace(".", "/")
+    reasons = []
+    for d in paths:
+        try:
+            loose = sorted(n for n in os.listdir(d)
+                           if n.endswith((".py", ".pyd", ".so"))
+                           and os.path.isfile(os.path.join(d, n)))
+        except OSError:
+            continue
+        if loose:
+            reasons.append("%s holds %s but no __init__.py" % (d, ", ".join(loose[:3])))
+    for entry in sys.path:
+        try:
+            items = os.listdir(entry)
+        except OSError:
+            continue
+        for item in sorted(items):
+            if not item.endswith(".dist-info"):
+                continue
+            try:
+                with open(os.path.join(entry, item, "RECORD"), encoding="utf-8",
+                          errors="replace") as handle:
+                    lines = handle.read().splitlines()
+            except OSError:
+                continue
+            if any(line.startswith(rel + "/__init__.py,") for line in lines):
+                reasons.append("%s lists %s/__init__.py, which is missing" % (item, rel))
+    if reasons:
+        print("; ".join(reasons))
+        sys.exit(__EXIT__)
+""".replace("__EXIT__", str(_PROBE_NAMESPACE_EXIT))
+
+
 def check_venv(plugin_data_dir: str, plugin_root: str, check_imports: List[str],
                extras: Sequence[str] = (), venv_path: Optional[str] = None) -> Result:
     """Check if a Python venv exists and required imports are available.
@@ -238,9 +298,20 @@ def check_venv(plugin_data_dir: str, plugin_root: str, check_imports: List[str],
     for module in check_imports:
         try:
             result = subprocess.run(
-                [python_bin, "-c", f"import {module}"],
+                [python_bin, "-c", _IMPORT_PROBE, module],
                 capture_output=True, timeout=10,
             )
+            if result.returncode == _PROBE_NAMESPACE_EXIT:
+                why = result.stdout.decode("utf-8", errors="replace").strip()
+                return _venv_result(
+                    passed=False,
+                    message=(
+                        f"import {module} resolved to a namespace package with no "
+                        f"__init__.py (half-installed package): {why}"
+                    ),
+                    venv_path=venv_path,
+                    remediation_cmd=remediation,
+                )
             if result.returncode != 0:
                 return _venv_result(
                     passed=False,
@@ -579,6 +650,64 @@ def _is_stale_released_index_error(
     return None
 
 
+# uv wraps its error text across lines and quotes the file in backticks:
+#   error: failed to remove file `<path>`: Access is
+#          denied. (os error 5)
+# The OS error codes are Windows' ERROR_ACCESS_DENIED (5),
+# ERROR_SHARING_VIOLATION (32) and ERROR_LOCK_VIOLATION (33): the three ways a
+# running process's open file refuses an installer's delete or rename.
+_LOCKED_FILE_RE = re.compile(
+    r"failed to [a-z ]*?`(?P<path>[^`]+)`:\s*(?P<why>[^()]*?)\s*\(os error (?P<code>\d+)\)",
+    re.IGNORECASE,
+)
+_LOCK_OS_ERRORS = frozenset({"5", "32", "33"})
+
+
+def locked_file_in_uv_error(stderr_text: str, venv_path: str) -> Optional[str]:
+    """The file under ``venv_path`` that uv could not touch because it is in use.
+
+    Returns the path as uv printed it, else None. Only a file under the venv
+    counts: a refusal elsewhere is no evidence about this venv. A permission
+    refusal that is not a Windows lock (``os error 13``) is not a lock either.
+    """
+    text = " ".join(stderr_text.split())
+    for match in _LOCKED_FILE_RE.finditer(text):
+        why = match.group("why").lower()
+        locked = (
+            match.group("code") in _LOCK_OS_ERRORS
+            or "access is denied" in why
+            or "used by another process" in why
+        )
+        path = match.group("path")
+        if locked and _is_inside(Path(path), Path(venv_path)):
+            return path
+    return None
+
+
+def _locked_failure(venv_path: str, locked_path: str) -> Result:
+    """The failed result for a sync that a running process's open file blocked.
+
+    The display label (``extras['display']``) carries the file's name and no
+    path: display text never holds an absolute path, and the full text is in
+    ``message`` and the log. Nothing is killed: stopping the holder is the
+    user's call.
+    """
+    name = os.path.basename(locked_path.replace("\\", "/"))
+    return Result(
+        passed=False,
+        subject=venv_path,
+        message=(
+            f"uv sync is blocked by a locked file: {locked_path} is held open by a "
+            f"running process, usually one started from this venv ({venv_path}). "
+            f"Stop that process, then run `bootstrap run` to finish the sync"
+        ),
+        remediation_cmd="bootstrap run",
+        extras={
+            "display": f"FAILED - {name} locked; stop the process using this venv",
+        },
+    )
+
+
 def ensure_venv(
     project_dir: str,
     venv_path: str,
@@ -727,7 +856,13 @@ def ensure_venv(
         # now a rendering concern: the record and the log keep everything, and
         # the collated display line shortens it (see messages.py).
         entries.append(f"uv sync failed (exit {proc.returncode}): {stderr_text}")
-        if behind:
+        locked_path = locked_file_in_uv_error(stderr_text, venv_path)
+        if locked_path:
+            # Whatever the re-check said, this venv cannot converge until the
+            # holder exits, and a quiet log line would repeat on every pass.
+            entries.append(f"locked file blocks uv sync: {locked_path}")
+            result = _locked_failure(venv_path, locked_path)
+        elif behind:
             # A pinned target that uv could not resolve or install is a miss,
             # however healthy the old venv still is.
             result = _target_failure(

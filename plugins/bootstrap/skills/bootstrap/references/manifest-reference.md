@@ -231,7 +231,7 @@ A **layered** manifest (`~/.claude/bootstrap.json` or `<project>/.claude/bootstr
 Fields (all optional):
 
 - `extras` — dependency extras (`uv sync --extra <name>` each).
-- `check_imports` — module names that must import inside the venv.
+- `check_imports` — module names that must import inside the venv. A name that imports only as a namespace package whose directory should hold a regular package (loose modules without `__init__.py`, or a dist-info RECORD that lists its `__init__.py`) fails the check (engine-internals.md, "Venv import check and locked-file sync failures").
 - `subdir` — a **project-relative** subdirectory that becomes BOTH the uv-sync project target and the `.venv` parent: `<project>/<subdir>/pyproject.toml` → `<project>/<subdir>/.venv`. Absent = the project root (`<project>/pyproject.toml` → `<project>/.venv`). A `subdir` that is absolute or resolves outside the project is a descriptive `project_venv` failure — no fallback to the root.
 - `shared_lib_imports` -- published first-party libraries to link into the project venv, so the project imports them without a `sitecustomize.py` shim. A list whose entries take either of two forms, and the two may be mixed:
   - a library name string, `"content_pipeline"`; or
