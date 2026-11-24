@@ -141,6 +141,11 @@ conditional_loading:
     load_references:
       - references/components.md
 
+  segments_keywords:
+    keywords: [segment, segments dir, contributed cell, cell cut off, missing cell, add a cell, another plugin's cell, STATUSLINE_SEGMENTS_DIR, timeout]
+    load_references:
+      - references/segments.md
+
   styling_keywords:
     keywords: [color, theme, gradient, progress bar, threshold, ansi, hex, truecolor, separator, powerline, icon, emoji, nerd font, bold, italic, dim]
     load_references:

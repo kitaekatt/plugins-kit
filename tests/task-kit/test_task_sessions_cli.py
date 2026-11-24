@@ -452,10 +452,11 @@ def test_list_show_and_status_display_running_not_running_and_unverified(alpha):
     status = rig.plain(["status", "dev/tasks/alpha"])
 
     assert listed.returncode == shown.returncode == status.returncode == 0
-    task_line = next(line for line in listed.stdout.splitlines() if line.startswith("dev/tasks/alpha  active"))
-    assert task_line.endswith(f"[working: {HOST} running <1m; {HOST} not running <1m; otherhost unverified 3h]")
-    fields = task_line.split("  ")
-    assert fields[:3] == ["dev/tasks/alpha", "active", "-"]  # the first fields are unchanged
+    task_line = next(line for line in listed.stdout.splitlines() if "| dev/tasks/alpha |" in line)
+    cells = [cell.strip() for cell in task_line.strip("|").split("|")]
+    # Session column: each registered session by name (no transcript title, so its 8-character id).
+    assert cells[2] == "aaaaaaaa, bbbbbbbb, ffffffff"
+    assert cells[3] == "dev/tasks/alpha"
     working = [line for line in shown.stdout.splitlines() if line.startswith("working: ")]
     assert len(working) == 3
     assert working[0].startswith(f"working: {HOST} running (project, session aaaaaaaa, since ")

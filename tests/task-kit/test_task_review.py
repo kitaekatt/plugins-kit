@@ -122,7 +122,7 @@ class TestTaskListingAndReview:
         text_result = run_cli(["list", "--root", str(tmp_path)], tmp_path)
         assert text_result.returncode == 0
         assert "Open tasks:" in text_result.stdout
-        assert "tmp/missing  active  -  2026-09-20  Needs summary" in text_result.stdout
+        assert "| 0h | - | - | tmp/missing | Needs summary |" in text_result.stdout
         assert "missing task.summary" in text_result.stderr
 
         json_result = run_cli(
@@ -173,7 +173,7 @@ class TestTaskListingAndReview:
         # Section ordering: Open, then Deferred, then Closed.
         assert stdout.index("Open tasks:") < stdout.index("Deferred tasks:")
         assert stdout.index("Deferred tasks:") < stdout.index("Closed tasks:")
-        assert "tmp/on-hold  deferred  -  2026-09-19  On hold" in stdout
+        assert "| 0h | - | - | tmp/on-hold | Deferred summary. |" in stdout
 
     def test_review_is_collapsible_sorted_escaped_and_excludes_archived(
         self, tmp_path: Path

@@ -268,7 +268,8 @@ fi
 #          per-segment timeout (STATUSLINE_SEGMENT_TIMEOUT, default 2s,
 #          via `timeout` or `gtimeout`). Emit your own ANSI; no leading
 #          separator. Output is normalized like *.txt -- first line only,
-#          capped 120 chars, CR stripped -- so a segment that ignores the
+#          capped at 120 VISIBLE chars (escape codes not counted, never
+#          cut mid-escape), CR stripped -- so a segment that ignores the
 #          single-line contract degrades itself rather than the bar, and a
 #          RESET is appended so unreset color cannot bleed onward. Empty
 #          output, non-zero exit, timeout, or NO timeout binary on PATH all
@@ -345,7 +346,24 @@ if [ -d "$SEGMENTS_DIR" ]; then
         # ignores the single-line contract degrades itself, never the bar.
         # Trailing RESET so an unreset color cannot bleed into what follows.
         if [ -n "$SEGOUT" ]; then
-            SEGOUT=$(printf '%s' "$SEGOUT" | awk 'NR==1 {print substr($0,1,120); exit}' | tr -d '\r')
+            # The cap counts VISIBLE characters: CSI escape sequences (colors)
+            # are copied whole and not counted, so a colorful cell keeps its
+            # text and a cut never lands inside an escape (a half-written
+            # ESC[3 rendered as a stray "[3" on the bar).
+            SEGOUT=$(printf '%s' "$SEGOUT" | tr -d '\r' | awk '
+                NR==1 {
+                    csi = "^" sprintf("%c", 27) "\\[[0-9;?]*[@-~]"
+                    s = $0; out = ""; n = 0
+                    while (length(s) > 0) {
+                        if (match(s, csi)) {
+                            out = out substr(s, 1, RLENGTH); s = substr(s, RLENGTH + 1)
+                        } else {
+                            if (n >= 120) break
+                            out = out substr(s, 1, 1); s = substr(s, 2); n++
+                        }
+                    }
+                    print out; exit
+                }')
         fi
         [ -n "$SEGOUT" ] && OUT="$OUT$SEP$SEGOUT${RESET}"
     done

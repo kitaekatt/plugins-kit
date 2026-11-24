@@ -18,6 +18,7 @@ _README = _PLUGIN_ROOT / "README.md"
 _SKILL = _PLUGIN_ROOT / "skills" / "statusline" / "SKILL.md"
 _COMPONENTS = _PLUGIN_ROOT / "skills" / "statusline" / "references" / "components.md"
 _STYLING = _PLUGIN_ROOT / "skills" / "statusline" / "references" / "styling.md"
+_SEGMENTS = _PLUGIN_ROOT / "skills" / "statusline" / "references" / "segments.md"
 _INSTALLER = _PLUGIN_ROOT / "scripts" / "install_statusline.py"
 _STATUSLINE_SH = _PLUGIN_ROOT / "scripts" / "statusline.sh"
 
@@ -181,7 +182,7 @@ class TestItem6SegmentsDirAtCopyPoint:
 # ASCII rule covers it too, detector or not.
 _PROSE_PUNCTUATION_VIOLATIONS = ("\u2014", "\u2192")  # em-dash, rightwards arrow
 
-_DOCS_UNDER_TEST = [_README, _SKILL, _COMPONENTS, _STYLING, _INSTALLER]
+_DOCS_UNDER_TEST = [_README, _SKILL, _COMPONENTS, _STYLING, _SEGMENTS, _INSTALLER]
 
 
 class TestItem7AsciiProsePunctuation:
@@ -197,10 +198,10 @@ class TestItem7AsciiProsePunctuation:
 
 
 # ---------------------------------------------------------------------------
-# Item 8: README must not use temporal deixis, and must correctly describe
-# the segment normalization (120-char cap, missing-timeout case). The
-# missing-timeout half of this pin also lives alongside
-# test_overlong_sh_segment_is_capped in test_statusline.py.
+# Item 8: README must not use temporal deixis, and the segment contract
+# (references/segments.md) must correctly describe the normalization
+# (120-char cap, missing-timeout case). The contract lives in a skill
+# reference so an agent reaches it; the README only points there.
 # ---------------------------------------------------------------------------
 
 _TEMPORAL_DEIXIS = ("Currently ships", "Future home", "no longer used")
@@ -212,9 +213,8 @@ class TestItem8NoTemporalDeixisAndAccurateSegmentApi:
         for phrase in _TEMPORAL_DEIXIS:
             assert phrase not in text, f"temporal deixis found: {phrase!r}"
 
-    def test_readme_segment_api_names_the_cap_and_missing_timeout_case(self):
-        text = _read(_README)
-        segment_section = text.split("## Segment API", 1)[1].split("##", 1)[0]
+    def test_segment_contract_names_the_cap_and_missing_timeout_case(self):
+        segment_section = _read(_SEGMENTS)
         assert "120" in segment_section
         assert "timeout(1)" in segment_section
         # The old broken claim was that stdout is appended verbatim; it may
@@ -223,3 +223,19 @@ class TestItem8NoTemporalDeixisAndAccurateSegmentApi:
         # phrase wraps across a line break in prose.
         normalized = " ".join(segment_section.split())
         assert "is appended verbatim" not in normalized
+
+
+# ---------------------------------------------------------------------------
+# The segment contract is reachable by an agent: SKILL.md loads the reference
+# on segment keywords, and the README points at it instead of restating it.
+# ---------------------------------------------------------------------------
+
+class TestSegmentContractReachable:
+    def test_skill_loads_segments_reference(self):
+        assert "references/segments.md" in _read(_SKILL)
+
+    def test_readme_points_at_segments_reference_without_restating(self):
+        text = _read(_README)
+        section = text.split("## Segment API", 1)[1].split("\n## ", 1)[0]
+        assert "skills/statusline/references/segments.md" in section
+        assert "STATUSLINE_SEGMENT_TIMEOUT" not in section

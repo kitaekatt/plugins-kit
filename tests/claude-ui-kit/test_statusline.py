@@ -9,6 +9,7 @@ instead of relying on the bootstrap plugin's manifest transitively.
 import atexit
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -322,15 +323,40 @@ class TestSegmentApi:
         assert "X" * 120 in result.stdout
         assert "X" * 200 not in result.stdout
 
-    def test_readme_documents_the_cap_this_test_enforces(self):
-        """README.md's segment-API section must name the 120-char cap this
-        test pins, and the missing-timeout(1) case -- see claude-ui-kit
-        slice2 item 8."""
-        readme = _PLUGIN_ROOT / "README.md"
-        text = readme.read_text(encoding="utf-8")
-        segment_section = text.split("## Segment API", 1)[1].split("##", 1)[0]
-        assert "120" in segment_section
-        assert "timeout(1)" in segment_section
+    def test_cap_counts_visible_text_not_color_codes(self, tmp_path):
+        """The cap measures what the user sees. A colorful segment whose ANSI
+        codes push it past 120 raw characters must keep all its visible text,
+        and a cut must never land inside an escape sequence (which rendered a
+        stray "[3" on the bar)."""
+        segs = tmp_path / "segments"
+        segs.mkdir()
+        # 12 badges, ~42 raw chars each (~500 raw), 3 visible chars each (36).
+        badges = "".join(
+            f"\\033[48;2;61;156;61m\\033[38;2;26;26;26m B{i:x} \\033[0m"
+            for i in range(12))
+        (segs / "50-badges.sh").write_text(
+            f"#!/usr/bin/env bash\nprintf '{badges}\\n'\n")
+        result = self._run_with_segments(tmp_path, segs)
+        assert result.returncode == 0
+        visible = re.sub(r"\x1b\[[0-9;?]*[@-~]", "", result.stdout)
+        for i in range(12):
+            assert f" B{i:x} " in visible
+        assert "\x1b[" not in visible, "partial escape sequence leaked"
+
+    def test_cap_never_cuts_inside_an_escape(self, tmp_path):
+        """When visible text does exceed the cap, the cut lands between
+        escape sequences, never inside one."""
+        segs = tmp_path / "segments"
+        segs.mkdir()
+        (segs / "50-long.sh").write_text(
+            "#!/usr/bin/env bash\n"
+            "for i in $(seq 1 100); do printf '\\033[38;5;196mXY\\033[0m'; done\n"
+            "echo\n")
+        result = self._run_with_segments(tmp_path, segs)
+        visible = re.sub(r"\x1b\[[0-9;?]*[@-~]", "", result.stdout)
+        assert "\x1b[" not in visible, "partial escape sequence leaked"
+        assert "XY" * 60 in visible
+        assert "XY" * 61 not in visible
 
 
 @pytest.mark.skipif(not _HAS_TOOLS, reason="bash + jq required")

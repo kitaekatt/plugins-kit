@@ -11,10 +11,18 @@ Operation signature: `task.py list [--scope all|user|project|skill|file]
 
 Default output has three sections in order: Open tasks, Deferred tasks, and
 Closed tasks. Open means active or blocked. Deferred means purposefully on
-hold and intended to resume. Each line is
-`id  status  priority  last_update  title`; absent fields are `-`, and
-last_update is the latest ISO date in dated log entries. Explicit `--status`
-prints only matching tasks, including archived and other classifications.
+hold and intended to resume. Each section is a Markdown table
+`| Stale | Pri | Session | Task | Summary |`, freshest task first:
+- Stale: the newest file mtime in the task folder (`answers/` ignored; the
+  system regenerates it), as hours under a day (`5h`) and whole days from 24
+  hours (`2d`). `-` without a local folder (remote, archived).
+- Session: the name of each session registered on the task (the last
+  `customTitle` of its transcript, else the first 8 characters of its id), or
+  `-` when unclaimed.
+- Summary: the summary, else the title, cut at 70 characters.
+Absent fields are `-`. Explicit `--status` prints one such table of the
+matching tasks, including archived and other classifications. Invalid tasks
+keep the one-line form with their first error.
 List deduplicates by canonical path, validates each task, and exits 0 when
 empty. Notes and summary warnings use stderr.
 
@@ -31,9 +39,8 @@ history, diagnostics, items, and sessions. A current orientation answer's
 headline replaces `task.summary`. List never invokes inference or writes a
 task folder. Documents are the registry; there is no stored master list.
 
-A task with registrations ends in
-`[working: <host> <state> <age>; ...]`. JSON and YAML carry `sessions` per
-task. List only reads them.
+A task with registrations shows their session names in the Session column.
+JSON and YAML carry `sessions` per task. List only reads them.
 
 `--scope all` scans direct, non-hidden project directories under each parent
 in `~/.claude/task.local.yaml`'s `project_directories`. Entries may be absolute
