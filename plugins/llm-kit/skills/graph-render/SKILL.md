@@ -38,12 +38,13 @@ technique_skill:
           action: Pick the output path (see "Where the page goes").
         - n: 3
           action: Run the render call, then the open call on the path the render call printed.
-          on_failure: Exit 1 or 2 prints the reason on stderr; report it as written and stop.
+          on_failure: Exit 1, 2 or 3 prints the reason on stderr; report it as written and stop. On exit 3 offer the user `--no-labels`; never run `llm-kit consent set` yourself.
         - n: 4
           action: Tell the user the printed path.
       gotchas:
         - Without -o the verb writes into the current directory, which dirties the user's repository; always pass -o.
         - The graph browser opens only with no GRAPH; a single graph that runs no other file opens straight on that graph.
+        - Labels are on by default, so the first build of a large project can take up to about a minute; progress lines go to stderr and a rebuild from the cache is quick.
 ```
 
 ## Running the call
@@ -68,7 +69,21 @@ ${CLAUDE_PLUGIN_ROOT}/bin/llm-kit graph render <graph name or file> --project <p
 `--project` defaults to the current directory; `--title TEXT` sets the page
 title. Exit codes: `0` written (the path is printed), `1` a graph does not load
 or the file cannot be written, `2` usage (for example no `.llm-kit/graphs.yaml`
-and no graph named).
+and no graph named), `3` the labels could not be made (no page is written).
+
+## Labels
+
+A model (haiku by default) infers a title and description for each node, and
+the page shows them as purple italic text marked inferred. Its Labels button
+hides or shows that text. The first build can take up to about a minute (one
+call per graph file, progress on stderr); answers are cached outside the
+project, so a rebuild makes no calls. `--relabel` ignores the cache and asks
+again; `--no-labels` draws the plain picture with no model call.
+
+On exit 3 (consent for the `graph-labels` scope refused, or the model
+unavailable), report the message as written. It names the fix, either
+`llm-kit consent set ...` or `--no-labels`. Never change consent yourself:
+offer the user `--no-labels` and let them choose.
 
 ## Where the page goes
 
