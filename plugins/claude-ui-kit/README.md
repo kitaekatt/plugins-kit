@@ -80,32 +80,12 @@ The bootstrap install script:
 
 ## Segment API (contributing a cell from another plugin)
 
-Other plugins add a cell to the bar WITHOUT touching `statusLine.command`:
-drop one entry into `segments/` (sibling of `scripts/` in this plugin's data
-dir, `~/.claude/plugins/data/<marketplace>/claude-ui-kit/segments/`). ui-kit
-owns composition -- the separator and ordering (lexical by filename; use
-`NN-` prefixes) -- contributors own content. Two entry kinds:
-
-- `*.txt` -- first line rendered while fresh (mtime within
-  `STATUSLINE_SEGMENT_TXT_TTL` seconds, default 300), capped at 60 chars.
-- `*.sh` -- executed with the statusline stdin JSON on stdin under a hard
-  per-segment timeout (`STATUSLINE_SEGMENT_TIMEOUT`, default 2s, via `timeout`
-  or `gtimeout`). Emit your own ANSI, one line, no leading separator. Stdout
-  is NOT appended verbatim: it is normalized first line only, capped at 120
-  visible characters (ANSI color codes are not counted and are never cut in
-  half), with CR stripped and a RESET appended, so a segment that
-  ignores the single-line contract degrades itself, not the bar. Empty
-  output, non-zero exit, timeout, or no `timeout(1)` binary on PATH all
-  render as an absent cell -- the last case disables every `*.sh` segment and
-  the bar shows one `[segments off: no timeout(1)]` marker instead of
-  rendering nothing with no explanation.
-
-Contract for `*.sh` entries: **pure cache reader**. Read pre-computed local
-state; never fetch, poll, or block on the network. Collect data in your own
-out-of-band process (a daemon, a hook, a cron) and write it somewhere cheap
-to read. Uninstalling a contributor should remove its segment file; a
-segment whose backing plugin is gone should exit 0 silently, which renders
-as no cell.
+Other plugins add a cell to the bar WITHOUT touching `statusLine.command`, by
+dropping one `*.txt` or `*.sh` entry into the `segments/` directory in this
+plugin's data dir. The full contract (ordering, timeouts, the 120-character
+visible cap, and when a cell is absent) is in
+`skills/statusline/references/segments.md`, which the `/statusline` skill
+loads.
 
 ## /statusline skill
 
@@ -135,4 +115,5 @@ claude-ui-kit/
       references/
         components.md         # what data the script can read
         styling.md            # ANSI palettes, progress bars, gradients, themes
+        segments.md           # segment API: contributed cells and their contract
 ```
