@@ -121,6 +121,14 @@ DECISION_KEYS = frozenset(
 # below and TestCapabilityRendering in tests/awesome-kit/test_orchestration_guidance.py.
 CAPABILITY_KEYS = ("isolation", "effort", "network", "concurrency", "returns")
 
+# `model_overrides` scopes and fields. A harness setting applies to every entry
+# that harness drives; a model setting (keyed by entry id) wins field by field.
+# `disabled` wins over `reset_mode` on the same entry.
+MODEL_OVERRIDE_SCOPES = ("harnesses", "models")
+MODEL_OVERRIDE_FIELDS = ("disabled", "reset_mode")
+DISABLED_LABEL = "disabled by config"
+RESET_LABEL = "reset available (config)"
+
 
 # --------------------------------------------------------------------------
 # Layer resolution
@@ -299,6 +307,68 @@ def validate_layer(layer: str, path: Path, data: Dict[str, Any]) -> None:
                 f"{layer} layer ({path}): `{key}` must be a list, got "
                 f"{type(value).__name__} ({value!r})"
             )
+    if "model_overrides" in data:
+        validate_model_overrides(f"{layer} layer ({path})", data["model_overrides"])
+
+
+def validate_model_overrides(where: str, value: Any) -> None:
+    """Fail loudly on a `model_overrides` block this renderer would misread.
+
+    Shape: ``{harnesses: {<harness>: FIELDS}, models: {<entry id>: FIELDS}}``,
+    FIELDS a mapping of `disabled` / `reset_mode` to a boolean. An unknown
+    scope or field, or a non-boolean value, is an error rather than ignored,
+    because an override that silently does nothing reads as one in force.
+    """
+    if not isinstance(value, dict):
+        raise ValueError(
+            f"{where}: `model_overrides` must be a mapping, got {type(value).__name__}"
+        )
+    for scope, targets in value.items():
+        if scope not in MODEL_OVERRIDE_SCOPES:
+            raise ValueError(
+                f"{where}: `model_overrides.{scope}` is not a known scope "
+                f"(expected one of {', '.join(MODEL_OVERRIDE_SCOPES)})"
+            )
+        if not isinstance(targets, dict):
+            raise ValueError(
+                f"{where}: `model_overrides.{scope}` must be a mapping of id to "
+                f"settings, got {type(targets).__name__}"
+            )
+        for target, fields in targets.items():
+            prefix = f"{where}: `model_overrides.{scope}.{target}`"
+            if not isinstance(target, str) or not target:
+                raise ValueError(f"{prefix}: the id must be a non-empty string")
+            if not isinstance(fields, dict):
+                raise ValueError(
+                    f"{prefix} must be a mapping of settings, got {type(fields).__name__}"
+                )
+            for name, flag in fields.items():
+                if name not in MODEL_OVERRIDE_FIELDS:
+                    raise ValueError(
+                        f"{prefix}.{name} is not a known setting "
+                        f"(expected one of {', '.join(MODEL_OVERRIDE_FIELDS)})"
+                    )
+                if not isinstance(flag, bool):
+                    raise ValueError(
+                        f"{prefix}.{name} must be true or false, got {flag!r}"
+                    )
+
+
+def model_override(
+    config: Mapping[str, Any], entry_id: str, harness: Optional[str]
+) -> Tuple[bool, bool]:
+    """``(disabled, reset_mode)`` in force for one entry.
+
+    The harness setting applies first, then the entry's own setting, field by
+    field; `disabled` wins over `reset_mode`.
+    """
+    overrides = config.get("model_overrides") or {}
+    fields: Dict[str, bool] = {}
+    if harness:
+        fields.update((overrides.get("harnesses") or {}).get(str(harness).lower()) or {})
+    fields.update((overrides.get("models") or {}).get(str(entry_id)) or {})
+    disabled = bool(fields.get("disabled"))
+    return disabled, bool(fields.get("reset_mode")) and not disabled
 
 
 def resolve_config(project_root: Path) -> Tuple[Dict[str, Any], List[Tuple[str, Path, str]]]:
@@ -1127,6 +1197,82 @@ def _switched_off_model(
     }
 
 
+def _unpaced(entry: Any) -> Any:
+    """``entry`` without ``conserve_usage``: describe reads no usage for it.
+
+    A reset-mode entry is treated as having its whole pool, so its spent or
+    behind-pace reading must neither mark it out of quota nor move it.
+    Unpaced, it keeps the slot it is given (``order_by_pace`` moves only paced
+    entries), which is how a reset-mode entry stays first.
+    """
+    if dataclasses.is_dataclass(entry) and not isinstance(entry, type):
+        if "conserve_usage" in {field.name for field in dataclasses.fields(entry)}:
+            return dataclasses.replace(entry, conserve_usage=None)
+        return entry
+    values = dict(vars(entry))
+    values["conserve_usage"] = None
+    return SimpleNamespace(**values)
+
+
+def _with_reset(line: str, reset: bool) -> str:
+    """Mark a reset-mode entry, so the override is never read as a reading."""
+    return f"{line}   {RESET_LABEL}" if reset else line
+
+
+def _row_overrides(
+    config: Mapping[str, Any], ids: List[str], harness_of: Callable[[str], Optional[str]]
+) -> Tuple[List[str], List[str], set]:
+    """``(ordered ids, disabled ids, reset ids)`` for one row.
+
+    Reset-mode ids move to the front in declared order; disabled ids stay in
+    the declaration (describe excludes them) and never count as reset.
+    """
+    disabled: List[str] = []
+    reset: List[str] = []
+    for entry_id in ids:
+        is_disabled, is_reset = model_override(config, entry_id, harness_of(entry_id))
+        if is_disabled:
+            disabled.append(entry_id)
+        elif is_reset:
+            reset.append(entry_id)
+    ordered = reset + [entry_id for entry_id in ids if entry_id not in reset]
+    return ordered, disabled, set(reset)
+
+
+def _disabled_model(
+    entry_id: str, harness: Optional[str], effort: Optional[str]
+) -> Dict[str, Any]:
+    """A menu row for an entry `model_overrides` disabled: shown, never usable."""
+    line = f"  {entry_id}  UNUSABLE ({DISABLED_LABEL}); do not delegate to it"
+    return {
+        "id": entry_id,
+        "target": _target(entry_id, harness),
+        "harness": harness,
+        "usable": False,
+        "default": False,
+        "disabled": True,
+        "effort": effort,
+        "line": _with_effort(line, effort),
+    }
+
+
+def _shown_when_enabled(entry_id: str, context: Mapping[str, Any]) -> bool:
+    """Whether describe would list ``entry_id`` at all, were it not disabled.
+
+    Mirrors the renderer's own routability: a resolved harness entry the
+    session can drive. An unresolved or unroutable id stays hidden, as it
+    would without the override; the floor alone may name it.
+    """
+    entry = context["entries"].get(entry_id)
+    if entry is None or getattr(entry, "kind", None) != "harness":
+        return False
+    try:
+        context["factory"](entry_id)
+    except Exception:  # noqa: BLE001 -- the factory's resolve error means unroutable
+        return False
+    return True
+
+
 def _describe_row(
     api: SimpleNamespace,
     ids: List[str],
@@ -1143,6 +1289,11 @@ def _describe_row(
     is never dropped.
     """
     efforts = efforts or {}
+    ids, disabled, reset = _row_overrides(
+        context["config"],
+        ids,
+        lambda entry_id: getattr(context["entries"].get(entry_id), "harness", None),
+    )
     _seed_reachability(
         api, ids, context["entries"], context["harness_status"], context["cache"]
     )
@@ -1150,6 +1301,7 @@ def _describe_row(
     try:
         ranking = api.describe(
             ids,
+            exclude=disabled,
             project_root=context["project_root"],
             caller="session",
             self_ref=context["self_ref"],
@@ -1161,8 +1313,14 @@ def _describe_row(
             harness_auth=context["harness_auth"],
         )
     except api.no_usable as exc:  # the floor: the only surface naming hidden ids
+        floor = str(exc)
+        for entry_id in disabled:
+            floor = floor.replace(
+                f"{entry_id}: excluded (ruled out by the caller)",
+                f"{entry_id}: excluded ({DISABLED_LABEL})",
+            )
         return {
-            "models": [], "header": None, "rule": "", "floor": str(exc),
+            "models": [], "header": None, "rule": "", "floor": floor,
             "consent": _consent_line(context["policy"]),
         }
     lines = ranking.render().split("\n")
@@ -1177,7 +1335,8 @@ def _describe_row(
             "effort": efforts.get(entry.id),
             "cost_class": entry.cost_class,
             "line": _with_effort(
-                _with_cost(line, entry.cost_class), efforts.get(entry.id)
+                _with_cost(_with_reset(line, entry.id in reset), entry.cost_class),
+                efforts.get(entry.id),
             ),
         }
         for entry, line in zip(entries, lines[1 : 1 + len(entries)])
@@ -1185,6 +1344,15 @@ def _describe_row(
     models.extend(
         _switched_off_model(disposition, context["entries"], efforts)
         for disposition in ranking.switched_off
+    )
+    models.extend(
+        _disabled_model(
+            entry_id,
+            getattr(context["entries"].get(entry_id), "harness", None),
+            efforts.get(entry_id),
+        )
+        for entry_id in disabled
+        if _shown_when_enabled(entry_id, context)
     )
     return {
         "models": models,
@@ -1207,12 +1375,25 @@ def _reduced_row(
     self_ref: Optional[str],
     reason: str,
     efforts: Optional[Mapping[str, Optional[str]]] = None,
+    config: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """One row's menu without llm-kit: its core ids, in declared order."""
+    """One row's menu without llm-kit: its core ids, in declared order.
+
+    `model_overrides` still apply: a reset-mode core id leads the row and a
+    disabled one is listed unusable after it.
+    """
     efforts = efforts or {}
-    kept = [entry_id for entry_id in ids if entry_id in core_ids]
+    ordered, disabled, reset = _row_overrides(
+        config or {}, ids, lambda entry_id: CLAUDE_HARNESS if entry_id in core_ids else None
+    )
+    kept = [entry_id for entry_id in ordered if entry_id in core_ids and entry_id not in disabled]
     if not kept:
-        itemised = "\n".join(f"  {entry_id}: unroutable ({reason})" for entry_id in ids)
+        itemised = "\n".join(
+            f"  {entry_id}: excluded ({DISABLED_LABEL})"
+            if entry_id in disabled
+            else f"  {entry_id}: unroutable ({reason})"
+            for entry_id in ids
+        )
         return {
             "models": [],
             "header": None,
@@ -1230,6 +1411,7 @@ def _reduced_row(
         line = f"  {entry_id:<{width}}  claude/agent"
         if marks:
             line += "   " + " ".join(marks)
+        line = _with_reset(line, entry_id in reset)
         models.append(
             {
                 "id": entry_id,
@@ -1241,6 +1423,11 @@ def _reduced_row(
                 "line": _with_effort(line, efforts.get(entry_id)),
             }
         )
+    models.extend(
+        _disabled_model(entry_id, CLAUDE_HARNESS, efforts.get(entry_id))
+        for entry_id in disabled
+        if entry_id in core_ids
+    )
     return {
         "models": models,
         "header": "Declared Claude models, in declared order: choose one; default is marked.",
@@ -1317,7 +1504,11 @@ def resolve_routing_models(
                 degraded.append(note)
             return [], [note]
         entries = _declaration_entries(model_entries, core_ids, quota=_quota_reads_enabled())
+        for entry_id, entry in list(entries.items()):
+            if model_override(config, entry_id, getattr(entry, "harness", None))[1]:
+                entries[entry_id] = _unpaced(entry)
         context = {
+            "config": config,
             "policy": policy,
             "harness_auth": {},
             "entries": entries,
@@ -1385,7 +1576,7 @@ def resolve_routing_models(
                 if api is None
                 else "llm_kit describe() failed here"
             )
-            row = _reduced_row(ids, core_ids, self_ref, reason, efforts)
+            row = _reduced_row(ids, core_ids, self_ref, reason, efforts, config)
 
         routes.append(
             {
@@ -2101,6 +2292,56 @@ def discover_consult_seats(
         return None, "discovery_failed", f"{type(exc).__name__}: {exc}"
 
 
+def apply_seat_overrides(result: Any, config: Mapping[str, Any]) -> Any:
+    """``result`` with `model_overrides` applied to its seats.
+
+    A disabled seat leaves ``seats`` and ``out_of_quota`` for ``disabled``,
+    which the render lists as not to be consulted. A reset-mode seat that its
+    pool reading spent returns from ``out_of_quota`` to ``seats``, and every
+    reset-mode seat sorts to the front of its relation and tier and is no
+    longer de-prioritized for being behind pace. Other seats keep llm-kit's
+    order (relation, then quota, then tier).
+    """
+    if not config.get("model_overrides"):
+        return result
+
+    def flags(seat: Any) -> Tuple[bool, bool]:
+        return model_override(config, str(seat.endpoint), getattr(seat, "harness", None))
+
+    seats = list(getattr(result, "seats", ()) or ())
+    spent = list(getattr(result, "out_of_quota", ()) or ())
+    disabled = [seat for seat in seats + spent if flags(seat)[0]]
+    reset = {str(seat.endpoint) for seat in seats + spent if flags(seat)[1]}
+    kept = [seat for seat in seats if not flags(seat)[0]]
+    kept += [seat for seat in spent if str(seat.endpoint) in reset]
+
+    def key(item: Tuple[int, Any]) -> Tuple[int, int, int, int, int]:
+        index, seat = item
+        relation = getattr(seat, "relation", "")
+        is_reset = str(seat.endpoint) in reset
+        budget = getattr(seat, "budget", None)
+        quota = 0 if is_reset or not getattr(budget, "deprioritized", False) else 1
+        tier = getattr(seat, "tier", None)
+        tier_rank = -tier if relation == "UP" and isinstance(tier, int) else 0
+        return (0 if relation == "UP" else 1, quota, tier_rank, 0 if is_reset else 1, index)
+
+    ordered = [seat for _index, seat in sorted(enumerate(kept), key=key)]
+    values = dict(vars(result)) if hasattr(result, "__dict__") else {
+        name: getattr(result, name, ())
+        for name in ("self", "unclassified", "probe_unknown")
+    }
+    values.update(
+        seats=tuple(ordered),
+        out_of_quota=tuple(
+            seat for seat in spent
+            if not flags(seat)[0] and str(seat.endpoint) not in reset
+        ),
+        disabled=tuple(disabled),
+        reset_endpoints=frozenset(reset),
+    )
+    return SimpleNamespace(**values)
+
+
 def render_consult_seats(
     result: Optional[Any], status: str, detail: Optional[str], out: List[str]
 ) -> None:
@@ -2121,12 +2362,14 @@ def render_consult_seats(
         return
 
     seats = list(getattr(result, "seats", ()) or ())
+    reset = getattr(result, "reset_endpoints", frozenset())
     if seats:
         for seat in seats:
             harness = getattr(seat, "harness", None) or "?"
-            out.append(
-                f"{seat.relation} {seat.endpoint} ({seat.band}, {harness})"
-            )
+            line = f"{seat.relation} {seat.endpoint} ({seat.band}, {harness})"
+            if str(seat.endpoint) in reset:
+                line += f" {RESET_LABEL}"
+            out.append(line)
     else:
         out.append("none reachable -- decide and say so")
     # An out-of-quota seat stays visible with its reset time: it is real on
@@ -2138,6 +2381,12 @@ def render_consult_seats(
         out.append(
             f"{seat.relation} {seat.endpoint} ({seat.band}, {harness}) "
             f"out of quota until {format_reset_time(resets_at)}"
+        )
+    for seat in getattr(result, "disabled", ()) or ():
+        harness = getattr(seat, "harness", None) or "?"
+        out.append(
+            f"{seat.relation} {seat.endpoint} ({seat.band}, {harness}) "
+            f"{DISABLED_LABEL}; do not consult it"
         )
     self_seat = result.self
     out.append(f"self: {self_seat.endpoint} ({self_seat.band})")
@@ -2247,6 +2496,8 @@ def render(
     seat_result, seat_status, seat_detail = discover_consult_seats(
         self_ref, project_root
     )
+    if seat_result is not None:
+        seat_result = apply_seat_overrides(seat_result, config)
     # The other three optional-library sites (model definitions, quota, the
     # adapter command renderer) all disclose a degraded render via
     # degradation_notes. Without this note, an absent
@@ -2408,7 +2659,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             # Rendered entries only: a hidden id surfaces through the floor
             # alone, never here.
             targets = ", ".join(
-                model["target"] + (" [switched off]" if model.get("switched_off") else "")
+                model["target"]
+                + (" [switched off]" if model.get("switched_off") else "")
+                + (" [disabled]" if model.get("disabled") else "")
                 for model in route["models"]
             )
             if route.get("floor"):

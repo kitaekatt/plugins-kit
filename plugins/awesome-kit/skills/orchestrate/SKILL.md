@@ -94,8 +94,10 @@ technique_skill:
       not be dispatched to. Each routing row lists the models it declares that are real on
       this machine -- usable, out of quota until a stated reset, unreachable, or marked
       UNUSABLE because the llm-kit consent scope `orchestrate` does not allow its cost class
-      (never delegate to an UNUSABLE entry; its line gives the reason and the exact
-      `llm-kit consent set` command) -- and the backends listed are the only ones that
+      or the user's `model_overrides` disabled it (never delegate to an UNUSABLE entry; its
+      line gives the reason, and for consent the exact `llm-kit consent set` command). An
+      entry marked `reset available (config)` leads its row on the user's override, not on a
+      usage reading -- and the backends listed are the only ones that
       exist here. A declared model that resolves to
       nothing or that this policy cannot drive is left out without comment, and anything not
       installed on this machine is omitted from the output entirely, so do not reach for a
@@ -104,7 +106,8 @@ technique_skill:
       detection status, if you need to answer that question.)
 
       The Consult seats section is who to ask; take the first UP seat, else the first BESIDE.
-      A seat listed as out of quota is not askable until its reset time. When a consult
+      A seat listed as out of quota is not askable until its reset time, and a seat listed
+      as disabled by config is not askable at all. When a consult
       dispatch fails for a reason the launch-correction rule in
       [references/configuration.md](references/configuration.md) does not explain, ask the
       next seat in that order and say which seat failed and how.
