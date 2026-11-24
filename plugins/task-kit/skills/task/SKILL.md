@@ -80,7 +80,7 @@ capability_skill:
       details: references/work-and-hand-off.md#refresh
       steps:
         - n: 1
-          action: "Load references/work-and-hand-off.md and follow its refresh procedure. Never release the session registration or emit the hand-off baton."
+          action: "Load references/work-and-hand-off.md and follow its refresh procedure. After the report, give compact guidance: when the folder is current and nothing running must land in it first, show a ready-to-paste `/compact <focus>` line (one paragraph, about 120 words at most); otherwise do not show it, and state what must finish first and when you will be ready. Never release the session registration or emit the hand-off baton."
     - id: hand_off
       keywords: [hand-off, hand off, package for a fresh session, resume in a new session, baton, continue in a new session]
       user_objective: "Package the folder so a fresh session resumes with one paste -- ONLY when the user invokes /task hand-off or /restart hand-off."
