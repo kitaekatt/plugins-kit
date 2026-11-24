@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 _SUMMARY_WIDTH = 70
+_TAIL_BYTES = 2_000_000
 _TITLE_RE = re.compile(rb'"customTitle":"([^"]*)"')
 HEADER = ("Stale", "Pri", "Session", "Task", "Summary")
 
@@ -32,12 +33,25 @@ def stale_label(mtime: float | None, now: float) -> str:
     return f"{int(hours)}h" if hours < 24 else f"{int(hours // 24)}d"
 
 
+def _last_titles(transcript: Path) -> list[bytes]:
+    """customTitle values of a transcript: the last 2 MB first (the title is re-emitted), the whole file if none."""
+    size = transcript.stat().st_size
+    with transcript.open("rb") as handle:
+        if size > _TAIL_BYTES:
+            handle.seek(size - _TAIL_BYTES)
+            found = _TITLE_RE.findall(handle.read())
+            if found:
+                return found
+            handle.seek(0)
+        return _TITLE_RE.findall(handle.read())
+
+
 def session_name(record) -> str:
     """The session's name: the last ``customTitle`` of its transcript, else the first 8 characters of its id."""
     if record.transcript_path and record.owned:
         transcript = Path(record.transcript_path).expanduser()
         if transcript.is_file():
-            found = _TITLE_RE.findall(transcript.read_bytes())
+            found = _last_titles(transcript)
             if found:
                 return found[-1].decode("utf-8")
     return record.session_id[:8]
@@ -55,7 +69,7 @@ def _row(view, now: float) -> tuple[float, tuple[str, ...]]:
     names = sorted({session_name(r) for r in view.sessions})
     summary = view.summary or view.title or "-"
     if len(summary) > _SUMMARY_WIDTH:
-        summary = summary[: _SUMMARY_WIDTH - 1] + "…"
+        summary = summary[: _SUMMARY_WIDTH - 3] + "..."
     cells = (
         stale_label(mtime, now),
         view.priority or "-",

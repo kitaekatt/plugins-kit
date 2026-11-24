@@ -642,17 +642,24 @@ class TestListCLI:
         ]
 
     def test_default_lists_open_and_closed_in_separate_sections(self, tmp_path):
-        make_task(tmp_path, "tmp/open", status="active")
-        make_task(tmp_path, "tmp/stuck", status="blocked")
-        make_task(tmp_path, "tmp/done", status="closed")
+        import os
+        import time
+
+        for index, (rel, status) in enumerate(
+            (("tmp/open", "active"), ("tmp/stuck", "blocked"), ("tmp/done", "closed"))
+        ):
+            folder = make_task(tmp_path, rel, status=status)
+            stamp = time.time() - index * 60  # each task one minute older than the one before
+            for path in folder.rglob("*"):
+                os.utime(path, (stamp, stamp))
         proc = run_cli(["list", "--root", str(tmp_path)], tmp_path)
         assert proc.returncode == 0, proc.stderr
         assert proc.stdout.splitlines() == [
             "Open tasks:",
             "| Stale | Pri | Session | Task | Summary |",
             "|---|---|---|---|---|",
-            "| 0h | - | - | tmp/stuck | A task |",
             "| 0h | - | - | tmp/open | A task |",
+            "| 0h | - | - | tmp/stuck | A task |",
             "",
             "Closed tasks:",
             "| Stale | Pri | Session | Task | Summary |",
