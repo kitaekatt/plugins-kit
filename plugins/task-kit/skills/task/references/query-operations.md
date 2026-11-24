@@ -9,9 +9,11 @@ Operation signature: `task.py list [--scope all|user|project|skill|file]
 [--target X] [--status S] [--priority P] [--format text|json|yaml]
 [--include-hidden] [--root PATH]`.
 
-Default output has three sections in order: Open tasks, Deferred tasks, and
-Closed tasks. Open means active or blocked. Deferred means purposefully on
-hold and intended to resume. Each section is a Markdown table
+Default output has two sections in order, Open tasks and Deferred tasks, then
+one line `(N) Closed Tasks` that counts closed tasks and lists none, so closed
+tasks do not fill the agent's context; `--status closed` lists them. Open
+means active or blocked. Deferred means purposefully on hold and intended to
+resume. Each section is a Markdown table
 `| Stale | Pri | Session | Task | Summary |`, freshest task first:
 - Stale: the newest file mtime in the task folder (`answers/` ignored; the
   system regenerates it), as hours under a day (`5h`) and whole days from 24

@@ -641,7 +641,7 @@ class TestListCLI:
             "| 0h | - | - | tmp/done | A task |",
         ]
 
-    def test_default_lists_open_and_closed_in_separate_sections(self, tmp_path):
+    def test_default_lists_open_tasks_and_only_counts_closed(self, tmp_path):
         import os
         import time
 
@@ -661,10 +661,7 @@ class TestListCLI:
             "| 0h | - | - | tmp/open | A task |",
             "| 0h | - | - | tmp/stuck | A task |",
             "",
-            "Closed tasks:",
-            "| Stale | Pri | Session | Task | Summary |",
-            "|---|---|---|---|---|",
-            "| 0h | - | - | tmp/done | A task |",
+            "(1) Closed Tasks",
         ]
 
     def test_priority_filter_flag(self, tmp_path):
