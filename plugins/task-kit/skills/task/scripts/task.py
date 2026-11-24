@@ -171,6 +171,7 @@ try:
     from task_system import location_ops  # noqa: E402
     from task_system import reference_rewrite  # noqa: E402
     from task_system import resolve  # noqa: E402
+    from task_system import list_table  # noqa: E402
     from task_system import sessions_cli  # noqa: E402
     from task_system import state_ops  # noqa: E402
     from task_system.discovery import (  # noqa: E402
@@ -327,9 +328,9 @@ def _print_task_sections(
     printed = False
     invalid = [view for view in sections["other"] if view.status == "invalid"]
     for heading, section, format_line in (
-        ("Open tasks:", sections["open"], _format_list_line),
-        ("Deferred tasks:", sections["deferred"], _format_list_line),
-        ("Closed tasks:", sections["closed"], _format_list_line),
+        ("Open tasks:", sections["open"], None),
+        ("Deferred tasks:", sections["deferred"], None),
+        ("Closed tasks:", sections["closed"], None),
         ("Invalid tasks:", invalid, _format_invalid_line),
     ):
         if not section:
@@ -337,8 +338,12 @@ def _print_task_sections(
         if printed:
             print()
         print(indent + heading)
-        for view in section:
-            print(indent + format_line(view))
+        if format_line is None:
+            for line in list_table.format_table(section):
+                print(indent + line)
+        else:
+            for view in section:
+                print(indent + format_line(view))
         printed = True
     return printed
 
@@ -361,14 +366,14 @@ def _cmd_list(args: argparse.Namespace) -> int:
             if args.status is None:
                 _print_task_sections(section_views(project.views), indent="  ")
             else:
-                for view in project.views:
-                    print("  " + _format_list_line(view))
+                for line in list_table.format_table(project.views):
+                    print("  " + line)
         return 0
     if args.status is None:
         _print_task_sections(section_views(listing.views))
     else:
-        for view in listing.views:
-            print(_format_list_line(view))
+        for line in list_table.format_table(listing.views):
+            print(line)
     return 0
 
 

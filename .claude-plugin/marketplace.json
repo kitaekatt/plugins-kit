@@ -84,7 +84,7 @@
     {
       "name": "claude-ui-kit",
       "description": "Claude Code status line with context-window and rate-limit threshold colors, plus the /statusline skill to inspect and customize it.",
-      "version": "0.12.8",
+      "version": "0.12.9",
       "author": {
         "name": "Christina"
       },
@@ -176,7 +176,7 @@
     {
       "name": "task-kit",
       "description": "Provides the task skill (a file-backed task-folder system with a CLI for creating, listing, working, closing, archiving, and moving task folders and task_list references) and task-kit export, the task facts databench's tasks view reads; bare task-kit opens that view.",
-      "version": "0.30.1",
+      "version": "0.31.0",
       "author": {
         "name": "Christina"
       },

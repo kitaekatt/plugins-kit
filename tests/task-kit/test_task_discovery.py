@@ -511,7 +511,9 @@ class TestListCLI:
         assert proc.returncode == 0, proc.stderr
         assert proc.stdout.splitlines() == [
             "Open tasks:",
-            "tmp/foo  active  P2  -  Fix the run",
+            "| Stale | Pri | Session | Task | Summary |",
+            "|---|---|---|---|---|",
+            "| 0h | P2 | - | tmp/foo | Fix the run |",
         ]
 
     def test_invalid_task_is_listed_and_flagged(self, tmp_path):
@@ -522,7 +524,9 @@ class TestListCLI:
         assert proc.returncode == 0, proc.stderr
         assert proc.stdout.splitlines() == [
             "Open tasks:",
-            "tmp/good  active  P2  -  Fine",
+            "| Stale | Pri | Session | Task | Summary |",
+            "|---|---|---|---|---|",
+            "| 0h | P2 | - | tmp/good | Fine |",
             "",
             "Invalid tasks:",
             "tmp/bad  invalid  -  -  Broken  (missing scaffolding file: plan.md)",
@@ -540,7 +544,9 @@ class TestListCLI:
         assert proc.returncode == 0, proc.stderr
         assert proc.stdout.splitlines() == [
             "Open tasks:",
-            "tmp/foo  active  P2  2026-09-21  Fix the run",
+            "| Stale | Pri | Session | Task | Summary |",
+            "|---|---|---|---|---|",
+            "| 0h | P2 | - | tmp/foo | Fix the run |",
         ]
 
     def test_last_update_uses_dated_heading_before_summary_refresh(self, tmp_path):
@@ -555,7 +561,9 @@ class TestListCLI:
         assert proc.returncode == 0, proc.stderr
         assert proc.stdout.splitlines() == [
             "Open tasks:",
-            "tmp/foo  active  P2  2026-08-29  Fix the run",
+            "| Stale | Pri | Session | Task | Summary |",
+            "|---|---|---|---|---|",
+            "| 0h | P2 | - | tmp/foo | Fix the run |",
         ]
 
     def test_dated_heading_with_time_is_in_update_history(self, tmp_path):
@@ -602,7 +610,9 @@ class TestListCLI:
         proc = run_cli(["list", "--root", str(tmp_path)], tmp_path)
         assert proc.stdout.splitlines() == [
             "Open tasks:",
-            "tmp/bare  active  -  -  A task",
+            "| Stale | Pri | Session | Task | Summary |",
+            "|---|---|---|---|---|",
+            "| 0h | - | - | tmp/bare | A task |",
         ]
 
     def test_remote_line_shape(self, tmp_path):
@@ -613,7 +623,9 @@ class TestListCLI:
         proc = run_cli(["list", "--status", "remote", "--root", str(tmp_path)], tmp_path)
         assert proc.returncode == 0, proc.stderr
         assert proc.stdout.splitlines() == [
-            f"tmp/spike @{OTHER}  remote  -  -  -"
+            "| Stale | Pri | Session | Task | Summary |",
+            "|---|---|---|---|---|",
+            f"| - | - | - | tmp/spike @{OTHER} | - |",
         ]
 
     def test_status_filter_flag(self, tmp_path):
@@ -623,21 +635,36 @@ class TestListCLI:
             ["list", "--status", "closed", "--root", str(tmp_path)], tmp_path
         )
         assert proc.returncode == 0, proc.stderr
-        assert proc.stdout.splitlines() == ["tmp/done  closed  -  -  A task"]
+        assert proc.stdout.splitlines() == [
+            "| Stale | Pri | Session | Task | Summary |",
+            "|---|---|---|---|---|",
+            "| 0h | - | - | tmp/done | A task |",
+        ]
 
     def test_default_lists_open_and_closed_in_separate_sections(self, tmp_path):
-        make_task(tmp_path, "tmp/open", status="active")
-        make_task(tmp_path, "tmp/stuck", status="blocked")
-        make_task(tmp_path, "tmp/done", status="closed")
+        import os
+        import time
+
+        for index, (rel, status) in enumerate(
+            (("tmp/open", "active"), ("tmp/stuck", "blocked"), ("tmp/done", "closed"))
+        ):
+            folder = make_task(tmp_path, rel, status=status)
+            stamp = time.time() - index * 60  # each task one minute older than the one before
+            for path in folder.rglob("*"):
+                os.utime(path, (stamp, stamp))
         proc = run_cli(["list", "--root", str(tmp_path)], tmp_path)
         assert proc.returncode == 0, proc.stderr
         assert proc.stdout.splitlines() == [
             "Open tasks:",
-            "tmp/open  active  -  -  A task",
-            "tmp/stuck  blocked  -  -  A task",
+            "| Stale | Pri | Session | Task | Summary |",
+            "|---|---|---|---|---|",
+            "| 0h | - | - | tmp/open | A task |",
+            "| 0h | - | - | tmp/stuck | A task |",
             "",
             "Closed tasks:",
-            "tmp/done  closed  -  -  A task",
+            "| Stale | Pri | Session | Task | Summary |",
+            "|---|---|---|---|---|",
+            "| 0h | - | - | tmp/done | A task |",
         ]
 
     def test_priority_filter_flag(self, tmp_path):
@@ -648,7 +675,28 @@ class TestListCLI:
         )
         assert proc.stdout.splitlines() == [
             "Open tasks:",
-            "tmp/p1  active  P1  -  A task",
+            "| Stale | Pri | Session | Task | Summary |",
+            "|---|---|---|---|---|",
+            "| 0h | P1 | - | tmp/p1 | A task |",
+        ]
+
+    def test_rows_run_freshest_first_with_stale_in_hours_then_days(self, tmp_path):
+        import os
+        import time
+
+        now = time.time()
+        for rel, age_hours in (("tmp/old", 50), ("tmp/mid", 5), ("tmp/new", 0)):
+            folder = make_task(tmp_path, rel)
+            stamp = now - age_hours * 3600
+            for path in folder.rglob("*"):
+                os.utime(path, (stamp, stamp))
+        proc = run_cli(["list", "--root", str(tmp_path)], tmp_path)
+        assert proc.returncode == 0, proc.stderr
+        rows = [line for line in proc.stdout.splitlines() if line.startswith("| ") and "tmp/" in line]
+        assert [(r.split(" | ")[0], r.split(" | ")[3]) for r in rows] == [
+            ("| 0h", "tmp/new"),
+            ("| 5h", "tmp/mid"),
+            ("| 2d", "tmp/old"),
         ]
 
     def test_scope_file_via_flags(self, tmp_path):
@@ -673,7 +721,7 @@ class TestListCLI:
             tmp_path,
         )
         assert proc.returncode == 0, proc.stderr
-        assert proc.stdout.splitlines() == ["dev/tasks/one  archived  -  -  -"]
+        assert proc.stdout.splitlines()[2:] == ["| - | - | - | dev/tasks/one | - |"]
 
     def test_notes_go_to_stderr_exit_zero(self, tmp_path):
         write_doc(

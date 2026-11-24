@@ -151,8 +151,8 @@ class TestCliLifecycle:
         res = run_cli(["list", *rootflag], cwd=root)
         assert res.returncode == 0, res.stderr
         assert any(
-            line.startswith(f"tmp/{STUB}  active  P2  ")
-            and line.endswith(f"  {TITLE}")
+            f"| P2 | - | tmp/{STUB} |" in line
+            and line.endswith(f" {TITLE} |")
             for line in res.stdout.splitlines()
         )
 
@@ -228,7 +228,7 @@ class TestCliLifecycle:
         assert f"dev/tasks/{STUB}" not in res.stdout
         res = run_cli(["list", "--status", "archived", *rootflag], cwd=root)
         assert res.returncode == 0, res.stderr
-        assert f"dev/tasks/{STUB}  archived  -  -  -" in res.stdout.splitlines()
+        assert f"| - | - | - | dev/tasks/{STUB} | - |" in res.stdout.splitlines()
 
     def test_delete_second_tmp_task(self, tmp_path):
         root = tmp_path

@@ -6,14 +6,14 @@
       }
     },
     "katsoft-llm-kit": {
-      "1.41.0": {
-        "version": "1.41.0"
+      "1.43.0": {
+        "version": "1.43.0"
       }
     }
   },
   "schema": 1,
   "source": {
-    "commit": "48fc34351e09599132eb5fa175b22ee0257651bd",
+    "commit": "688148ee1c10550833293ebf1bdf5cfc32168eea",
     "repository": "https://github.com/kitaekatt/katsoft-libs"
   }
 }
