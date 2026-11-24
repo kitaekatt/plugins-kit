@@ -120,7 +120,7 @@ capability_skill:
       operation: task.py list [--scope all|user|project|skill|file] [--target X] [--status S] [--priority P] [--format text|json|yaml] [--include-hidden] [--root PATH]
       details: references/query-operations.md#list
       gotchas:
-        - "List prints Markdown tables (Stale, Pri, Session, Task, Summary), freshest first. Show them as printed; do not reformat."
+        - "List prints Markdown tables (Stale, Pri, Session, Task, Summary), freshest first, and only a `(N) Closed Tasks` count for closed tasks (`--status closed` lists them). Show them as printed; do not reformat."
     - id: triage
       keywords: [triage, triage the tasks, task triage, audit tasks, oldest first, review old tasks, /task triage]
       user_objective: "Audit open and deferred tasks, oldest first, and present one disposition decision at a time for the user."

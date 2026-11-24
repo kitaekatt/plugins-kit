@@ -519,7 +519,7 @@ Two crawl modes, both script-driven:
    exists; the structured projection also carries `last_activity`, the latest entry's
    `YYYY-MM-DD HH:MM`, which orders tasks and projects. Folderless-non-tmp refs read as `archived`. With no
    `--status`, active/blocked, deferred, and closed classifications are emitted; the CLI presents
-   them in separate Open tasks, Deferred tasks, and Closed tasks sections. An explicit `--status` lists that classification,
+   Open tasks and Deferred tasks sections, then only a `(N) Closed Tasks` count line. An explicit `--status` lists that classification,
     including archived and other non-working states. The shared projection also reads `task.summary`,
     computes summary freshness from a source fingerprint, reads the orientation answer (which takes precedence over `task.summary`), and reports missing/stale/invalid/unavailable
     summaries and answers as non-blocking diagnostics. `review` groups the projection into collapsible HTML and

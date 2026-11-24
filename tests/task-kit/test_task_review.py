@@ -143,7 +143,7 @@ class TestTaskListingAndReview:
         assert yaml.safe_load(yaml_result.stdout)["schema_version"] == "2"
         assert "missing task.summary" in yaml_result.stderr
 
-    def test_list_text_has_deferred_section_between_open_and_closed(
+    def test_list_text_has_deferred_section_between_open_and_closed_count(
         self, tmp_path: Path
     ) -> None:
         make_task(tmp_path, "tmp/open-one", title="Open one", date="2026-09-20")
@@ -169,11 +169,13 @@ class TestTaskListingAndReview:
         stdout = result.stdout
         assert "Open tasks:" in stdout
         assert "Deferred tasks:" in stdout
-        assert "Closed tasks:" in stdout
-        # Section ordering: Open, then Deferred, then Closed.
+        assert "(1) Closed Tasks" in stdout
+        # Section ordering: Open, then Deferred, then the closed count.
         assert stdout.index("Open tasks:") < stdout.index("Deferred tasks:")
-        assert stdout.index("Deferred tasks:") < stdout.index("Closed tasks:")
+        assert stdout.index("Deferred tasks:") < stdout.index("(1) Closed Tasks")
         assert "| 0h | - | - | tmp/on-hold | Deferred summary. |" in stdout
+        # Closed rows stay out of the default listing.
+        assert "dev/tasks/closed" not in stdout
 
     def test_review_is_collapsible_sorted_escaped_and_excludes_archived(
         self, tmp_path: Path

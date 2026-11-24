@@ -15,9 +15,10 @@ folder path to stdout on success; on failure the reason/findings go to
 stderr (and no partial folder is left behind).
 
 Read-op conventions (Step 3):
-- ``list`` prints stable, parseable task lines in three default sections:
+- ``list`` prints stable, parseable task lines in two default sections:
   ``Open tasks:`` (active/blocked), ``Deferred tasks:`` (purposefully put on
-  hold, intended to be resumed later), and ``Closed tasks:``. Each task line
+  hold, intended to be resumed later), and a ``(N) Closed Tasks`` count with
+  no rows, so closed tasks cost no context. Each task line
   is ``id  status  priority  last_update  title`` (two-space separated;
   absent fields ``-``; ``last_update`` is the latest ISO date in dated
   ``log.md`` entries). Explicit ``--status`` prints only matching task lines.
@@ -330,13 +331,18 @@ def _print_task_sections(
     for heading, section, format_line in (
         ("Open tasks:", sections["open"], None),
         ("Deferred tasks:", sections["deferred"], None),
-        ("Closed tasks:", sections["closed"], None),
+        ("Closed Tasks", sections["closed"], "count"),
         ("Invalid tasks:", invalid, _format_invalid_line),
     ):
         if not section:
             continue
         if printed:
             print()
+        printed = True
+        if format_line == "count":
+            # Closed rows are only counted; `--status closed` lists them.
+            print(f"{indent}({len(section)}) {heading}")
+            continue
         print(indent + heading)
         if format_line is None:
             for line in list_table.format_table(section):
@@ -344,7 +350,6 @@ def _print_task_sections(
         else:
             for view in section:
                 print(indent + format_line(view))
-        printed = True
     return printed
 
 
