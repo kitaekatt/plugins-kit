@@ -129,7 +129,9 @@ def _cache_location(cwd: Path, requested: Path | None) -> tuple[Path, str]:
     project_tmp = cwd / "tmp"
     if project_tmp.is_dir():
         return project_tmp / "agent-cache", "project tmp"
-    return DEFAULT_GLOBAL_CACHE, "global fallback"
+    # Resolved like --cache-dir: codex cannot open its -o file through a
+    # symlinked ancestor (a relative ~/.claude symlink fails with ENOTDIR).
+    return _absolute(DEFAULT_GLOBAL_CACHE), "global fallback"
 
 
 def _ensure_cache(cache_dir: Path) -> None:

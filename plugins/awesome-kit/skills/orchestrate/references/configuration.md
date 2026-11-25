@@ -198,6 +198,10 @@ value that is not `true` or `false`, is a configuration error.
 A reset-mode line shows no usage figures, because none was read. Remove the override once the
 reset has been spent; it does not expire by itself.
 
+The rendered `Reset:` line makes this override a dispatch preference: choose a usable reset
+entry listed for the unit's row, and use another entry only for independence or after a
+failed dispatch.
+
 ## `lexicon[]`
 
 The lexicon is the vocabulary for shape rows and announcements. A term with `kind: skill`

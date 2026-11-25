@@ -3237,3 +3237,132 @@ class TestConsultSeatOverrides:
         assert lines.index(
             "UP fable (frontier, claude) disabled by config; do not consult it"
         ) > lines.index("BESIDE luna (strong, codex)")
+
+
+class TestResetPreference:
+    def _render(self, layered, monkeypatch, overrides):
+        monkeypatch.setitem(sys.modules, "llm_kit", None)
+        monkeypatch.setattr(og, "discover_model_definitions", lambda _root: ({}, []))
+        layered("shipped", cfg(
+            routing=[{"shape": ["novel"], "models": ["opus", "sonnet"]}],
+            model_overrides=overrides,
+        ))
+        config, provenance = og.resolve_config(layered.project_root)
+        return og.render(config, provenance)
+
+    def test_reset_line_lists_rendered_reset_ids(self, layered, monkeypatch):
+        text = self._render(layered, monkeypatch, {
+            "harnesses": {"claude": {"reset_mode": True}},
+        })
+        assert (
+            "Reset: opus, sonnet carry the user's reset_mode override. Choose a usable reset "
+            "entry for every unit whose row lists one; take another entry only for "
+            "independence or after a failed dispatch, and name the reason."
+        ) in text
+        no_reset = self._render(layered, monkeypatch, {})
+        assert "Reset:" not in no_reset
+
+    def test_reset_line_follows_independence_or_reselect(self):
+        for rules, preceding in (
+            (
+                "Rule: no preference\nRe-select: retry elsewhere\n"
+                "Independence: use another",
+                "Independence:",
+            ),
+            ("Rule: no preference\nRe-select: retry elsewhere", "Re-select:"),
+        ):
+            out = []
+            og.render_routing(
+                {},
+                og.Terms([]),
+                [{"shape": [], "models": [], "rule": rules}],
+                og.Blocks(out),
+                out,
+                ["opus"],
+            )
+            lines = out
+            reset_index = lines.index(
+                "Reset: opus carry the user's reset_mode override. Choose a usable reset "
+                "entry for every unit whose row lists one; take another entry only for "
+                "independence or after a failed dispatch, and name the reason."
+            )
+            assert lines[reset_index - 1].startswith(preceding)
+
+    def test_reset_ids_include_visible_reset_consult_seats(self):
+        routes = [{"models": [{"id": "sol", "line": f"sol {og.RESET_LABEL}"}]}]
+        seats = SimpleNamespace(
+            reset_endpoints=frozenset({"luna"}),
+            seats=(SimpleNamespace(endpoint="luna"),),
+        )
+        assert og._rendered_reset_ids(routes, seats) == ["sol", "luna"]
+
+
+class TestNewestCachedRenderer:
+    def _cache_script(self, root, version):
+        script = (
+            root
+            / "plugins"
+            / "cache"
+            / "plugins-kit"
+            / "awesome-kit"
+            / version
+            / "skills"
+            / "orchestrate"
+            / "scripts"
+            / "orchestration_guidance.py"
+        )
+        script.parent.mkdir(parents=True)
+        script.touch()
+        return script
+
+    def test_selects_higher_cached_version(self, tmp_path):
+        old = self._cache_script(tmp_path, "0.80.3")
+        new = self._cache_script(tmp_path, "0.81.0")
+        assert og._newer_cached_script(old) == new
+
+    def test_version_selection_is_numeric(self, tmp_path):
+        old = self._cache_script(tmp_path, "0.81.9")
+        new = self._cache_script(tmp_path, "0.81.10")
+        assert og._newer_cached_script(old) == new
+
+    def test_does_not_select_outside_a_plugin_cache(self, tmp_path):
+        script = tmp_path / "dev" / "awesome-kit" / "orchestration_guidance.py"
+        script.parent.mkdir(parents=True)
+        script.touch()
+        assert og._newer_cached_script(script) is None
+
+    def test_exec_decision_sets_marker_and_reexecs_same_argv(self, tmp_path, monkeypatch):
+        old = self._cache_script(tmp_path, "0.80.3")
+        new = self._cache_script(tmp_path, "0.81.0")
+        env = {}
+        calls = []
+        monkeypatch.setattr(
+            og.os,
+            "execv",
+            lambda executable, argv: calls.append((executable, argv)),
+        )
+
+        assert og._maybe_reexec_newer_copy(
+            old, [str(old), "--self", "opus"], "/python", env
+        ) is True
+        assert env[og._NEWER_COPY_REEXEC_MARKER] == "0.80.3|0.81.0"
+        assert calls == [("/python", ["/python", str(new), "--self", "opus"])]
+
+    def test_does_not_reexec_when_marker_or_plugin_test_is_set(
+        self, tmp_path, monkeypatch
+    ):
+        old = self._cache_script(tmp_path, "0.80.3")
+        self._cache_script(tmp_path, "0.81.0")
+        calls = []
+        monkeypatch.setattr(og.os, "execv", lambda *args: calls.append(args))
+
+        assert og._maybe_reexec_newer_copy(
+            old,
+            [str(old)],
+            "/python",
+            {og._NEWER_COPY_REEXEC_MARKER: "0.80.3|0.81.0"},
+        ) is False
+        assert og._maybe_reexec_newer_copy(
+            old, [str(old)], "/python", {"CLAUDE_PLUGIN_TEST": "1"}
+        ) is False
+        assert calls == []

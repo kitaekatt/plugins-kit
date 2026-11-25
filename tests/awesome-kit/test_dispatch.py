@@ -565,3 +565,36 @@ def test_dispatched_session_runs_no_bootstrap_pass(tmp_path, monkeypatch, capsys
     assert dispatch.main(_run_args(tmp_path, brief, tmp_path / "cache")) == 0
     assert calls[0]["env"]["BOOTSTRAP_NO_PASS"] == "1"
     assert calls[0]["env"]["PATH"] == os.environ["PATH"]
+
+
+def test_global_fallback_cache_is_resolved_through_symlinks(tmp_path, monkeypatch, capsys):
+    # codex cannot open its -o file through a symlinked ancestor (a relative
+    # symlink such as ~/.claude -> Dev/claude-settings fails with ENOTDIR), so
+    # the global fallback must reach codex as its realpath, like --cache-dir.
+    real = tmp_path / "real-home"
+    (real / "agent-cache").mkdir(parents=True)
+    link = tmp_path / "link-home"
+    link.symlink_to(Path("real-home"))
+    monkeypatch.setattr(dispatch, "DEFAULT_GLOBAL_CACHE", link / "agent-cache")
+    monkeypatch.setattr(dispatch.codex_lib, "resolve_cli", lambda name: ("codex",))
+    cwd = tmp_path / "no-tmp-here"
+    cwd.mkdir()
+    args = ["--label", "unit", "--brief", str(_brief(tmp_path)), "--model", "sol",
+            "--cwd", str(cwd), "--print-only"]
+    assert dispatch.main(args) == 0
+    output = capsys.readouterr().out.splitlines()
+    resolved = (real / "agent-cache").resolve()
+    assert output[0].startswith(str(resolved) + os.sep)
+    assert f"-o {Path(output[0]) / 'result.md'} " in output[1]
+    assert str(link) not in output[1]
+
+
+def test_list_reads_the_resolved_global_fallback(tmp_path, monkeypatch):
+    real = tmp_path / "real-home"
+    real.mkdir()
+    link = tmp_path / "link-home"
+    link.symlink_to(real)
+    monkeypatch.setattr(dispatch, "DEFAULT_GLOBAL_CACHE", link / "agent-cache")
+    cwd = tmp_path / "no-tmp-here"
+    cwd.mkdir()
+    assert dispatch._cache_location(cwd, None) == (real.resolve() / "agent-cache", "global fallback")

@@ -128,6 +128,76 @@ MODEL_OVERRIDE_SCOPES = ("harnesses", "models")
 MODEL_OVERRIDE_FIELDS = ("disabled", "reset_mode")
 DISABLED_LABEL = "disabled by config"
 RESET_LABEL = "reset available (config)"
+_NEWER_COPY_REEXEC_MARKER = "_AWESOME_KIT_NEWER_COPY_REEXEC"
+_RESET_POLICY = (
+    "Reset: {ids} carry the user's reset_mode override. Choose a usable reset entry for "
+    "every unit whose row lists one; take another entry only for independence or after "
+    "a failed dispatch, and name the reason."
+)
+
+
+def _numeric_version(value: str) -> Optional[Tuple[int, ...]]:
+    """Parse numeric dotted versions for cache comparison."""
+    if not re.fullmatch(r"\d+(?:\.\d+)*", value):
+        return None
+    return tuple(int(part) for part in value.split("."))
+
+
+def _newer_cached_script(script_path: Path) -> Optional[Path]:
+    """Return the newest higher-version sibling copy, if this is a cache path."""
+    script_path = Path(script_path).resolve()
+    parts = script_path.parts
+    for cache_index, part in enumerate(parts):
+        if (
+            part != "cache"
+            or cache_index + 3 >= len(parts)
+            or parts[cache_index + 2] != PLUGIN
+        ):
+            continue
+        current_version = parts[cache_index + 3]
+        current_key = _numeric_version(current_version)
+        if current_key is None:
+            return None
+        version_dir = Path(script_path.anchor).joinpath(*parts[1 : cache_index + 4])
+        relative_script = Path(*parts[cache_index + 4 :])
+        candidates = []
+        for sibling in version_dir.parent.iterdir():
+            if not sibling.is_dir():
+                continue
+            version_key = _numeric_version(sibling.name)
+            candidate = sibling / relative_script
+            if (
+                version_key is not None
+                and version_key > current_key
+                and candidate.is_file()
+            ):
+                candidates.append((version_key, candidate))
+        if not candidates:
+            return None
+        return max(candidates, key=lambda item: item[0])[1]
+    return None
+
+
+def _maybe_reexec_newer_copy(
+    script_path: Path,
+    argv: List[str],
+    executable: str,
+    environ: Dict[str, str],
+) -> bool:
+    """Re-exec this invocation from the newest cache copy at most once."""
+    if _NEWER_COPY_REEXEC_MARKER in environ or "CLAUDE_PLUGIN_TEST" in environ:
+        return False
+    newer = _newer_cached_script(script_path)
+    if newer is None:
+        return False
+    old_version = Path(script_path).resolve().parts[-5]
+    new_version = newer.parts[-5]
+    environ[_NEWER_COPY_REEXEC_MARKER] = f"{old_version}|{new_version}"
+    os.execv(executable, [executable, str(newer), *argv[1:]])
+    return True
+
+
+_maybe_reexec_newer_copy(Path(__file__), sys.argv, sys.executable, os.environ)
 
 
 # --------------------------------------------------------------------------
@@ -1728,6 +1798,7 @@ def render_routing(
     routes: List[Dict[str, Any]],
     blocks: Blocks,
     out: List[str],
+    reset_ids: Optional[List[str]] = None,
 ) -> None:
     """Render the ordered shape rows, each with its model-declaration menu.
 
@@ -1737,6 +1808,9 @@ def render_routing(
     rule is identical for every row, so it renders once, after the rows.
     """
     if not routes:
+        if reset_ids:
+            out.append(_RESET_POLICY.format(ids=", ".join(reset_ids)))
+            out.append("")
         return
     blocks.heading("Routing")
     out.append("Evaluate rows in order; the first matching shape wins.")
@@ -1770,6 +1844,21 @@ def render_routing(
             if line and line not in rules:
                 rules.append(line)
     out.append("")
+    if reset_ids:
+        reset_line = _RESET_POLICY.format(ids=", ".join(reset_ids))
+        preferred_index = next(
+            (i for i, line in enumerate(rules) if line.startswith("Independence:")),
+            None,
+        )
+        if preferred_index is None:
+            preferred_index = next(
+                (i for i, line in enumerate(rules) if line.startswith("Re-select:")),
+                None,
+            )
+        if preferred_index is None:
+            rules.append(reset_line)
+        else:
+            rules.insert(preferred_index + 1, reset_line)
     if rules:
         out.extend(rules)
         out.append("")
@@ -1919,6 +2008,7 @@ def render_decision_tree(
     backend_names: Dict[str, str],
     out: List[str],
     routes: Optional[List[Dict[str, Any]]] = None,
+    reset_ids: Optional[List[str]] = None,
 ) -> None:
     """Render the policy in document order: shape -> routing -> agent type ->
     effort -> announcement -> review overlap.
@@ -1932,7 +2022,7 @@ def render_decision_tree(
         out.append("")
     blocks = Blocks(out)
     render_shape(config, terms, available_backends, blocks, out)
-    render_routing(config, terms, routes or [], blocks, out)
+    render_routing(config, terms, routes or [], blocks, out, reset_ids)
     render_agent_types(config, terms, blocks, out)
     render_effort(config, terms, available_backends, blocks, out, routes)
     render_announce(config, terms, available_backends, blocks, out, routes)
@@ -2445,6 +2535,26 @@ def retired_capacity_keys(config: Dict[str, Any]) -> List[str]:
     return []
 
 
+def _rendered_reset_ids(
+    routes: List[Dict[str, Any]], seat_result: Optional[Any]
+) -> List[str]:
+    """Return reset ids whose entries or consult seats appear in this render."""
+    ids: List[str] = []
+    for route in routes:
+        for model in route.get("models") or []:
+            if RESET_LABEL in str(model.get("line") or ""):
+                entry_id = str(model.get("id") or model.get("target") or "")
+                if entry_id and entry_id not in ids:
+                    ids.append(entry_id)
+    if seat_result is not None:
+        reset = getattr(seat_result, "reset_endpoints", frozenset())
+        for seat in getattr(seat_result, "seats", ()) or ():
+            endpoint = str(seat.endpoint)
+            if endpoint in reset and endpoint not in ids:
+                ids.append(endpoint)
+    return ids
+
+
 def legacy_schema_keys(config: Dict[str, Any]) -> List[str]:
     """Schema-1 keys present in the merged config, in declaration order."""
     return [k for k in LEGACY_SCHEMA_1_KEYS if k in config]
@@ -2456,6 +2566,15 @@ def render(
     self_ref: Optional[str] = None,
 ) -> str:
     out: List[str] = ["# Orchestration policy", ""]
+    rendered_by = os.environ.get(_NEWER_COPY_REEXEC_MARKER, "")
+    versions = rendered_by.split("|", 1)
+    if len(versions) == 2 and all(versions):
+        old_version, new_version = versions
+        out.append(
+            f"Rendered by awesome-kit {new_version} (this session loaded {old_version}; "
+            "run /reload-plugins to update the skill text)."
+        )
+        out.append("")
     detected = detect_all(config)
     backend_names = {
         str(b.get("id")): str(b.get("name") or b.get("id")) for b, _, _ in detected
@@ -2492,12 +2611,20 @@ def render(
         project_root=project_root,
         degraded=degradation_notes,
     )
-    render_decision_tree(config, routable_backend_ids, backend_names, out, routes)
     seat_result, seat_status, seat_detail = discover_consult_seats(
         self_ref, project_root
     )
     if seat_result is not None:
         seat_result = apply_seat_overrides(seat_result, config)
+    visible_seats = (
+        seat_result
+        if seat_status not in {"self_not_provided", "library_absent"}
+        else None
+    )
+    reset_ids = _rendered_reset_ids(routes, visible_seats)
+    render_decision_tree(
+        config, routable_backend_ids, backend_names, out, routes, reset_ids
+    )
     # The other three optional-library sites (model definitions, quota, the
     # adapter command renderer) all disclose a degraded render via
     # degradation_notes. Without this note, an absent
