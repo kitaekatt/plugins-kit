@@ -105,6 +105,8 @@ technique_skill:
       "unavailable" on the strength of its absence. (`--explain` reports each backend's
       detection status, if you need to answer that question.)
 
+      The rendered Reset line outranks the Rule line's "no preference" clause for reset entries.
+
       The Consult seats section is who to ask; take the first UP seat, else the first BESIDE.
       A seat listed as out of quota is not askable until its reset time, and a seat listed
       as disabled by config is not askable at all. When a consult
