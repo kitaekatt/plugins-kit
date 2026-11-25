@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/skills-kit/agents",
+  "decision": "none",
+  "source_sha": "0db3512e8ac79dace3275abb605875e9396edc64",
+  "input_sha256": "c7918d5652a42fbd147d545db4c5e3c455208d085712f410bad295d005d2bd11",
+  "input_shape_sha256": "90c5cd666b5a6473f34bf4fe7b873626c6ea6642d417b9629c8be98eaaf8e57e",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

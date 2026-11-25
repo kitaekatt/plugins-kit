@@ -1,13 +1,12 @@
 {
   "schema_version": 1,
   "directory": "plugins/skills-kit",
-  "decision": "page",
-  "source_sha": "a0940524c17758c9806ce4758c8c79bbf6edcda1",
-  "generation_spec_sha256": "8573606e5f3b827eff1eb29578efe854f3b917c38f7e9b9539ce898c925d9fa1",
-  "input_sha256": "748ff58d7152cfdf1709ab29b3fe0484b7cb9dcffd67f352be7df97307da5a5d",
-  "input_shape_sha256": "7f1d11f6380da63b23a3a601e2a52130f273d7d0d6276e901c8d786c2329cbcc",
+  "decision": "none",
+  "source_sha": "0db3512e8ac79dace3275abb605875e9396edc64",
+  "input_sha256": "67cf4098893bfb3fcbcd6b96d29c5e3ab6c49ecb7ad2363b6bfaf97a311acc44",
+  "input_shape_sha256": "31e885fc786ec63f0f26d262eb6ff3eebd94db8f0e6e5194d4349c3375ef9b6a",
   "dirty": false,
-  "identity": "The skills-kit plugin that authors and audits project markdown through a verb-by-artifact dispatch, carrying its four skills, fan-out lane workflows, and deprecation contract.",
+  "identity": "",
   "instructions": "",
   "references": []
 }

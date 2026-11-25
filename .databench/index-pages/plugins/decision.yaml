@@ -2,12 +2,12 @@
   "schema_version": 1,
   "directory": "plugins",
   "decision": "page",
-  "source_sha": "93ff783dad0d17f8e189958e3b2a5dfaaf42ccd8",
+  "source_sha": "0db3512e8ac79dace3275abb605875e9396edc64",
   "generation_spec_sha256": "d40323919c23e31cc9c5afe305627667e78bca3c257330f0fc0b3a9b1c826ade",
-  "input_sha256": "dd09f6912c6411f5a449d4511b00fe9f7b4d0e06fa613420fd8855ad33c48da6",
-  "input_shape_sha256": "64eb5f817fe0f28f65739334aa0d4abfe340435900be40db837f9679eae05def",
+  "input_sha256": "44ee48ec0ba300b498448b556b44267b99f6d419dbe7bdb393f1e401cb3523bf",
+  "input_shape_sha256": "ea15ddcb2782041cd169e335998037eae1c85ad8c7806352bfe43b77dca408f0",
   "dirty": false,
-  "identity": "The plugins-kit marketplace: independently installable Claude Code plugins for code review, LLM pipelines, task tracking, session management, and domain automation, plus the shared bootstrap engine that provisions each plugin's runtime",
+  "identity": "The source tree for the plugins-kit marketplace: one independently installable Claude Code plugin per directory, with the shared bootstrap engine provisioning each plugin's tools, venvs, and configuration at session start",
   "instructions": "",
   "references": []
 }
