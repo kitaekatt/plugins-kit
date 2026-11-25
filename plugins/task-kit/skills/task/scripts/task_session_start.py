@@ -1,4 +1,4 @@
-"""task_session_start.py -- the SessionStart hook entry (matchers ``resume`` and ``clear``).
+"""task_session_start.py -- the SessionStart hook entry (matchers ``resume``, ``clear`` and ``compact``).
 
 ``hooks/sessionstart/session-start.sh`` pipes the hook input (JSON) to this script after its fast path
 saw a session file in the project that the event can affect. The input's ``source`` selects the work. The
@@ -12,15 +12,19 @@ project than that one is not refreshed or released (its registration is then cor
 * ``clear`` -- the session id changes and the process stays, but the cleared conversation no longer works the
   tasks: ``sessions.release_after_clear`` removes every record of the calling process (compaction, which keeps
   the session id, keeps the registration) and the old session id's statusline pointers are removed with them.
-* anything else (``fork``, ``startup``, ``compact``) does nothing: a fork has a fresh id and registers through
-  ``/task work``.
+* ``compact`` -- the session id and the process stay, so the registration is kept as it is and nothing is
+  written. The compacted conversation, though, may no longer know that it holds it: :func:`compact_context`
+  prints SessionStart hook JSON to stdout whose ``additionalContext`` names each open task folder
+  (:func:`held_folders`) this machine's records hold for the session id, and the shell script passes it to
+  Claude Code (the ``compact`` entry is synchronous). A session that holds nothing prints nothing.
+* anything else (``fork``, ``startup``) does nothing: a fork has a fresh id and registers through ``/task work``.
 
 Changed session files are then published, one publication per repository, through ``session_publish``.
 
-The hook never fails the session: :func:`main` returns 0 on every path. It runs asynchronously, so nothing it
-prints reaches anyone; a failure (an error, a note, a publication that did not complete) is therefore appended
-to ``<data dir>/sessions/session-start-hook.log`` (stderr when the data directory cannot be resolved). That
-file is a diagnostic of failures only, never a record of registrations or of successful runs. The library is
+The hook never fails the session: :func:`main` returns 0 on every path. On ``resume`` and ``clear`` it runs
+asynchronously, so nothing it prints reaches anyone, and on ``compact`` stdout carries only the context; a
+failure (an error, a note, a publication that did not complete) is therefore appended to ``<data dir>/sessions/session-start-hook.log``
+(stderr when the data directory cannot be resolved). That file is a diagnostic of failures only, never a record of registrations or of successful runs. The library is
 imported inside :func:`run`, after the venv re-exec in :func:`main`, as ``task.py`` orders it.
 """
 
@@ -37,6 +41,7 @@ from typing import Callable, Mapping
 LOG_NAME = "session-start-hook.log"
 SOURCE_RESUME = "resume"
 SOURCE_CLEAR = "clear"
+SOURCE_COMPACT = "compact"
 PROJECT_DIR_ENV = "CLAUDE_PROJECT_DIR"
 _COMPLETE = ("published", "nothing-pending", "disabled")  # session_publish statuses that need no diagnostic
 
@@ -94,20 +99,38 @@ def publish_changed(changed, machine, data_dir: Path | None, log: Callable[[str]
             log(f"{flight.repo_root}: {result.status}: {result.message}")
 
 
+def held_folders(project_root: Path, machine, session_id: str) -> list[str]:
+    """The task folders this machine's records (its own file) hold for ``session_id`` on open tasks; never writes."""
+    from task_system import sessions
+
+    return [str(record.root / record.task) for view in sessions.read_project(project_root, machine)
+            for record in view.records
+            if record.owned and record.session_id == session_id and not record.dropped_on_next_write]
+
+
+def compact_context(folders: list[str]) -> str:
+    """The SessionStart hook JSON that tells a compacted conversation which task folders it still works."""
+    text = (f"task-kit: this session is still registered as working {', '.join(folders)} (the registration "
+            "carried over the compaction; do not register again). Re-read each task folder's CLAUDE.md and "
+            "plan.md before you continue its work.")
+    return json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}})
+
+
 def run(raw: str, env: Mapping[str, str] | None = None, *, data_dir: Path | None = None, machine=None,
         identity=None, publish: Callable[..., None] | None = None, log: Callable[[str], None] | None = None,
-        project_root: Path | None = None) -> str:
+        project_root: Path | None = None, emit: Callable[[str], None] | None = None) -> str:
     """Do the work for one hook input and return a one-line outcome. Raises on any failure (see :func:`main`).
 
-    ``data_dir``, ``machine``, ``identity``, ``publish``, ``log`` and ``project_root`` default to the real ones
-    (the project is ``$CLAUDE_PROJECT_DIR``, else the input's ``cwd``); tests inject them.
+    ``data_dir``, ``machine``, ``identity``, ``publish``, ``log``, ``project_root`` and ``emit`` (where the
+    compact context goes: stdout) default to the real ones (the project is ``$CLAUDE_PROJECT_DIR``, else the
+    input's ``cwd``); tests inject them.
     """
     from task_system import datadir, harness, machine as machine_module, sessions, statusline_pointer
 
     env = os.environ if env is None else env
     data = parse_input(raw)
     source = data.get("source")
-    if source not in (SOURCE_RESUME, SOURCE_CLEAR):
+    if source not in (SOURCE_RESUME, SOURCE_CLEAR, SOURCE_COMPACT):
         return f"ignored source {source!r}"
     if harness.in_dashboard_run(env):
         return "ignored: this is a dashboard run"
@@ -119,13 +142,18 @@ def run(raw: str, env: Mapping[str, str] | None = None, *, data_dir: Path | None
         if not isinstance(project, str) or not project:
             raise HookInputError(f"the hook input carries no cwd and {PROJECT_DIR_ENV} is not set")
         project_root = Path(project)
+    if machine is None:
+        machine = machine_module.current()
+    if source == SOURCE_COMPACT:
+        folders = held_folders(project_root, machine, session_id)
+        if folders:
+            (emit or print)(compact_context(folders))
+        return f"compact {session_id[:8]}: holds {len(folders)}"
     if data_dir is None:
         data_dir = datadir.resolve_data_dir()
     if log is None:
         def log(text: str) -> None:
             log_line(data_dir, text)
-    if machine is None:
-        machine = machine_module.current()
     if identity is None:
         identity = harness.resolve_identity({**env, harness.SESSION_ID_ENV: session_id})
     transcript = data.get("transcript_path")

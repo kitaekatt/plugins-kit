@@ -75,10 +75,10 @@ def log_lines(data_root: Path) -> list[str]:
 def test_hooks_json_runs_one_async_ensure_for_each_supported_source():
     document = json.loads(HOOKS_JSON.read_text(encoding="utf-8"))
     session_start = document["hooks"]["SessionStart"]
-    matchers = [group["matcher"] for group in session_start]
-    assert sorted(matchers) == sorted(SOURCES)
     groups = {group["matcher"]: group["hooks"] for group in session_start}
     command = 'bash "${CLAUDE_PLUGIN_ROOT}/hooks/sessionstart/databench-ensure.sh"'
+    ensuring = sorted(m for m, hooks in groups.items() if any(e["command"] == command for e in hooks))
+    assert ensuring == sorted(SOURCES), "the ensure runs on exactly the supported sources"
     for source in SOURCES:
         entries = [entry for entry in groups[source] if entry["command"] == command]
         (entry,) = entries

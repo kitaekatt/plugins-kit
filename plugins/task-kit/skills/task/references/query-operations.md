@@ -101,7 +101,9 @@ Operation signatures:
 
 Work creates a registration; release or a `/clear` ends it. Harness exit, resume
 and compaction do not; `/clear` does, because the cleared session no longer works the
-task (the SessionStart `clear` hook releases every registration of that process). The record lives at `<task root>/.sessions/<host id>.yaml`, one file
+task (the SessionStart `clear` hook releases every registration of that process). After a
+compaction the SessionStart `compact` hook tells the compacted conversation which task
+folders it still holds, so it resumes them without registering again. The record lives at `<task root>/.sessions/<host id>.yaml`, one file
 per machine, committed and pushed with the task repository.
 
 Only the writing machine can judge `running` or `not running`, using the exact
