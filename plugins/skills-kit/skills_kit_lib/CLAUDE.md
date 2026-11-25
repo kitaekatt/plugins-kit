@@ -213,8 +213,9 @@ claude_md:
         state "absent", "too-old" or "no-pyyaml") when the library cannot be
         used. A missing PyYAML is never reported as invalid frontmatter.
         material.load_skill_material probes every call skills-kit makes before
-        returning the module; its SKILL_MATERIAL_BOOTSTRAP constant equals
-        requires_bootstrap in ../bootstrap.json. markdown_heuristics imports
+        returning the module; its SKILL_MATERIAL_BOOTSTRAP constant is at most
+        requires_bootstrap in ../bootstrap.json, which also covers the
+        katsoft-llm-kit package handling (0.160.0). markdown_heuristics imports
         the binding inside the strict branch only, so importing it (as every
         audit caller does) imports neither material nor bootstrap_lib, and the
         audits run unchanged against an older bootstrap_lib. Keep both imports

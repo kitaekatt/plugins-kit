@@ -32,25 +32,31 @@ Findings (``IncompleteLaneModelsError``; CLI exit 1): an entry that states no
 effort. Findings are collected across ALL layers, including layers a higher
 layer overrides, and raised together after every layer validated.
 
-``agent_route`` splits an agent-only family's entries into the ids Workflow
-``agent()`` / the Agent tool can run (``CORE_IDS``) and the ids they cannot,
-which are dropped and reported. ``audit_job`` never goes through it, because
-its route runs through llm-kit.
+``lane_route`` ranks an agent-only family's entries with llm-kit's
+``describe(caller="session")`` -- the user's model overrides (``disabled``,
+``reset_mode``) apply there, so a usable reset entry leads -- and gives each
+usable entry its dispatch route: ``agent`` (a Claude core id run by Workflow
+``agent()`` or the Agent tool) or ``codex`` (a codex harness entry run through
+the md-lane bridge, ``scripts/run_lane.py``). Every other entry is dropped and
+reported with its reason. ``audit_job`` never goes through it, because its
+jobs are ranked by llm-kit's job runner. ``agent_route`` / ``agent_routes`` are
+the deprecated core-id filter (docs/reference/deprecation-policy.md).
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+import warnings
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Optional
 
 from bootstrap_lib import model_declaration
 from bootstrap_lib.code_review.review_profiles import EFFORT_LEVELS
 
 from . import standards_resolve
 
-#: Families whose lanes run on Workflow agent() or the Agent tool only.
+#: Families whose lanes run on Workflow agent(), the Agent tool or the md-lane bridge.
 AGENT_ONLY_FAMILIES = ("detect", "classify", "coverage", "generate", "remediate")
 
 #: Every family the slot carries.
@@ -60,8 +66,23 @@ SLOT_KEY = "lane_models"
 ENTRY_FIELDS = frozenset({"id", "effort"})
 DEFAULTS_PATH = Path(__file__).resolve().parent / "defaults" / "lane_models.yaml"
 
-#: The reason agent_route records for every dropped entry.
+#: The reason the deprecated agent_route records for every dropped entry.
 DROP_REASON = "not runnable by agent()/Agent"
+
+#: Dispatch routes lane_route assigns. ``agent``: Workflow agent() or the Agent
+#: tool runs the id. ``codex``: the md-lane bridge runs the codex harness entry.
+ROUTE_AGENT = "agent"
+ROUTE_CODEX = "codex"
+ROUTES = (ROUTE_AGENT, ROUTE_CODEX)
+
+#: The katsoft-llm-kit release whose describe() applies the user's model
+#: overrides (disabled, reset_mode).
+LLM_KIT_OVERRIDES_VERSION = "1.46.0"
+
+#: The bootstrap that handles a katsoft-llm-kit package consumer (revokes an
+#: undeclared llm_kit link, holds the venv at the highest released target).
+#: Every consumer of the package sets requires_bootstrap to it (plugins/CLAUDE.md).
+LLM_KIT_PACKAGE_BOOTSTRAP = "0.160.0"
 
 
 class LaneModelsError(ValueError):
@@ -224,13 +245,166 @@ def load_lane_models(
     return {family: _normalize(resolved[family]) for family in FAMILIES}
 
 
-def agent_route(entries: list[dict]) -> dict[str, list[dict]]:
-    """Split ``entries`` into the ids agent()/Agent can run and the dropped rest.
+def _check_entries(entries: list[dict], who: str) -> None:
+    for entry in entries:
+        if not isinstance(entry, dict) or "id" not in entry or "effort" not in entry:
+            raise LaneModelsError(f"{who}: not an {{id, effort}} entry: {entry!r}")
 
-    Returns ``{"run": [{id, effort}, ...], "dropped": [{id, effort, reason}, ...]}``,
-    each in declaration order. A drop is not an error. Raises
+
+def _llm_kit_describe() -> tuple[Callable[..., Any], type, Callable[[str], Any]]:
+    """llm-kit's describe(), its floor exception and an agent-tool reachability.
+
+    The third item builds the reachability recorded for a Claude core id:
+    agent() and the Agent tool run it inside the session, so the ``claude`` CLI
+    describe would otherwise probe for on PATH is not what dispatches it.
+    """
+    try:
+        from llm_kit.dispatch.declaration import NoUsableRoutingTarget, describe
+        from llm_kit.dispatch.reachability import STATUS_REACHABLE, Reachability
+    except ImportError as exc:
+        raise LaneModelsError(
+            "lane_route: llm_kit is not importable by this interpreter "
+            f"({sys.executable}): {exc}. The md-domain lane route ranks entries "
+            f"with katsoft-llm-kit >= {LLM_KIT_OVERRIDES_VERSION} describe(); run "
+            "under the skills-kit plugin venv, whose pyproject requires it"
+        ) from exc
+
+    def agent_tool(entry_id: str) -> Any:
+        return Reachability(status=STATUS_REACHABLE, checked="agent-tool",
+                            detail=f"agent() runs {entry_id} in the session")
+
+    return describe, NoUsableRoutingTarget, agent_tool
+
+
+def _route_of(state: Any) -> Optional[str]:
+    """The dispatch route for one usable rendered entry, or None for no route."""
+    if getattr(state, "via", None) is not None:
+        return None
+    harness = getattr(state, "harness", None)
+    if harness == "claude" and getattr(state, "drive", None) == "agent" and model_declaration.is_core_id(state.id):
+        return ROUTE_AGENT
+    if getattr(state, "kind", None) == "harness" and harness == "codex":
+        return ROUTE_CODEX
+    return None
+
+
+def _no_route_reason(state: Any) -> str:
+    if getattr(state, "via", None) is not None:
+        return f"front-door group member via {state.via}; md-domain lanes run declared entries only"
+    how = "/".join(str(part) for part in (getattr(state, "kind", None), getattr(state, "harness", None),
+                                          getattr(state, "drive", None)) if part)
+    return (f"no md-domain lane route for {how or 'this entry'} (lanes run Claude core ids on "
+            "agent() and codex harness entries on the md-lane bridge)")
+
+
+def lane_route(
+    entries: list[dict],
+    *,
+    project_root: Path | None = None,
+    describe: Optional[Callable[..., Any]] = None,
+) -> dict[str, list[dict]]:
+    """Rank ``entries`` with llm-kit ``describe`` and give each usable one its route.
+
+    Returns ``{"run": [{id, effort, route}, ...], "dropped": [{id, effort,
+    reason}, ...]}``. ``run`` is in describe's order: a usable reset entry
+    first, paced entries by pace, unpaced entries in their declared places.
+    ``dropped`` is in declaration order and names every declared entry that is
+    not in ``run``, with describe's disposition or the missing route. A drop is
+    not an error. ``describe`` defaults to
+    ``llm_kit.dispatch.declaration.describe`` (injected by tests). Raises
+    ``NoRunnableLaneModelError`` when no entry is runnable and
+    ``LaneModelsError`` when llm_kit cannot be imported.
+    """
+    _check_entries(entries, "lane_route")
+    real_describe, floor_error, agent_tool = _llm_kit_describe()
+    rank = describe if describe is not None else real_describe
+    efforts = {e["id"].strip(): e["effort"] for e in entries}
+    ids = [e["id"].strip() for e in entries]
+    # A core id is dispatched by agent() in the session, never by the claude
+    # CLI, so describe reads it as reachable instead of probing PATH. Every
+    # other filter -- overrides, quota, consent -- still applies to it.
+    reachability = {i: agent_tool(i) for i in ids if model_declaration.is_core_id(i)}
+    try:
+        ranking = rank(ids, caller="session",
+                       project_root=None if project_root is None else str(project_root),
+                       reachability_cache=reachability)
+    except floor_error as floor:
+        raise NoRunnableLaneModelError(
+            f"no declared entry is usable for an md-domain lane: {floor}"
+        ) from floor
+    run: list[dict] = []
+    reasons: dict[str, str] = {}
+    for state in ranking.rendered_entries:
+        if state.id not in efforts:
+            continue
+        route = _route_of(state) if state.usable else None
+        if route is not None:
+            run.append({"id": state.id, "effort": efforts[state.id], "route": route})
+        elif not state.usable:
+            reasons.setdefault(state.id, f"not usable now: {state.status_text}")
+        else:
+            reasons.setdefault(state.id, _no_route_reason(state))
+    for disposition in ranking.dispositions:
+        detail = f": {disposition.detail}" if disposition.detail else ""
+        reasons.setdefault(disposition.id, f"{disposition.disposition}{detail}")
+    routed = {entry["id"] for entry in run}
+    dropped = [
+        {"id": i, "effort": efforts[i], "reason": reasons.get(i, "not ranked by describe")}
+        for i in ids if i not in routed
+    ]
+    if not run:
+        names = ", ".join(f"{d['id']} ({d['effort']}): {d['reason']}" for d in dropped) or "none"
+        raise NoRunnableLaneModelError(
+            f"no declared entry has an md-domain lane route; dropped: {names}"
+        )
+    return {"run": run, "dropped": dropped}
+
+
+def lane_routes(
+    resolved: dict[str, list[dict]],
+    *,
+    project_root: Path | None = None,
+    describe: Optional[Callable[..., Any]] = None,
+) -> dict[str, dict[str, list[dict]]]:
+    """The resolve_standards JSON block: ``{family: {declared, run, dropped}}``.
+
+    Covers the agent-only families only, each through :func:`lane_route`.
+    Raises ``NoRunnableLaneModelError``, naming the family, when one of them
+    has nothing runnable.
+    """
+    block: dict[str, dict[str, list[dict]]] = {}
+    for family in AGENT_ONLY_FAMILIES:
+        declared = [dict(e) for e in resolved[family]]
+        try:
+            route = lane_route(declared, project_root=project_root, describe=describe)
+        except NoRunnableLaneModelError as exc:
+            raise NoRunnableLaneModelError(f"{SLOT_KEY}.{family}: {exc}") from exc
+        block[family] = {"declared": declared, **route}
+    return block
+
+
+def _deprecated(old: str, new: str) -> None:
+    warnings.warn(
+        f"skills_kit_lib.lane_models.{old} is deprecated since 0.98.12 and is removed "
+        f"after 0.100.0; use {new}, which ranks with llm-kit describe() and routes codex "
+        "entries (docs/reference/deprecation-policy.md)",
+        DeprecationWarning, stacklevel=3,
+    )
+
+
+def agent_route(entries: list[dict]) -> dict[str, list[dict]]:
+    """Deprecated: the core-id filter. Use :func:`lane_route`.
+
+    Splits ``entries`` into the ids agent()/Agent can run and the dropped
+    rest. Returns ``{"run": [{id, effort}, ...], "dropped": [{id, effort,
+    reason}, ...]}``, each in declaration order. Raises
     ``NoRunnableLaneModelError`` when no entry is runnable.
     """
+    _deprecated("agent_route", "lane_route")
+    return _core_id_route(entries)
+
+
+def _core_id_route(entries: list[dict]) -> dict[str, list[dict]]:
     run: list[dict] = []
     dropped: list[dict] = []
     for entry in entries:
@@ -250,16 +424,17 @@ def agent_route(entries: list[dict]) -> dict[str, list[dict]]:
 
 
 def agent_routes(resolved: dict[str, list[dict]]) -> dict[str, dict[str, list[dict]]]:
-    """The resolve_standards JSON block: ``{family: {declared, run, dropped}}``.
+    """Deprecated: the core-id filter per family. Use :func:`lane_routes`.
 
     Covers the agent-only families only. Raises ``NoRunnableLaneModelError``,
     naming the family, when one of them has nothing runnable.
     """
+    _deprecated("agent_routes", "lane_routes")
     block: dict[str, dict[str, list[dict]]] = {}
     for family in AGENT_ONLY_FAMILIES:
         declared = [dict(e) for e in resolved[family]]
         try:
-            route = agent_route(declared)
+            route = _core_id_route(declared)
         except NoRunnableLaneModelError as exc:
             raise NoRunnableLaneModelError(f"{SLOT_KEY}.{family}: {exc}") from exc
         block[family] = {"declared": declared, **route}

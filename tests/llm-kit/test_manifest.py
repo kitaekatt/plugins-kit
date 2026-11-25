@@ -113,6 +113,7 @@ def test_venv_carries_every_extra_the_bundled_code_reaches():
     project = tomllib.loads((PLUGIN / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     assert "extras" not in MANIFEST["venv"]
     (requirement,) = [r for r in project["dependencies"] if r.startswith("katsoft-llm-kit")]
+    assert requirement.endswith(">=1.46.0,<2")
     extras = set(re.fullmatch(r"katsoft-llm-kit\[([^\]]*)\].*", requirement).group(1).split(","))
     assert extras == {"config", "sdk", "local", "frontdoor", "jobs", "pipeline", "relay"}
     assert "scripts" not in project, "the console script llm-kit is the distribution's"

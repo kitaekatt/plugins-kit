@@ -74,8 +74,10 @@ def is_agent_alias(model: str) -> bool:
 # is a constraint on the BACKEND KIND rather than on eligibility -- see
 # LANES_REQUIRING_AGENT_LOOP.
 #
-# The validator is NOT here on purpose. The runner has no validator prompt, input
-# or verdict contract, so a non-Agent validator entry is dropped at dispatch.
+# The validator is NOT here on purpose. This set is the reviewer runner's
+# (llm_kit.dispatch.review_lane), which has no validator prompt, input or verdict
+# contract. A codex validator runs through bootstrap_lib.code_review.validator_lane
+# instead, via each kit's run_validator_lane.py.
 ENDPOINT_ELIGIBLE_LANES = frozenset(
     {
         "reviewer_a_claude_md_compliance",

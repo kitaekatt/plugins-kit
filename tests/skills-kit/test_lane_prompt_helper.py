@@ -170,3 +170,27 @@ def test_failures_are_loud_and_print_no_json(tmp_path):
         assert done.returncode == 1, (cli, done.stdout, done.stderr)
         assert done.stdout == "", cli
         assert reason in done.stderr, (cli, done.stderr)
+
+
+def test_a_codex_first_route_captures_the_same_prompts_and_writes_bridge_inputs(tmp_path):
+    # With a codex entry first, the script's first dispatch is the bridge's
+    # prompt, not the lane prompt. The helper captures with an agent route, so
+    # its prompts are unchanged, and --out-dir writes each lane's bridge payload.
+    # Revert that turns this RED: capture with the caller's laneModels.
+    agent_args = _args("skill")
+    codex_args = dict(agent_args, laneModels={
+        "run": [{"id": "luna", "effort": "high", "route": "codex"},
+                {"id": "sonnet", "effort": "low", "route": "agent"}], "dropped": []})
+    want = json.loads(_helper("--lane", "skill", "--args-file", str(_write(tmp_path, agent_args))).stdout)
+    out_dir = tmp_path / "codex"
+    done = _helper("--lane", "skill", "--args-file", str(_write(tmp_path, codex_args, "codex.json")),
+                   "--out-dir", str(out_dir))
+    assert done.returncode == 0, done.stderr
+    got = json.loads(done.stdout)
+    assert got["run"] == codex_args["laneModels"]["run"]
+    for lane_row, expected in zip(got["lanes"], want["lanes"]):
+        assert Path(lane_row["promptFile"]).read_text(encoding="utf-8") == expected["dispatchPrompt"]
+        payload = json.loads(Path(lane_row["laneInputFile"]).read_text(encoding="utf-8"))
+        assert payload["v"] == 1 and payload["access"] == "read-only"
+        assert payload["prompt"] == expected["dispatchPrompt"][: expected["lanePromptLength"]]
+        assert json.dumps(payload["schema"], separators=(",", ":")) in expected["dispatchPrompt"]

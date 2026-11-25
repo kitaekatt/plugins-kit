@@ -6,21 +6,26 @@
 # <project>/.claude/skills-kit/config.yaml (+ config.local.yaml). A later layer
 # wins per family key, and its list REPLACES this list wholesale.
 #
-# The agent-only families (detect, classify, coverage, generate, remediate) run
-# through Workflow agent() or the Agent tool; skills_kit_lib.lane_models.agent_route
-# drops any id those cannot run and reports the drop. audit_job runs through
-# llm-kit, where every declared id can run.
+# The agent-only families (detect, classify, coverage, generate, remediate) are
+# ranked by skills_kit_lib.lane_models.lane_route through llm-kit describe(), so
+# the user's model overrides apply: a disabled entry is dropped, and a usable
+# reset_mode entry runs first. A Claude core id runs on Workflow agent() or the
+# Agent tool; a codex entry runs through the md-lane bridge (scripts/run_lane.py).
+# Any other id is dropped and reported. audit_job runs through llm-kit's job
+# runner, which ranks with the same describe().
 #
-# classify and remediate apply already-decided edits, so they take the cheapest
-# Claude seat (haiku). detect, coverage and generate stay on sonnet.
-# The agent-only families run only Claude models (Workflow agent()), so they cannot
-# carry a codex entry; only audit_job can.
+# Each agent-only family names its Claude seat first and luna second. describe()
+# keeps an unpaced Claude entry in its declared place, so the Claude seat runs
+# unless the user sets reset_mode on codex (or the Claude seat fails), and then
+# luna leads. classify and remediate apply already-decided edits, so they take
+# the cheapest seats (haiku; luna low). detect, coverage and generate stay on
+# sonnet, with luna high as their codex seat.
 #
 # Resolver and grammar: skills_kit_lib/lane_models.py.
 lane_models:
-  detect:    [{id: sonnet, effort: low}]
-  classify:  [{id: haiku, effort: low}]
-  coverage:  [{id: sonnet, effort: low}]
-  generate:  [{id: sonnet, effort: low}]
-  remediate: [{id: haiku, effort: low}]
+  detect:    [{id: sonnet, effort: low}, {id: luna, effort: high}]
+  classify:  [{id: haiku, effort: low}, {id: luna, effort: low}]
+  coverage:  [{id: sonnet, effort: low}, {id: luna, effort: high}]
+  generate:  [{id: sonnet, effort: low}, {id: luna, effort: high}]
+  remediate: [{id: haiku, effort: low}, {id: luna, effort: low}]
   audit_job: [{id: luna, effort: high}, {id: sonnet, effort: low}]

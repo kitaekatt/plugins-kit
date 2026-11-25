@@ -233,7 +233,8 @@ class TestMdDomainContributorPresent:
         for clause in (
             "Use this route when the Workflow tool is unavailable (including inside a subagent) "
             "or rejects the lane script.",
-            f"take `laneModels.run[0]` and invoke Agent with `subagent_type: {vcs}-kit:review-lane-<effort>` "
+            "take `laneModels.run[0]` and dispatch it by its `route`.",
+            f"invokes Agent with `subagent_type: {vcs}-kit:review-lane-<effort>` "
             "and `model: <id>`, from that entry's `effort` and `id`.",
             "The Agent tool has no effort argument; the subtype's `effort` frontmatter binds effort.",
             "node \"<root>/skills/md-domain/scripts/lane-prompt.cjs\" --lane <claude-md|skill|project-doc> "
@@ -245,7 +246,8 @@ class TestMdDomainContributorPresent:
             "`--out-dir`, to one line telling the lane to read its `promptFile`",
             "`node` missing, or a helper that exits non-zero, REFUSES: that file is `REVIEW INCOMPLETE`; "
             "never write the prompt from memory or from a paraphrase.",
-            "Parse each Agent response as JSON and validate it against the installed `FILE_FINDINGS_SCHEMA` "
+            "Parse each Agent response (or each codex `result`) as JSON and validate it against the "
+            "installed `FILE_FINDINGS_SCHEMA` "
             "before running the reducer. Require one schema-valid result for every requested file.",
             "Missing or invalid results mean REVIEW INCOMPLETE; never substitute empty findings or DIFF-CLEAN.",
             "Apply the same installed script's review reducer and totals calculation, preserving attribution "
@@ -254,7 +256,7 @@ class TestMdDomainContributorPresent:
             "Transport failure never authorizes a generic-review fallback, a model or effort outside "
             "`laneModels.run`, or a change to the lane's schema or criteria. Keep the claimed files "
             "assigned to their existing specialist lanes.",
-            "If Agent is unavailable, every `run` entry fails for a file, or any result is missing "
+            "If no `run` entry can be dispatched, every `run` entry fails for a file, or any result is missing "
             "or invalid, report `REVIEW INCOMPLETE: <file> - <invocation or validation failure>` for each "
             "affected file. Incomplete coverage cannot satisfy a submit gate.",
         ):

@@ -29,9 +29,15 @@ def _lane_prompt_body(text: str) -> str:
     return text[start:end]
 
 
+_LANE_ROUTE_REGION = re.compile(r"^// lane-route: begin.*?^// lane-route: end\n", re.M | re.S)
+
+
 def _file_level_required(text: str) -> list[str]:
     """The LAST `required: [...]` in the file is the file-level schema's --
-    the per-finding one is nested earlier under `findings.items.properties`."""
+    the per-finding one is nested earlier under `findings.items.properties`.
+    The shared lane-route chunk is skipped: its md-lane bridge schema wraps the
+    lane schema and is not sent to the lane model."""
+    text = _LANE_ROUTE_REGION.sub("", text)
     matches = re.findall(r"required:\s*\[([^\]]*)\]", text)
     assert matches, "no required: [...] list found"
     last = matches[-1]

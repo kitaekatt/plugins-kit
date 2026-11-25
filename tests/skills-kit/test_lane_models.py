@@ -2,7 +2,8 @@
 
 Covers the shipped defaults, layer precedence (a later layer's list replaces
 the lower list wholesale), every loud error, effort findings collected across
-all layers, the agent_route drop, the resolve_standards JSON block, the
+all layers, the describe-ranked lane_route (and the deprecated agent_route
+shim), the resolve_standards JSON block, the
 `skills_kit_tool.py lane-models` CLI, and the parity between CORE_IDS and the
 core-id list the generated LANE_ROUTE_CHUNK carries.
 """
@@ -14,6 +15,7 @@ import os
 import re
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -30,6 +32,8 @@ from skills_kit_lib.lane_models import (
     NoRunnableLaneModelError,
     agent_route,
     agent_routes,
+    lane_route,
+    lane_routes,
     load_lane_models,
 )
 
@@ -40,12 +44,14 @@ RESOLVE = PLUGIN / "scripts" / "resolve_standards.py"
 
 SONNET_LOW = [{"id": "sonnet", "effort": "low"}]
 HAIKU_LOW = [{"id": "haiku", "effort": "low"}]
+LUNA_HIGH = {"id": "luna", "effort": "high"}
+LUNA_LOW = {"id": "luna", "effort": "low"}
 SHIPPED = {
-    "detect": SONNET_LOW,
-    "classify": HAIKU_LOW,
-    "coverage": SONNET_LOW,
-    "generate": SONNET_LOW,
-    "remediate": HAIKU_LOW,
+    "detect": SONNET_LOW + [LUNA_HIGH],
+    "classify": HAIKU_LOW + [LUNA_LOW],
+    "coverage": SONNET_LOW + [LUNA_HIGH],
+    "generate": SONNET_LOW + [LUNA_HIGH],
+    "remediate": HAIKU_LOW + [LUNA_LOW],
     "audit_job": [{"id": "luna", "effort": "high"}, {"id": "sonnet", "effort": "low"}],
 }
 
@@ -226,65 +232,192 @@ def test_an_error_in_any_layer_outranks_findings(roots):
     assert not isinstance(exc.value, IncompleteLaneModelsError)
 
 
-# -- agent_route -------------------------------------------------------------
+# -- agent_route (deprecated shim) ---------------------------------------------
 
 
-def test_agent_route_drops_a_non_core_id_and_keeps_order():
-    # Revert that turns this RED: route every id to `run` (no CORE_IDS filter).
+def test_agent_route_is_a_deprecated_shim_that_keeps_the_core_id_filter():
+    # Revert that turns this RED: drop the DeprecationWarning, or change the
+    # shim's behaviour (it must stay the old filter for the policy window).
     entries = [
         {"id": "luna", "effort": "high"},
         {"id": "sonnet", "effort": "low"},
         {"id": "qwen38-5090", "effort": "medium"},
         {"id": "haiku", "effort": "low"},
     ]
-    route = agent_route(entries)
+    with pytest.warns(DeprecationWarning, match="use lane_route"):
+        route = agent_route(entries)
     assert route["run"] == [{"id": "sonnet", "effort": "low"}, {"id": "haiku", "effort": "low"}]
     assert route["dropped"] == [
         {"id": "luna", "effort": "high", "reason": "not runnable by agent()/Agent"},
         {"id": "qwen38-5090", "effort": "medium", "reason": "not runnable by agent()/Agent"},
     ]
+    with pytest.warns(DeprecationWarning, match="use lane_route"):
+        with pytest.raises(NoRunnableLaneModelError, match="luna \\(high\\)"):
+            agent_route([{"id": "luna", "effort": "high"}])
+    with pytest.warns(DeprecationWarning, match="use lane_routes"):
+        block = agent_routes(load_lane_models())
+    assert list(block) == list(AGENT_ONLY_FAMILIES)
 
 
-def test_agent_route_runs_every_core_id():
-    entries = [{"id": i, "effort": "low"} for i in sorted(model_declaration.CORE_IDS)]
-    assert agent_route(entries) == {"run": entries, "dropped": []}
+# -- lane_route: describe ranking --------------------------------------------
 
 
-def test_agent_route_with_nothing_runnable_raises():
+@dataclass(frozen=True)
+class _State:
+    id: str
+    kind: str = "harness"
+    harness: str = "claude"
+    drive: str = "agent"
+    usable: bool = True
+    via: str | None = None
+    status_text: str = "n/a (unpaced)"
+
+
+@dataclass(frozen=True)
+class _Disp:
+    id: str
+    disposition: str = "usable"
+    detail: str = ""
+
+
+class _Ranking:
+    def __init__(self, rendered, dispositions):
+        self.rendered_entries = tuple(rendered)
+        self.dispositions = tuple(dispositions)
+
+
+def _fake_describe(rendered, dispositions=None, calls=None):
+    def describe(names, **kwargs):
+        if calls is not None:
+            calls.append((list(names), kwargs))
+        disps = dispositions if dispositions is not None else [_Disp(s.id) for s in rendered]
+        return _Ranking(rendered, disps)
+    return describe
+
+
+CODEX = dict(harness="codex", drive="codex exec")
+
+
+def test_lane_route_gives_claude_core_ids_the_agent_route_and_codex_the_codex_route():
+    # Revert that turns this RED: restore the core-id filter (codex dropped).
+    entries = [{"id": "sonnet", "effort": "low"}, {"id": "luna", "effort": "high"}]
+    calls = []
+    route = lane_route(entries, describe=_fake_describe(
+        [_State("sonnet"), _State("luna", **CODEX)], calls=calls))
+    assert route == {
+        "run": [{"id": "sonnet", "effort": "low", "route": "agent"},
+                {"id": "luna", "effort": "high", "route": "codex"}],
+        "dropped": [],
+    }
+    (names, kwargs), = calls
+    assert names == ["sonnet", "luna"]
+    assert kwargs["caller"] == "session"
+
+
+def test_lane_route_follows_describe_order_so_a_reset_codex_entry_leads():
+    # describe puts a usable reset entry first; the run list keeps that order
+    # and each entry keeps its DECLARED effort.
+    # Revert that turns this RED: build run in declaration order.
+    entries = [{"id": "sonnet", "effort": "low"}, {"id": "luna", "effort": "high"}]
+    route = lane_route(entries, describe=_fake_describe(
+        [_State("luna", **CODEX), _State("sonnet")]))
+    assert [(e["id"], e["effort"], e["route"]) for e in route["run"]] == [
+        ("luna", "high", "codex"), ("sonnet", "low", "agent")]
+
+
+def test_lane_route_drops_unusable_unrouted_and_hidden_entries_with_reasons():
+    entries = [
+        {"id": "opus", "effort": "high"},
+        {"id": "sol", "effort": "high"},
+        {"id": "qwen", "effort": "medium"},
+        {"id": "gone", "effort": "low"},
+        {"id": "haiku", "effort": "low"},
+    ]
+    rendered = [
+        _State("opus", usable=False, status_text="out of quota until 2026-11-26 03:00 UTC"),
+        _State("sol", **CODEX),
+        _State("qwen", kind="transport", harness=None, drive="openai-compat"),
+        _State("haiku"),
+    ]
+    disps = [_Disp("opus", "out-of-quota"), _Disp("sol"), _Disp("qwen"),
+             _Disp("gone", "disabled", "disabled by config"), _Disp("haiku")]
+    route = lane_route(entries, describe=_fake_describe(rendered, disps))
+    assert [e["id"] for e in route["run"]] == ["sol", "haiku"]
+    reasons = {d["id"]: d["reason"] for d in route["dropped"]}
+    assert [d["id"] for d in route["dropped"]] == ["opus", "qwen", "gone"]
+    assert reasons["opus"] == "not usable now: out of quota until 2026-11-26 03:00 UTC"
+    assert reasons["qwen"].startswith("no md-domain lane route for transport/openai-compat")
+    assert reasons["gone"] == "disabled: disabled by config"
+    assert all(d["effort"] for d in route["dropped"])
+
+
+def test_lane_route_drops_a_claude_entry_that_is_not_a_core_id():
+    route = lane_route(
+        [{"id": "claude-cli-opus", "effort": "high"}, {"id": "sonnet", "effort": "low"}],
+        describe=_fake_describe([_State("claude-cli-opus", drive="cli"), _State("sonnet")]))
+    assert [e["id"] for e in route["run"]] == ["sonnet"]
+    assert route["dropped"][0]["id"] == "claude-cli-opus"
+
+
+def test_lane_route_with_nothing_routable_raises():
     # Revert that turns this RED: return the empty route instead of raising.
-    with pytest.raises(NoRunnableLaneModelError, match="luna \\(high\\)"):
-        agent_route([{"id": "luna", "effort": "high"}])
+    with pytest.raises(NoRunnableLaneModelError, match="qwen \\(medium\\)"):
+        lane_route([{"id": "qwen", "effort": "medium"}], describe=_fake_describe(
+            [_State("qwen", kind="transport", harness=None, drive="openai-compat")]))
     assert issubclass(NoRunnableLaneModelError, LaneModelsError)
 
 
-def test_agent_route_rejects_a_malformed_entry():
+def test_lane_route_turns_the_describe_floor_into_no_runnable():
+    from llm_kit.dispatch.declaration import NoUsableRoutingTarget
+
+    def floor(names, **kwargs):
+        raise NoUsableRoutingTarget(list(names), (), "session")
+
+    with pytest.raises(NoRunnableLaneModelError, match="no declared entry is usable"):
+        lane_route([{"id": "luna", "effort": "high"}], describe=floor)
+
+
+def test_lane_route_rejects_a_malformed_entry():
     with pytest.raises(LaneModelsError):
-        agent_route(["sonnet"])
+        lane_route(["sonnet"], describe=_fake_describe([]))
 
 
-def test_agent_routes_covers_only_agent_families(roots):
+def test_lane_routes_covers_only_agent_families_and_names_the_failing_family(roots):
     home, project = roots
-    _write(_project(project), "lane_models:\n  detect: [{id: luna, effort: high}, {id: sonnet, effort: low}]\n")
-    block = agent_routes(load_lane_models(project, home))
-    assert list(block) == list(AGENT_ONLY_FAMILIES)
-    assert block["detect"]["declared"] == [{"id": "luna", "effort": "high"}, {"id": "sonnet", "effort": "low"}]
-    assert block["detect"]["run"] == SONNET_LOW
-    assert block["detect"]["dropped"][0]["id"] == "luna"
-    assert block["coverage"] == {"declared": SONNET_LOW, "run": SONNET_LOW, "dropped": []}
+    _write(_project(project), "lane_models:\n  remediate: [{id: qwen, effort: low}]\n")
+    resolved = load_lane_models(project, home)
 
+    def describe(names, **kwargs):
+        rendered = [_State(n, kind="transport", harness=None, drive="openai-compat")
+                    if n == "qwen" else (_State(n, **CODEX) if n == "luna" else _State(n))
+                    for n in names]
+        return _Ranking(rendered, [_Disp(n) for n in names])
 
-def test_agent_routes_names_the_family_with_nothing_runnable(roots):
-    home, project = roots
-    _write(_project(project), "lane_models:\n  remediate: [{id: luna, effort: high}]\n")
     with pytest.raises(NoRunnableLaneModelError, match="lane_models.remediate"):
-        agent_routes(load_lane_models(project, home))
+        lane_routes(resolved, describe=describe)
+    shipped = lane_routes(load_lane_models(None, home), describe=describe)
+    assert list(shipped) == list(AGENT_ONLY_FAMILIES)
+    assert "audit_job" not in shipped
+    assert shipped["detect"]["declared"] == SHIPPED["detect"]
 
 
-def test_audit_job_keeps_luna_because_it_never_goes_through_agent_route(roots):
+def test_audit_job_keeps_luna_first_for_the_llm_kit_job_runner(roots):
     home, project = roots
     resolved = load_lane_models(project, home)
     assert resolved["audit_job"][0] == {"id": "luna", "effort": "high"}
-    assert "audit_job" not in agent_routes(resolved)
+
+
+def test_every_shipped_agent_family_declares_a_claude_entry_first_and_a_codex_entry(roots):
+    # Claude first keeps today's choice when no override is set; the codex entry
+    # is what a reset_mode override moves to the front.
+    # Revert that turns this RED: remove the codex entry from a family in
+    # defaults/lane_models.yaml.
+    home, _project_root = roots
+    shipped = load_lane_models(None, home)
+    for family in AGENT_ONLY_FAMILIES:
+        ids = [e["id"] for e in shipped[family]]
+        assert model_declaration.is_core_id(ids[0]), (family, ids)
+        assert "luna" in ids[1:], (family, ids)
 
 
 # -- subprocess CLIs ---------------------------------------------------------
@@ -351,7 +484,9 @@ def test_resolve_standards_json_carries_the_lane_models_block(tmp_path):
     # Revert that turns this RED: drop "lane_models" from the `out` dict.
     config_dir = tmp_path / "cfg"
     _write(config_dir / "skills-kit" / "config.yaml",
-           "lane_models:\n  detect: [{id: luna, effort: high}, {id: sonnet, effort: low}]\n")
+           "lane_models:\n  detect: [{id: no-such-model, effort: high}, {id: sonnet, effort: low}]\n"
+           "  classify: [{id: sonnet, effort: low}]\n  coverage: [{id: sonnet, effort: low}]\n"
+           "  generate: [{id: sonnet, effort: low}]\n  remediate: [{id: sonnet, effort: low}]\n")
     project = tmp_path / "project"
     project.mkdir()
     proc = subprocess.run(
@@ -362,16 +497,16 @@ def test_resolve_standards_json_carries_the_lane_models_block(tmp_path):
     assert proc.returncode == 0, proc.stderr
     block = json.loads(proc.stdout)["lane_models"]
     assert list(block) == list(AGENT_ONLY_FAMILIES)
-    assert block["detect"]["run"] == SONNET_LOW
-    assert block["detect"]["dropped"] == [
-        {"id": "luna", "effort": "high", "reason": "not runnable by agent()/Agent"}
-    ]
+    assert block["detect"]["run"] == [{"id": "sonnet", "effort": "low", "route": "agent"}]
+    (dropped,) = block["detect"]["dropped"]
+    assert (dropped["id"], dropped["effort"]) == ("no-such-model", "high")
+    assert dropped["reason"]
 
 
 @pytest.mark.parametrize(
     "body, needle",
     [
-        ("lane_models:\n  detect: [{id: luna, effort: high}]\n", "lane_models.detect"),
+        ("lane_models:\n  detect: [{id: no-such-model, effort: high}]\n", "lane_models.detect"),
         ("lane_models:\n  detect: [{id: opus}]\n", "missing effort"),
         ("lane_models:\n  detect: {id: opus, effort: low}\n", "got a mapping"),
     ],
@@ -410,8 +545,8 @@ def js_core_ids(text: str) -> list[list[str]]:
 @pytest.mark.parametrize("name", ROUTED_SCRIPTS)
 def test_shipped_script_core_ids_match_model_declaration(name):
     """Each SHIPPED workflow script throws on a `run` id outside its
-    LANE_CORE_IDS, and agent_route drops ids outside CORE_IDS. The two lists
-    must be the same set, or an id agent_route keeps is one the lane rejects
+    LANE_CORE_IDS, and lane_route gives the agent route only to CORE_IDS. The
+    two lists must be the same set, or an id lane_route keeps is one the lane rejects
     (or the reverse). This reads the shipped bytes, not the generator's chunk:
     the chunk is rendered FROM CORE_IDS, so comparing it to CORE_IDS could not
     fail.
@@ -422,3 +557,24 @@ def test_shipped_script_core_ids_match_model_declaration(name):
     lists = js_core_ids((WORKFLOW / name).read_text(encoding="utf-8"))
     assert len(lists) == 1, f"{name}: expected one LANE_CORE_IDS list, got {lists}"
     assert sorted(lists[0]) == sorted(model_declaration.CORE_IDS)
+
+
+def test_lane_route_seeds_core_ids_as_agent_tool_reachable_for_describe():
+    # agent() runs a Claude core id in the session; the claude CLI on PATH is
+    # not what dispatches it, so describe must not rule it out for a missing CLI.
+    # Revert that turns this RED: call describe without the reachability seed.
+    calls = []
+    lane_route([{"id": "sonnet", "effort": "low"}, {"id": "luna", "effort": "high"}],
+               describe=_fake_describe([_State("sonnet"), _State("luna", **CODEX)], calls=calls))
+    (_names, kwargs), = calls
+    seeded = kwargs["reachability_cache"]
+    assert set(seeded) == {"sonnet"}
+    assert seeded["sonnet"].status == "reachable" and seeded["sonnet"].checked == "agent-tool"
+
+
+def test_lane_route_keeps_sonnet_routable_when_the_claude_cli_is_not_on_path(monkeypatch):
+    # The real describe, with an empty PATH: no claude and no codex CLI.
+    monkeypatch.setenv("PATH", "")
+    route = lane_route([{"id": "sonnet", "effort": "low"}, {"id": "luna", "effort": "high"}])
+    assert route["run"] == [{"id": "sonnet", "effort": "low", "route": "agent"}]
+    assert route["dropped"][0]["id"] == "luna"

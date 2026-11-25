@@ -93,19 +93,19 @@ technique_skill:
       lineups or dispatch mechanics: a model or harness absent from the rendered policy must
       not be dispatched to. Each routing row lists the models it declares that are real on
       this machine -- usable, out of quota until a stated reset, unreachable, or marked
-      UNUSABLE because the llm-kit consent scope `orchestrate` does not allow its cost class
-      or the user's `model_overrides` disabled it (never delegate to an UNUSABLE entry; its
-      line gives the reason, and for consent the exact `llm-kit consent set` command). An
-      entry marked `reset available (config)` leads its row on the user's override, not on a
-      usage reading -- and the backends listed are the only ones that
-      exist here. A declared model that resolves to
+      When llm-kit's consent scope `orchestrate` disallows a cost class, its `Switched off:`
+      line names those entries; do not dispatch to them. An
+      entry marked `reset available (config)` leads its declaration per llm-kit's Rule line;
+      its actual usage reading remains visible. Model usage overrides live in
+      `~/.config/llm-kit/model-overrides.yaml`; see references/configuration.md. The
+      backends listed are the only ones that exist here. A declared model that resolves to
       nothing or that this policy cannot drive is left out without comment, and anything not
       installed on this machine is omitted from the output entirely, so do not reach for a
       backend or model you remember but cannot see, and do not tell the user something is
       "unavailable" on the strength of its absence. (`--explain` reports each backend's
       detection status, if you need to answer that question.)
 
-      The rendered Reset line outranks the Rule line's "no preference" clause for reset entries.
+      Follow llm-kit's rendered Rule and Reset lines verbatim.
 
       The Consult seats section is who to ask; take the first UP seat, else the first BESIDE.
       A seat listed as out of quota is not askable until its reset time, and a seat listed

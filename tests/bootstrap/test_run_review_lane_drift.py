@@ -63,11 +63,14 @@ class TestWrapperCopiesMatch:
         # stamps a venv against the released-package target of its requirement.
         # git-kit and p4-kit require 0.168.0, which supplies
         # bootstrap_lib.code_review.kit_scripts (imported by prepare_review.py).
+        # git-kit and p4-kit require 0.175.0, which supplies
+        # bootstrap_lib.code_review.validator_lane (imported by
+        # run_validator_lane.py) and the resolved codex_validator_concurrency.
         # llm-kit's describe/run call bootstrap_lib.model_declaration (parse,
         # CORE_IDS), first shipped in bootstrap 0.129.0.
         expected = {
-            "git-kit": "0.168.0",
-            "p4-kit": "0.168.0",
+            "git-kit": "0.175.0",
+            "p4-kit": "0.175.0",
             "llm-kit": "0.160.0",
         }
         minimum = {"git-kit": "0.113.0", "p4-kit": "0.113.0",
@@ -237,10 +240,10 @@ class TestOwnerDependenciesAreDeclared:
         )["project"]
         assert project["requires-python"].startswith(">=3.12")
         assert "pyyaml" in project["dependencies"]
-        assert "katsoft-llm-kit[config]>=1.37,<2" in project["dependencies"]
+        assert "katsoft-llm-kit[config]>=1.46.0,<2" in project["dependencies"]
         assert "katsoft-contracts>=1.0,<2" in project["dependencies"]
         assert project["optional-dependencies"]["endpoint-dispatch"] == [
-            "katsoft-llm-kit[sdk]>=1.37,<2"
+            "katsoft-llm-kit[sdk]>=1.46.0,<2"
         ]
         manifest = json.loads((plugin / "bootstrap.json").read_text(encoding="utf-8"))
         assert manifest["shared_lib_imports"] == ["bootstrap_lib"]

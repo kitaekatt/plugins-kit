@@ -138,29 +138,62 @@ def test_a_runner_refusal_is_not_re_selected_past(vcs: str) -> None:
 
 
 @pytest.mark.parametrize("vcs", VCS)
-def test_validators_dispatch_to_the_effort_agent(vcs: str) -> None:
-    steps = _steps(vcs)
-    (validate,) = [step for step in steps if step["n"] == 7]
+def test_validators_dispatch_by_entry_harness(vcs: str) -> None:
+    (validate,) = [step for step in _steps(vcs) if step["n"] == 7]
     action = _flat(validate["action"])
     kit = KIT[vcs]
     assert "an ordered list of one or more `{id, effort}` entries" in action
-    assert "Dispatch the first Agent entry." in action
     assert f"`subagent_type: {kit}:review-lane-<entry effort>` and `model: <id>`" in action
+    assert "/scripts/run_validator_lane.py" in action
+    for flag in ("--issue", "--bundle", "--chunk-index", "--model <id>", "--effort <entry effort>"):
+        assert flag in action, flag
+    assert "read-only with network off" in action
+    assert "run_validator_lane.py" in _flat(str(validate["tool"]))
 
 
 @pytest.mark.parametrize("vcs", VCS)
-def test_step7_drops_non_agent_validator_entries_with_a_route_line(vcs: str) -> None:
+def test_every_validator_reason_is_routed_through_describe(vcs: str) -> None:
     (validate,) = [step for step in _steps(vcs) if step["n"] == 7]
     action = _flat(validate["action"])
-    assert "Drop every non-Agent entry ahead of it." in action
-    assert (
-        "`route: validator <reason> -> <id> <effort>; <dropped id> dropped: no lane-tool "
-        "route for validators`" in action
-    )
+    assert "Route EVERY reason the issues carry, a one-entry list included" in action
+    assert "models describe <entry>... --caller session" in action
+    assert "Never pass `--dispatchable transport`" in action
+    assert "`route: validator <reason> -> <id> <effort>; <clause>`" in action
     assert "`route: validator issue <n> -> <id>; <prior> failed: <kind>`" in action
-    assert "unvalidated" in action
+    assert "Drop every non-Agent entry" not in action
     (render,) = [step for step in _steps(vcs) if step["n"] == 9]
     assert "`route: validator` line" in _flat(render["action"])
+
+
+@pytest.mark.parametrize("vcs", VCS)
+def test_codex_validators_are_capped_with_overflow_to_the_next_entry(vcs: str) -> None:
+    (validate,) = [step for step in _steps(vcs) if step["n"] == 7]
+    action = _flat(validate["action"])
+    assert "At most `codex_validator_concurrency`" in action
+    assert "next usable entry in the printed menu that is not a codex entry" in action
+    assert "codex concurrency <N> reached" in action
+
+
+@pytest.mark.parametrize("vcs", VCS)
+def test_a_malformed_verdict_leaves_the_issue_unvalidated(vcs: str) -> None:
+    (validate,) = [step for step in _steps(vcs) if step["n"] == 7]
+    action = _flat(validate["action"])
+    assert "exit 4 from the validator tool, is a MALFORMED answer" in action
+    assert "the issue stays UNVALIDATED" in action
+    assert "never treat it as rejected" in action
+    assert "Exit 2 from the validator tool is a REFUSAL" in action
+    assert "`## Lane failures` as unvalidated" in action
+
+
+@pytest.mark.parametrize("vcs", VCS)
+def test_the_validator_definition_renders_the_shared_restrictions(vcs: str) -> None:
+    from bootstrap_lib.code_review import validator_lane
+
+    body = gen.render_full_review(vcs)
+    block = body.split("```yaml\n", 1)[1].split("\n```", 1)[0]
+    subagents = yaml.safe_load(block)["full_review_reference"]["subagents"]
+    (validator,) = [agent for agent in subagents if agent["name"] == "validator"]
+    assert tuple(validator["restrictions"]) == validator_lane.VALIDATOR_RESTRICTIONS
 
 
 @pytest.mark.parametrize("vcs", VCS)

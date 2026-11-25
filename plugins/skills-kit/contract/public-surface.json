@@ -2,7 +2,7 @@
   "schema": 1,
   "package": "skills_kit_lib",
   "current_version_file": ".claude-plugin/plugin.json",
-  "scope": "skills_kit_lib.audit: the names that left or changed signature when the shipped standards criteria took over the audit checks, and the names that replace them. Other modules are not listed.",
+  "scope": "skills_kit_lib.audit: the names that left or changed signature when the shipped standards criteria took over the audit checks, and the names that replace them. skills_kit_lib.lane_models: the lane-route names. Other modules are not listed.",
   "entries": [
     {"name": "skills_kit_lib.audit.SkillCriterion", "status": "deprecated", "since": "0.97.0", "remove_after": "0.99.0", "replacement": "skills_kit_lib.audit.MechanicalCriterion (the same id and severity record)."},
     {"name": "skills_kit_lib.audit.skill_md_criteria", "status": "deprecated", "since": "0.97.0", "remove_after": "0.99.0", "replacement": "skills_kit_lib.audit.mechanical_criteria(\"skill_md\", resolved), which returns the same (criteria, threshold defaults) pair."},
@@ -24,6 +24,10 @@
     {"name": "skills_kit_lib.audit.check_universal", "status": "public"},
     {"name": "skills_kit_lib.audit.check_claude_md_defaults", "status": "public"},
     {"name": "skills_kit_lib.audit.audit", "status": "public"},
-    {"name": "skills_kit_lib.audit.audit_claude_md", "status": "public"}
+    {"name": "skills_kit_lib.audit.audit_claude_md", "status": "public"},
+    {"name": "skills_kit_lib.lane_models.agent_route", "status": "deprecated", "since": "0.98.12", "remove_after": "0.100.0", "replacement": "skills_kit_lib.lane_models.lane_route, which ranks with llm-kit describe() and gives each usable entry its route (agent or codex)."},
+    {"name": "skills_kit_lib.lane_models.agent_routes", "status": "deprecated", "since": "0.98.12", "remove_after": "0.100.0", "replacement": "skills_kit_lib.lane_models.lane_routes."},
+    {"name": "skills_kit_lib.lane_models.lane_route", "status": "public"},
+    {"name": "skills_kit_lib.lane_models.lane_routes", "status": "public"}
   ]
 }

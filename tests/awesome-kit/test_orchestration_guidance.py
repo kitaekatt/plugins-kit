@@ -2556,27 +2556,15 @@ class TestDeclarationRender:
 
 
 class TestOrchestrateConsentScope:
-    """Orchestrate applies llm-kit's consent scope `orchestrate` to its menu.
+    """The library's rendered consent lines and structured cost data survive."""
 
-    A class the policy does not allow is shown unusable, with the reason and the
-    library's own command, never dropped and never the default; the Claude core
-    entries the renderer synthesizes carry the class of this session's
-    authentication.
-    """
-
-    def test_a_disallowed_entry_is_shown_unusable_with_reason_and_command(
+    def test_a_disallowed_entry_uses_the_library_switched_off_line(
         self, declared, harness_auth
     ):
         harness_auth("codex", "metered")  # codex on API-key billing: class metered
         text = declared([{"shape": ["novel"], "models": ["sol", "fable"]}])
-        line = _entry_line(text, 1, "sol")
-        assert "UNUSABLE" in line
-        assert "metered not allowed" in line
-        assert "codex auth is metered" in line  # the library's reason, verbatim
-        assert "`llm-kit consent set --scope orchestrate --metered on`" in line  # and its exact command
-        assert "[default]" not in line
+        assert "Switched off: sol (metered)" in _routing_block(text)
         assert "[default]" in _entry_line(text, 1, "fable")
-        assert "cost: subscription" in _entry_line(text, 1, "fable")
 
     def test_a_scope_restriction_names_the_scoped_command(self, declared, consent_file):
         consent_file({"scopes": {"orchestrate": {"subscription": False}}})
@@ -2627,12 +2615,12 @@ class TestOrchestrateConsentScope:
         assert "allowed local, subscription" in block
         assert "not allowed metered" in block
 
-    def test_synthesized_claude_entries_carry_subscription(self, declared):
+    def test_synthesized_claude_entries_are_rendered_from_describe(self, declared):
         # fable/opus/sonnet/haiku are not in the stubbed registry: the renderer
         # synthesizes them as Claude harness entries driven by the Agent tool.
         text = declared([{"shape": ["novel"], "models": ["fable", "opus", "sonnet", "haiku"]}])
         for entry_id in ("fable", "opus", "sonnet", "haiku"):
-            assert "cost: subscription" in _entry_line(text, 1, entry_id), entry_id
+            assert "claude/agent" in _entry_line(text, 1, entry_id), entry_id
 
     def test_a_failing_claude_probe_never_blocks_native_entries(
         self, declared, monkeypatch
@@ -2651,10 +2639,10 @@ class TestOrchestrateConsentScope:
         monkeypatch.setattr(og, "probe_session_auth", failing_probe)
         text = declared([{"shape": ["novel"], "models": ["fable", "sol"]}])
         line = _entry_line(text, 1, "fable")
-        assert "UNUSABLE" not in line and "cost: subscription" in line
+        assert "UNUSABLE" not in line
         assert "[default]" in line
         assert "claude" not in probed  # never probed; codex still is
-        assert "UNUSABLE" in _entry_line(text, 1, "sol")  # codex keeps the library probe
+        assert "Switched off: sol (metered)" in _routing_block(text)
 
     def test_a_billing_diverting_key_classifies_the_agent_tool_entries_metered(
         self, declared, session_env
@@ -2719,7 +2707,7 @@ class TestOrchestrateConsentScope:
         )
         (model,) = routes[0]["models"]
         assert model["usable"] and model["cost_class"] == "local"
-        assert "cost: local" in model["line"]
+        assert "cost:" not in model["line"]
 
     def test_an_unreadable_consent_file_fails_loudly_not_open(
         self, declared, consent_file
@@ -3075,226 +3063,113 @@ def _paced_entries():
     )
 
 
-class TestModelOverrides:
-    """`model_overrides` takes models out of routing (disabled) or puts them
-    first (reset_mode), per harness or per model id; a model setting wins over
-    its harness's, and disabled wins over reset_mode."""
+@pytest.fixture
+def llm_kit_overrides_file(tmp_path, monkeypatch):
+    """Use the released library's user-policy path without touching home config."""
+    path = tmp_path / "model-overrides.yaml"
+    monkeypatch.setenv("LLM_KIT_MODEL_OVERRIDES_FILE", str(path))
 
-    ROW = [{"shape": ["novel"], "models": ["opus", "sol", "luna"]}]
+    def write(**data):
+        path.write_text(yaml.safe_dump({"schema_version": 1, **data}), encoding="utf-8")
 
-    def _paced(self, quota):
-        quota("opus", remaining=0.9, window=0.5)   # pace 180%
-        quota("sol", status="out-of-quota", resets_at=1_790_000_000)
-        quota("luna", remaining=0.2, window=0.5)   # pace 40%
+    return write
 
-    def test_harness_reset_mode_puts_every_harness_entry_first(self, declared, quota):
-        self._paced(quota)
-        text = declared(
-            self.ROW, entries=_paced_entries(),
-            model_overrides={"harnesses": {"codex": {"reset_mode": True}}},
+
+class TestLlmKitModelOverrides:
+    ROW = [{"shape": ["novel"], "models": ["sol", "luna", "opus"]}]
+
+    def test_reset_codex_entry_is_default_and_uses_library_rule(
+        self, declared, monkeypatch, llm_kit_overrides_file
+    ):
+        llm_kit_overrides_file(harnesses={"codex": {"reset_mode": True}})
+        monkeypatch.delenv("ORCHESTRATE_QUOTA_ROUTING", raising=False)
+        import llm_kit.dispatch.declaration as declaration
+        from llm_kit.dispatch.usage_budget import Budget
+        monkeypatch.setattr(
+            declaration,
+            "pinned_evaluate",
+            lambda *_args: Budget(
+                status="out-of-quota", pool="seven_day", detail="fixture",
+                resets_at=1_790_000_000,
+            ),
         )
-        assert _menu_ids(text, 1) == ["sol", "luna", "opus"]
-        sol = _entry_line(text, 1, "sol")
-        assert "[default]" in sol
-        assert "reset available (config)" in sol
-        assert "out of quota" not in sol  # the spent reading is ignored
-        assert "reset available (config)" in _entry_line(text, 1, "luna")
-        assert "[default]" not in _entry_line(text, 1, "opus")
-
-    def test_a_model_setting_wins_over_its_harness(self, declared, quota):
-        self._paced(quota)
-        text = declared(
-            self.ROW, entries=_paced_entries(),
-            model_overrides={
-                "harnesses": {"codex": {"reset_mode": True}},
-                "models": {"luna": {"reset_mode": False}},
-            },
+        monkeypatch.setattr(
+            declaration,
+            "_fresh_reading",
+            lambda *_args: Budget(
+                status="out-of-quota", pool="seven_day", detail="fixture",
+                remaining=0.0, window_remaining=0.5, resets_at=1_790_000_000,
+            ),
         )
-        assert _menu_ids(text, 1) == ["sol", "opus", "luna"]
-        assert "[default]" in _entry_line(text, 1, "sol")
-        luna = _entry_line(text, 1, "luna")
-        assert "reset available (config)" not in luna
-        assert "pace 40%" in luna
+        rendered = declared(self.ROW, entries=_paced_entries())
+        assert "sol" == _menu_ids(rendered, 1)[0]
+        assert "[default]" in _entry_line(rendered, 1, "sol")
+        assert "Rule: choose a usable reset entry from this declaration; choose another only for independence or after a failed dispatch, and announce why." in rendered
+        assert "Reset: sol, luna have reset available (config)" in rendered
+        assert "actual: out of quota" in _entry_line(rendered, 1, "sol")
 
-    def test_a_disabled_model_is_unusable_and_never_the_default(self, declared):
-        text = declared(
-            [{"shape": ["novel"], "models": ["sol", "fable"]}],
-            model_overrides={"models": {"sol": {"disabled": True}}},
+    def test_disabled_entry_is_not_default(self, declared, llm_kit_overrides_file):
+        llm_kit_overrides_file(models={"sol": {"disabled": True}})
+        rendered = declared(
+            [{"shape": ["novel"], "models": ["sol", "luna"]}],
+            entries=_paced_entries(),
         )
-        assert _menu_ids(text, 1) == ["fable", "sol"]
-        sol = _entry_line(text, 1, "sol")
-        assert "UNUSABLE (disabled by config); do not delegate to it" in sol
-        assert "[default]" not in sol
-        assert "[default]" in _entry_line(text, 1, "fable")
+        assert "[default]" in _entry_line(rendered, 1, "luna")
+        assert "sol" not in _menu_ids(rendered, 1)
 
-    def test_disabled_wins_over_reset_mode(self, declared):
-        text = declared(
-            [{"shape": ["novel"], "models": ["fable", "sol", "luna"]}],
-            model_overrides={
-                "harnesses": {"codex": {"reset_mode": True}},
-                "models": {"sol": {"disabled": True}},
-            },
-        )
-        assert _menu_ids(text, 1) == ["luna", "fable", "sol"]
-        assert "[default]" in _entry_line(text, 1, "luna")
-        sol = _entry_line(text, 1, "sol")
-        assert "UNUSABLE (disabled by config)" in sol
-        assert "reset available" not in sol
-
-    def test_a_disabled_harness_leaves_the_floor_naming_the_override(self, declared):
-        text = declared(
-            [
-                {"shape": ["novel"], "models": ["sol", "luna"]},
-                {"shape": [], "models": ["sonnet"]},
-            ],
-            model_overrides={"harnesses": {"codex": {"disabled": True}}},
-        )
-        row = "\n".join(_row_lines(text, 1))
-        assert "no usable routing target" in row
-        assert "sol: excluded (disabled by config)" in row
-        assert "luna: excluded (disabled by config)" in row
-        assert _menu_ids(text, 2) == ["sonnet"]
-
-    def test_disabled_core_id_applies_without_the_library(self, layered, monkeypatch):
-        monkeypatch.setitem(sys.modules, "llm_kit", None)
-        monkeypatch.setattr(og, "discover_model_definitions", lambda _root: ({}, []))
-        layered("shipped", cfg(
-            routing=[{"shape": [], "models": ["opus", "sonnet"]}],
-            model_overrides={"models": {"opus": {"disabled": True}},
-                             "harnesses": {"claude": {"reset_mode": True}}},
-        ))
-        config, provenance = og.resolve_config(layered.project_root)
-        text = og.render(config, provenance)
-        assert _menu_ids(text, 1) == ["sonnet", "opus"]
-        assert "[default]" in _entry_line(text, 1, "sonnet")
-        assert "reset available (config)" in _entry_line(text, 1, "sonnet")
-        assert "UNUSABLE (disabled by config)" in _entry_line(text, 1, "opus")
-
-    @pytest.mark.parametrize(
-        "overrides, needle",
-        [
-            ({"harnesses": {"codex": {"reset": True}}}, "reset"),
-            ({"models": {"sol": {"disabled": "yes"}}}, "disabled"),
-            ({"modles": {}}, "modles"),
-            ({"models": ["sol"]}, "models"),
-            ("codex", "model_overrides"),
-        ],
-    )
-    def test_a_malformed_override_fails_loudly(self, layered, overrides, needle):
+    def test_leftover_orchestration_key_fails_with_migration_path(self, layered):
         layered("shipped", cfg())
-        layered("user", {"model_overrides": overrides})
-        with pytest.raises(ValueError, match=needle):
+        layered("user", {"model_overrides": {"harnesses": {"codex": {"reset_mode": True}}}})
+        with pytest.raises(ValueError) as error:
             og.resolve_config(layered.project_root)
+        message = str(error.value)
+        assert "model_overrides" in message
+        assert "~/.config/llm-kit/model-overrides.yaml" in message
+        assert "LLM_KIT_MODEL_OVERRIDES_FILE" in message
 
+    def test_consult_seats_are_returned_by_llm_kit(self, tmp_path, monkeypatch, llm_kit_overrides_file):
+        from types import SimpleNamespace
+        from llm_kit.dispatch.reachability import Reachability
+        from llm_kit.registry.conserve import Budget, ConserveSpec
+        from llm_kit.registry.model_endpoints import EndpointEntry
+        import llm_kit.dispatch.seats as seats_api
 
-class TestConsultSeatOverrides:
-    def _render(self, layered, monkeypatch, result, overrides):
-        _install_fake_seats(monkeypatch, lambda _self_ref, *, project_root: result)
-        monkeypatch.setattr(og, "discover_model_definitions", lambda _root: ({}, []))
-        layered("shipped", cfg(model_overrides=overrides))
-        config, provenance = og.resolve_config(layered.project_root)
-        text = og.render(config, provenance, self_ref="opus")
-        return text.split("## Consult seats\n", 1)[1].split("## Dispatch backends\n", 1)[0]
+        llm_kit_overrides_file(models={"blocked": {"disabled": True}, "reset": {"reset_mode": True}})
+        spec = ConserveSpec(pool="seven_day")
 
-    def _result(self):
-        return SimpleNamespace(
-            self=SimpleNamespace(endpoint="opus", band="strong"),
-            seats=(
-                SimpleNamespace(relation="UP", endpoint="fable", band="frontier",
-                                harness="claude", tier=5, budget=None),
-                SimpleNamespace(relation="BESIDE", endpoint="luna", band="strong",
-                                harness="codex", tier=4, budget=None),
-            ),
-            unclassified=(),
-            probe_unknown=(),
-            out_of_quota=(
-                SimpleNamespace(relation="BESIDE", endpoint="sol", band="strong",
-                                harness="codex", tier=4,
-                                budget=SimpleNamespace(resets_at=1_790_000_000)),
-            ),
-        )
-
-    def test_a_reset_seat_returns_to_the_front_of_its_tier(self, layered, monkeypatch):
-        section = self._render(layered, monkeypatch, self._result(), {
-            "harnesses": {"codex": {"reset_mode": True}},
-            "models": {"luna": {"reset_mode": False}},
-        })
-        assert "out of quota" not in section
-        lines = section.strip().splitlines()
-        assert lines[:3] == [
-            "UP fable (frontier, claude)",
-            "BESIDE sol (strong, codex) reset available (config)",
-            "BESIDE luna (strong, codex)",
-        ]
-
-    def test_a_disabled_seat_is_marked_and_not_offered(self, layered, monkeypatch):
-        section = self._render(layered, monkeypatch, self._result(), {
-            "models": {"fable": {"disabled": True}},
-        })
-        lines = section.strip().splitlines()
-        assert lines[0] == "BESIDE luna (strong, codex)"
-        assert "UP fable (frontier, claude) disabled by config; do not consult it" in lines
-        assert lines.index(
-            "UP fable (frontier, claude) disabled by config; do not consult it"
-        ) > lines.index("BESIDE luna (strong, codex)")
-
-
-class TestResetPreference:
-    def _render(self, layered, monkeypatch, overrides):
-        monkeypatch.setitem(sys.modules, "llm_kit", None)
-        monkeypatch.setattr(og, "discover_model_definitions", lambda _root: ({}, []))
-        layered("shipped", cfg(
-            routing=[{"shape": ["novel"], "models": ["opus", "sonnet"]}],
-            model_overrides=overrides,
-        ))
-        config, provenance = og.resolve_config(layered.project_root)
-        return og.render(config, provenance)
-
-    def test_reset_line_lists_rendered_reset_ids(self, layered, monkeypatch):
-        text = self._render(layered, monkeypatch, {
-            "harnesses": {"claude": {"reset_mode": True}},
-        })
-        assert (
-            "Reset: opus, sonnet carry the user's reset_mode override. Choose a usable reset "
-            "entry for every unit whose row lists one; take another entry only for "
-            "independence or after a failed dispatch, and name the reason."
-        ) in text
-        no_reset = self._render(layered, monkeypatch, {})
-        assert "Reset:" not in no_reset
-
-    def test_reset_line_follows_independence_or_reselect(self):
-        for rules, preceding in (
-            (
-                "Rule: no preference\nRe-select: retry elsewhere\n"
-                "Independence: use another",
-                "Independence:",
-            ),
-            ("Rule: no preference\nRe-select: retry elsewhere", "Re-select:"),
-        ):
-            out = []
-            og.render_routing(
-                {},
-                og.Terms([]),
-                [{"shape": [], "models": [], "rule": rules}],
-                og.Blocks(out),
-                out,
-                ["opus"],
+        def entry(name, tier, family):
+            return EndpointEntry(
+                id=name, base_url=None, model=f"{name}-model", kind="harness",
+                harness="codex", tier=tier, family=family, conserve_usage=spec,
             )
-            lines = out
-            reset_index = lines.index(
-                "Reset: opus carry the user's reset_mode override. Choose a usable reset "
-                "entry for every unit whose row lists one; take another entry only for "
-                "independence or after a failed dispatch, and name the reason."
-            )
-            assert lines[reset_index - 1].startswith(preceding)
 
-    def test_reset_ids_include_visible_reset_consult_seats(self):
-        routes = [{"models": [{"id": "sol", "line": f"sol {og.RESET_LABEL}"}]}]
-        seats = SimpleNamespace(
-            reset_endpoints=frozenset({"luna"}),
-            seats=(SimpleNamespace(endpoint="luna"),),
+        entries = {
+            "self": entry("self", 2, "self"),
+            "reset": entry("reset", 3, "frontier"),
+            "blocked": entry("blocked", 4, "frontier"),
+        }
+        monkeypatch.setattr(seats_api, "load_model_config", lambda **_kwargs: {})
+        monkeypatch.setattr(
+            seats_api, "discover_model_entries",
+            lambda **_kwargs: SimpleNamespace(entries=entries),
         )
-        assert og._rendered_reset_ids(routes, seats) == ["sol", "luna"]
+        monkeypatch.setattr(
+            seats_api, "check_many",
+            lambda items, **_kwargs: {
+                name: Reachability("reachable", "fixture", "") for name in items
+            },
+        )
+        spent = Budget("out-of-quota", "seven_day", "fixture", 0.0, 0.5, 1_790_000_000)
+        monkeypatch.setattr(seats_api, "pinned_evaluate", lambda *_args: spent)
+        result, status, detail = og.discover_consult_seats("self", tmp_path)
+        assert status == "available", detail
+        assert [seat.endpoint for seat in result.seats] == ["reset"]
+        assert [seat.endpoint for seat in result.disabled] == ["blocked"]
+        assert result.seats[0].budget.remaining == 0.0
+        lines = []
+        og.render_consult_seats(result, status, detail, lines)
+        assert any("reset available (config); actual: out-of-quota" in line for line in lines)
+        assert any("blocked" in line and "disabled by config" in line for line in lines)
 
 
 class TestNewestCachedRenderer:

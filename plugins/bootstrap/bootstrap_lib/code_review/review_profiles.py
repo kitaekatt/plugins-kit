@@ -45,7 +45,12 @@ DEFAULTS_PATH = _SCRIPT_DIR / "defaults" / CONFIG_NAME
 PathLike = str | Path
 Provenance = tuple[str, Path, str]
 
-TOP_LEVEL_FIELDS = frozenset({"profiles"})
+TOP_LEVEL_FIELDS = frozenset({"profiles", "codex_validator_concurrency"})
+# The most codex validators step 7 runs at once. `codex exec` documents no
+# concurrency control, so the bound is a configurable default rather than a
+# measured limit; a user who has observed their own account's limit states it
+# in a higher layer. An issue past the bound goes to the next usable entry.
+CODEX_VALIDATOR_CONCURRENCY = "codex_validator_concurrency"
 PROFILE_FIELDS = frozenset(
     {"id", "selection", "reviewers", "validator_models", "disabled"}
 )
@@ -391,6 +396,16 @@ def _validate_selection(value: Any, source: Path | str, location: str) -> None:
         )
 
 
+def _validate_concurrency(value: Any, source: Path | str) -> None:
+    """Require a positive integer (a bool is not one)."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        _fail(
+            source,
+            CODEX_VALIDATOR_CONCURRENCY,
+            f"must be a positive integer, got {value!r}",
+        )
+
+
 def _validate_validator_models(value: Any, source: Path | str, location: str) -> None:
     """Validate reason-to-entry bindings.
 
@@ -399,9 +414,9 @@ def _validate_validator_models(value: Any, source: Path | str, location: str) ->
     appended by the normal mapping merge.
 
     Each value is an ordered list of one or more ``{id, effort}`` entries,
-    like a reviewer's model list. The lane tool has no validator route, so the
-    skill drops non-Agent entries at dispatch; the resolved table must still
-    name at least one Agent entry per reason (see ``_validate_resolved``).
+    like a reviewer's model list. A claude entry runs as an Agent validator and
+    a codex entry through the kits' ``run_validator_lane.py``; step 7 of the
+    review skill routes every reason through ``llm-kit models describe``.
     """
     if not isinstance(value, dict):
         _fail(source, location, f"must be a mapping, got {type(value).__name__}")
@@ -512,6 +527,8 @@ def _validate_layer(
 ) -> None:
     """Validate a sparse layer's structure before it participates in the merge."""
     _validate_known_fields(value, TOP_LEVEL_FIELDS, source, "top level")
+    if CODEX_VALIDATOR_CONCURRENCY in value:
+        _validate_concurrency(value[CODEX_VALIDATOR_CONCURRENCY], source)
     if "profiles" not in value:
         return
     profiles = value["profiles"]
@@ -554,6 +571,9 @@ def _validate_resolved(
     profiles = value["profiles"]
     if not isinstance(profiles, list):
         _fail(source, "profiles", f"must be a list, got {type(profiles).__name__}")
+    if CODEX_VALIDATOR_CONCURRENCY not in value:
+        _fail(source, "top level", f"required field missing: {CODEX_VALIDATOR_CONCURRENCY}")
+    _validate_concurrency(value[CODEX_VALIDATOR_CONCURRENCY], source)
     if require_runtime_coverage and not profiles:
         _fail(source, "profiles", "must contain at least one active review profile")
 
@@ -581,18 +601,6 @@ def _validate_resolved(
 
     if not require_runtime_coverage:
         return
-    for index, profile in enumerate(profiles):
-        for reason, entries in profile["validator_models"].items():
-            ids = [entry["id"].strip() for entry in entries]
-            if not any(lane_prompts.is_agent_alias(model_id) for model_id in ids):
-                _fail(
-                    source,
-                    f"profiles[{index}].validator_models.{reason}",
-                    f"validator reason {reason!r} names no Agent entry "
-                    f"(entries: {ids!r}); the lane tool has no validator route, "
-                    "so a validator can only run Agent entries "
-                    f"({sorted(lane_prompts.AGENT_MODEL_ALIASES)})",
-                )
     supported = sorted(lane_prompts.KNOWN_LANES - {"validator"})
     for index, profile in enumerate(profiles):
         location = f"profiles[{index}]"
@@ -828,7 +836,10 @@ def canonical_projection(value: Mapping[str, Any]) -> dict[str, Any]:
                 },
             }
         )
-    return {"profiles": profiles}
+    return {
+        "profiles": profiles,
+        CODEX_VALIDATOR_CONCURRENCY: active[CODEX_VALIDATOR_CONCURRENCY],
+    }
 
 
 def render_projection(value: Mapping[str, Any]) -> str:

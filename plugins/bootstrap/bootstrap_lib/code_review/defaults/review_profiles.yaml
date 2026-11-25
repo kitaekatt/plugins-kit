@@ -19,10 +19,10 @@ profiles:
     - {id: haiku, effort: low}
     - {id: sonnet, effort: low}
     - {id: luna, effort: medium}
-  # Validators are Claude-only by mechanism: a validator runs on an Agent entry only.
+  # A claude entry runs as an Agent validator, a codex entry through run_validator_lane.py.
   validator_models:
-    bug: [{id: haiku, effort: low}, {id: sonnet, effort: low}]
-    claude_md: [{id: haiku, effort: low}, {id: sonnet, effort: low}]
+    bug: [{id: haiku, effort: low}, {id: sonnet, effort: low}, {id: luna, effort: medium}]
+    claude_md: [{id: haiku, effort: low}, {id: sonnet, effort: low}, {id: luna, effort: medium}]
 - id: code
   selection: {}
   reviewers:
@@ -39,7 +39,10 @@ profiles:
     model:
     - {id: sonnet, effort: high}
     - {id: luna, effort: xhigh}
-  # Validators are Claude-only by mechanism: a validator runs on an Agent entry only.
+  # A claude entry runs as an Agent validator, a codex entry through run_validator_lane.py.
   validator_models:
-    bug: [{id: opus, effort: medium}]
-    claude_md: [{id: haiku, effort: medium}, {id: sonnet, effort: low}]
+    bug: [{id: opus, effort: medium}, {id: sol, effort: medium}]
+    claude_md: [{id: haiku, effort: medium}, {id: sonnet, effort: low}, {id: luna, effort: medium}]
+# The most codex validators step 7 runs at once. `codex exec` documents no
+# concurrency control; set the limit your account sustains in a user or project layer.
+codex_validator_concurrency: 4

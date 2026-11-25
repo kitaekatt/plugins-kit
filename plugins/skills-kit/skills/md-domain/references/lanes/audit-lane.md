@@ -47,16 +47,16 @@ lane record in the dispatch table:
 
 Every fan-out lane takes its model AND effort from the `lane_models` config
 slot; nothing is inherited from the session. No workflow script contains a
-model literal. Each script takes a REQUIRED `laneModels = {run, dropped}`
-argument and throws when it is absent.
+model literal for a lane. Each script takes a REQUIRED `laneModels = {run,
+dropped}` argument and throws when it is absent.
 
 The slot, one list of `{id, effort}` entries per lane family, in preference
 order:
 
 | family | shipped default |
 |---|---|
-| `detect`, `coverage`, `generate` | `[{id: sonnet, effort: low}]` |
-| `classify`, `remediate` | `[{id: haiku, effort: low}]` |
+| `detect`, `coverage`, `generate` | `[{id: sonnet, effort: low}, {id: luna, effort: high}]` |
+| `classify`, `remediate` | `[{id: haiku, effort: low}, {id: luna, effort: low}]` |
 | `audit_job` | `[{id: luna, effort: high}, {id: sonnet, effort: low}]` |
 
 **Layers.** Shipped `skills_kit_lib/defaults/lane_models.yaml`, then the user
@@ -69,18 +69,58 @@ resolves the slot once per run and its JSON carries
 `lane_models: {<family>: {declared, run, dropped}}` for the agent-only
 families.
 
-**The agent_route drop.** `skills_kit_lib.lane_models.agent_route(entries)`
-splits a family's entries into `run` and `dropped`. Workflow `agent()` and the
-Agent tool run only the core ids `fable`, `opus`, `sonnet` and `haiku`, so any
-other id (for example `luna`) is dropped with the reason "not runnable by
-agent()/Agent". A drop is not an error: it is reported in `routes.dropped`
-and, for code review, as a disclosure line. This holds wherever the entry
-came from, including a workflow-specific declaration. If `run` ends up empty,
-the lane fails loudly. The workflow lanes try `run` entries in order and move
-to the next when `agent()` throws or returns nothing; failover between declared
-entries is configured behaviour. The `audit_job` family does not go through
-`agent_route`, because its route runs through llm-kit,
-where `luna` runs.
+**The lane route.** `skills_kit_lib.lane_models.lane_route(entries)` ranks a
+family's entries with llm-kit's `describe(caller="session")` (katsoft-llm-kit
+>= 1.46.0), so the user's model overrides apply: a `disabled` entry is dropped,
+and a usable `reset_mode` entry runs first. Otherwise describe keeps an unpaced
+entry (the Claude seats) in its declared place and orders paced entries by pace,
+which is why each shipped family names its Claude seat first: it runs unless
+codex is in reset mode or the Claude seat fails. Each usable entry gets a
+`route`. `agent`: a core id (`fable`, `opus`, `sonnet`, `haiku`) runs on
+Workflow `agent()` or the Agent tool. `codex`: a codex harness entry (for
+example `luna`) runs through the md-lane bridge, below. Any other entry (a
+transport, an opencode harness, a front-door member) and any entry describe
+rules out (out of quota, unreachable, disabled) is dropped with its reason in
+`routes.dropped`. A drop is not an error. If `run` ends up empty, the lane
+fails loudly. The workflow lanes try `run` entries in order and move to the
+next when the dispatch throws, returns nothing or fails its checks; failover
+between declared entries is configured behaviour. The `audit_job` family does
+not go through `lane_route`: llm-kit's job runner ranks each job's `models`
+with the same `describe` for a process caller, so a reset `luna` leads there
+too.
+
+**The md-lane bridge (codex lanes).** A Workflow script has no shell, so a
+codex entry is dispatched as one `agent()` call to the
+`skills-kit:md-lane-bridge` executor (a Bash-only subagent on haiku, low
+effort). Its one command runs `scripts/run_lane.py` with the lane payload
+(`{v, entry, access, prompt, schema, cwd?}`) in a here-document and the
+digest the script computed over it; the helper refuses a payload that arrives
+changed. The helper ranks the one entry through llm-kit's `Reselector` (an
+out-of-quota entry is refused before any prompt is sent), builds it with
+`create_backend`, and runs one `codex exec` with network off. Detect,
+classify, coverage and generate's verification step run with
+`-s read-only`; generate's compose and apply steps and apply-mode remediate
+pass `access: 'write'` and run with `-s workspace-write`, rooted at
+`args.projectRoot` when the caller passes it, else the session directory.
+Propose-mode remediate still dispatches nothing. The lane schema is normalized
+for codex's strict structured output (every property required, the optional
+ones nullable); the answer is validated, its optional nulls removed, and
+validated again against the lane's own schema. The helper prints one JSON line
+carrying the result and its digest; the executor returns that line, and the
+script refuses a result whose digest does not match, so a result is never
+paraphrased. A quota or credit halt is written back to llm-kit. The route
+record of a codex lane names `route: codex`, its access, the endpoint, the
+served model and the sandbox controls applied. A caller without the Workflow
+tool runs the same helper on a file `lane-prompt.cjs --out-dir` wrote:
+`run_lane.py --input-file <laneInputFile> --entry <id> --effort <effort>`.
+
+**Capping codex lanes (`codexMaxConcurrent`).** At most `codexMaxConcurrent`
+codex lanes are in flight at once in one script (default 4; no measured codex
+concurrency limit exists, so the default is a conservative choice and the
+argument is the knob). A lane whose next entry is codex while the cap is full
+moves to its following entry at once and records the cap on its route; it does
+not wait. An invalid value (zero, negative, fractional, not a number) throws
+before any agent launches.
 
 **Overrides apply.** A user or project layer replaces the shipped default on
 that machine, so the model a run uses can differ from the table above. Run
@@ -100,8 +140,8 @@ declared for any md-domain lane. This is a convention; nothing enforces it.
 
 The md-audit evidence-pack adapter is enforced in `scripts/emit_audit_jobs.py`,
 which attaches the pack only for the endpoints it was measured for. Detect
-lanes build their prompts in process and run only core ids, so no
-adapter-admitted endpoint reaches them.
+lanes build their prompts in process and run only core ids and codex harness
+entries, so no adapter-admitted endpoint (a transport) reaches them.
 
 ## Bounding fan-out (`maxConcurrent`)
 

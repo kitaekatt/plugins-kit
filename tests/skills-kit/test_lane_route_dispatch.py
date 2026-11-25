@@ -245,3 +245,244 @@ def test_every_dispatch_goes_through_lane_agent(lane: str) -> None:
     offenders = [m.group(0) for m in re.finditer(r"(?<![A-Za-z0-9_$.])agent\(\s*[A-Za-z_]", code)]
     assert offenders == [], offenders
     assert "laneAgent(" in code
+
+
+# -- the codex route through the md-lane bridge --------------------------------
+#
+# A run entry with route "codex" is dispatched as ONE agent() call to the
+# skills-kit:md-lane-bridge executor (haiku, low), whose prompt carries the
+# run_lane.py command with the lane payload in a here-document. The stub below
+# plays the executor: it records the call and answers with a status built by
+# the test from skills_kit_lib.lane_bridge, so the script's own laneDigest and
+# laneCanonical are checked against the Python helper's byte for byte.
+
+from skills_kit_lib import lane_bridge  # noqa: E402
+
+BRIDGE_AGENT = "skills-kit:md-lane-bridge"
+
+BRIDGE_HARNESS = r"""
+const fs = require('fs')
+const src = fs.readFileSync(process.argv[2], 'utf8').replace('export const meta', 'const meta')
+const spec = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'))
+const calls = []
+const logs = []
+let bridgeCalls = 0
+const agent = (prompt, opts) => {
+  calls.push({ model: opts && opts.model, effort: opts && opts.effort, agentType: opts && opts.agentType,
+               label: opts && opts.label, prompt, schema: opts && opts.schema })
+  if (opts && opts.agentType) {
+    const answer = spec.bridge[Math.min(bridgeCalls, spec.bridge.length - 1)]
+    bridgeCalls++
+    return new Promise((resolve) => setTimeout(() => resolve(answer), 20))
+  }
+  return Promise.resolve(spec.reply)
+}
+const parallel = (thunks) => Promise.all(thunks.map((t) => Promise.resolve().then(t).catch(() => null)))
+const noop = () => {}
+const log = (m) => { logs.push(String(m)) }
+const fn = new Function('args', 'agent', 'parallel', 'phase', 'log',
+  '"use strict"; return (async () => {\n' + src + '\n})()')
+Promise.resolve()
+  .then(() => fn(spec.args, agent, parallel, noop, log))
+  .then((result) => console.log(JSON.stringify({ calls, logs, result, error: null })))
+  .catch((e) => console.log(JSON.stringify({ calls, logs, result: null, error: String((e && e.message) || e) })))
+"""
+
+LUNA = {"id": "luna", "effort": "high", "route": "codex"}
+SONNET = {"id": "sonnet", "effort": "low", "route": "agent"}
+
+# Unsorted keys and non-ASCII text make the digest parity meaningful.
+CODEX_DETECT_REPLY = {"verdict": "COMPLIANT", "findings": [], "note": "caf\u00e9 \u2014 ok"}
+
+
+def _ok_status(result: object, entry: dict = LUNA) -> dict:
+    return {"exit_code": 0, "status": {
+        "ok": True, "entry": {"id": entry["id"], "effort": entry["effort"]},
+        "access": "read-only", "endpoint": entry["id"], "served_model": "gpt-6-luna",
+        "argv": ["codex", "exec"], "controls": ["sandbox-mode"],
+        "digest": lane_bridge.digest(lane_bridge.canonical(result)), "result": result}}
+
+
+def _run_bridge(tmp_path: Path, lane: str, args: dict, reply: object, bridge: list) -> dict:
+    harness = tmp_path / "bridge_harness.js"
+    harness.write_text(BRIDGE_HARNESS, encoding="utf-8")
+    spec = tmp_path / "bridge_spec.json"
+    spec.write_text(json.dumps({"args": args, "reply": reply, "bridge": bridge}), encoding="utf-8")
+    proc = subprocess.run(
+        [NODE, str(harness), str(WORKFLOW_DIR / lane), str(spec)],
+        capture_output=True, text=True, encoding="utf-8", timeout=120,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+_HEREDOC = re.compile(
+    r"--input-digest (?P<digest>\S+) <<'MD_LANE_BRIDGE_INPUT'\n(?P<payload>.*)\nMD_LANE_BRIDGE_INPUT\n\Z",
+    re.DOTALL,
+)
+
+
+def _bridge_payload(call: dict) -> tuple[str, dict, str]:
+    """The digest and payload a bridge call's command carries."""
+    command = call["prompt"].split("COMMAND:\n", 1)[1]
+    assert command.startswith('"${BOOTSTRAP_PYTHON:?'), command[:80]
+    assert "/scripts/run_lane.py" in command.split("\n", 1)[0]
+    match = _HEREDOC.search(command)
+    assert match, command[-200:]
+    return match.group("digest"), json.loads(match.group("payload")), match.group("payload")
+
+
+@pytest.mark.parametrize("lane, access", [("skill-detect.js", "read-only"),
+                                          ("skill-remediate.js", "write"),
+                                          ("references-classify.js", "read-only")])
+def test_a_codex_entry_runs_once_through_the_bridge_executor(tmp_path: Path, lane: str, access: str) -> None:
+    # Revert that turns this RED: dispatch a codex entry with agent(prompt, {model: 'luna'})
+    # (the pre-bridge chunk threw on it before any dispatch).
+    args, reply = _args_for(tmp_path, lane)
+    if lane == "skill-detect.js":
+        reply = CODEX_DETECT_REPLY
+    args["laneModels"] = {"run": [LUNA, SONNET], "dropped": []}
+    out = _run_bridge(tmp_path, lane, args, reply, [_ok_status(reply)])
+    assert out["error"] is None, out
+    (call,) = out["calls"]
+    assert (call["agentType"], call["model"], call["effort"]) == (BRIDGE_AGENT, "haiku", "low")
+    digest, payload, text = _bridge_payload(call)
+    # The JS laneDigest over the payload text equals the Python helper's digest.
+    assert digest == lane_bridge.digest(text)
+    assert payload["entry"] == {"id": "luna", "effort": "high"}
+    assert payload["access"] == access
+    assert payload["v"] == 1 and payload["prompt"] and payload["schema"]
+    assert call["schema"]["properties"]["status"]["properties"]["result"] == payload["schema"]
+    (route,) = out["result"]["routes"]["perFile"]
+    assert route["used"]["id"] == "luna" and route["used"]["route"] == "codex"
+    assert route["used"]["access"] == access
+    assert route["failed"] == []
+
+
+def test_the_codex_result_reaches_the_reducer_unchanged(tmp_path: Path) -> None:
+    args, _reply = _args_for(tmp_path, "skill-detect.js")
+    args["laneModels"] = {"run": [LUNA], "dropped": []}
+    out = _run_bridge(tmp_path, "skill-detect.js", args, {}, [_ok_status(CODEX_DETECT_REPLY)])
+    assert out["error"] is None, out
+    (per_file,) = out["result"]["perFile"]
+    assert per_file["verdict"] == "COMPLIANT"
+    assert per_file["note"] == CODEX_DETECT_REPLY["note"]
+
+
+@pytest.mark.parametrize("answer, needle", [
+    ("mismatch", "digest mismatch"),
+    ("failed", "codex lane failed (exit 1): entry 'luna' is not serving this run"),
+    ("null", "md-lane bridge returned nothing"),
+    ("other-entry", "md-lane bridge ran"),
+])
+def test_a_bad_bridge_answer_fails_the_entry_and_moves_on(tmp_path: Path, answer: str, needle: str) -> None:
+    # Revert that turns this RED: accept any bridge status (drop the digest,
+    # ok and entry checks in laneBridge).
+    args, reply = _args_for(tmp_path, "skill-detect.js")
+    args["laneModels"] = {"run": [LUNA, SONNET], "dropped": []}
+    if answer == "mismatch":
+        bad = _ok_status(reply)
+        bad["status"]["result"] = {**reply, "verdict": "NON-COMPLIANT"}
+    elif answer == "failed":
+        bad = {"exit_code": 1, "status": {"ok": False, "entry": {"id": "luna", "effort": "high"},
+                                          "error": "entry 'luna' is not serving this run", "exit": 1}}
+    elif answer == "null":
+        bad = None
+    else:
+        bad = _ok_status(reply, entry={"id": "sol", "effort": "high"})
+    out = _run_bridge(tmp_path, "skill-detect.js", args, reply, [bad])
+    assert out["error"] is None, out
+    assert [c.get("agentType") or c["model"] for c in out["calls"]] == [BRIDGE_AGENT, "sonnet"]
+    (route,) = out["result"]["routes"]["perFile"]
+    assert route["used"] == {"id": "sonnet", "effort": "low"}
+    (failure,) = route["failed"]
+    assert failure["id"] == "luna" and needle in failure["reason"], failure
+
+
+def _two_file_detect_args(tmp_path: Path) -> dict:
+    args, _reply = _args_for(tmp_path, "skill-detect.js")
+    second = tmp_path / "second.md"
+    second.write_text("# Second\n", encoding="utf-8")
+    args["files"].append({"path": str(second), "preImagePath": None, "standardsPaths": []})
+    return args
+
+
+def test_the_codex_cap_sends_overflow_to_the_next_entry_without_waiting(tmp_path: Path) -> None:
+    # Revert that turns this RED: ignore laneCodexCap (both files take codex).
+    args = _two_file_detect_args(tmp_path)
+    args["laneModels"] = {"run": [LUNA, SONNET], "dropped": []}
+    args["codexMaxConcurrent"] = 1
+    out = _run_bridge(tmp_path, "skill-detect.js", args, DETECT_REPLY, [_ok_status(DETECT_REPLY)])
+    assert out["error"] is None, out
+    used = sorted(r["used"]["id"] for r in out["result"]["routes"]["perFile"])
+    assert used == ["luna", "sonnet"]
+    overflow = next(r for r in out["result"]["routes"]["perFile"] if r["used"]["id"] == "sonnet")
+    assert "codex lane cap reached: 1" in overflow["failed"][0]["reason"]
+
+
+def test_the_default_codex_cap_runs_two_lanes_on_codex(tmp_path: Path) -> None:
+    args = _two_file_detect_args(tmp_path)
+    args["laneModels"] = {"run": [LUNA, SONNET], "dropped": []}
+    out = _run_bridge(tmp_path, "skill-detect.js", args, DETECT_REPLY, [_ok_status(DETECT_REPLY)])
+    assert out["error"] is None, out
+    assert [r["used"]["id"] for r in out["result"]["routes"]["perFile"]] == ["luna", "luna"]
+
+
+@pytest.mark.parametrize("value", [0, -1, 1.5, "2", None])
+def test_a_malformed_codex_cap_throws_before_any_dispatch(tmp_path: Path, value: object) -> None:
+    args, reply = _args_for(tmp_path, "skill-detect.js")
+    args["laneModels"] = {"run": [LUNA, SONNET], "dropped": []}
+    args["codexMaxConcurrent"] = value
+    out = _run_bridge(tmp_path, "skill-detect.js", args, reply, [_ok_status(reply)])
+    assert out["calls"] == [], out
+    assert "codexMaxConcurrent must be a positive integer" in (out["error"] or ""), out
+
+
+def test_an_unknown_route_throws_before_any_dispatch(tmp_path: Path) -> None:
+    args, reply = _args_for(tmp_path, "skill-detect.js")
+    args["laneModels"] = {"run": [{"id": "qwen", "effort": "low", "route": "transport"}], "dropped": []}
+    out = _run_bridge(tmp_path, "skill-detect.js", args, reply, [None])
+    assert out["calls"] == [], out
+    assert 'route "agent" or "codex"' in (out["error"] or ""), out
+
+
+def test_propose_mode_dispatches_nothing_even_with_a_codex_route(tmp_path: Path) -> None:
+    args, reply = _args_for(tmp_path, "skill-remediate.js")
+    args["fixMode"] = "propose"
+    args["laneModels"] = {"run": [LUNA, SONNET], "dropped": []}
+    out = _run_bridge(tmp_path, "skill-remediate.js", args, reply, [_ok_status(reply)])
+    assert out["error"] is None and out["calls"] == [], out
+
+
+@pytest.mark.parametrize("lane", ALL_LANES)
+def test_every_lane_can_route_its_dispatches_to_codex(tmp_path: Path, lane: str) -> None:
+    """Each of the ten scripts sends a codex-only run through the bridge, never agent(model: luna)."""
+    args, reply = _args_for(tmp_path, lane)
+    args["laneModels"] = {"run": [LUNA], "dropped": []}
+    out = _run_bridge(tmp_path, lane, args, reply, [_ok_status(reply)])
+    assert out["error"] is None, out
+    assert out["calls"], out
+    assert {(c.get("agentType"), c["model"]) for c in out["calls"]} == {(BRIDGE_AGENT, "haiku")}
+    for call in out["calls"]:
+        digest, payload, text = _bridge_payload(call)
+        assert digest == lane_bridge.digest(text)
+        expected = "write" if (lane in REMEDIATE_LANES or (
+            lane == "claude-md-generate.js" and call["label"].startswith(("generate:", "apply-hoists:", "create-from-hoists:")))) else "read-only"
+        assert payload["access"] == expected, (lane, call["label"])
+
+
+@pytest.mark.parametrize("lane", ALL_LANES)
+def test_every_lane_schema_is_carried_by_codex_strict_output(tmp_path: Path, lane: str) -> None:
+    """The schema each script sends is inside llm-kit's subset and normalizes to
+    a strict-mode schema, so no shipped lane is refused by run_lane.py."""
+    from llm_kit.completion.contract_types import strict_schema_violations
+    from llm_kit.schema.json_schema import check_schema
+
+    args, reply = _args_for(tmp_path, lane)
+    args["laneModels"] = {"run": [LUNA], "dropped": []}
+    out = _run_bridge(tmp_path, lane, args, reply, [_ok_status(reply)])
+    assert out["error"] is None, out
+    for call in out["calls"]:
+        _digest, payload, _text = _bridge_payload(call)
+        check_schema(payload["schema"])
+        assert strict_schema_violations(lane_bridge.strict_schema(payload["schema"])) == ()

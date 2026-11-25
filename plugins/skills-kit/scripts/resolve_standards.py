@@ -29,16 +29,19 @@ Prints one JSON object:
       "standards":  {"<primitive>": ["<abs path>", ...], ...},
       "audit":      {"fix_mode": "apply"|"propose"},
       "lane_models": {"<family>": {"declared": [{"id", "effort"}, ...],
-                                   "run":      [{"id", "effort"}, ...],
+                                   "run":      [{"id", "effort", "route"}, ...],
                                    "dropped":  [{"id", "effort", "reason"}, ...]}},
       "notes":      ["<loud-but-non-fatal diagnostic>", ...]
     }
 
 `lane_models` covers the agent-only lane families (detect, classify, coverage,
 generate, remediate): the layered `lane_models` slot resolved by
-skills_kit_lib.lane_models, routed through its agent_route. A dropped entry is
-not an error; a family with nothing runnable, an incomplete or malformed slot,
-or an unimportable bootstrap_lib exits 1 like any other config error.
+skills_kit_lib.lane_models and ranked by its lane_route through llm-kit
+describe(), so the user's model overrides apply and a usable reset entry
+leads. Each `run` entry carries its `route`: `agent` (Workflow agent() or the
+Agent tool) or `codex` (the md-lane bridge). A dropped entry is not an error;
+a family with nothing runnable, an incomplete or malformed slot, or an
+unimportable bootstrap_lib or llm_kit exits 1 like any other config error.
 
 Stdlib-only argument handling; the actual resolution (pyyaml + schema
 validation) lives in skills_kit_lib.standards_resolve. Exit 1, with one line on
@@ -121,7 +124,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     # lane_models needs bootstrap_lib (EFFORT_LEVELS, model_declaration), which
-    # the skills-kit plugin venv links; standards_resolve stays free of it.
+    # the skills-kit plugin venv links, and llm_kit (describe), which its
+    # pyproject installs; standards_resolve stays free of both.
     try:
         from skills_kit_lib import lane_models
     except ImportError as exc:
@@ -132,7 +136,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
     try:
-        routes = lane_models.agent_routes(lane_models.load_lane_models(project_root))
+        routes = lane_models.lane_routes(
+            lane_models.load_lane_models(project_root), project_root=project_root
+        )
     except lane_models.LaneModelsError as exc:
         print(f"resolve_standards: lane_models: {exc}", file=sys.stderr)
         return 1

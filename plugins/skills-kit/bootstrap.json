@@ -1,12 +1,12 @@
 {
-  "$comment": "requires_bootstrap is the newest bootstrap call shape skills-kit makes: bootstrap_lib.skill_material (parse_frontmatter_strict, SkillSelection.from_json, materialize, SkillMaterialReport.to_json), first carried by bootstrap 0.138.0 and bound in skills_kit_lib/material.py. The 0.120.0 in shipped launch expressions (\"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}\") is the interpreter variable's own version, the bootstrap whose SessionStart hook first exports BOOTSTRAP_PYTHON.",
-  "requires_bootstrap": "0.138.0",
+  "$comment": "requires_bootstrap is the newest bootstrap call shape or package handling skills-kit needs. 0.160.0 is the package handling: skills-kit consumes llm_kit as the katsoft-llm-kit package its pyproject.toml pins, and every consumer of that package sets requires_bootstrap to 0.160.0, the bootstrap that revokes an undeclared llm_kit link and holds the venv at the highest released target data/package-targets.json admits (plugins/CLAUDE.md, \"Why shared libs rather than published packages\"; skills_kit_lib/lane_models.py LLM_KIT_PACKAGE_BOOTSTRAP). The highest bootstrap_lib CALL shape is lower: bootstrap_lib.skill_material (parse_frontmatter_strict, SkillSelection.from_json, materialize, SkillMaterialReport.to_json), first carried by bootstrap 0.138.0 and bound in skills_kit_lib/material.py as SKILL_MATERIAL_BOOTSTRAP. The 0.120.0 in shipped launch expressions (\"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}\") is the interpreter variable's own version, the bootstrap whose SessionStart hook first exports BOOTSTRAP_PYTHON.",
+  "requires_bootstrap": "0.160.0",
   "shared_lib_imports": ["bootstrap_lib"],
   "shared_libs": [
     { "name": "skills_kit_lib", "src": "." }
   ],
   "venv": {
-    "check_imports": ["yaml"]
+    "check_imports": ["yaml", "llm_kit"]
   },
   "plugins": [
     {"ref": "plugins-kit:skills-kit", "enabled": true}
