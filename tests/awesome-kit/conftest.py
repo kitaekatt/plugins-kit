@@ -55,6 +55,9 @@ def _isolated_consent_and_auth(monkeypatch, tmp_path):
 
     consent_path = tmp_path / "consent" / "consent.json"
     monkeypatch.setenv("LLM_KIT_CONSENT_FILE", str(consent_path))
+    # Routing policy belongs to llm-kit and is user-scoped. Keep renders
+    # independent of the developer's live model-overrides.yaml.
+    monkeypatch.setenv("LLM_KIT_MODEL_OVERRIDES_FILE", str(tmp_path / "model-overrides.yaml"))
     states = {"codex": "subscription"}
     env: dict = {}
 

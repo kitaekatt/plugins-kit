@@ -104,6 +104,8 @@ review stops. It is the same root the prepare bundle later reports as
   one or more `{id, effort}` entries, and a layer stating a reason replaces that reason's list outright.
 - `disabled: true` on a profile or a reviewer record removes that record entirely from the
   resolved table, not just its fields.
+- Top-level `codex_validator_concurrency` is a positive integer; a higher layer stating it
+  replaces the lower value. See "How a validator declaration is routed" below.
 - Every other list, such as `selection.data_only_extensions`, is also a PLAIN list that a higher
   layer replaces outright.
 
@@ -163,10 +165,10 @@ profiles:
     - {id: haiku, effort: low}
     - {id: sonnet, effort: low}
     - {id: luna, effort: medium}
-  # Validators are Claude-only by mechanism: a validator runs on an Agent entry only.
+  # A claude entry runs as an Agent validator, a codex entry through run_validator_lane.py.
   validator_models:
-    bug: [{id: haiku, effort: low}, {id: sonnet, effort: low}]
-    claude_md: [{id: haiku, effort: low}, {id: sonnet, effort: low}]
+    bug: [{id: haiku, effort: low}, {id: sonnet, effort: low}, {id: luna, effort: medium}]
+    claude_md: [{id: haiku, effort: low}, {id: sonnet, effort: low}, {id: luna, effort: medium}]
 - id: code
   selection: {}
   reviewers:
@@ -183,10 +185,13 @@ profiles:
     model:
     - {id: sonnet, effort: high}
     - {id: luna, effort: xhigh}
-  # Validators are Claude-only by mechanism: a validator runs on an Agent entry only.
+  # A claude entry runs as an Agent validator, a codex entry through run_validator_lane.py.
   validator_models:
-    bug: [{id: opus, effort: medium}]
-    claude_md: [{id: haiku, effort: medium}, {id: sonnet, effort: low}]
+    bug: [{id: opus, effort: medium}, {id: sol, effort: medium}]
+    claude_md: [{id: haiku, effort: medium}, {id: sonnet, effort: low}, {id: luna, effort: medium}]
+# The most codex validators step 7 runs at once. `codex exec` documents no
+# concurrency control; set the limit your account sustains in a user or project layer.
+codex_validator_concurrency: 4
 ```
 
 ## What an `effort` value may name
@@ -208,13 +213,14 @@ How the effort reaches the model depends on the entry's harness:
   agent per level in the menu. The menu and the shipped agents are the same set, so accepting a
   level at resolve time guarantees that its dispatch target exists. The entry's `id` is passed
   as `model` at the CALL SITE, where it overrides whatever model the effort agent's own
-  frontmatter would imply. Validators are dispatched the same way.
+  frontmatter would imply. A validator's `claude` entry is dispatched the same way.
 - Any other entry runs through `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${GIT_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/run_review_lane.py"` with `--effort <effort>`, which hands the level to
   llm-kit. The runner refuses the lane with exit 2 when a codex entry's effort menu
   does not include the level, or when a transport entry cannot deliver an effort at all; the
   review reports that refusal as a configuration error. The Codex and Claude CLI backends also
   hold the level to the exact model's measured menu (`gpt-6-luna` has no `ultra`) before they run.
-  The runner's JSON envelope records the effort it sent in its `effort` field.
+  The runner's JSON envelope records the effort it sent in its `effort` field. A validator's
+  `codex` entry runs through `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${GIT_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/run_validator_lane.py"` with `--effort <effort>` instead.
 
 `model` and `effort` are therefore independent: any model may pair with any effort the model's
 harness accepts, and neither is ever traded for the other.
@@ -247,9 +253,7 @@ follow the shared format specified in the bootstrap plugin's
 twice, is a configuration error at resolve time. The renderer prints each reviewer's `model` as
 that entry list, in declared order; `git-code-review` routes the ids and looks the chosen id's
 effort up in the same list. A `validator_models` value is an ordered list of one or more
-entries. The lane tool has no validator route, so step 7 dispatches the first Agent entry and
-drops each non-Agent entry ahead of it with a `route: validator` line; the resolved table
-refuses a reason that has no Agent entry at all.
+entries, routed as "How a validator declaration is routed" below describes.
 
 Each entry is an id in the llm-kit model registry, and which harness serves it decides
 how that lane is dispatched:
@@ -304,15 +308,56 @@ entries in declared order and skips every other entry without comment. A declara
 of those four does not run, and the review reports that lane as failed with each declared
 entry named.
 
+### How a validator declaration is routed
+
+Every validator reason, a one-entry list included, goes through the same `models describe`
+command, without `--dispatchable transport`. So the user's llm-kit model overrides (a
+`disabled` entry, reset mode) apply to validators as they do to reviewers. Each chosen entry is
+dispatched by its harness:
+
+| Entry | Dispatch |
+|---|---|
+| a `claude` harness entry | an Agent subagent of type `git-kit:review-lane-<effort>` with `model: <id>` and the `validator` definition |
+| a `codex` harness entry | a Bash call to `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${GIT_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/run_validator_lane.py"` with `--issue <file> --bundle <bundle.json> --chunk-index <i> --model <id> --effort <effort>` |
+| any other entry | not a validator route; the review chooses another usable entry |
+
+`"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${GIT_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/run_validator_lane.py"` sends one protocol-1 request to `llm-kit completion complete
+--request-file -`: the validator's rules, the issue, the chunk diff it was reported against
+and, for a `claude_md` issue, the text of the CLAUDE.md files that govern its file. The
+request asks for a read-only sandbox with network off (`extras.sandbox: read-only`,
+`extras.network: false`), runs from the bundle's project root at the entry's effort, and
+carries a strict output contract, `{verdict: CONFIRMED|REJECTED, reason}`. The tool refuses
+an entry that does not resolve to the codex backend before any call, and refuses a verdict
+from a call whose envelope does not show the sandbox applied. It prints the same one line an
+Agent validator returns. Its exit codes:
+
+| Exit | Meaning | What the review does |
+|---|---|---|
+| 0 | one `CONFIRMED:` or `REJECTED:` line on stdout | uses the verdict |
+| 1 | the call did not run to an answer | re-selects through describe |
+| 2 | refused as configured | reports the issue unvalidated under `## Lane failures` |
+| 3 | quota or credit halt | records the halt, then re-selects |
+| 4 | answered, but not with a valid verdict | reports the issue unvalidated, never rejected |
+
+At most `codex_validator_concurrency` codex validators run at once; the shipped default is 4.
+`codex exec` documents no concurrency control, so the default is a conservative bound, not a
+measured limit. An issue past the bound takes the next usable non-codex entry in the menu, and
+waits for a later wave when there is none. To raise or lower it, state the limit your account
+sustains in a user or project layer:
+
+```yaml
+codex_validator_concurrency: 8
+```
+
 ### Which lanes may take an endpoint entry
 
 The three REVIEWER lanes -- the set is `ENDPOINT_ELIGIBLE_LANES` in
 `bootstrap_lib.code_review.lane_prompts`, which is the authority; this prose is not. The
 runner refuses any other lane by name and exits 2 (a configuration error).
 
-The validator is excluded because the runner has no validator prompt, input or verdict
-contract. A non-Agent entry in a validator list is dropped at dispatch with a one-line
-disclosure, never sent to the runner.
+The validator is not one of them: the reviewer runner has no validator prompt, input or
+verdict contract. A validator's `codex` entry runs through `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${GIT_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/run_validator_lane.py"` instead (see
+"How a validator declaration is routed" below).
 
 Eligibility is not the only gate. `reviewer_a_claude_md_compliance` and
 `reviewer_c_introduced_code` read files beyond their chunk, so they need an agent loop

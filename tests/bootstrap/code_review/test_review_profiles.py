@@ -57,7 +57,8 @@ DEFAULTS: dict[str, Any] = {
                 "claude_md": [_e("sonnet", "medium")],
             },
         },
-    ]
+    ],
+    "codex_validator_concurrency": 4,
 }
 
 
@@ -485,14 +486,60 @@ def test_a_validator_may_lead_with_a_non_agent_entry(tmp_path: Path) -> None:
     assert _profile(resolved, "code")["validator_models"]["bug"] == entries
 
 
-def test_a_validator_with_no_agent_entry_is_refused(tmp_path: Path) -> None:
-    with pytest.raises(rp.ConfigError) as excinfo:
+def test_a_validator_with_only_a_codex_entry_resolves(tmp_path: Path) -> None:
+    # A codex entry runs through run_validator_lane.py, so a validator reason
+    # needs no Agent entry.
+    resolved = rp.apply_model_priority(
         _resolved(tmp_path, user=_validator_layer([_e("luna", "high")]))
+    )
 
-    message = str(excinfo.value)
-    assert "validator_models.bug" in message
-    assert "no validator route" in message
-    assert "luna" in message
+    assert _profile(resolved, "code")["validator_models"]["bug"] == [_e("luna", "high")]
+    rp.validate_config(resolved)
+
+
+# --------------------------------------------------------------------------
+# codex_validator_concurrency
+# --------------------------------------------------------------------------
+
+
+def test_codex_validator_concurrency_defaults_and_renders(tmp_path: Path) -> None:
+    resolved = rp.apply_model_priority(_resolved(tmp_path))
+
+    assert resolved["codex_validator_concurrency"] == 4
+    rendered = yaml.safe_load(rp.render_projection(resolved))
+    assert rendered["codex_validator_concurrency"] == 4
+
+
+def test_codex_validator_concurrency_is_overridden_by_a_higher_layer(
+    tmp_path: Path,
+) -> None:
+    resolved = _resolved(
+        tmp_path,
+        user={"codex_validator_concurrency": 2},
+        project={"codex_validator_concurrency": 8},
+    )
+
+    assert resolved["codex_validator_concurrency"] == 8
+
+
+@pytest.mark.parametrize("value", [0, -1, "4", True, 2.5, None])
+def test_codex_validator_concurrency_must_be_a_positive_integer(
+    tmp_path: Path, value: Any
+) -> None:
+    with pytest.raises(rp.ConfigError) as excinfo:
+        _resolved(tmp_path, user={"codex_validator_concurrency": value})
+
+    assert "codex_validator_concurrency" in str(excinfo.value)
+
+
+def test_a_resolved_table_without_codex_validator_concurrency_is_refused(
+    tmp_path: Path, defaults_path: Path
+) -> None:
+    _write_yaml(defaults_path, {"profiles": DEFAULTS["profiles"]})
+    with pytest.raises(rp.ConfigError) as excinfo:
+        _resolved(tmp_path)
+
+    assert "codex_validator_concurrency" in str(excinfo.value)
 
 
 @pytest.mark.parametrize(

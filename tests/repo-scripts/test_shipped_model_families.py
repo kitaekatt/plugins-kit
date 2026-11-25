@@ -6,10 +6,6 @@ comes from llm_kit.registry.models.DEFAULT_MODEL_CONFIG (`harness: claude|codex`
 An id with no harness there fails loudly.
 
 Named exemptions (a NEW Claude-only declaration is not exempt and fails):
-  - review `validator_models`: a validator runs on an Agent entry only
-    (plugins/CLAUDE.md register, "A validator runs on an Agent entry only").
-  - skills-kit lane_models families detect, classify, coverage, generate,
-    remediate: Workflow agent() runs Claude models only.
   - workflow-kit EXECUTOR_MODELS: a Claude subagent running one shell command.
 """
 
@@ -26,9 +22,6 @@ ORCHESTRATION = PLUGINS / "awesome-kit/skills/orchestrate/defaults/orchestration
 REVIEW_PROFILES = PLUGINS / "bootstrap/bootstrap_lib/code_review/defaults/review_profiles.yaml"
 LANE_MODELS = PLUGINS / "skills-kit/skills_kit_lib/defaults/lane_models.yaml"
 TASK_ANSWERS = PLUGINS / "task-kit/skills/task/defaults/answers.yaml"
-
-# Exempt lane_models families: Workflow agent() runs Claude models only.
-AGENT_ONLY_LANE_FAMILIES = {"detect", "classify", "coverage", "generate", "remediate"}
 
 
 def _load(path: Path):
@@ -59,20 +52,15 @@ def _declarations():
                 f"review_profiles {profile['id']}.{reviewer['name']}",
                 [_entry_id(m) for m in reviewer["model"]],
             )
+        for reason, entries in profile["validator_models"].items():
+            yield (
+                f"review_profiles {profile['id']}.validator_models.{reason}",
+                [_entry_id(m) for m in entries],
+            )
     yield "task-kit answers.models", [_entry_id(m) for m in _load(TASK_ANSWERS)["answers"]["models"]]
     lanes = _load(LANE_MODELS)["lane_models"]
     for family, entries in lanes.items():
-        if family in AGENT_ONLY_LANE_FAMILIES:
-            continue
         yield f"lane_models {family}", [_entry_id(m) for m in entries]
-
-
-def test_exempt_lane_families_are_the_only_ones_skipped():
-    families = set(_load(LANE_MODELS)["lane_models"])
-    assert families - AGENT_ONLY_LANE_FAMILIES == {"audit_job"}, (
-        "a lane_models family was added: list both a claude and a codex entry, "
-        "or name it as Claude-only in AGENT_ONLY_LANE_FAMILIES with a reason"
-    )
 
 
 @pytest.mark.parametrize("label,ids", list(_declarations()), ids=lambda v: v if isinstance(v, str) else "")

@@ -1,12 +1,12 @@
 [project]
 name = "yaml-data-editor-kit"
-version = "0.19.1"
+version = "0.19.2"
 description = "Project-independent YAML data dialect: schema, anchored comments, and planner/dispatcher binding. Databench owns the browser editor boundary; this package ships no web editor."
 requires-python = ">=3.12"
 
 dependencies = [
     "pyyaml",
-    "katsoft-llm-kit[config,sdk,pipeline]>=1.37,<2",
+    "katsoft-llm-kit[config,sdk,pipeline]>=1.46.0,<2",
     "katsoft-contracts>=1.0,<2",
 ]
 

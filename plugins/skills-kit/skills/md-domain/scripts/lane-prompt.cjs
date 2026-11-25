@@ -22,11 +22,18 @@
 // `dispatchPrompt` is what to send as an Agent tool's `prompt`: the script's
 // lanePrompt, unchanged, as its first `lanePromptLength` characters, followed by
 // the script's exact FILE_FINDINGS_SCHEMA and the instruction to return one JSON
-// object matching it. `run` is args.laneModels.run, the ordered {id, effort}
-// entries to dispatch with. With --out-dir, each dispatchPrompt is written to
+// object matching it. `run` is args.laneModels.run, the ordered {id, effort,
+// route} entries to dispatch with. With --out-dir, each dispatchPrompt is written to
 // <dir>/<index>.prompt.txt instead and stdout carries only that absolute path as
 // `promptFile`, so a prompt of tens of kilobytes is not printed, and a caller can
-// have the lane read the file instead of pasting the text. Any failure -- bad args, a script that throws, a lane count that does not
+// have the lane read the file instead of pasting the text. --out-dir also writes
+// <dir>/<index>.lane.json, the md-lane bridge payload without its entry
+// ({v, access: "read-only", prompt, schema}), named as `laneInputFile`: a run
+// entry whose route is "codex" is dispatched with
+//   run_lane.py --input-file <laneInputFile> --entry <id> --effort <effort>
+// rather than the Agent tool. The prompts are captured with a one-entry agent
+// route, so a codex entry first in `run` does not change them: the prompt does
+// not depend on the model. Any failure -- bad args, a script that throws, a lane count that does not
 // match the files -- exits 1 with the reason on stderr and prints no JSON.
 
 const fs = require('fs')
@@ -101,13 +108,21 @@ function dispatchPrompt(prompt, schema) {
     'Schema (FILE_FINDINGS_SCHEMA):\n' + JSON.stringify(schema)
 }
 
+// The prompt a lane sends does not depend on the model, so it is captured with
+// a one-entry agent route: a codex entry would send the bridge's prompt instead.
+const CAPTURE_ROUTE = { run: [{ id: 'sonnet', effort: 'low', route: 'agent' }], dropped: [] }
+
 async function main() {
   const opts = parseCli(process.argv.slice(2))
   const args = readArgs(opts)
   const scriptName = LANES[opts.lane]
   const scriptPath = path.join(__dirname, '..', 'workflow', scriptName)
   const files = args && (typeof args === 'string' ? null : args.files)
-  const seen = await capture(scriptPath, args)
+  const seen = await capture(scriptPath, { ...args, laneModels: CAPTURE_ROUTE })
+  if (!args || typeof args !== 'object' || !args.laneModels || typeof args.laneModels !== 'object' ||
+      !Array.isArray(args.laneModels.run) || !Array.isArray(args.laneModels.dropped)) {
+    fail('args.laneModels must be the {run, dropped} route from resolve_standards.py')
+  }
   if (!Array.isArray(files) || seen.length !== files.length) {
     fail(scriptName + ' dispatched ' + seen.length + ' distinct lane prompt(s) for ' +
       (Array.isArray(files) ? files.length : 'an unknown number of') + ' file(s); expected one each')
@@ -122,6 +137,9 @@ async function main() {
     if (opts['out-dir']) {
       lane.promptFile = path.resolve(opts['out-dir'], index + '.prompt.txt')
       fs.writeFileSync(lane.promptFile, text, 'utf8')
+      lane.laneInputFile = path.resolve(opts['out-dir'], index + '.lane.json')
+      fs.writeFileSync(lane.laneInputFile,
+        JSON.stringify({ v: 1, access: 'read-only', prompt: s.prompt, schema: s.schema }), 'utf8')
     } else {
       lane.dispatchPrompt = text
     }

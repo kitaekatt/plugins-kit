@@ -993,5 +993,19 @@ def test_every_name_audit_deprecates_is_listed():
                 and node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)):
             named.add(node.args[0].value)
     assert len(named) >= 13, named
-    listed = {e["name"].removeprefix("skills_kit_lib.audit.") for e in ENTRIES if e["status"] == "deprecated"}
+    listed = {e["name"].removeprefix("skills_kit_lib.audit.") for e in ENTRIES
+              if e["status"] == "deprecated" and e["name"].startswith("skills_kit_lib.audit.")}
     assert named == listed, (named - listed, listed - named)
+
+
+def test_every_name_lane_models_deprecates_is_listed():
+    """Derived from the code: each lane_models shim names itself in _deprecated()."""
+    from skills_kit_lib import lane_models
+
+    tree = ast.parse(Path(lane_models.__file__).read_text(encoding="utf-8"))
+    named = {node.args[0].value for node in ast.walk(tree)
+             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_deprecated"
+             and node.args and isinstance(node.args[0], ast.Constant)}
+    listed = {e["name"].removeprefix("skills_kit_lib.lane_models.") for e in ENTRIES
+              if e["status"] == "deprecated" and e["name"].startswith("skills_kit_lib.lane_models.")}
+    assert named == listed == {"agent_route", "agent_routes"}

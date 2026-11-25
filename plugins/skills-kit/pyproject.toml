@@ -1,8 +1,18 @@
 [project]
 name = "skills-kit"
-version = "0.98.11"
+version = "0.98.12"
 requires-python = ">=3.12"
-dependencies = ["pyyaml", "katsoft-contracts>=1.0,<2"]
+# llm_kit is NOT linked: it is the katsoft-llm-kit package, installed into this
+# venv. The md-domain lane route (skills_kit_lib.lane_models.lane_route) ranks with
+# its describe(), whose user model overrides (disabled, reset_mode) first ship in
+# 1.46.0, and the md-lane bridge (skills_kit_lib.lane_bridge) drives codex through
+# its Reselector, backend factory and codex adapter. [config] adds the PyYAML its
+# registry discovery reads model config with.
+dependencies = [
+    "pyyaml",
+    "katsoft-llm-kit[config]>=1.46.0,<2",
+    "katsoft-contracts>=1.0,<2",
+]
 
 [build-system]
 requires = ["setuptools>=64"]

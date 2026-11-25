@@ -11,6 +11,7 @@ shared_lib_imports at all before this change.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -25,28 +26,32 @@ def test_skills_kit_bootstrap_lib_is_a_declared_shared_lib_import() -> None:
     )
 
 
-def test_requires_bootstrap_covers_the_skill_material_call() -> None:
-    """The floor is the HIGHEST bootstrap call shape skills-kit makes, not what
-    happens to import: skills_kit_lib.material binds
-    bootstrap_lib.skill_material's parse_frontmatter_strict,
-    SkillSelection.from_json, materialize and SkillMaterialReport.to_json.
-    SKILL_MATERIAL_BOOTSTRAP is skills-kit's only bootstrap version constant,
-    so the manifest equals it."""
-    from skills_kit_lib import material
+def _version(text: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in text.split("."))
+
+
+def test_requires_bootstrap_covers_every_floor_skills_kit_needs() -> None:
+    """The floor is the HIGHEST of what skills-kit needs: the bootstrap_lib CALL
+    shapes it makes (skills_kit_lib.material binds bootstrap_lib.skill_material,
+    SKILL_MATERIAL_BOOTSTRAP) and the katsoft-llm-kit package handling every
+    consumer of that package requires (lane_models.LLM_KIT_PACKAGE_BOOTSTRAP)."""
+    from skills_kit_lib import lane_models, material
 
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    assert manifest.get("requires_bootstrap") == material.SKILL_MATERIAL_BOOTSTRAP
+    floors = [material.SKILL_MATERIAL_BOOTSTRAP, lane_models.LLM_KIT_PACKAGE_BOOTSTRAP]
+    assert manifest.get("requires_bootstrap") == max(floors, key=_version)
 
 
-def test_skill_material_floor_is_pinned_literally() -> None:
-    """The skill-material floor is the literal 0.138.0, asserted for the
-    constant and the manifest apart, so moving both back together cannot stay
-    green (the test above derives its floor from the constant)."""
-    from skills_kit_lib import material
+def test_bootstrap_floors_are_pinned_literally() -> None:
+    """Each floor is asserted as a literal, apart from the derived check above,
+    so moving a constant and the manifest back together cannot stay green.
+    Red: set requires_bootstrap back to 0.138.0 (the skill-material floor alone)."""
+    from skills_kit_lib import lane_models, material
 
     assert material.SKILL_MATERIAL_BOOTSTRAP == "0.138.0"
+    assert lane_models.LLM_KIT_PACKAGE_BOOTSTRAP == "0.160.0"
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    assert manifest.get("requires_bootstrap") == "0.138.0"
+    assert manifest.get("requires_bootstrap") == "0.160.0"
 
 
 def _imports_llm_kit(path: Path) -> bool:
@@ -61,18 +66,38 @@ def _imports_llm_kit(path: Path) -> bool:
     return False
 
 
-def test_llm_kit_is_not_linked_because_no_skills_kit_python_imports_it() -> None:
-    """The link was vestigial: skills-kit reaches llm-kit only through the `llm-kit` launcher on PATH and the
-    job files it emits. Red: add `import llm_kit` to any skills-kit .py (the link is then needed, and it must
-    arrive as a declared package), or put `llm_kit` back in `shared_lib_imports`."""
+def test_llm_kit_arrives_as_the_declared_package_never_as_a_shared_lib_link() -> None:
+    """The md-domain lane route (lane_models.lane_route, llm-kit describe) and the
+    md-lane bridge (lane_bridge.run_lane) import llm_kit, so the plugin venv needs
+    it, as the katsoft-llm-kit package whose describe() applies the user's model
+    overrides. Red: put `llm_kit` back in `shared_lib_imports`, import llm_kit
+    from another module, drop it from check_imports, or declare a floor below
+    lane_models.LLM_KIT_OVERRIDES_VERSION."""
+    import tomllib
+
+    from skills_kit_lib.lane_models import LLM_KIT_OVERRIDES_VERSION
+
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     assert "llm_kit" not in manifest.get("shared_lib_imports", [])
-    offenders = [
+    assert "llm_kit" in manifest["venv"]["check_imports"]
+    importers = sorted(
         str(path.relative_to(REPO_ROOT))
         for path in (REPO_ROOT / "plugins" / "skills-kit").rglob("*.py")
         if ".venv" not in path.parts and "__pycache__" not in path.parts and _imports_llm_kit(path)
+    )
+    assert importers == [
+        "plugins/skills-kit/skills_kit_lib/lane_bridge.py",
+        "plugins/skills-kit/skills_kit_lib/lane_models.py",
     ]
-    assert offenders == []
+    pyproject = tomllib.loads((MANIFEST.parent / "pyproject.toml").read_text(encoding="utf-8"))
+    floors = [
+        re.search(r">=\s*([0-9.]+)", dep).group(1)
+        for dep in pyproject["project"]["dependencies"]
+        if re.match(r"katsoft-llm-kit\b", dep) and re.search(r">=\s*([0-9.]+)", dep)
+    ]
+    assert floors, "pyproject.toml declares no katsoft-llm-kit requirement with a >= floor"
+    as_tuple = lambda v: tuple(int(x) for x in v.split("."))  # noqa: E731
+    assert as_tuple(floors[0]) >= as_tuple(LLM_KIT_OVERRIDES_VERSION), floors
 
 
 def test_katsoft_contracts_is_declared_because_bootstrap_lib_is_linked() -> None:

@@ -218,17 +218,21 @@ unconfigurable opinion whose test passes is a finding.
   transient failure from a confirmed outage; never excluding would repeatedly spend later
   jobs probing that outage.
 
-- **A validator runs on an Agent entry only; the lane tool has no validator route.** A
-  review profile's validator reason is an ordered list of `{id, effort}` entries, the same
-  as a reviewer's, and may name llm-kit endpoint entries. The lane tool
-  (`run_review_lane` / `llm_kit.dispatch.review_lane`) has no validator prompt, no
-  per-issue input and no verdict contract, so the skill drops a non-Agent validator entry
-  at dispatch, discloses the drop in one route line, and runs the next Agent entry. A
-  validator with no Agent entry fails loudly when the profile resolves. Shipped validators
-  therefore name no endpoint entry. `validator` is absent from `ENDPOINT_ELIGIBLE_LANES`
-  (`bootstrap_lib.code_review.lane_prompts`) because the route is missing, not because of a
-  quality stance: the owner decided on 2026-10-02 that sonnet is not better than luna.
-  Widening the route is a plugin change.
+- **A codex validator runs only on a codex harness entry, read-only with network off.** A
+  review profile's validator reason is an ordered list of `{id, effort}` entries, routed like a
+  reviewer's through `llm-kit models describe --caller session`, one-entry lists included. A
+  `claude` entry runs as an Agent validator; a `codex` entry runs through each kit's
+  `scripts/run_validator_lane.py` (`bootstrap_lib.code_review.validator_lane`), which sends
+  llm-kit's protocol-1 completion request with `extras.sandbox: read-only`,
+  `extras.network: false` and a strict `{verdict, reason}` output contract. Any other entry
+  (opencode, a transport) is not a validator route, and the tool refuses an entry that does not
+  resolve to the codex backend. A team could reasonably want a validator on another harness;
+  we refuse it because the codex adapter is the one that honours the sandbox extras, and a
+  validator reads the repository, so another harness would run it without a read-only
+  guarantee. That team names a claude or codex entry instead. The number of codex validators
+  at once is configurable (`codex_validator_concurrency`, default 4). `validator` stays absent
+  from `ENDPOINT_ELIGIBLE_LANES` (`bootstrap_lib.code_review.lane_prompts`) because that set is
+  the reviewer runner's, which has no validator contract.
 - **An unexplained lane failure re-selects through `describe`, and every re-selection is
   disclosed.** A reviewer declaration may cover more than one entry; when a launch
   failure is not explained by the entry-harness rule, the lane re-runs `llm-kit models
@@ -607,7 +611,7 @@ optional-dependency section above defers to it.
 | workflow-kit | `llm_kit.dispatch.declaration` (`run`, `RunRequest`, `NoUsableRoutingTarget`), `llm_kit.dispatch.factory.create_transport_backend`, `llm_kit.completion.types.BackendOptions`, and `llm_kit.registry.models.default_declaration` (via `scripts/openrouter_run.py`), where `llm_kit` is the `katsoft-llm-kit` package in workflow-kit's venv and `shared_lib_imports` names `bootstrap_lib` only; `llm_kit.completion.contract` (`OutputContract`) and `llm_kit.schema.json_schema` for typed artifacts (via `workflow_kit_lib/contracts.py` at compile time, lazily and only for a schema artifact, and `scripts/check_artifact.py` and `scripts/openrouter_run.py --provides` at run time); every `model:` declaration is validated with `bootstrap_lib.model_declaration` (via `workflow_kit_lib/declarations.py`), not llm-kit | The `openrouter` node strategy: one non-Claude call per workflow node over a declaration of transport entries, reporting the typed floor; agent-step routing of Claude core ids at compile time; typed node artifacts (compile-time `provides`/`requires` checks with compatibility by `schema_digest` equality, and the per-execution verdict file) | Yes |
 | awesome-kit (orchestrate) | `llm_kit.registry.models.discover_model_entries`, `llm_kit.dispatch.declaration.describe(caller="session")`, `llm_kit.registry.consent.policy` (scope `orchestrate`) and, for codex entries, `llm_kit.adapters.harness_auth.probe_harness_auth` (lazy/optional, via `orchestration_guidance.py` and `dispatch.py`) | Each routing row ranked by `describe(caller="session")` with the `orchestrate` consent policy applied and passed through verbatim (no local ranking; a disallowed entry is shown UNUSABLE with the library's command); native Agent-tool entries are classified from the session environment, not probed; `dispatch.py` resolves `--model` through `discover_model_entries` and prints an absent diagnostic when `llm_kit` (the `katsoft-llm-kit` package in awesome-kit's venv) is not importable | Yes |
 | bootstrap | none directly -- `bootstrap_lib.code_review.review_profiles` and `bootstrap_lib.model_declaration` are stdlib-only and import no llm_kit module | Shape validation of reviewer `model` priority lists (ordered registry ids); ranking and dispatch live in llm-kit and the code-review kits (see the git-kit, p4-kit row) | Yes |
-| git-kit, p4-kit | `llm_kit.dispatch.review_lane.main` via each kit's thin `scripts/run_review_lane.py` wrapper | The code-review skills rank each reviewer declaration through the `llm-kit models describe` CLI (session caller) and dispatch by entry harness; bootstrap setup and an absent diagnostic for `llm_kit` live here (`llm_kit` is the pinned `katsoft-llm-kit` package in each kit's venv, so no version probe runs), and the lane's prompt lives in `bootstrap_lib.code_review.lane_prompts` and its guards in `llm_kit.dispatch.review_lane` | Yes |
+| git-kit, p4-kit | `llm_kit.dispatch.review_lane.main` via each kit's thin `scripts/run_review_lane.py` wrapper; the `llm-kit completion complete --request-file -` CLI (protocol 1) via `scripts/run_validator_lane.py` and `bootstrap_lib.code_review.validator_lane`, for a codex validator | The code-review skills rank each reviewer and validator declaration through the `llm-kit models describe` CLI (session caller) and dispatch by entry harness; bootstrap setup and an absent diagnostic for `llm_kit` live here (`llm_kit` is the pinned `katsoft-llm-kit` package in each kit's venv, so no version probe runs), and the lane's prompt lives in `bootstrap_lib.code_review.lane_prompts` and its guards in `llm_kit.dispatch.review_lane` | Yes |
 | task-kit | `llm_kit.dispatch.declaration.run(allow=)`, `llm_kit.registry.consent.policy` and `llm_kit.registry.cost.classify` (lazy/optional, via `task_system/answer_chain.py`; the answers engine behind `task-kit answers` and the review verb) | The question catalog, the two-phase allow sets (local first, then the llm-kit consent layer or `--allow`), answer validation and the answer files; when `llm_kit` (the `katsoft-llm-kit` package in the plugin venv) is not importable, model answering refuses with an actionable diagnostic and every other verb works | Yes |
 | skills-kit | none directly -- consumes `bootstrap_lib.skill_material` through `skills_kit_lib/material.py` | Skill-material reading for audits; no `llm_kit` link (`shared_lib_imports` is `bootstrap_lib` only) | Yes |
 | yaml-data-editor-kit | `llm_kit.pipeline` (`core.workunit`, `execution`, `runtime.backends`, `runtime.platform`, `artifacts`) and `llm_kit.cli.run.build_commands` | The editor's dispatch planner, not the completion transport | No (`published: false`) |

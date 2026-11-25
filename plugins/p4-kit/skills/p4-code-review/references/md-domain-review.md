@@ -152,7 +152,8 @@ On exit 0, parse stdout as `{ disabled, thresholds, standards, audit, lane_model
 - `disabledCriteria` = `disabled`, passed at the top level of EVERY lane args object below --
   including the empty list.
 - `laneModels` = `lane_models.detect`, passed as `{ run, dropped }` at the top level of EVERY lane
-  args object below. `run` is the ordered list of `{id, effort}` entries agent() and Agent can run;
+  args object below. `run` is the ordered list of `{id, effort, route}` entries this review can run (`route` is
+  `agent` or `codex`; step 3 of "Manual detect invocation" below dispatches by it);
   `dropped` lists each declared entry they cannot run, with its reason. A drop is configured
   behaviour, not an error: the step-9 disclosure line reports it. Every detect lane throws without
   `laneModels`, and no lane inherits the session model.
@@ -249,18 +250,33 @@ The installed script remains the source of the prompt and result contract.
    `FILE_FINDINGS_SCHEMA`; say so in the step-9 disclosure. `node` missing, or a helper that exits
    non-zero, REFUSES: that file is `REVIEW INCOMPLETE`; never write the prompt from memory or
    from a paraphrase.
-3. For each file, take `laneModels.run[0]` and invoke Agent with
-   `subagent_type: p4-kit:review-lane-<effort>` and `model: <id>`, from that entry's `effort` and
-   `id`. The Agent tool has no effort argument; the subtype's `effort` frontmatter binds effort.
-   Set `prompt` to that file's `dispatchPrompt` verbatim, or, when the prompts were written with
-   `--out-dir`, to one line telling the lane to read its `promptFile` and follow it as its complete
-   instructions. Preserve all prompt instructions, standards, ancestor context, and attribution input.
+3. For each file, take `laneModels.run[0]` and dispatch it by its `route`. An entry whose
+   `route` is `agent` (or that carries no `route`, from a skills-kit that predates it) invokes
+   Agent with `subagent_type: p4-kit:review-lane-<effort>` and `model: <id>`, from that entry's
+   `effort` and `id`. The Agent tool has no effort argument; the subtype's `effort` frontmatter
+   binds effort. Set `prompt` to that file's `dispatchPrompt` verbatim, or, when the prompts were
+   written with `--out-dir`, to one line telling the lane to read its `promptFile` and follow it
+   as its complete instructions. Preserve all prompt instructions, standards, ancestor context,
+   and attribution input.
+   An entry whose `route` is `codex` does not go to the Agent tool. It needs the prompts written
+   with `--out-dir`; run, as a Bash call,
+
+   ```bash
+   "<venvPython>" "<root>/scripts/run_lane.py" --input-file <laneInputFile> --entry <id> --effort <effort>
+   ```
+
+   with that file's `laneInputFile` and the entry's `id` and `effort`. It runs the lane on codex
+   read-only with network off and prints one JSON status line. A non-zero exit or `"ok": false`
+   is a failed dispatch; otherwise take the `result` object of its `"ok": true` status line as the
+   lane's response. A missing `laneInputFile` (a `lane-prompt.cjs` that predates it) or a missing
+   `run_lane.py` makes that entry a failed dispatch, never an Agent call on its id.
+   Agent and Bash dispatches go out in the same message.
    If the dispatch fails or returns no schema-valid object, announce it in one line
    (`md-domain lane failover: <file> - <id> (<effort>) failed: <reason>; running <next id> (<next effort>)`)
-   and dispatch the same prompt with the next `run` entry. Use only `run` entries, in order; never
-   a `dropped` entry and never a model the route does not name. Record the entry each file used
-   for the step-9 disclosure line.
-4. Parse each Agent response as JSON and validate it against the installed `FILE_FINDINGS_SCHEMA`
+   and dispatch the same prompt with the next `run` entry, by that entry's own `route`. Use only
+   `run` entries, in order; never a `dropped` entry and never a model the route does not name.
+   Record the entry each file used for the step-9 disclosure line.
+4. Parse each Agent response (or each codex `result`) as JSON and validate it against the installed `FILE_FINDINGS_SCHEMA`
    before running the reducer. Require one schema-valid result for every requested file.
    Missing or invalid results mean REVIEW INCOMPLETE; never substitute empty findings or DIFF-CLEAN.
    For valid results, retain the input path and mechanical scan as the script does. Apply the same
@@ -271,7 +287,7 @@ Transport failure never authorizes a generic-review fallback, a model or effort 
 `laneModels.run`, or a change to the lane's schema or criteria. Keep the claimed files assigned to their existing specialist lanes.
 
 Use the native Workflow result for any lane group that already completed; invoke only outstanding
-groups manually. If Agent is unavailable, every `run` entry fails for a file, or any result
+groups manually. If no `run` entry can be dispatched, every `run` entry fails for a file, or any result
 is missing or invalid, report `REVIEW INCOMPLETE: <file> - <invocation or validation failure>` for
 each affected file. Incomplete coverage cannot satisfy a submit gate.
 

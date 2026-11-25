@@ -39,7 +39,9 @@ LANE_SCRIPT = {
 }
 
 #: Names a lane script reads from args that the caller may leave out.
-OPTIONAL_ARGS = {"maxConcurrent", "mechanicalCheckPhrases"}
+# codexMaxConcurrent and projectRoot are optional lane-route args (the codex cap
+# and the codex sandbox root); a lane runs without them.
+OPTIONAL_ARGS = {"maxConcurrent", "mechanicalCheckPhrases", "codexMaxConcurrent", "projectRoot"}
 
 
 def _write(path: Path, text: str = "") -> Path:

@@ -38,6 +38,7 @@ target), mirroring tests/skills-kit/test_workflow_js_drift.py.
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -52,6 +53,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # forgot to regenerate" into a suite failure.
 sys.path.insert(0, str(REPO_ROOT / "plugins" / "bootstrap"))
 from bootstrap_lib.code_review import lane_prompts  # noqa: E402
+from bootstrap_lib.code_review import validator_lane  # noqa: E402
 from bootstrap_lib.code_review.review_profiles import EFFORT_LEVELS  # noqa: E402
 from bootstrap_lib.env_var_check import plugin_root_env_var_name  # noqa: E402
 from bootstrap_lib.interpreter_env import PLUGIN_CALL_SITE_EXPR  # noqa: E402
@@ -109,12 +111,14 @@ PREPARE_LAUNCHER_YAML = {v: "'" + PREPARE_LAUNCHER[v] + "'" for v in _KIT_BY_VCS
 # They are only ever rendered mid-line (prose, a table cell, a code block, or a
 # `tool:` value that starts with other text), so they need no YAML wrapping.
 LANE_LAUNCHER = {v: _launcher(v, "run_review_lane.py") for v in _KIT_BY_VCS}
+VALIDATOR_LAUNCHER = {v: _launcher(v, "run_validator_lane.py") for v in _KIT_BY_VCS}
 PARSE_LAUNCHER = {v: _launcher(v, "parse_review_lane.py") for v in _KIT_BY_VCS}
 RENDER_LAUNCHER = {v: _launcher(v, "render_review_profiles.py") for v in _KIT_BY_VCS}
 # SKILL.md variants of the four launchers above (same scripts, harness-substituted root).
 PREPARE_LAUNCHER_SKILL = {v: _launcher(v, "prepare_review.py", "skill") for v in _KIT_BY_VCS}
 PREPARE_LAUNCHER_YAML_SKILL = {v: "'" + PREPARE_LAUNCHER_SKILL[v] + "'" for v in _KIT_BY_VCS}
 LANE_LAUNCHER_SKILL = {v: _launcher(v, "run_review_lane.py", "skill") for v in _KIT_BY_VCS}
+VALIDATOR_LAUNCHER_SKILL = {v: _launcher(v, "run_validator_lane.py", "skill") for v in _KIT_BY_VCS}
 PARSE_LAUNCHER_SKILL = {v: _launcher(v, "parse_review_lane.py", "skill") for v in _KIT_BY_VCS}
 RENDER_LAUNCHER_SKILL = {v: _launcher(v, "render_review_profiles.py", "skill") for v in _KIT_BY_VCS}
 # The snapshot lifecycle CLI each kit's background-review technique drives.
@@ -639,7 +643,7 @@ PROFILE_GOTCHAS = """
         - See references/configuration.md for the layer precedence, merge rules (profiles/reviewers merge by id/name; validator_models and other mappings deep-merge; `disabled: true` removes a record; plain lists like `data_only_extensions`, a reviewer's `model` entry list, and a validator reason's entry list replace), the shipped default table, what a declaration entry may name, how a multi-entry declaration is routed, which lanes may take an endpoint entry, and what happens when a lane fails.
         - A reviewer's `model` is a model DECLARATION -- an ordered list of `{id, effort}` entries. Each entry is dispatched by its harness under step 6's entry-harness rule, at that entry's own effort -- a `claude` entry launches the `@KIT@:review-lane-<effort>` agent with its `id` as the model, any other entry runs through @LANE_TOOL@ with `--model <id> --effort <effort>`.
         - Apply references/configuration.md's pre-dispatch launch-correction rule before classifying a failed invocation.
-        - Every model entry, reviewer and validator alike, states its own `effort` (`low`, `medium`, `high`, `xhigh`, `max`); the renderer refuses a table in which any entry does not, so an entry's stated effort is the only effort it runs at. For an Agent entry, effort selects the DISPATCH TARGET, not a parameter -- the Agent tool has no effort argument, so the entry goes to the `@KIT@:review-lane-<effort>` agent, whose frontmatter sets it. For a lane-tool entry it is the `--effort` argument. Do not attempt to pass effort as an Agent argument, and do not read an entry's effort off the agent's page -- the RESOLVED table is the authority.
+        - Every model entry, reviewer and validator alike, states its own `effort` (`low`, `medium`, `high`, `xhigh`, `max`); the renderer refuses a table in which any entry does not, so an entry's stated effort is the only effort it runs at. For an Agent entry, effort selects the DISPATCH TARGET, not a parameter -- the Agent tool has no effort argument, so the entry goes to the `@KIT@:review-lane-<effort>` agent, whose frontmatter sets it. For a lane-tool entry, and a validator's codex entry, it is the `--effort` argument. Do not attempt to pass effort as an Agent argument, and do not read an entry's effort off the agent's page -- the RESOLVED table is the authority.
         - Effort and model are independent and BOTH are honoured: the entry's `id` goes at the CALL SITE as `model`, where it overrides whatever the effort agent's own frontmatter would imply. Never move a lane to a different model to obtain an effort level, and never move it to a different effort to obtain a model. A re-selected entry runs at its own stated effort."""
 
 
@@ -890,26 +894,63 @@ full_review_reference:
           expected: JSON arrays of candidate issues from each launched reviewer (one array per (reviewer, chunk) lane), plus a recorded failure for any lane that exited non-zero.
         - n: 7
           action: |
-            Launch one validator subagent per candidate issue, all in parallel via a single message.
+            Launch one validator per candidate issue, all in parallel via a single message.
             The selected profile's `validator_models[reason]` (from the RESOLVED table fetched in
             step 0) is an ordered list of one or more `{id, effort}` entries, chosen per issue by
-            its reason. Read it in declared order.
-            - Dispatch the first Agent entry. An Agent entry's `id` is one of `sonnet`, `opus`,
-              `haiku`, `fable`: launch an Agent with `subagent_type: @KIT@:review-lane-<entry effort>`
-              and `model: <id>`, using that entry's own stated effort, and give it the `validator`
-              subagent definition below with the issue.
-            - Drop every non-Agent entry ahead of it. The lane tool has no validator route: it has
-              no validator prompt, input or verdict contract, so the runner refuses a validator lane
-              and exits 2. Never send a validator to it. Announce the drop with ONE line per reason
-              per run: `route: validator <reason> -> <id> <effort>; <dropped id> dropped: no
-              lane-tool route for validators`, where `<id> <effort>` is the Agent entry dispatched.
-            - If an Agent dispatch fails, move to the next Agent entry at that entry's own effort,
-              at most once per entry, announced as `route: validator issue <n> -> <id>; <prior>
-              failed: <kind>`.
+            its reason. An entry's effort is the `effort` stated beside its `id`; use it as stated.
+            - Route EVERY reason the issues carry, a one-entry list included, through the same
+              `llm-kit models describe <entry>... --caller session` command step 6 runs, with each
+              entry's `id` in declared order, plus `--project-root <bundle.project_root>` when the
+              bundle has one, plus `--self <id>` when one declared entry is the model you are
+              running on. Never pass `--dispatchable transport`: a transport entry is not a
+              validator route. Run every such describe before the validator wave, in one message,
+              print each stdout verbatim, choose one usable entry per reason as its printed rule
+              says, and announce it once per reason as
+              `route: validator <reason> -> <id> <effort>; <clause>`, where `<clause>` is a reason
+              the printed rule allows.
+            - When describe exits 1, no entry is usable for that reason: report every issue of
+              that reason under `## Lane failures` as unvalidated, with describe's itemised
+              stderr. When llm-kit or `models describe` is unavailable (the step-6 no-menu case),
+              take the reason's `sonnet`, `opus`, `haiku` and `fable` entries in declared order
+              and skip every other entry without comment.
+            - Entry-harness rule for validators: an entry whose describe line reads
+              `claude/agent` -- or, on the no-menu route, whose id is one of `sonnet`, `opus`,
+              `haiku`, `fable` -- launches an Agent with
+              `subagent_type: @KIT@:review-lane-<entry effort>` and `model: <id>`, and gives it
+              the `validator` subagent definition below with the issue. An entry whose line
+              reads `codex` runs as a parallel Bash call to @VALIDATOR_TOOL@ with `--issue <file>`
+              (the issue object written verbatim to a distinct temporary file under
+              `bundle.bundle_dir`), `--bundle <bundle.bundle_dir>/bundle.json`, `--chunk-index <i>`
+              (the index of the chunk whose reviewer lane reported the issue), `--model <id>` and
+              `--effort <entry effort>`. It runs codex read-only with network off, from the
+              bundle's project root, and prints the same one line an Agent validator returns.
+              Any other entry is not a validator route: choose another usable entry and say
+              nothing about it. Agent and Bash validators go out in the same message.
+            - At most `codex_validator_concurrency` (from the RESOLVED table) codex validators
+              run at once. Give each issue past that bound the next usable entry in the printed
+              menu that is not a codex entry, announced as
+              `route: validator issue <n> -> <id> <effort>; codex concurrency <N> reached`. When
+              the menu has none, run that issue in a later wave, once a codex validator finishes.
+            - A verdict is exactly one line that starts `CONFIRMED:` or `REJECTED:`. Any other
+              answer from an Agent validator, and exit 4 from the validator tool, is a MALFORMED
+              answer: the issue stays UNVALIDATED. Report it under `## Lane failures`; never
+              treat it as rejected, and do not re-select past it.
+            - Exit 2 from the validator tool is a REFUSAL: an entry that is not a codex entry, an
+              unreadable issue or bundle, a call that ran without the read-only sandbox, or a
+              plugin venv that has no katsoft-llm-kit package installed yet. Report it under
+              `## Lane failures` with its stderr verbatim; the issue is unvalidated. Do not
+              re-select past it.
+            - Exit 3 is a quota or credit halt: run the `record-halt` command the printed
+              `Re-select:` line names for that entry, then re-select as below.
+            - Exit 1, or an Agent dispatch failure, follows the printed `Re-select:` line: run
+              describe again with the same arguments plus one `--exclude <entry>` per entry that
+              issue has already failed on, print its stdout verbatim, choose, and announce
+              `route: validator issue <n> -> <id>; <prior> failed: <kind>`. Each entry runs at
+              most once per issue, at its own effort.
             - If no entry is left, report the issue under `## Lane failures` as unvalidated,
               neither confirmed nor dropped.
-          tool: Agent
-          expected: CONFIRMED or REJECTED per issue.
+          tool: Bash (the llm-kit venv CLI, `models describe`, and @VALIDATOR_TOOL@ for a codex entry) + Agent
+          expected: CONFIRMED or REJECTED per issue, or an issue reported as unvalidated.
         - n: 8
           action: Drop rejected issues from the findings. Do not detail them, but state the count in one line ("N candidate issues did not survive validation") so the user can ask rather than being told nothing.
         - n: 9
@@ -918,7 +959,8 @@ full_review_reference:
             - Report each corrected launch's original stderr, no-dispatch evidence,
               correction, and final outcome in a `## Launch corrections` section.
               Only a completed, schema-valid reviewer result restores that lane's coverage.
-            - A validator issue left with no usable entry is listed there as unvalidated.
+            - Every validator issue step 7 left unvalidated is listed under `## Lane failures`
+              as unvalidated, with the reason (no usable entry, a refusal, or a malformed answer).
             - When any lane FAILED (including an unsuccessful launch correction
               or a lane refused as a configuration error), prepend a `## Lane failures`
               section naming each failed lane, the model entry and effort it was configured with,
@@ -1060,10 +1102,13 @@ full_review_reference:
       scope: confirm or reject one candidate issue with high confidence
       input: "the issue (JSON), the chunk diff, [if claude_md: relevant CLAUDE.md contents]"
       output_format: "exactly one line: 'CONFIRMED: <one-sentence reason>' or 'REJECTED: <one-sentence reason>'"
+      codex_note: |
+        A `codex` entry runs this validator through the step-7 validator tool instead of an
+        Agent. The tool sends these same restrictions, the issue, its chunk diff and, for a
+        claude_md issue, the governing CLAUDE.md text, under a strict
+        `{verdict, reason}` output contract, and prints the same one line.
       restrictions:
-        - "Validator does not see who flagged the issue. Independence is the value."
-        - "Read the chunk diff, and each supplied CLAUDE.md, in full: when Read returns a partial view, continue with the offset it names until the last line. Never judge from a partial page. Do not Read other chunks."
-        - "For a silenced-error issue (an input the change newly admits that a consumer ignores), MAY Read the consumer the description names. CONFIRMED when no consumer acts on the admitted input; it is not an input-dependent issue."
+@VALIDATOR_RESTRICTIONS@
   false_positive_guardrails:
     only_flag:
       - "code that will fail to compile or parse (syntax errors, type errors, missing imports, unresolved references)"
@@ -1604,8 +1649,8 @@ GIT_CHECKLIST = f"""\
         - Submit gates discharged by the agent (if any), each with a MET / NOT APPLICABLE / NOT MET / NEEDS THE USER verdict and its evidence
         - Executable review-profile table resolved via render_review_profiles.py FIRST (step 0, before prepare_review.py and before any question to the user); a non-zero exit stopped the review with its stderr printed verbatim; profile selected from the resolved table using review_profiles guidance
         - Reviewers launched in parallel (single message, R {X} K Agent calls -- one per (reviewer {X} chunk) pair, where K = len(bundle.diff_chunks))
-        - Validators launched in parallel (single message, N Agent calls), each the first Agent entry of the profile's validator_models list at its own effort; a non-Agent entry dropped with one `route: validator` line per reason; an issue with no Agent entry left reported as unvalidated under `## Lane failures`
-        - Every reviewer and validator entry dispatched at its own stated effort -- an Agent entry as `@KIT@:review-lane-<effort>` with its `id` as the model, a lane-tool entry with `--effort <effort>`; a re-selected entry at its own effort; a runner refusal (exit 2) reported under `## Lane failures`, not re-selected past
+        - Validators launched in parallel (single message, N calls), every reason routed through `llm-kit models describe` (one-entry lists included) with one `route: validator` line per reason; a `claude/agent` entry as an Agent, a `codex` entry through run_validator_lane.py, at most `codex_validator_concurrency` codex validators at once with overflow on the next non-codex entry; a malformed answer, a refusal, or an issue with no entry left reported as unvalidated under `## Lane failures`, never as rejected
+        - Every reviewer and validator entry dispatched at its own stated effort -- an Agent entry as `@KIT@:review-lane-<effort>` with its `id` as the model, a lane-tool entry or a validator's codex entry with `--effort <effort>`; a re-selected entry at its own effort; a runner refusal (exit 2) reported under `## Lane failures`, not re-selected past
         - Filtered to confirmed-only
         - Launch rationale line emitted once (file-type-driven; md_trivial variant when the change is all-mechanical)
         - Every multi-entry reviewer declaration routed through `llm-kit models describe` (stdout printed verbatim, choice announced as a `route:` line) or, without describe, through its core entries; a FAILED lane re-selected per the printed `Re-select:` line, each entry at most once; every `route:` line carried into the `## Lane routes` section; a lane with no usable entry left still reports a `## Lane failures` entry with coverage missing
@@ -1626,8 +1671,8 @@ P4_CHECKLIST = f"""\
         - Submit gates discharged by the agent (if any), each with a MET / NOT APPLICABLE / NOT MET / NEEDS THE USER verdict and its evidence
         - Executable review-profile table resolved via render_review_profiles.py FIRST (step 0, before prepare_review.py and before any question to the user); a non-zero exit stopped the review with its stderr printed verbatim; profile selected from the resolved table using review_profiles guidance
         - Reviewers launched in parallel (single message, R {X} K Agent calls -- one per (reviewer {X} chunk) pair, where K = len(bundle.diff_chunks))
-        - Validators launched in parallel (single message, N Agent calls), each the first Agent entry of the profile's validator_models list at its own effort; a non-Agent entry dropped with one `route: validator` line per reason; an issue with no Agent entry left reported as unvalidated under `## Lane failures`
-        - Every reviewer and validator entry dispatched at its own stated effort -- an Agent entry as `@KIT@:review-lane-<effort>` with its `id` as the model, a lane-tool entry with `--effort <effort>`; a re-selected entry at its own effort; a runner refusal (exit 2) reported under `## Lane failures`, not re-selected past
+        - Validators launched in parallel (single message, N calls), every reason routed through `llm-kit models describe` (one-entry lists included) with one `route: validator` line per reason; a `claude/agent` entry as an Agent, a `codex` entry through run_validator_lane.py, at most `codex_validator_concurrency` codex validators at once with overflow on the next non-codex entry; a malformed answer, a refusal, or an issue with no entry left reported as unvalidated under `## Lane failures`, never as rejected
+        - Every reviewer and validator entry dispatched at its own stated effort -- an Agent entry as `@KIT@:review-lane-<effort>` with its `id` as the model, a lane-tool entry or a validator's codex entry with `--effort <effort>`; a re-selected entry at its own effort; a runner refusal (exit 2) reported under `## Lane failures`, not re-selected past
         - Filtered to confirmed-only
         - Launch rationale line emitted once (file-type-driven; md_trivial variant when the change is all-mechanical)
         - Every multi-entry reviewer declaration routed through `llm-kit models describe` (stdout printed verbatim, choice announced as a `route:` line) or, without describe, through its core entries; a FAILED lane re-selected per the printed `Re-select:` line, each entry at most once; every `route:` line carried into the `## Lane routes` section; a lane with no usable entry left still reports a `## Lane failures` entry with coverage missing
@@ -1647,7 +1692,7 @@ GATE_GOTCHAS = """
 
 GIT_GOTCHAS = f"""\
         - Always quote the exact CLAUDE.md rule text when flagging a claude_md issue. If you cannot quote it verbatim, do not flag it.
-        - Sequential reviewer or validator calls waste time. Reviewers run in one message with one concurrent Agent call per (reviewer {X} chunk) pair (R reviewers {X} K chunks). Validators run in one message with N concurrent Agent calls.
+        - Sequential reviewer or validator calls waste time. Reviewers run in one message with one concurrent Agent call per (reviewer {X} chunk) pair (R reviewers {X} K chunks). Validators run in one message with N concurrent calls (an Agent call, or a Bash call to run_validator_lane.py for a codex entry).
         - Each reviewer subagent reads ONE chunk path, not the whole diff. Do not pass `bundle_dir` and expect the subagent to glob -- pass the absolute chunk path the subagent should Read.
         - The rendered review stays in chat. This skill does not post a PR comment. prepare_review.py writes transient diff chunks, bundle.json, and pre-images under bundle.bundle_dir. ledger.py writes a durable ledger.json.
         - If prepare_review.py fails, report the error and stop. No retry.
@@ -1661,7 +1706,7 @@ GIT_GOTCHAS = f"""\
 
 P4_GOTCHAS = f"""\
         - Always quote the exact CLAUDE.md rule text when flagging a claude_md issue. If you cannot quote it verbatim, do not flag it.
-        - Sequential reviewer or validator calls waste time. Reviewers run in one message with one concurrent Agent call per (reviewer {X} chunk) pair (R reviewers {X} K chunks). Validators run in one message with N concurrent Agent calls.
+        - Sequential reviewer or validator calls waste time. Reviewers run in one message with one concurrent Agent call per (reviewer {X} chunk) pair (R reviewers {X} K chunks). Validators run in one message with N concurrent calls (an Agent call, or a Bash call to run_validator_lane.py for a codex entry).
         - Each reviewer subagent reads ONE chunk path, not the whole diff. Do not pass `bundle_dir` and expect the subagent to glob -- pass the absolute chunk path the subagent should Read.
         - The rendered review stays in chat. This skill does not post a Swarm or PR comment. prepare_review.py writes transient diff chunks, bundle.json, and pre-images under bundle.bundle_dir. ledger.py writes a durable ledger.json.
         - If prepare_review.py fails, report the error and stop. No retry.
@@ -1889,6 +1934,7 @@ FRAGMENTS = {
         "OUTPUT_FORMAT": GIT_OUTPUT_FORMAT,
         "PREPARE_TOOL": PREPARE_LAUNCHER_YAML_SKILL["git"],
         "LANE_TOOL": LANE_LAUNCHER_SKILL["git"],
+        "VALIDATOR_TOOL": VALIDATOR_LAUNCHER_SKILL["git"],
         "PARSE_TOOL": PARSE_LAUNCHER_SKILL["git"],
         "RENDER_TOOL": RENDER_LAUNCHER_SKILL["git"],
         "PROFILE_ROOT": PROFILE_ROOT["git"],
@@ -1928,6 +1974,7 @@ FRAGMENTS = {
         "OUTPUT_FORMAT": P4_OUTPUT_FORMAT,
         "PREPARE_TOOL": PREPARE_LAUNCHER_YAML_SKILL["p4"],
         "LANE_TOOL": LANE_LAUNCHER_SKILL["p4"],
+        "VALIDATOR_TOOL": VALIDATOR_LAUNCHER_SKILL["p4"],
         "PARSE_TOOL": PARSE_LAUNCHER_SKILL["p4"],
         "RENDER_TOOL": RENDER_LAUNCHER_SKILL["p4"],
         "PROFILE_ROOT": PROFILE_ROOT["p4"],
@@ -1959,6 +2006,12 @@ _SHARED = {
         ("        " + line).rstrip()
         for line in lane_prompts.REVIEWER_C_SYSTEM.splitlines()
     ),
+    # The validator's restrictions, rendered from the module the codex validator
+    # tool sends, as YAML double-quoted list items (json.dumps is a valid YAML
+    # double-quoted scalar for ASCII text).
+    "VALIDATOR_RESTRICTIONS": "\n".join(
+        "        - " + json.dumps(rule) for rule in validator_lane.VALIDATOR_RESTRICTIONS
+    ),
     "MD_DOMAIN_LAUNCH": MD_DOMAIN_LAUNCH,
     "MD_DOMAIN_REPORT": MD_DOMAIN_REPORT,
     "GENERATED_REPORT": GENERATED_REPORT,
@@ -1985,6 +2038,7 @@ _SKILL_TOKEN_ORDER = [
     # LANE_ROUTING block, so it must come after it.
     "LANE_BG", "STEP5_RUNNER", "BACKGROUND_TECHNIQUE",
     "REVIEWER_A_PROMPT", "REVIEWER_B_PROMPT", "REVIEWER_C_PROMPT",  # rendered prompt text, no nested @tokens@
+    "VALIDATOR_RESTRICTIONS",  # rendered restriction text, no nested @tokens@
     "MD_DOMAIN_LAUNCH", "MD_DOMAIN_REPORT",  # shared, no nested @tokens@
     "GENERATED_REPORT",  # shared, no nested @tokens@
     # Ledger regions: shared bodies that DO carry nested per-VCS @tokens@
@@ -2000,7 +2054,7 @@ _SKILL_TOKEN_ORDER = [
     "CHECKLIST", "GOTCHAS", "NARRATION_TEMPLATES", "NARRATION_VARIABLES",
     "DIFF_OR_CL", "RANGE_OR_CL", "FILEPATHS", "CHANGE_DESC", "ISSUE_PATH",
     "SG_DESC", "OUTPUT_FORMAT", "PREPARE_TOOL", "RENDER_TOOL", "LANE_TOOL",
-    "PARSE_TOOL", "LEDGER_RECORD_N", "BASELINE_DESC", "KIT",
+    "VALIDATOR_TOOL", "PARSE_TOOL", "LEDGER_RECORD_N", "BASELINE_DESC", "KIT",
     # glyph tokens last -- they appear inside already-substituted blocks too,
     # but those blocks embed the literal glyph (via f-strings), so the only
     # remaining @X@/@CHK@/@CRS@ markers are in the template body.
@@ -2273,7 +2327,8 @@ On exit 0, parse stdout as `{ disabled, thresholds, standards, audit, lane_model
 - `disabledCriteria` = `disabled`, passed at the top level of EVERY lane args object below --
   including the empty list.
 - `laneModels` = `lane_models.detect`, passed as `{ run, dropped }` at the top level of EVERY lane
-  args object below. `run` is the ordered list of `{id, effort}` entries agent() and Agent can run;
+  args object below. `run` is the ordered list of `{id, effort, route}` entries this review can run (`route` is
+  `agent` or `codex`; step 3 of "Manual detect invocation" below dispatches by it);
   `dropped` lists each declared entry they cannot run, with its reason. A drop is configured
   behaviour, not an error: the step-9 disclosure line reports it. Every detect lane throws without
   `laneModels`, and no lane inherits the session model.
@@ -2370,18 +2425,33 @@ The installed script remains the source of the prompt and result contract.
    `FILE_FINDINGS_SCHEMA`; say so in the step-9 disclosure. `node` missing, or a helper that exits
    non-zero, REFUSES: that file is `REVIEW INCOMPLETE`; never write the prompt from memory or
    from a paraphrase.
-3. For each file, take `laneModels.run[0]` and invoke Agent with
-   `subagent_type: @KIT@:review-lane-<effort>` and `model: <id>`, from that entry's `effort` and
-   `id`. The Agent tool has no effort argument; the subtype's `effort` frontmatter binds effort.
-   Set `prompt` to that file's `dispatchPrompt` verbatim, or, when the prompts were written with
-   `--out-dir`, to one line telling the lane to read its `promptFile` and follow it as its complete
-   instructions. Preserve all prompt instructions, standards, ancestor context, and attribution input.
+3. For each file, take `laneModels.run[0]` and dispatch it by its `route`. An entry whose
+   `route` is `agent` (or that carries no `route`, from a skills-kit that predates it) invokes
+   Agent with `subagent_type: @KIT@:review-lane-<effort>` and `model: <id>`, from that entry's
+   `effort` and `id`. The Agent tool has no effort argument; the subtype's `effort` frontmatter
+   binds effort. Set `prompt` to that file's `dispatchPrompt` verbatim, or, when the prompts were
+   written with `--out-dir`, to one line telling the lane to read its `promptFile` and follow it
+   as its complete instructions. Preserve all prompt instructions, standards, ancestor context,
+   and attribution input.
+   An entry whose `route` is `codex` does not go to the Agent tool. It needs the prompts written
+   with `--out-dir`; run, as a Bash call,
+
+   ```bash
+   "<venvPython>" "<root>/scripts/run_lane.py" --input-file <laneInputFile> --entry <id> --effort <effort>
+   ```
+
+   with that file's `laneInputFile` and the entry's `id` and `effort`. It runs the lane on codex
+   read-only with network off and prints one JSON status line. A non-zero exit or `"ok": false`
+   is a failed dispatch; otherwise take the `result` object of its `"ok": true` status line as the
+   lane's response. A missing `laneInputFile` (a `lane-prompt.cjs` that predates it) or a missing
+   `run_lane.py` makes that entry a failed dispatch, never an Agent call on its id.
+   Agent and Bash dispatches go out in the same message.
    If the dispatch fails or returns no schema-valid object, announce it in one line
    (`md-domain lane failover: <file> - <id> (<effort>) failed: <reason>; running <next id> (<next effort>)`)
-   and dispatch the same prompt with the next `run` entry. Use only `run` entries, in order; never
-   a `dropped` entry and never a model the route does not name. Record the entry each file used
-   for the step-9 disclosure line.
-4. Parse each Agent response as JSON and validate it against the installed `FILE_FINDINGS_SCHEMA`
+   and dispatch the same prompt with the next `run` entry, by that entry's own `route`. Use only
+   `run` entries, in order; never a `dropped` entry and never a model the route does not name.
+   Record the entry each file used for the step-9 disclosure line.
+4. Parse each Agent response (or each codex `result`) as JSON and validate it against the installed `FILE_FINDINGS_SCHEMA`
    before running the reducer. Require one schema-valid result for every requested file.
    Missing or invalid results mean REVIEW INCOMPLETE; never substitute empty findings or DIFF-CLEAN.
    For valid results, retain the input path and mechanical scan as the script does. Apply the same
@@ -2392,7 +2462,7 @@ Transport failure never authorizes a generic-review fallback, a model or effort 
 `laneModels.run`, or a change to the lane's schema or criteria. Keep the claimed files assigned to their existing specialist lanes.
 
 Use the native Workflow result for any lane group that already completed; invoke only outstanding
-groups manually. If Agent is unavailable, every `run` entry fails for a file, or any result
+groups manually. If no `run` entry can be dispatched, every `run` entry fails for a file, or any result
 is missing or invalid, report `REVIEW INCOMPLETE: <file> - <invocation or validation failure>` for
 each affected file. Incomplete coverage cannot satisfy a submit gate.
 
@@ -2761,6 +2831,8 @@ Three layers are merged from lowest to highest precedence:
   one or more `{id, effort}` entries, and a layer stating a reason replaces that reason's list outright.
 - `disabled: true` on a profile or a reviewer record removes that record entirely from the
   resolved table, not just its fields.
+- Top-level `codex_validator_concurrency` is a positive integer; a higher layer stating it
+  replaces the lower value. See "How a validator declaration is routed" below.
 - Every other list, such as `selection.data_only_extensions`, is also a PLAIN list that a higher
   layer replaces outright.
 
@@ -2821,13 +2893,14 @@ How the effort reaches the model depends on the entry's harness:
   agent per level in the menu. The menu and the shipped agents are the same set, so accepting a
   level at resolve time guarantees that its dispatch target exists. The entry's `id` is passed
   as `model` at the CALL SITE, where it overrides whatever model the effort agent's own
-  frontmatter would imply. Validators are dispatched the same way.
+  frontmatter would imply. A validator's `claude` entry is dispatched the same way.
 - Any other entry runs through `@LANE_TOOL@` with `--effort <effort>`, which hands the level to
   llm-kit. The runner refuses the lane with exit 2 when a codex entry's effort menu
   does not include the level, or when a transport entry cannot deliver an effort at all; the
   review reports that refusal as a configuration error. The Codex and Claude CLI backends also
   hold the level to the exact model's measured menu (`gpt-6-luna` has no `ultra`) before they run.
-  The runner's JSON envelope records the effort it sent in its `effort` field.
+  The runner's JSON envelope records the effort it sent in its `effort` field. A validator's
+  `codex` entry runs through `@VALIDATOR_TOOL@` with `--effort <effort>` instead.
 
 `model` and `effort` are therefore independent: any model may pair with any effort the model's
 harness accepts, and neither is ever traded for the other.
@@ -2860,9 +2933,7 @@ follow the shared format specified in the bootstrap plugin's
 twice, is a configuration error at resolve time. The renderer prints each reviewer's `model` as
 that entry list, in declared order; `@SKILL_NAME@` routes the ids and looks the chosen id's
 effort up in the same list. A `validator_models` value is an ordered list of one or more
-entries. The lane tool has no validator route, so step 7 dispatches the first Agent entry and
-drops each non-Agent entry ahead of it with a `route: validator` line; the resolved table
-refuses a reason that has no Agent entry at all.
+entries, routed as "How a validator declaration is routed" below describes.
 
 Each entry is an id in the llm-kit model registry, and which harness serves it decides
 how that lane is dispatched:
@@ -2917,15 +2988,56 @@ entries in declared order and skips every other entry without comment. A declara
 of those four does not run, and the review reports that lane as failed with each declared
 entry named.
 
+### How a validator declaration is routed
+
+Every validator reason, a one-entry list included, goes through the same `models describe`
+command, without `--dispatchable transport`. So the user's llm-kit model overrides (a
+`disabled` entry, reset mode) apply to validators as they do to reviewers. Each chosen entry is
+dispatched by its harness:
+
+| Entry | Dispatch |
+|---|---|
+| a `claude` harness entry | an Agent subagent of type `@KIT@:review-lane-<effort>` with `model: <id>` and the `validator` definition |
+| a `codex` harness entry | a Bash call to `@VALIDATOR_TOOL@` with `--issue <file> --bundle <bundle.json> --chunk-index <i> --model <id> --effort <effort>` |
+| any other entry | not a validator route; the review chooses another usable entry |
+
+`@VALIDATOR_TOOL@` sends one protocol-1 request to `llm-kit completion complete
+--request-file -`: the validator's rules, the issue, the chunk diff it was reported against
+and, for a `claude_md` issue, the text of the CLAUDE.md files that govern its file. The
+request asks for a read-only sandbox with network off (`extras.sandbox: read-only`,
+`extras.network: false`), runs from the bundle's project root at the entry's effort, and
+carries a strict output contract, `{verdict: CONFIRMED|REJECTED, reason}`. The tool refuses
+an entry that does not resolve to the codex backend before any call, and refuses a verdict
+from a call whose envelope does not show the sandbox applied. It prints the same one line an
+Agent validator returns. Its exit codes:
+
+| Exit | Meaning | What the review does |
+|---|---|---|
+| 0 | one `CONFIRMED:` or `REJECTED:` line on stdout | uses the verdict |
+| 1 | the call did not run to an answer | re-selects through describe |
+| 2 | refused as configured | reports the issue unvalidated under `## Lane failures` |
+| 3 | quota or credit halt | records the halt, then re-selects |
+| 4 | answered, but not with a valid verdict | reports the issue unvalidated, never rejected |
+
+At most `codex_validator_concurrency` codex validators run at once; the shipped default is 4.
+`codex exec` documents no concurrency control, so the default is a conservative bound, not a
+measured limit. An issue past the bound takes the next usable non-codex entry in the menu, and
+waits for a later wave when there is none. To raise or lower it, state the limit your account
+sustains in a user or project layer:
+
+```yaml
+codex_validator_concurrency: 8
+```
+
 ### Which lanes may take an endpoint entry
 
 The three REVIEWER lanes -- the set is `ENDPOINT_ELIGIBLE_LANES` in
 `bootstrap_lib.code_review.lane_prompts`, which is the authority; this prose is not. The
 runner refuses any other lane by name and exits 2 (a configuration error).
 
-The validator is excluded because the runner has no validator prompt, input or verdict
-contract. A non-Agent entry in a validator list is dropped at dispatch with a one-line
-disclosure, never sent to the runner.
+The validator is not one of them: the reviewer runner has no validator prompt, input or
+verdict contract. A validator's `codex` entry runs through `@VALIDATOR_TOOL@` instead (see
+"How a validator declaration is routed" below).
 
 Eligibility is not the only gate. `reviewer_a_claude_md_compliance` and
 `reviewer_c_introduced_code` read files beyond their chunk, so they need an agent loop
@@ -3039,6 +3151,7 @@ CONFIGURATION_FRAGMENTS = {
         "KIT": "git-kit",
         "RENDER_TOOL": RENDER_LAUNCHER["git"],
         "LANE_TOOL": LANE_LAUNCHER["git"],
+        "VALIDATOR_TOOL": VALIDATOR_LAUNCHER["git"],
         "CONFIG_PROFILE_ROOT": (
             "the output of `git rev-parse --show-toplevel`. When that command fails, the\n"
             "review stops."
@@ -3049,6 +3162,7 @@ CONFIGURATION_FRAGMENTS = {
         "KIT": "p4-kit",
         "RENDER_TOOL": RENDER_LAUNCHER["p4"],
         "LANE_TOOL": LANE_LAUNCHER["p4"],
+        "VALIDATOR_TOOL": VALIDATOR_LAUNCHER["p4"],
         "CONFIG_PROFILE_ROOT": (
             "the output of `p4 -ztag -F %clientRoot% info`. When that prints nothing, no client\n"
             "workspace resolves: `--project-root` is omitted and the resolver reads the project\n"

@@ -162,10 +162,22 @@ def test_md_domain_parts_pin_no_model(path: Path) -> None:
 def test_manual_route_dispatches_from_the_run_list(path: Path) -> None:
     body = _flat(path)
     kit = "git-kit" if "git-kit" in str(path) else "p4-kit"
-    assert "take `laneModels.run[0]` and invoke Agent with" in body
+    assert "take `laneModels.run[0]` and dispatch it by its `route`" in body
     assert f"`subagent_type: {kit}:review-lane-<effort>` and `model: <id>`" in body
     assert "md-domain lane failover: <file> - <id> (<effort>) failed: <reason>;" in body
     assert "never a `dropped` entry and never a model the route does not name" in body
+
+
+@pytest.mark.parametrize("path", REFERENCES, ids=("git", "p4"))
+def test_manual_route_runs_a_codex_entry_through_the_lane_helper(path: Path) -> None:
+    body = _flat(path)
+    assert "An entry whose `route` is `codex` does not go to the Agent tool" in body
+    assert (
+        '"<venvPython>" "<root>/scripts/run_lane.py" --input-file <laneInputFile> '
+        "--entry <id> --effort <effort>" in body
+    )
+    assert "A non-zero exit or `\"ok\": false` is a failed dispatch" in body
+    assert "take the `result` object of its `\"ok\": true` status line" in body
 
 
 @pytest.mark.parametrize("path", SKILLS, ids=("git", "p4"))

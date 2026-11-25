@@ -39,15 +39,15 @@ def test_llm_kit_is_installed_not_linked() -> None:
 
 
 def test_the_manifest_requires_the_bootstrap_that_revokes_the_old_link() -> None:
-    assert _MANIFEST["requires_bootstrap"] == "0.168.0"
+    assert _MANIFEST["requires_bootstrap"] == "0.175.0"
 
 
 def test_the_package_requirements_are_declared() -> None:
     dependencies = _PYPROJECT["project"]["dependencies"]
-    assert "katsoft-llm-kit[config]>=1.37,<2" in dependencies
+    assert "katsoft-llm-kit[config]>=1.46.0,<2" in dependencies
     assert "katsoft-contracts>=1.0,<2" in dependencies
     assert _PYPROJECT["project"]["optional-dependencies"]["endpoint-dispatch"] == [
-        "katsoft-llm-kit[sdk]>=1.37,<2"
+        "katsoft-llm-kit[sdk]>=1.46.0,<2"
     ]
 
 

@@ -76,8 +76,12 @@ class TestShippedDefaultsPreserveAgentDispatch:
                 assert isinstance(entries, list) and entries, (
                     f"shipped {profile['id']}.validator_models.{reason} is not a non-empty list"
                 )
-                assert all(lp.is_agent_alias(entry["id"]) for entry in entries), (
-                    f"shipped {profile['id']}.validator_models.{reason} holds a non-Agent entry"
+                ids = [entry["id"] for entry in entries]
+                assert any(lp.is_agent_alias(model_id) for model_id in ids), (
+                    f"shipped {profile['id']}.validator_models.{reason} states no Agent alias"
+                )
+                assert not all(lp.is_agent_alias(model_id) for model_id in ids), (
+                    f"shipped {profile['id']}.validator_models.{reason} states no codex entry"
                 )
         assert endpoint_entries == [
             ("data_only", "reviewer_a_claude_md_compliance", "luna"),
@@ -102,10 +106,12 @@ class TestShippedDefaultsPreserveAgentDispatch:
         assert ids(by_profile["data_only"]["validator_models"]["claude_md"]) == [
             ("haiku", "low"),
             ("sonnet", "low"),
+            ("luna", "medium"),
         ]
         assert ids(by_profile["data_only"]["validator_models"]["bug"]) == [
             ("haiku", "low"),
             ("sonnet", "low"),
+            ("luna", "medium"),
         ]
         code = {r["name"]: r["model"] for r in by_profile["code"]["reviewers"]}
         assert ids(code["reviewer_a_claude_md_compliance"]) == [
@@ -116,10 +122,14 @@ class TestShippedDefaultsPreserveAgentDispatch:
         assert ids(by_profile["code"]["validator_models"]["claude_md"]) == [
             ("haiku", "medium"),
             ("sonnet", "low"),
+            ("luna", "medium"),
         ]
         assert ids(code["reviewer_b_diff_only_bugs"]) == [("opus", "medium"), ("sol", "medium")]
         assert ids(code["reviewer_c_introduced_code"]) == [("sonnet", "high"), ("luna", "xhigh")]
-        assert ids(by_profile["code"]["validator_models"]["bug"]) == [("opus", "medium")]
+        assert ids(by_profile["code"]["validator_models"]["bug"]) == [
+            ("opus", "medium"),
+            ("sol", "medium"),
+        ]
 
 
 class TestParseIssueArray:
@@ -376,10 +386,10 @@ class TestLaneEligibility:
         assert lane in lp.ENDPOINT_ELIGIBLE_LANES
 
     def test_the_validator_is_not_eligible(self) -> None:
-        """The control that suppresses a weak reviewer's noise stays native.
+        """The reviewer lane runner refuses a validator by name.
 
-        Weakening the reviewer and the instrument that measures it in the same
-        run makes a regression unattributable.
+        A codex validator runs through run_validator_lane.py, which carries the
+        validator's prompt and verdict contract; run_review_lane.py has neither.
         """
         assert "validator" in lp.KNOWN_LANES
         assert "validator" not in lp.ENDPOINT_ELIGIBLE_LANES

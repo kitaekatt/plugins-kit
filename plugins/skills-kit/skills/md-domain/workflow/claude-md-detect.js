@@ -174,39 +174,172 @@ if (!Array.isArray(input.disabledCriteria) || !input.disabledCriteria.every((d) 
 // lane-route: begin (shared chunk; the generator rewrites this region)
 // laneModels is REQUIRED: this lane family's resolved route from
 // scripts/resolve_standards.py (lane_models.<family>), threaded by the caller.
-// run is the ordered list of {id, effort} entries agent() can run; dropped lists
-// the declared entries it cannot run, each with its reason. An absent or
-// malformed value throws before any agent is dispatched: reading "not passed" as
-// "inherit the session model" is the default this argument exists to remove.
+// run is the ordered list of {id, effort, route} entries, ranked by llm-kit
+// describe() (a usable reset entry first); route is 'agent' (agent() runs a
+// Claude core id) or 'codex' (the md-lane bridge runs a codex harness entry), and
+// an entry with no route is an agent entry. dropped lists the declared entries
+// that cannot run, each with its reason. An absent or malformed value throws
+// before any agent is dispatched: reading "not passed" as "inherit the session
+// model" is the default this argument exists to remove.
 const LANE_CORE_IDS = ['fable', 'haiku', 'opus', 'sonnet']
 const laneModels = input.laneModels
+const laneRouteOf = (e) => (e.route === undefined ? 'agent' : e.route)
 const isLaneEntry = (e) => !!e && typeof e === 'object' &&
   typeof e.id === 'string' && e.id.trim() !== '' &&
-  typeof e.effort === 'string' && e.effort.trim() !== ''
+  typeof e.effort === 'string' && e.effort.trim() !== '' &&
+  (laneRouteOf(e) === 'agent' || laneRouteOf(e) === 'codex')
 if (!laneModels || typeof laneModels !== 'object' || !Array.isArray(laneModels.run) ||
     laneModels.run.length === 0 || !laneModels.run.every(isLaneEntry) || !Array.isArray(laneModels.dropped)) {
-  throw new Error(`md-domain lane requires args.laneModels = {run: [{id, effort}, ...], dropped: [...]} with a non-empty run list, got ${JSON.stringify(laneModels) ?? 'nothing'}. Pass this lane family's lane_models entry from scripts/resolve_standards.py; an absent route is never read as "inherit the session model".`)
+  throw new Error(`md-domain lane requires args.laneModels = {run: [{id, effort, route}, ...], dropped: [...]} with a non-empty run list and route "agent" or "codex", got ${JSON.stringify(laneModels) ?? 'nothing'}. Pass this lane family's lane_models entry from scripts/resolve_standards.py; an absent route is never read as "inherit the session model".`)
 }
-const laneUnrunnable = laneModels.run.filter((e) => !LANE_CORE_IDS.includes(e.id))
+const laneUnrunnable = laneModels.run.filter((e) => laneRouteOf(e) === 'agent' && !LANE_CORE_IDS.includes(e.id))
 if (laneUnrunnable.length > 0) {
-  throw new Error(`md-domain lane: args.laneModels.run names ${laneUnrunnable.map((e) => JSON.stringify(e.id)).join(', ')}, which agent() cannot run (runnable ids: ${LANE_CORE_IDS.join(', ')}). The resolver moves such ids to laneModels.dropped; a run list that still carries one was not produced by it.`)
+  throw new Error(`md-domain lane: args.laneModels.run names ${laneUnrunnable.map((e) => JSON.stringify(e.id)).join(', ')} on the agent route, which agent() cannot run (runnable ids: ${LANE_CORE_IDS.join(', ')}). The resolver gives a codex entry the codex route and moves any other id to laneModels.dropped; a run list that still carries one was not produced by it.`)
 }
 const laneEntryText = (e) => String(e.id) + ' (' + String(e.effort) + ')'
 if (laneModels.dropped.length > 0) {
   log('md-domain lanes: dropped ' + laneModels.dropped.map(laneEntryText).join(', ') +
-    ' -- not runnable on agent(); running ' + laneModels.run.map(laneEntryText).join(', '))
+    ' -- see routes.dropped for each reason; running ' + laneModels.run.map(laneEntryText).join(', '))
 }
+
+// codexMaxConcurrent is OPTIONAL: a positive integer bounding the codex lanes in
+// flight at once across this script (default LANE_CODEX_DEFAULT_CAP). A lane whose
+// next entry is codex while the cap is full moves to its following entry at once;
+// it does not wait. Any other value throws before any agent is dispatched.
+const LANE_CODEX_DEFAULT_CAP = 4
+const laneCodexArg = input.codexMaxConcurrent
+if (laneCodexArg !== undefined && !(typeof laneCodexArg === 'number' && Number.isInteger(laneCodexArg) && laneCodexArg >= 1)) {
+  throw new Error(`md-domain lane: args.codexMaxConcurrent must be a positive integer (the most codex lanes in flight at once) or absent, got ${JSON.stringify(laneCodexArg)}. Omit it for the default of ${LANE_CODEX_DEFAULT_CAP}.`)
+}
+const laneCodexCap = laneCodexArg === undefined ? LANE_CODEX_DEFAULT_CAP : laneCodexArg
+let laneCodexInFlight = 0
+
+// The md-lane bridge. A Workflow script has no shell, so a codex entry runs
+// through the skills-kit:md-lane-bridge executor (a Bash-only haiku subagent at
+// low effort) running scripts/run_lane.py once. The lane payload travels in a
+// here-document; laneDigest over its exact text goes with it, and run_lane.py
+// refuses a payload that arrives changed. The helper validates codex's answer
+// against the lane schema and prints it with laneDigest(laneCanonical(result));
+// the executor returns that line, and a result whose digest does not match was
+// not returned verbatim and fails the entry. Both functions mirror
+// skills_kit_lib/lane_bridge.py (digest, canonical) exactly.
+const LANE_BRIDGE_AGENT = 'skills-kit:md-lane-bridge'
+const LANE_BRIDGE_MODEL = 'haiku'
+const LANE_BRIDGE_EFFORT = 'low'
+const LANE_BRIDGE_EOF = 'MD_LANE_BRIDGE_INPUT'
+const laneCanonical = (v) => {
+  if (Array.isArray(v)) return '[' + v.map(laneCanonical).join(',') + ']'
+  if (v !== null && typeof v === 'object') {
+    return '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + laneCanonical(v[k])).join(',') + '}'
+  }
+  return JSON.stringify(v)
+}
+const laneDigest = (s) => {
+  let h = 0x811c9dc5
+  let n = 0
+  for (const ch of s) {
+    h = Math.imul(h ^ ch.codePointAt(0), 0x01000193) >>> 0
+    n++
+  }
+  return 'fnv1a32:' + n + ':' + h.toString(16).padStart(8, '0')
+}
+function laneBridgeCommand(payloadText) {
+  return '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" ' +
+    '"${SKILLS_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/run_lane.py" ' +
+    '--input-digest ' + laneDigest(payloadText) + " <<'" + LANE_BRIDGE_EOF + "'\n" +
+    payloadText + '\n' + LANE_BRIDGE_EOF
+}
+function laneBridgeSchema(resultSchema) {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      exit_code: { type: 'integer' },
+      status: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean' },
+          error: { type: 'string' },
+          exit: { type: 'integer' },
+          entry: { type: ['object', 'null'] },
+          access: { type: 'string' },
+          endpoint: { type: 'string' },
+          served_model: { type: 'string' },
+          argv: { type: 'array', items: { type: 'string' } },
+          controls: { type: 'array', items: { type: 'string' } },
+          digest: { type: 'string' },
+          result: resultSchema,
+        },
+        required: ['ok'],
+      },
+    },
+    required: ['exit_code', 'status'],
+  }
+}
+// Run one lane on a codex entry; resolve to the helper's status, or throw the
+// reason the entry failed.
+async function laneBridge(e, prompt, opts, access) {
+  if (!opts.schema) throw new Error('the codex route needs the lane result schema; this dispatch passed none')
+  const payload = { v: 1, entry: { id: e.id, effort: e.effort }, access, prompt, schema: opts.schema }
+  if (typeof input.projectRoot === 'string' && input.projectRoot !== '') payload.cwd = input.projectRoot
+  const text = JSON.stringify(payload)
+  const bridgeOpts = { agentType: LANE_BRIDGE_AGENT, model: LANE_BRIDGE_MODEL, effort: LANE_BRIDGE_EFFORT, schema: laneBridgeSchema(opts.schema) }
+  if (opts.label !== undefined) bridgeOpts.label = opts.label
+  if (opts.phase !== undefined) bridgeOpts.phase = opts.phase
+  const r = await agent('Run this md-domain codex lane through the md-lane bridge.\nCOMMAND:\n' + laneBridgeCommand(text) + '\n', bridgeOpts)
+  if (r === null || r === undefined) throw new Error('md-lane bridge returned nothing')
+  const st = r.status
+  if (!st || st.ok !== true) {
+    throw new Error('codex lane failed (exit ' + String(r.exit_code) + '): ' + String((st && st.error) || 'no status'))
+  }
+  if (!st.entry || st.entry.id !== e.id) {
+    throw new Error('md-lane bridge ran ' + JSON.stringify(st.entry) + ', not ' + e.id)
+  }
+  if (st.result === undefined || laneDigest(laneCanonical(st.result)) !== st.digest) {
+    throw new Error('md-lane bridge result digest mismatch: the executor did not return the helper result verbatim')
+  }
+  return st
+}
+
 const laneRoutePerFile = []
 // Dispatch one lane through the run list. Entries are tried in order; the next
-// one runs when agent() throws or returns nothing. A lane whose every entry
-// failed returns null, as a single agent() call that died does, and each
-// failure stays on its route record.
+// one runs when agent() or the bridge throws or returns nothing, and when a codex
+// entry meets a full codex cap. opts.access is 'write' for a lane that edits
+// files (generate's compose and apply steps, apply-mode remediate) and is read-only
+// otherwise; it reaches only the codex sandbox. A lane whose every entry failed
+// returns null, as a single agent() call that died does, and each failure stays
+// on its route record.
 async function laneAgent(key, prompt, opts) {
+  const { access, ...agentOpts } = opts || {}
+  const laneAccess = access === 'write' ? 'write' : 'read-only'
   const failed = []
   for (const e of laneModels.run) {
+    if (laneRouteOf(e) === 'codex') {
+      if (laneCodexInFlight >= laneCodexCap) {
+        failed.push({ id: e.id, effort: e.effort, reason: 'codex lane cap reached: ' + laneCodexCap + ' codex lane(s) already in flight (args.codexMaxConcurrent)' })
+        continue
+      }
+      laneCodexInFlight++
+      let st = null
+      try {
+        st = await laneBridge(e, prompt, agentOpts, laneAccess)
+      } catch (err) {
+        failed.push({ id: e.id, effort: e.effort, reason: String((err && err.message) || err) })
+        continue
+      } finally {
+        laneCodexInFlight--
+      }
+      laneRoutePerFile.push({
+        path: key,
+        used: { id: e.id, effort: e.effort, route: 'codex', access: laneAccess, endpoint: st.endpoint, servedModel: st.served_model, controls: st.controls || [] },
+        failed,
+      })
+      return st.result
+    }
     let r = null
     try {
-      r = await agent(prompt, { ...opts, model: e.id, effort: e.effort })
+      r = await agent(prompt, { ...agentOpts, model: e.id, effort: e.effort })
     } catch (err) {
       failed.push({ id: e.id, effort: e.effort, reason: String((err && err.message) || err) })
       continue
