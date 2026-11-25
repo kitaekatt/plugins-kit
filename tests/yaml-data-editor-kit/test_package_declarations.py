@@ -19,7 +19,7 @@ def test_llm_kit_is_not_a_shared_lib_link() -> None:
 def test_the_package_requirements_are_declared_in_the_restricted_form() -> None:
     """Red: drop either requirement or widen its range. The extras are the ones the dispatch imports reach."""
     dependencies = PYPROJECT["project"]["dependencies"]
-    assert "katsoft-llm-kit[config,sdk,pipeline]>=1.37,<2" in dependencies
+    assert "katsoft-llm-kit[config,sdk,pipeline]>=1.46.0,<2" in dependencies
     assert "katsoft-contracts>=1.0,<2" in dependencies
 
 
