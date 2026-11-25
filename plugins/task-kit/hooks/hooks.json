@@ -27,6 +27,16 @@
         ]
       },
       {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/sessionstart/session-start.sh\"",
+            "timeout": 30
+          }
+        ]
+      },
+      {
         "matcher": "clear",
         "hooks": [
           {

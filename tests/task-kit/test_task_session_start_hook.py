@@ -2,7 +2,8 @@
 
 Three layers, each with its own tests:
 
-* ``hooks.json`` keeps the async session-registration command on ``resume`` and ``clear``.
+* ``hooks.json`` keeps the async session-registration command on ``resume`` and ``clear``, and runs the same
+  command synchronously on ``compact`` (its output is the context the compacted conversation gets).
 * The real shell script, run with a fake interpreter planted where the forced interpreter chain looks first
   (``$HOME/.local/share/python-standalone/python/bin/python3``). The fake writes a marker, so "Python was never
   started" is a file that does not exist. The data root is redirected to a temporary directory.
@@ -58,6 +59,10 @@ def test_hooks_json_keeps_the_async_session_script_on_resume_and_clear():
         (entry,) = entries
         assert entry["type"] == "command"
         assert entry["async"] is True
+    (entry,) = [entry for entry in groups["compact"]
+                if entry["command"] == 'bash "${CLAUDE_PLUGIN_ROOT}/hooks/sessionstart/session-start.sh"']
+    assert entry["type"] == "command"
+    assert not entry.get("async"), "an async hook's output does not reach the compacted conversation"
     assert SCRIPT.is_file()
 
 
@@ -220,7 +225,29 @@ def test_a_session_registered_in_another_project_than_the_cwd_is_not_covered(rig
 
 
 @posix_only
-@pytest.mark.parametrize("source", ["fork", "startup", "compact", ""])
+@pytest.mark.parametrize("shell", SHELLS)
+def test_compact_with_a_file_naming_the_session_passes_the_entrys_stdout_through(tmp_path, shell):
+    rig = Rig(tmp_path)
+    python = rig.home / ".local" / "share" / "python-standalone" / "python" / "bin" / "python3"
+    python.write_text("#!/bin/sh\ncat >/dev/null\necho 'entry context'\necho 'entry note' >&2\n", encoding="utf-8")
+    rig.session_file("sess-one")
+    done = rig.run(shell, rig.payload("compact", "sess-one"))
+    assert done.returncode == 0
+    assert done.stdout == "entry context\n", "the entry's stdout is the hook's output on compact"
+    assert "entry note" in rig.log and "entry note" not in done.stdout
+
+
+@posix_only
+@pytest.mark.parametrize("shell", SHELLS)
+def test_compact_without_a_file_naming_the_session_never_starts_python(rig, shell):
+    rig.session_file("some-other-session")
+    done = rig.run(shell, rig.payload("compact", "sess-one"))
+    assert done.returncode == 0 and done.stdout == ""
+    assert not rig.marker.exists()
+
+
+@posix_only
+@pytest.mark.parametrize("source", ["fork", "startup", ""])
 def test_other_sources_do_nothing_even_when_registrations_exist(rig, source):
     rig.session_file("sess-one")
     assert rig.run(["bash"], rig.payload(source, "sess-one")).returncode == 0
@@ -425,6 +452,55 @@ def test_a_resume_from_a_project_holding_no_registration_of_the_session_does_not
     outcome = hook.run(hook_input("resume", "sess-one", cwd=other), {}, data_dir=world.data, machine=HOST,
                        identity=world.ident("sess-one"), publish=world.record_publish)
     assert "refreshed 0" in outcome and world.snapshot() == before and world.publishes == []
+
+
+def compact_context(world, session_id, *, project=None) -> tuple[str, list[str]]:
+    emitted: list[str] = []
+    outcome = hook.run(hook_input("compact", session_id, cwd=project or world.project), {}, data_dir=world.data,
+                       machine=HOST, publish=world.record_publish, emit=emitted.append)
+    return outcome, emitted
+
+
+def test_compact_tells_the_compacted_conversation_which_tasks_it_still_holds(world):
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
+    world.procs.append(proc)
+    world.register(world.ident("sess-one", proc), "alpha")
+    world.register(world.ident("sess-one", proc), "beta")
+    world.register(world.ident("sess-bystander"), "beta")
+    before = world.snapshot()
+
+    outcome, emitted = compact_context(world, "sess-one")
+
+    (raw,) = emitted
+    output = json.loads(raw)["hookSpecificOutput"]
+    assert output["hookEventName"] == "SessionStart"
+    context = output["additionalContext"]
+    assert str(world.root / "alpha") in context and str(world.root / "beta") in context
+    assert "registered" in context and "CLAUDE.md" in context
+    assert "sess-bystander" not in context
+    assert outcome == "compact sess-one: holds 2"
+    assert world.snapshot() == before and world.publishes == [], "the registration is kept as it is"
+
+
+def test_compact_for_a_session_without_a_registration_emits_nothing(world):
+    world.register(world.ident("sess-one"), "alpha")
+    outcome, emitted = compact_context(world, "sess-other")
+    assert emitted == [] and outcome == "compact sess-oth: holds 0"
+
+
+def test_compact_ignores_a_registration_on_a_closed_task(world):
+    world.register(world.ident("sess-one"), "alpha")
+    (world.project / "dev" / "tasks" / "alpha" / "task.yaml").write_text("task:\n  status: closed\n", encoding="utf-8")
+    _, emitted = compact_context(world, "sess-one")
+    assert emitted == []
+
+
+def test_compact_ignores_another_machines_record_of_the_same_session_id(world):
+    world.register(world.ident("sess-one"), "alpha")
+    other = Machine("otherhost", "0000000000000000", "macos")
+    outcome = hook.run(hook_input("compact", "sess-one", cwd=world.project), {}, data_dir=world.data, machine=other,
+                       publish=world.record_publish, emit=(emitted := []).append)
+    assert emitted == [] and outcome.endswith("holds 0")
 
 
 def test_a_fork_changes_nothing_and_publishes_nothing(world):
