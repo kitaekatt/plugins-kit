@@ -26,13 +26,12 @@ restructure happened to do.
   (`skill-lanes.json`, `claude-md-lanes.json`, `project-doc-lanes.json`,
   `references-lanes.json`): the LLM detect/classify lane output over the
   same fixtures, same `<CORPUS>` normalization, `perFile` sorted by path.
-  Recorded 2026-07-28 against skills-kit 0.35.0 by invoking each member's
-  `workflow/detect.js` (references: `classify.js`) via the Workflow tool
-  with the models the scripts pinned at that version (opus, high effort); the
-  lane default at skills-kit 0.89.0 is sonnet, low effort (`lane_models`
-  slot), so these goldens predate that default and no test compares lane
-  output to them. See "Lane goldens"
-  below.
+  Recorded 2026-11-25 against skills-kit 0.98.12 by invoking md-domain's
+  `workflow/skill-detect.js`, `claude-md-detect.js`, `project-doc-detect.js`
+  and `references-classify.js` via the Workflow tool; the routes used were
+  haiku, low effort, agent route (skill, project-doc), opus, high effort,
+  agent route (claude-md) and luna, low effort, codex route (references).
+  No test compares lane output to them. See "Lane goldens" below.
 - `corpus_runner.py` -- staging + per-case runners + normalization (shared).
 - `record.py` -- re-records `expected/`; run only for intended changes and
   review the diff like code.
@@ -46,7 +45,7 @@ CLAUDE.md fixtures, claude-md-audit `discover.py` role + dimension
 classification, project-doc-audit `discover.py` citation/orphan signals,
 `references_audit.py` findings.
 
-Lane goldens (`expected-lanes/`, recorded 2026-07-28, skills-kit 0.35.0):
+Lane goldens (`expected-lanes/`, recorded 2026-11-25, skills-kit 0.98.12):
 the LLM detect/classify lane verdicts over the same fixtures. Unlike
 `expected/`, these are NOT compared byte-for-byte by pytest -- LLM output
 varies run to run. They are the reference record for the md-domain
@@ -54,7 +53,8 @@ restructure: the folded lanes must reproduce the per-file VERDICTS
 (COMPLIANT / NON-COMPLIANT / NOT-AUDITED) and the FAIL-level criteria hits
 on the same fixtures; finding wording and PASS-row detail are informative
 only. Recorded verdicts: skill s1/s5 COMPLIANT, s2/s3/s4 NON-COMPLIANT;
-claude-md c1/c4 COMPLIANT, c2/c3/c5 NON-COMPLIANT; project-doc CLAUDE.md
+claude-md c1/c2/c4 COMPLIANT (c2's seeded line-drift defect is found and
+graded JUDGMENT, I2_line_drift/FIX, not FAIL), c3/c5 NON-COMPLIANT; project-doc CLAUDE.md
 NOT-AUDITED (the PD-1 routing decline) with cited.md/orphan.md COMPLIANT;
 references: both scanner findings classified I_illustrative/FIX.
 Re-record the same way: stage fixtures (corpus_runner.stage), run each
