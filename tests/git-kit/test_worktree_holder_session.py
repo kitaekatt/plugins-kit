@@ -248,7 +248,7 @@ def test_dead_claude_holder_is_parked(lifecycle, tmp_path: Path, monkeypatch) ->
 
 
 @pytest.mark.parametrize("case, parked", [("idle", True), ("recent-git", False), ("recent-edit", False),
-                                           ("process-inside", False)])
+                                           ("process-inside", False), ("disabled", False)])
 def test_live_session_claim_parks_when_nothing_uses_the_worktree(lifecycle, tmp_path: Path, monkeypatch,
                                                                  case: str, parked: bool) -> None:
     """A live session keeps a claim only while the worktree shows use: a process in it or recent changes."""
@@ -256,7 +256,11 @@ def test_live_session_claim_parks_when_nothing_uses_the_worktree(lifecycle, tmp_
     obj.maintain()
     result = obj.take("long-done", "orchestrator", process=holder())
     path = Path(obj.get(result["id"])["path"])
-    old = time.time() - safety.IDLE_CLAIM_SECONDS - 60
+    hours = obj.settings.config.pool.idle_claim_hours
+    assert hours == 2  # The default.
+    if case == "disabled":
+        obj.settings.config.pool.idle_claim_hours = 0
+    old = time.time() - hours * 3600 - 60
     for target in [path, *path.rglob("*")]:
         os.utime(target, (old, old), follow_symlinks=False)
     gitdir = Path(wt.git(path, "rev-parse", "--absolute-git-dir"))
@@ -279,6 +283,10 @@ def test_live_session_claim_parks_when_nothing_uses_the_worktree(lifecycle, tmp_
     assert (record["state"] == "parked" and record["holder"] is None) is parked
     if parked:
         assert record["last_holder"]["session"] == "orchestrator"
+        # The session's own release after a push still succeeds and keeps the files.
+        released = obj.release(record["last_claim"])
+        assert (released["id"], released["state"]) == (record["id"], "parked")
+        assert path.exists()
 
 
 @pytest.mark.parametrize("evidence", ["live", "unknown-session", "failed-census"])

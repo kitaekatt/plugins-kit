@@ -66,6 +66,7 @@ class Pool(BaseModel):
     setup: list[Step] = Field(min_length=1)
     rerun_files: dict[str, list[str]] = Field(default_factory=dict)
     rebuildable: list[str] = Field(default_factory=list)
+    idle_claim_hours: StrictInt = Field(default=2, ge=0)  # 0 keeps every live session's claim.
 
     @field_validator("upstream")
     @classmethod

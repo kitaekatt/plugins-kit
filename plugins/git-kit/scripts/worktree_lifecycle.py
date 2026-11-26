@@ -887,10 +887,13 @@ class Lifecycle:
                     record["state"] = "parked"
                     record["waiting"] = "Holder ended; inspect preserved work before adoption"
                     self.fail(record, ValueError("Interrupted claim or dead holder; files preserved"))
-                elif not worker and safety.claim_idle(path):
+                elif not worker and safety.claim_idle(path, self.settings.config.pool.idle_claim_hours
+                                                      if self.settings.config else 0):
                     # A live session that never released: nothing uses the worktree.
-                    # Parking keeps the files; removal still needs full safety.
+                    # Parking keeps the files; removal still needs full safety. last_claim
+                    # lets the session's own later release succeed as a no-op.
                     record["last_holder"] = record["holder"]
+                    record["last_claim"] = record["holder"]["claim"]
                     record["holder"] = None
                     record["state"] = "parked"
                     record["waiting"] = "Claim idle while its session lives; inspect preserved work before adoption"
