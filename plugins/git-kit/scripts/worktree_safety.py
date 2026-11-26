@@ -209,6 +209,29 @@ def session_file_id(pid: int) -> str | None:
     return found if record.get("procStart") == result.stdout.strip() else None
 
 
+IDLE_CLAIM_SECONDS = 2 * 60 * 60  # A live claim with no use for this long is parked.
+
+
+def last_activity(path: Path) -> float:
+    """Newest mtime of the worktree's Git state (HEAD, index, HEAD log) and its changed paths."""
+    gitdir = Path(wt.git(path, "rev-parse", "--absolute-git-dir"))
+    stamps = [item.stat().st_mtime for item in (gitdir / "HEAD", gitdir / "index", gitdir / "logs" / "HEAD")
+              if item.exists()]
+    changed = wt.git(path, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames")
+    for entry in filter(None, changed.split("\0")):
+        target = path / entry[3:]
+        if target.exists() or target.is_symlink():
+            stamps.append(target.lstat().st_mtime)
+    return max(stamps, default=0.0)
+
+
+def claim_idle(path: Path) -> bool:
+    """No change for IDLE_CLAIM_SECONDS and no process using the path (cwd, open files, argv)."""
+    if time.time() - last_activity(path) < IDLE_CLAIM_SECONDS:
+        return False
+    return not path_processes(path)
+
+
 def process_cwd(pid: int) -> str | None:
     """Report a process cwd; directory-use inspection still owns safety evidence."""
     if sys.platform.startswith("linux"):

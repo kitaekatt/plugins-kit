@@ -475,9 +475,14 @@ The lifecycle never removes branches.
 Each completed or blocked public operation requests background maintenance.
 Disabled and unconfigured repositories perform no pass.
 One OS lock coordinates all clones of a remote.
-Internal steps continue the same pass. No timers or idle-age cleanup exist.
+Internal steps continue the same pass. No timers exist.
 
 Maintenance resolves interrupted journals and dead holders first.
+A holder is dead when its process ended and no live Claude process names its
+session, in argv or in Claude Code's `sessions/<pid>.json` with a matching
+`procStart`. A claim whose session still lives is idle when nothing in the
+worktree changed for 2 hours (Git HEAD, index, HEAD log, changed paths) and no
+process uses it. Maintenance parks dead and idle claims with `last_holder`.
 Unfinished work becomes parked. Safe candidates enter reuse before new builds.
 Reuse completes full setup before ready publication.
 Surplus safe candidates enter removal. Removed records remain available.

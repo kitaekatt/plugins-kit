@@ -887,6 +887,14 @@ class Lifecycle:
                     record["state"] = "parked"
                     record["waiting"] = "Holder ended; inspect preserved work before adoption"
                     self.fail(record, ValueError("Interrupted claim or dead holder; files preserved"))
+                elif not worker and safety.claim_idle(path):
+                    # A live session that never released: nothing uses the worktree.
+                    # Parking keeps the files; removal still needs full safety.
+                    record["last_holder"] = record["holder"]
+                    record["holder"] = None
+                    record["state"] = "parked"
+                    record["waiting"] = "Claim idle while its session lives; inspect preserved work before adoption"
+                    self.fail(record, ValueError("Idle claim: no process uses the worktree and nothing changed in it; files preserved"))
                 elif worker:
                     self.fail(record, ValueError(f"Interrupted {op['name']}; holder claim and files preserved"))
             elif worker:
