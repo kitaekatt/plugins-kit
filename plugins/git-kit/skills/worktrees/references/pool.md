@@ -163,6 +163,7 @@ Remove inputs that the repository does not use.
 | `pool.size` | Positive integer, default 2. Ready spares and active builds count toward capacity. |
 | `pool.upstream` | Optional remote-tracking branch, such as `origin/dev` or `upstream/develop`. The remote must exist, the name must have the form `<remote>/<branch>`, and `..` is invalid. Default: the remote default branch resolved below. |
 | `pool.rebuildable` | Optional list of relative gitignore-style globs for reproducible ignored outputs. Default: empty list. No glob can match tracked files. |
+| `pool.idle_claim_hours` | Integer, default 2. Maintenance parks a live session's claim after this many hours without change or process use. 0 keeps every live claim. |
 | `setup[].id` | Unique stable ID: letters, digits, underscore, or hyphen, starting with a letter. |
 | `setup[].argv` | Nonempty argument array. Commands run in declaration order without a shell. |
 | `setup[].path_bound` | Boolean, default false. Repeat this step after relocation during preparation, take, or adoption. |
@@ -254,10 +255,11 @@ Records include its PID, process start identity, executable, and command.
 If no Claude ancestor exists, the caller must supply `--holder-pid <pid>`.
 Otherwise, take and adopt refuse the claim.
 
-Reconciliation parks a claim only after proven Claude holder death.
-If the record has a session ID, a live Claude process for that session blocks parking.
-Uncertain session evidence also retains the holder.
-An older holder record without Claude executable or command evidence retains its claim after PID death.
+Reconciliation parks a claim after proven Claude holder death, or when the claim is idle
+(see [Retirement and maintenance](#retirement-and-maintenance): no change for `pool.idle_claim_hours` and no process using it).
+For death, if the record has a session ID, a live Claude process for that session blocks parking.
+Uncertain session evidence also blocks parking for death.
+An older holder record without Claude executable or command evidence is not dead after PID death.
 
 ## Parked work and adoption
 
@@ -475,9 +477,16 @@ The lifecycle never removes branches.
 Each completed or blocked public operation requests background maintenance.
 Disabled and unconfigured repositories perform no pass.
 One OS lock coordinates all clones of a remote.
-Internal steps continue the same pass. No timers or idle-age cleanup exist.
+Internal steps continue the same pass. No timers exist.
 
 Maintenance resolves interrupted journals and dead holders first.
+A holder is dead when its process ended and no live Claude process names its
+session, in argv or in Claude Code's `sessions/<pid>.json` with a matching
+`procStart`. A claim whose session still lives is idle when nothing in the
+worktree changed for `pool.idle_claim_hours` (Git HEAD, index, HEAD log, changed
+paths) and no process uses it. Maintenance parks dead and idle claims with
+`last_holder`. An idle claim also keeps `last_claim`, so the session's own later
+release succeeds without a change.
 Unfinished work becomes parked. Safe candidates enter reuse before new builds.
 Reuse completes full setup before ready publication.
 Surplus safe candidates enter removal. Removed records remain available.

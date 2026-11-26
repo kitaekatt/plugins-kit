@@ -19,6 +19,7 @@ from collections.abc import Iterator
 import pytest
 
 import worktree_safety as safety
+import worktrees as wt
 from test_worktree_lifecycle import holder, lifecycle
 
 
@@ -244,6 +245,48 @@ def test_dead_claude_holder_is_parked(lifecycle, tmp_path: Path, monkeypatch) ->
     record = obj.get(result["id"])
     assert record["state"] == "parked" and record["holder"] is None
     assert record["last_holder"]["pid"] == parent.pid
+
+
+@pytest.mark.parametrize("case, parked", [("idle", True), ("recent-git", False), ("recent-edit", False),
+                                           ("process-inside", False), ("disabled", False)])
+def test_live_session_claim_parks_when_nothing_uses_the_worktree(lifecycle, tmp_path: Path, monkeypatch,
+                                                                 case: str, parked: bool) -> None:
+    """A live session keeps a claim only while the worktree shows use: a process in it or recent changes."""
+    obj = lifecycle
+    obj.maintain()
+    result = obj.take("long-done", "orchestrator", process=holder())
+    path = Path(obj.get(result["id"])["path"])
+    hours = obj.settings.config.pool.idle_claim_hours
+    assert hours == 2  # The default.
+    if case == "disabled":
+        obj.settings.config.pool.idle_claim_hours = 0
+    old = time.time() - hours * 3600 - 60
+    for target in [path, *path.rglob("*")]:
+        os.utime(target, (old, old), follow_symlinks=False)
+    gitdir = Path(wt.git(path, "rev-parse", "--absolute-git-dir"))
+    for target in [gitdir, *gitdir.rglob("*")]:
+        os.utime(target, (old, old), follow_symlinks=False)
+    if case == "recent-git":
+        os.utime(gitdir / "HEAD")
+    elif case == "recent-edit":
+        (path / "draft.txt").write_text("in progress")
+    process = None
+    if case == "process-inside":
+        process = subprocess.Popen(["sleep", "60"], cwd=path)
+    try:
+        obj.reconcile()
+    finally:
+        if process:
+            process.kill()
+            process.wait()
+    record = obj.get(result["id"])
+    assert (record["state"] == "parked" and record["holder"] is None) is parked
+    if parked:
+        assert record["last_holder"]["session"] == "orchestrator"
+        # The session's own release after a push still succeeds and keeps the files.
+        released = obj.release(record["last_claim"])
+        assert (released["id"], released["state"]) == (record["id"], "parked")
+        assert path.exists()
 
 
 @pytest.mark.parametrize("evidence", ["live", "unknown-session", "failed-census"])
