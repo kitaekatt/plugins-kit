@@ -25,6 +25,8 @@ if TYPE_CHECKING:
 def claude_command(executable: str, command: str) -> bool:
     """Identify the native Claude executable or its Node/Bun CLI entry point."""
     names = {"claude", "claude.exe", "claude-code", "claude-code.exe"}
+    if re.search(r"/Claude\.app/Contents/", executable):
+        return False  # The desktop app shell and its helpers; its Code sessions run a separate CLI.
     name = re.split(r"[/\\]", executable.strip())[-1].lower()
     if name in names:
         return True

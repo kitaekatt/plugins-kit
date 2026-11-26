@@ -269,6 +269,30 @@ def test_dead_holder_keeps_claim_when_session_may_be_alive(lifecycle, monkeypatc
     assert obj.get(result["id"])["state"] == "taken"
 
 
+@pytest.mark.parametrize("file_session, expected", [("other-session", "dead"), ("resumed-session-full-id", "live"),
+                                                     (None, "uncertain"), ("stale-start", "uncertain")])
+def test_session_file_resolves_claude_without_session_argv(tmp_path: Path, monkeypatch,
+                                                           file_session: str | None, expected: str) -> None:
+    """Claude Code's sessions/<pid>.json names the session of a process whose argv omits it."""
+    import worktree_migration as migration
+
+    if os.name == "nt":
+        pytest.skip("POSIX session files")
+    # Claude Code writes procStart as ps lstart in UTC, not local time.
+    utc_start = subprocess.run(["ps", "-p", str(os.getpid()), "-o", "lstart="], capture_output=True, text=True,
+                               check=True, env={**os.environ, "TZ": "UTC"}).stdout.strip()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    if file_session:
+        (tmp_path / "sessions").mkdir()
+        start = "Thu Jan  1 00:00:00 1970" if file_session == "stale-start" else utc_start
+        (tmp_path / "sessions" / f"{os.getpid()}.json").write_text(json.dumps(
+            {"pid": os.getpid(), "sessionId": file_session, "procStart": start}))
+    monkeypatch.setattr(migration, "claude_processes",
+                        lambda: [{"pid": os.getpid(), "executable": "claude", "command": "claude"}])
+    assert safety.holder_state({"pid": 99999999, "start": "gone", "executable": "claude",
+                                "session": "resumed-session"}) == expected
+
+
 def test_incomplete_claude_census_keeps_claim(monkeypatch) -> None:
     """A visible Claude executable with unavailable argv is uncertain evidence."""
     if os.name == "nt":

@@ -625,6 +625,11 @@ def test_metadata_retirement_requires_record_and_git_agreement(migration) -> Non
     ("/usr/bin/node", "node /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js --resume", True),
     ("/usr/bin/node", "node -e console.log('@anthropic-ai/claude-code/cli.js')", False),
     (r"C:\node\node.exe", r'"C:\node\node.exe" "C:\npm\node_modules\@anthropic-ai\claude-code\cli.js"', True),
+    # The desktop app shell and its helpers are not Claude Code sessions; its bundled CLI is.
+    ("/Applications/Claude.app/Contents/MacOS/Claude", "/Applications/Claude.app/Contents/MacOS/Claude", False),
+    ("/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)",
+     "/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer) --type=renderer", False),
+    ("/Users/u/Library/Application Support/Claude/claude-code/2.1.0/claude", "claude", True),
 ])
 def test_claude_census_identifies_executable_not_unrelated_argument(executable: str, command: str, expected: bool) -> None:
     from worktree_migration import claude_command
