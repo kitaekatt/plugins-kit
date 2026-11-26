@@ -255,10 +255,11 @@ Records include its PID, process start identity, executable, and command.
 If no Claude ancestor exists, the caller must supply `--holder-pid <pid>`.
 Otherwise, take and adopt refuse the claim.
 
-Reconciliation parks a claim only after proven Claude holder death.
-If the record has a session ID, a live Claude process for that session blocks parking.
-Uncertain session evidence also retains the holder.
-An older holder record without Claude executable or command evidence retains its claim after PID death.
+Reconciliation parks a claim after proven Claude holder death, or when the claim is idle
+(see [Retirement and maintenance](#retirement-and-maintenance): no change for `pool.idle_claim_hours` and no process using it).
+For death, if the record has a session ID, a live Claude process for that session blocks parking.
+Uncertain session evidence also blocks parking for death.
+An older holder record without Claude executable or command evidence is not dead after PID death.
 
 ## Parked work and adoption
 
