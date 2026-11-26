@@ -177,13 +177,36 @@ def holder_state(identity: dict[str, Any]) -> str:
         processes = claude_processes()
         if any(session in row["command"] for row in processes):
             return "live"
-        # An argv that omits the ID cannot prove a Claude process belongs to
-        # another session. Keep ownership until all possible holders end.
-        if processes:
+        sessions = [session_file_id(row["pid"]) for row in processes]
+        if any(found and session in found for found in sessions):
+            return "live"
+        # A process with no session evidence could be the holder resumed
+        # (claude --continue). Keep ownership until all possible holders end.
+        if any(found is None for found in sessions):
             return "uncertain"
     except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
         return "uncertain"
     return "dead"
+
+
+def session_file_id(pid: int) -> str | None:
+    """The session ID in Claude Code's sessions/<pid>.json for a live Claude process.
+
+    The file counts only when its procStart matches the live process, so a
+    file left by an earlier process with a reused pid is no evidence.
+    """
+    from worktree_config import home_config, read_object
+
+    if os.name == "nt":
+        return None  # procStart there is not in ps lstart form; keep the uncertain default.
+    record = read_object(home_config() / "sessions" / f"{pid}.json")
+    found = record.get("sessionId")
+    if not isinstance(found, str) or not found:
+        return None
+    # Claude Code writes procStart as ps lstart in UTC.
+    result = subprocess.run(["ps", "-p", str(pid), "-o", "lstart="], capture_output=True, text=True,
+                            check=False, timeout=15, env={**os.environ, "TZ": "UTC"})
+    return found if record.get("procStart") == result.stdout.strip() else None
 
 
 def process_cwd(pid: int) -> str | None:
