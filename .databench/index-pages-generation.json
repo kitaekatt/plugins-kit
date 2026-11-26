@@ -12,7 +12,7 @@
     "plugins/bootstrap/skills/bootstrap": "03b918ec66c53519e2cd1286aa528127de4dd62c3ee614bc4d96ac6a9529abd3",
     "plugins/git-kit/skills/git-code-review": "00f6447ad12e08517253f1598c70465d8c9d34a9164e1348687af6986fab49ef",
     "plugins/secrets-kit/lib/secrets_kit": "123a443a0206148e053f9eafad9ab90829a2c69a05f5891d6ce0f91538d1cd3b",
-    "plugins/task-kit/skills/task": "e4f2b7925997d5589e1283f5852245eba117a9e160616cf3a6dda4799b502adf",
+    "plugins/task-kit/skills/task": "2c5358370b025b5f9d5c7df040feb64812f488e9b85944c5b737f4dc340ea4c8",
     "plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit": "dfa5e2f0af92b4211404c7468fd3173c0b6c77d6dec3d86f76345b41c33ab1ff",
     "docs/planning/md-domain-coverage-lane": "643430ad260d90d81863881a7f46e0f47fd350765e6c249e2edc3fe221a8afdf",
     "docs/planning/task-kit-dashboard": "8431c543efad6dbbd41e9eb1bac451a2a73366494c0f40f19790156e6c75000c",
