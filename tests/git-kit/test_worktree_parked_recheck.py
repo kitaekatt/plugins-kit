@@ -167,3 +167,24 @@ def test_parked_recheck_recovers_after_removal_before_record_save(migration, mon
     assert result["parked_recheck"]["removed"] == 1
     journal = json.loads((obj.state / "migration.json").read_text())
     assert journal["candidates"][0]["phase"] == "removed"
+
+
+def test_maintenance_gathers_unsafe_parked_evidence_without_claim_lock(migration, monkeypatch) -> None:
+    """Trigger: many parked trees. take, release and status must not wait for every recheck."""
+    import worktree_retirement as retirement
+    from worktree_pool import _file_lock
+
+    obj = migration
+    record = parked(obj)
+    real, free = retirement.evidence, []
+
+    def observe(owner, row, **options):
+        with _file_lock(owner.state / "claim.lock", blocking=False) as acquired:
+            free.append(acquired)
+        return real(owner, row, **options)
+
+    monkeypatch.setattr(retirement, "evidence", observe)
+    result = obj.maintain()
+    assert free and free[0] is True, free
+    assert obj.get(record["id"])["state"] == "parked"
+    assert result["parked_recheck"]["still_parked"] == 1

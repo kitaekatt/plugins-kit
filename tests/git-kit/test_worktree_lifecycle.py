@@ -663,6 +663,19 @@ def test_reserved_claim_is_never_counted_as_available(lifecycle):
     assert len([r for r in obj.read_records() if r["state"] == "ready" and not r["holder"]]) == 1
 
 
+def test_release_by_agent_name(lifecycle):
+    """A session that kept only the worktree name can release it without a status scan."""
+    obj = lifecycle
+    obj.maintain()
+    taken = obj.take("named-task", "s", process=holder())
+    command = [sys.executable, str(Path(wt.__file__)), "release", "--agent", "named-task", "--repo", str(obj.repo)]
+    done = subprocess.run(command, capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stderr
+    assert obj.get(taken["id"])["holder"] is None
+    unknown = subprocess.run(command, capture_output=True, text=True, timeout=120)
+    assert unknown.returncode != 0 and "named-task" in unknown.stderr
+
+
 def test_release_respects_active_builder(lifecycle):
     obj = lifecycle
     obj.maintain()

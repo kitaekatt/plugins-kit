@@ -89,65 +89,116 @@ def evidence(obj: Lifecycle, record: dict[str, Any], *, recover_removed: bool = 
     return migration.evidence(obj, record) if record.get("migration") else obj.safety(record, persist=False)
 
 
-def recheck_parked(obj: Lifecycle, *, exclude: set[str] | None = None) -> dict[str, Any]:
-    """Caller holds maintenance.lock and claim.lock through reservation/removal."""
+def recheck_parked(obj: Lifecycle, *, exclude: set[str] | None = None, lock_each: bool = False) -> dict[str, Any]:
+    """Recheck parked records; reservation and removal always run under claim.lock.
+
+    Migration holds claim.lock for the whole call. Maintenance passes
+    ``lock_each``: each record's first evidence is read without the lock, and
+    an unsafe result is saved under a short lock. A record that looks safe is
+    rechecked in full under the lock before any removal.
+    """
+    from contextlib import nullcontext
+
     from worktree_lifecycle import atomic_json
+    from worktree_pool import _file_lock
 
     result: dict[str, Any] = {"rechecked": 0, "removed": 0, "still_parked": 0, "by_reason": {}}
     journal_path = obj.state / "migration.json"
     journal = read_object(journal_path)
-    for record in obj.read_records():
-        if record["state"] != "parked":
+    for listed in obj.read_records():
+        if listed["state"] != "parked":
             continue
-        blockers = []
-        worker = record.get("worker")
-        if record["id"] in (exclude or set()):
-            blockers = record["safety"]["blockers"]
-        elif record.get("holder"):
-            blockers = ["holder claim remains"]
-        elif any(other["id"] != record["id"]
-                 and (other.get("holder") or (other.get("worker") and safety.process_state(other["worker"]) != "dead"))
-                 and path_identity(Path(other["path"])) == path_identity(Path(record["path"]))
-                 for other in obj.read_records()):
-            blockers = ["holder or live/uncertain worker remains on duplicate record"]
-        elif worker and safety.process_state(worker) != "dead":
-            blockers = ["live or uncertain worker"]
-        else:
-            result["rechecked"] += 1
-            row = next((row for row in journal.get("candidates", [])
-                        if row["id"] == record["id"] and row["path"] == record["path"]), None)
-            try:
-                if row and record.get("migration"):
-                    # A prior record may have inherited the configured clone.
-                    # The journal mapping still has to pass live Git validation.
-                    record["repo"] = {"remote": obj.url, "source_clone": row["source_clone"], "common_dir": row["common_dir"]}
-                record["safety"] = evidence(obj, record, recover_removed=True)
-                if record["safety"].get("absent"):
-                    record.update(state="removed", waiting=None, error=None)
-                elif record["safety"]["safe"]:
-                    record["worker"] = safety.process_identity(os.getpid())
-                    obj.transition(record, "parked-recheck", "reserved")
-                    # Re-read Git, ignored outputs and process evidence after
-                    # persisting the reservation, just as migration does.
-                    record["safety"] = evidence(obj, record)
-                    migration.process_check([record])
-                    if record["safety"]["safe"]:
-                        path = Path(record["path"])
-                        safety.remove_outputs(path, record["safety"]["reproducible"])
-                        wt.git(Path(record["repo"]["source_clone"]), "worktree", "remove", str(path))
-                        record.update(state="removed", waiting=None, error=None)
-            except (OSError, ValueError, subprocess.SubprocessError) as exc:
-                obj.park_removal(record, exc)
-            blockers = record["safety"]["blockers"]
-            if record["state"] == "removed":
-                result["removed"] += 1
-            record["worker"] = None
-            obj.transition(record, "parked-recheck", "complete")
-            if row:
-                row.update(phase=record["state"], safety=record["safety"])
-                atomic_json(journal_path, journal)
-        if record["state"] == "parked":
-            result["still_parked"] += 1
-            for reason in {blocker.split(":", 1)[0] for blocker in blockers}:
-                result["by_reason"][reason] = result["by_reason"].get(reason, 0) + 1
+        first = _unlocked_evidence(obj, listed, exclude, journal) if lock_each else None
+        with _file_lock(obj.state / "claim.lock", blocking=True) if lock_each else nullcontext():
+            record = obj.get(listed["id"]) if lock_each else listed
+            if record["state"] != "parked":
+                continue
+            if first is not None and not first["safe"] and not first.get("absent") and not record.get("holder"):
+                result["rechecked"] += 1
+                record["safety"] = first
+                record["worker"] = None
+                obj.transition(record, "parked-recheck", "complete")
+                _journal_row(journal, journal_path, record, atomic_json)
+                blockers = first["blockers"]
+            else:
+                blockers = _recheck_one(obj, record, result, journal, journal_path, exclude, atomic_json)
+            if record["state"] == "parked":
+                result["still_parked"] += 1
+                for reason in {blocker.split(":", 1)[0] for blocker in blockers}:
+                    result["by_reason"][reason] = result["by_reason"].get(reason, 0) + 1
     return result
+
+
+def _unlocked_evidence(obj: Lifecycle, record: dict[str, Any], exclude: set[str] | None,
+                       journal: dict[str, Any]) -> dict[str, Any] | None:
+    """First evidence for a parked record, read on a copy; None leaves the record to the locked path."""
+    worker = record.get("worker")
+    if record["id"] in (exclude or set()) or record.get("holder") or (worker and safety.process_state(worker) != "dead"):
+        return None
+    record = {**record}
+    row = next((row for row in journal.get("candidates", [])
+                if row["id"] == record["id"] and row["path"] == record["path"]), None)
+    if row and record.get("migration"):
+        record["repo"] = {"remote": obj.url, "source_clone": row["source_clone"], "common_dir": row["common_dir"]}
+    try:
+        return evidence(obj, record, recover_removed=True)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None  # The locked path records this error with park_removal.
+
+
+def _journal_row(journal: dict[str, Any], journal_path: Path, record: dict[str, Any], atomic_json) -> dict[str, Any] | None:
+    """Rewrite migration.json only when the row changes: the journal can be hundreds of MB."""
+    row = next((row for row in journal.get("candidates", [])
+                if row["id"] == record["id"] and row["path"] == record["path"]), None)
+    if row and (row.get("phase") != record["state"] or row.get("safety") != record["safety"]):
+        row.update(phase=record["state"], safety=record["safety"])
+        atomic_json(journal_path, journal)
+    return row
+
+
+def _recheck_one(obj: Lifecycle, record: dict[str, Any], result: dict[str, Any], journal: dict[str, Any],
+                 journal_path: Path, exclude: set[str] | None, atomic_json) -> list[str]:
+    """Caller holds claim.lock through reservation and removal."""
+    worker = record.get("worker")
+    if record["id"] in (exclude or set()):
+        return record["safety"]["blockers"]
+    if record.get("holder"):
+        return ["holder claim remains"]
+    if any(other["id"] != record["id"]
+           and (other.get("holder") or (other.get("worker") and safety.process_state(other["worker"]) != "dead"))
+           and path_identity(Path(other["path"])) == path_identity(Path(record["path"]))
+           for other in obj.read_records()):
+        return ["holder or live/uncertain worker remains on duplicate record"]
+    if worker and safety.process_state(worker) != "dead":
+        return ["live or uncertain worker"]
+    result["rechecked"] += 1
+    row = next((row for row in journal.get("candidates", [])
+                if row["id"] == record["id"] and row["path"] == record["path"]), None)
+    try:
+        if row and record.get("migration"):
+            # A prior record may have inherited the configured clone.
+            # The journal mapping still has to pass live Git validation.
+            record["repo"] = {"remote": obj.url, "source_clone": row["source_clone"], "common_dir": row["common_dir"]}
+        record["safety"] = evidence(obj, record, recover_removed=True)
+        if record["safety"].get("absent"):
+            record.update(state="removed", waiting=None, error=None)
+        elif record["safety"]["safe"]:
+            record["worker"] = safety.process_identity(os.getpid())
+            obj.transition(record, "parked-recheck", "reserved")
+            # Re-read Git, ignored outputs and process evidence after
+            # persisting the reservation, just as migration does.
+            record["safety"] = evidence(obj, record)
+            migration.process_check([record])
+            if record["safety"]["safe"]:
+                path = Path(record["path"])
+                safety.remove_outputs(path, record["safety"]["reproducible"])
+                wt.git(Path(record["repo"]["source_clone"]), "worktree", "remove", str(path))
+                record.update(state="removed", waiting=None, error=None)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        obj.park_removal(record, exc)
+    if record["state"] == "removed":
+        result["removed"] += 1
+    record["worker"] = None
+    obj.transition(record, "parked-recheck", "complete")
+    _journal_row(journal, journal_path, record, atomic_json)
+    return record["safety"]["blockers"]

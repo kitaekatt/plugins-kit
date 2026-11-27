@@ -40,6 +40,7 @@ holder's session, worktree path, and claim. Choose a different, unique ID.
 | `discard --id w-... --propose` | Identify the target and the work that discard will remove. |
 | `discard --id w-... --apply approved.json` | Apply targeted user direction for an unchanged proposal. |
 | `release --claim c-...` | Release the exact claim after full delivery and successful safety checks. |
+| `release --agent <id>` | The same, found by the take `--agent` value (the worktree folder name). |
 | `status [--json]` | Show records, current Git observations, process blockers, disk, and maintenance. |
 | `migrate --inventory [--clone /path/to/clone ...]` | Journal legacy candidates and clone identities after the Claude-process guard passes. |
 | `migrate --apply [--clone /path/to/clone ...]` | Resume safe removal or preservation, convert records, and request maintenance. |
@@ -477,6 +478,7 @@ Unique ignored data remains in place. Removal uses no blanket `--force`.
 The lifecycle never removes branches.
 
 Each completed or blocked public operation requests background maintenance.
+The parked recheck reads each tree's evidence without claim.lock and holds it only to save the result or remove the tree, after a full recheck.
 The worker runs the installed git-kit (`installed_plugins.json`), not the caller's version; with no entry there, it runs the caller's.
 
 Disabled and unconfigured repositories perform no pass.

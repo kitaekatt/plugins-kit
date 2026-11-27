@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 from worktree_config import read_object
-from worktree_lifecycle import Lifecycle, configure_repository
+from worktree_lifecycle import Lifecycle, claim_for_agent, configure_repository
 from worktree_pool import remote_url
 from worktree_safety import process_identity
 import worktrees as wt
@@ -59,7 +59,9 @@ def main(argv: list[str]) -> int:
     discard_mode.add_argument("--apply", type=Path, metavar="APPROVED_JSON")
     discard.add_argument("--force", action="store_true", help="Grants no discard authority")
     release = commands.add_parser("release")
-    release.add_argument("--claim", required=True)
+    named = release.add_mutually_exclusive_group(required=True)
+    named.add_argument("--claim")
+    named.add_argument("--agent", help="the take --agent value, which is also the worktree folder name")
     status = commands.add_parser("status")
     status.add_argument("--json", action="store_true")
     commands.add_parser("config", help="Read effective lifecycle settings")
@@ -121,7 +123,7 @@ def main(argv: list[str]) -> int:
         elif args.command == "discard":
             result = obj.discard(args.id, approved=read_object(args.apply) if args.apply else None, force=args.force)
         elif args.command == "release":
-            result = obj.release(args.claim)
+            result = obj.release(args.claim or claim_for_agent(obj, args.agent))
         elif args.command == "migrate":
             result = obj.migrate(apply=args.apply, clones=args.clone)
         elif args.command in {"status", "list", "config"}:

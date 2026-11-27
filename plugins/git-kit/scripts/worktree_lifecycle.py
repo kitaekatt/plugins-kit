@@ -997,8 +997,10 @@ class Lifecycle:
                     self.reconcile()
                     from worktree_retirement import recheck_parked
                     parked_ids = {r["id"] for r in self.read_records() if r["state"] == "parked"}
-                    result["parked_recheck"] = recheck_parked(self)
-                    result["removed"] = [r["id"] for r in self.read_records() if r["id"] in parked_ids and r["state"] == "removed"]
+                # Each parked tree takes claim.lock itself, so take, release and status wait for one tree, not all.
+                result["parked_recheck"] = recheck_parked(self, lock_each=True)
+                result["removed"] = [r["id"] for r in self.read_records() if r["id"] in parked_ids and r["state"] == "removed"]
+                with _file_lock(self.state / "claim.lock", blocking=True):
                     missing = self.missing_sources()
                     if missing:
                         result.setdefault("failures", []).extend(missing)
@@ -1103,6 +1105,14 @@ def _maintenance_script() -> Path:
             if script.is_file():
                 return script
     return Path(__file__).with_name("worktrees.py")
+
+
+def claim_for_agent(obj: Lifecycle, agent: str) -> str:
+    """The live claim of a take --agent value; release re-validates it under claim.lock."""
+    claims = [r["holder"]["claim"] for r in obj.read_records() if (r.get("holder") or {}).get("agent") == agent]
+    if len(claims) != 1:
+        raise ValueError(f"No single live claim for agent {agent}: {len(claims)} found")
+    return claims[0]
 
 
 def release(repo: Path, claim: str) -> dict[str, Any]:
