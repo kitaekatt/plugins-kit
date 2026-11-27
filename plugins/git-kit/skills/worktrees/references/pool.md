@@ -443,6 +443,8 @@ An old token cannot release a subsequent holder.
 ## Retirement and maintenance
 
 Release proves safety before it atomically persists the cleared holder.
+Uncommitted files or commits outside upstream end the safety check early: the
+ignored-file and process scans do not run, and the evidence lists only those blockers.
 A live or uncertain builder blocks release.
 Release ignores its callers. They are its caller chain, which is each parent
 process from the release process up to and including the holder's recorded

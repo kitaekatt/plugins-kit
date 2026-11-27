@@ -432,6 +432,14 @@ def inspect(record: dict[str, Any], upstream: str, declared: list[str], rebuilda
     cherry = wt.git(path, "cherry", upstream, "HEAD")
     if any(line.startswith("+") for line in cherry.splitlines()):
         blockers.append("commits outside fresh upstream")
+    if dirty or "commits outside fresh upstream" in blockers:
+        # Local work already blocks removal. The ignored-file and process scans
+        # cost seconds per worktree and can list every reproducible file, so
+        # skip them: a parked worktree with work stays cheap to recheck.
+        return {"safe": False, "at": time.time(), "upstream": upstream,
+                "head": wt.git(path, "rev-parse", "HEAD"), "blockers": blockers,
+                "reproducible": [], "unique_ignored": [],
+                "excluded_callers": [caller["pid"] for caller in callers]}
     reproducible, unique = outputs(path, declared, rebuildable)
     if unique:
         blockers.append(f"unique ignored data must be preserved: {unique}")
