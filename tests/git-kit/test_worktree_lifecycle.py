@@ -676,14 +676,18 @@ def test_release_respects_active_builder(lifecycle):
     assert obj.get(result["id"])["holder"]["claim"] == result["claim"]
 
 
-@pytest.mark.parametrize("runtime", [False, True])
-def test_unrecorded_process_blocks_retirement(lifecycle, runtime):
+@pytest.mark.parametrize("use", ["cwd", "runtime", "open-file"])
+def test_unrecorded_process_blocks_retirement(lifecycle, use):
     obj = lifecycle
     obj.maintain()
     record = obj.read_records()[0]
     path = Path(record["path"])
-    child = subprocess.Popen([sys.executable, "-u", "-c", "import time; print('ready', flush=True); time.sleep(60)", str(path)],
-        cwd=obj.repo if runtime else path, stdout=subprocess.PIPE, text=True)
+    # The open-file holder names the path only in its environment, so only open-file evidence can find it.
+    hold = "import os, time; f = open(os.environ['HELD'] + '/lock.txt'); print('ready', flush=True); time.sleep(60)"
+    script = hold if use == "open-file" else "import time; print('ready', flush=True); time.sleep(60)"
+    argv = [sys.executable, "-u", "-c", script] + ([] if use == "open-file" else [str(path)])
+    child = subprocess.Popen(argv, cwd=path if use == "cwd" else obj.repo, stdout=subprocess.PIPE, text=True,
+        env={**os.environ, "HELD": str(path)})
     try:
         assert child.stdout.readline().strip() == "ready"
         evidence = obj.safety(record)

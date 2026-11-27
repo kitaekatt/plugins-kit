@@ -477,7 +477,7 @@ Unique ignored data remains in place. Removal uses no blanket `--force`.
 The lifecycle never removes branches.
 
 Each completed or blocked public operation requests background maintenance.
-The worker runs the installed git-kit (`installed_plugins.json`), not the caller's version.
+The worker runs the installed git-kit (`installed_plugins.json`), not the caller's version; with no entry there, it runs the caller's.
 
 Disabled and unconfigured repositories perform no pass.
 One OS lock coordinates all clones of a remote.
