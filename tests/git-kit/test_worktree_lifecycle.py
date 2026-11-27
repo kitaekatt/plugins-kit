@@ -576,6 +576,22 @@ def test_background_maintenance_and_launcher_failure(lifecycle, monkeypatch):
     assert "launcher unavailable" in (obj.state / "launcher-error.json").read_text()
 
 
+def test_maintenance_launches_the_installed_git_kit(lifecycle):
+    """A session started on an older git-kit still launches the installed version's maintenance."""
+    obj = lifecycle
+    registry = json.loads((Path.home() / ".claude/plugins/installed_plugins.json").read_text())
+    installed = Path(registry["plugins"]["git-kit@plugins-kit"][0]["installPath"])
+    marker = obj.state.parent / "installed-ran"
+    script = installed / "scripts/worktrees.py"
+    script.parent.mkdir(parents=True)
+    script.write_text(f"import pathlib, sys; pathlib.Path({str(marker)!r}).write_text(' '.join(sys.argv[1:]))\n")
+    result = obj.real_request()
+    assert result["outcome"] == "started", result
+    pid, code = os.waitpid(result["pid"], 0)
+    assert code == 0, Path(result["log"]).read_text()
+    assert marker.read_text() == f"maintenance --repo {obj.repo}"
+
+
 def test_ready_take_does_not_run_unrelated_changed_setup(lifecycle: Lifecycle) -> None:
     import worktree_lifecycle as lc
     obj = lifecycle
@@ -660,14 +676,18 @@ def test_release_respects_active_builder(lifecycle):
     assert obj.get(result["id"])["holder"]["claim"] == result["claim"]
 
 
-@pytest.mark.parametrize("runtime", [False, True])
-def test_unrecorded_process_blocks_retirement(lifecycle, runtime):
+@pytest.mark.parametrize("use", ["cwd", "runtime", "open-file"])
+def test_unrecorded_process_blocks_retirement(lifecycle, use):
     obj = lifecycle
     obj.maintain()
     record = obj.read_records()[0]
     path = Path(record["path"])
-    child = subprocess.Popen([sys.executable, "-u", "-c", "import time; print('ready', flush=True); time.sleep(60)", str(path)],
-        cwd=obj.repo if runtime else path, stdout=subprocess.PIPE, text=True)
+    # The open-file holder names the path only in its environment, so only open-file evidence can find it.
+    hold = "import os, time; f = open(os.environ['HELD'] + '/lock.txt'); print('ready', flush=True); time.sleep(60)"
+    script = hold if use == "open-file" else "import time; print('ready', flush=True); time.sleep(60)"
+    argv = [sys.executable, "-u", "-c", script] + ([] if use == "open-file" else [str(path)])
+    child = subprocess.Popen(argv, cwd=path if use == "cwd" else obj.repo, stdout=subprocess.PIPE, text=True,
+        env={**os.environ, "HELD": str(path)})
     try:
         assert child.stdout.readline().strip() == "ready"
         evidence = obj.safety(record)

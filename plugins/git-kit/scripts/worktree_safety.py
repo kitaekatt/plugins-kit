@@ -287,17 +287,19 @@ def path_processes(path: Path, *, pids: set[int] | None = None, exclude: Collect
             return ["uncertain process evidence: lsof is unavailable"]
         selection = ["-a", "-p", ",".join(str(pid) for pid in sorted(pids))] if pids is not None else []
         # lsof and the helper it forks inherit this cwd; keep it outside every worktree.
-        result = subprocess.run([executable, "-nP", "-Fpn", *selection, "+D", str(path)], cwd=os.sep,
+        # One listing of all open files is filtered here: "+D <path>" walks every file in
+        # the tree (node_modules included) and cost seconds per worktree.
+        result = subprocess.run([executable, "-nP", "-Fpn", *selection], cwd=os.sep,
                                 capture_output=True, text=True, check=False, timeout=30)
         if result.stderr.strip() or result.returncode not in (0, 1):
             return [f"uncertain process evidence: {result.stderr.strip() or result.returncode}"]
-        # -F output: a "p<pid>" line, then that process's field lines.
-        kept, owner = [], None
+        # -F output: a "p<pid>" line, then that process's "n<name>" lines.
+        kept, owner, prefix = [], None, str(path).rstrip("/") + "/"
         for line in result.stdout.strip().splitlines():
             if line.startswith("p"):
                 owner = int(line[1:])
-            if owner not in exclude:
-                kept.append(line)
+            elif line.startswith("n") and owner not in exclude and (line[1:] == str(path) or line[1:].startswith(prefix)):
+                kept.extend([f"p{owner}", line])
         blockers = [f"live process/runtime: {chr(10).join(kept)}"] if kept else []
         if pids is not None:
             return blockers

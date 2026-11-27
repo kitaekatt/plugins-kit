@@ -1080,7 +1080,7 @@ class Lifecycle:
                 log = self.state / "maintenance.log"
                 kwargs = {"creationflags": subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
                 with log.open("a", encoding="utf-8") as stream:
-                    child = subprocess.Popen([sys.executable, str(Path(__file__).with_name("worktrees.py")),
+                    child = subprocess.Popen([sys.executable, str(_maintenance_script()),
                         "maintenance", "--repo", str(self.repo)], cwd=self.repo, stdin=subprocess.DEVNULL,
                         stdout=stream, stderr=stream, **kwargs)
                     identity = safety.process_identity(child.pid)
@@ -1092,6 +1092,17 @@ class Lifecycle:
             if (self.state / "namespace.json").exists():
                 atomic_json(self.state / "launcher-error.json", outcome)
             return outcome
+
+
+def _maintenance_script() -> Path:
+    """The installed git-kit runs maintenance, so a session on an older version gets current fixes."""
+    registry = Path.home() / ".claude/plugins/installed_plugins.json"
+    if registry.is_file():
+        for entry in json.loads(registry.read_text(encoding="utf-8")).get("plugins", {}).get("git-kit@plugins-kit", []):
+            script = Path(entry["installPath"]) / "scripts/worktrees.py"
+            if script.is_file():
+                return script
+    return Path(__file__).with_name("worktrees.py")
 
 
 def release(repo: Path, claim: str) -> dict[str, Any]:
