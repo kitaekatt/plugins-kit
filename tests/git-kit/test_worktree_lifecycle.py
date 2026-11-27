@@ -460,6 +460,33 @@ def test_status_observes_plain_commits_and_dirty_files(lifecycle):
     assert obj.status()["records"][0]["observed"]["dirty"]
 
 
+@pytest.mark.parametrize("cheap_blocker", ["commit", "dirty"])
+def test_cheap_git_blocker_skips_the_output_and_process_scans(lifecycle, monkeypatch, cheap_blocker):
+    """Trigger: many parked worktrees with local work. Their recheck stays cheap and its evidence small."""
+    import worktree_safety as safety
+
+    obj = lifecycle
+    obj.maintain()
+    record = obj.read_records()[0]
+    path = Path(record["path"])
+    (path / "work").write_text("local")
+    if cheap_blocker == "commit":
+        git(path, "add", "work")
+        git(path, "commit", "-qm", "local work")
+    record["state"] = "parked"
+    obj.save(record)
+
+    def expensive(*args, **kwargs):
+        raise AssertionError("expensive scan ran although a Git blocker already decides")
+    monkeypatch.setattr(safety, "outputs", expensive)
+    monkeypatch.setattr(safety, "path_processes", expensive)
+    evidence = obj.safety(record)
+    assert evidence["safe"] is False
+    expected = "commits outside fresh upstream" if cheap_blocker == "commit" else "uncommitted files (including untracked)"
+    assert expected in evidence["blockers"]
+    assert evidence["reproducible"] == [] and evidence["unique_ignored"] == []
+
+
 def test_status_summarizes_large_safety_and_discard_evidence(lifecycle):
     """Trigger: thousands of ignored files. Status stays small; record files keep full evidence."""
     obj = lifecycle
