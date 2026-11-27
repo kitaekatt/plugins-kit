@@ -70,7 +70,7 @@ technique_skill:
           action: |
             Work in the returned path. Commit with plain git commit.
             Apply the repository's review and delivery rules.
-            After a full push, run release --claim <claim-id>; it can run from inside that path.
+            After a full push, run release --claim <claim-id> or release --agent <agent-id>; it can run from inside that path.
             Report push and release outcomes separately; retain the claim after partial delivery.
             Repository after_take and before_release scripts retain ownership on failure.
         - n: 4
